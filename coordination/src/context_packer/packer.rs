@@ -25,6 +25,7 @@ pub struct ContextPacker {
     working_dir: PathBuf,
     generator: WorkPacketGenerator,
     file_walker: FileWalker,
+    tier: SwarmTier,
     max_context_tokens: usize,
 }
 
@@ -34,6 +35,7 @@ impl ContextPacker {
         Self {
             generator: WorkPacketGenerator::new(&wd),
             file_walker: FileWalker::new(&wd),
+            tier,
             max_context_tokens: max_context_tokens(tier),
             working_dir: wd,
         }
@@ -52,9 +54,9 @@ impl ContextPacker {
 
         // Extract symbols from all .rs files (reuse generator's extract logic via generate)
         let state = EscalationState::new(bead_id);
-        let mut packet =
-            self.generator
-                .generate(bead_id, objective, SwarmTier::Implementer, &state, None);
+        let mut packet = self
+            .generator
+            .generate(bead_id, objective, self.tier, &state, None);
 
         // The generator only gets symbols from git-changed files.
         // For initial pack, we want symbols from ALL .rs files, so build
