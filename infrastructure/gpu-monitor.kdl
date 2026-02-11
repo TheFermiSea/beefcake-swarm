@@ -1,0 +1,33 @@
+layout {
+    default_tab_template {
+        pane size=1 borderless=true {
+            plugin location="zellij:tab-bar"
+        }
+        children
+        pane size=2 borderless=true {
+            plugin location="zellij:status-bar"
+        }
+    }
+
+    tab name="GPU Dashboard" focus=true {
+        pane split_direction="vertical" {
+            pane size="60%" {
+                // Main Dashboard
+                command "python3"
+                args "scripts/gpu_dashboard.py"
+            }
+            pane split_direction="horizontal" {
+                // Host Monitoring (Glances or SSH)
+                pane command="ssh" {
+                    args "root@100.127.208.104"
+                }
+                pane command="ssh" {
+                    args "root@100.127.30.114"
+                }
+                pane command="ssh" {
+                    args "root@100.68.22.98"
+                }
+            }
+        }
+    }
+}

@@ -1,0 +1,211 @@
+# Apptainer definition for llama.cpp inference server
+# Optimized for V100S GPUs (Compute Capability 7.0)
+# Build: apptainer build llama-server.sif llama-server.def
+#
+# Options:
+#   LLAMA_CPP_VERSION - Git ref to build (default: HEAD)
+#   Example: apptainer build --build-arg LLAMA_CPP_VERSION=b4567 llama-server.sif llama-server.def
+
+Bootstrap: docker
+From: nvidia/cuda:12.2.0-devel-ubuntu22.04
+
+%arguments
+    LLAMA_CPP_VERSION=HEAD
+
+%labels
+    Author beefcake2-cluster
+    Version 1.1
+    Description llama.cpp inference server for V100S GPUs
+    LLAMA_CPP_VERSION {{LLAMA_CPP_VERSION}}
+
+%post
+    set -eu  # Fail fast on errors (pipefail not available in sh)
+
+    echo "=== Installing build dependencies ==="
+    apt-get update && apt-get install -y \
+        git \
+        build-essential \
+        cmake \
+        curl \
+        libcurl4-openssl-dev \
+        pkg-config \
+        && rm -rf /var/lib/apt/lists/*
+
+    echo "=== Cloning llama.cpp ==="
+    git clone https://github.com/ggerganov/llama.cpp /opt/llama.cpp
+    cd /opt/llama.cpp
+
+    # Checkout specific version if not HEAD
+    if [ "{{LLAMA_CPP_VERSION}}" != "HEAD" ]; then
+        echo "Checking out version: {{LLAMA_CPP_VERSION}}"
+        git checkout "{{LLAMA_CPP_VERSION}}"
+    fi
+
+    # Record version for debugging
+    COMMIT_SHA=$(git rev-parse HEAD)
+    echo "Building llama.cpp commit: ${COMMIT_SHA}"
+    echo "${COMMIT_SHA}" > /opt/llama-cpp-version.txt
+
+    echo "=== Configuring CMake build ==="
+    # Build with CUDA support for V100 (Compute Capability 7.0)
+    # Key flags:
+    #   GGML_CUDA=ON       - Enable CUDA backend
+    #   GGML_RPC=ON        - Enable RPC server for distributed inference
+    #   GGML_CUDA_F16=ON   - Use FP16 CUDA kernels (V100 Tensor Cores)
+    #   GGML_NATIVE=OFF    - Don't use host-specific optimizations (for portability)
+    cmake -B build \
+        -DGGML_CUDA=ON \
+        -DGGML_RPC=ON \
+        -DCMAKE_CUDA_ARCHITECTURES=70 \
+        -DGGML_CUDA_F16=ON \
+        -DGGML_NATIVE=OFF \
+        -DCMAKE_BUILD_TYPE=Release
+
+    echo "=== Building llama.cpp ==="
+    # Build core binaries - target names may vary by version
+    # Primary targets: llama-server, llama-cli
+    # RPC target: rpc-server (older) or llama-rpc-server (newer)
+    cmake --build build --config Release -j "$(nproc)"
+
+    echo "=== Installing shared libraries ==="
+    # llama.cpp builds shared libraries that binaries depend on
+    # Install them to /usr/local/lib and update ldconfig
+    mkdir -p /usr/local/lib
+    for lib in build/bin/*.so*; do
+        if [ -f "$lib" ]; then
+            cp -P "$lib" /usr/local/lib/
+            echo "Installed lib: $(basename $lib)"
+        fi
+    done
+    # Also check src/ for older build layouts
+    for lib in build/src/*.so* build/ggml/src/*.so*; do
+        if [ -f "$lib" ]; then
+            cp -P "$lib" /usr/local/lib/
+            echo "Installed lib: $(basename $lib)"
+        fi
+    done
+    ldconfig
+    echo "Library cache updated"
+
+    echo "=== Installing binaries ==="
+
+    # Verify and install llama-server (required)
+    if [ -f build/bin/llama-server ]; then
+        cp build/bin/llama-server /usr/local/bin/
+        echo "Installed: llama-server"
+    else
+        echo "FATAL: llama-server binary not found in build/bin/"
+        ls -la build/bin/ || true
+        exit 1
+    fi
+
+    # Install llama-cli if present
+    if [ -f build/bin/llama-cli ]; then
+        cp build/bin/llama-cli /usr/local/bin/
+        echo "Installed: llama-cli"
+    fi
+
+    # Install RPC server (name varies by llama.cpp version)
+    # Newer versions: llama-rpc-server
+    # Older versions: rpc-server
+    RPC_INSTALLED=false
+    if [ -f build/bin/llama-rpc-server ]; then
+        cp build/bin/llama-rpc-server /usr/local/bin/llama-rpc-server
+        echo "Installed: llama-rpc-server (native)"
+        RPC_INSTALLED=true
+    elif [ -f build/bin/rpc-server ]; then
+        cp build/bin/rpc-server /usr/local/bin/llama-rpc-server
+        echo "Installed: llama-rpc-server (from rpc-server)"
+        RPC_INSTALLED=true
+    fi
+
+    if [ "$RPC_INSTALLED" = false ]; then
+        echo "WARNING: RPC server binary not found - distributed inference will not work"
+        echo "Available binaries:"
+        ls -la build/bin/ || true
+    fi
+
+    echo "=== Build verification ==="
+    echo "Installed binaries:"
+    ls -la /usr/local/bin/llama* 2>/dev/null || true
+
+    # Verify binaries are executable
+    /usr/local/bin/llama-server --version 2>/dev/null || echo "(llama-server --version not supported)"
+
+    echo "=== Cleanup ==="
+    # Remove build artifacts to reduce image size
+    rm -rf /opt/llama.cpp/build
+    rm -rf /opt/llama.cpp/.git
+    # Keep source for reference but remove heavy files
+    find /opt/llama.cpp -name "*.o" -delete 2>/dev/null || true
+
+    echo "=== Build complete ==="
+
+%environment
+    export PATH=/usr/local/bin:$PATH
+    export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
+    export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+    # Optimal settings for V100S
+    export GGML_CUDA_NO_PINNED=0
+    export GGML_CUDA_FORCE_MMQ=0
+
+%runscript
+    exec llama-server "$@"
+
+%test
+    echo "=== Container validation ==="
+
+    # Verify CUDA is accessible (may not be available during build)
+    if nvidia-smi 2>/dev/null; then
+        echo "[PASS] nvidia-smi available"
+    else
+        echo "[SKIP] nvidia-smi not available (expected in build environment)"
+    fi
+
+    # Verify required binaries exist and are executable
+    if test -x /usr/local/bin/llama-server; then
+        echo "[PASS] llama-server binary exists"
+    else
+        echo "[FAIL] llama-server binary missing"
+        exit 1
+    fi
+
+    # Verify optional binaries
+    if test -x /usr/local/bin/llama-cli; then
+        echo "[PASS] llama-cli binary exists"
+    else
+        echo "[WARN] llama-cli binary missing"
+    fi
+
+    if test -x /usr/local/bin/llama-rpc-server; then
+        echo "[PASS] llama-rpc-server binary exists"
+    else
+        echo "[WARN] llama-rpc-server missing - distributed inference disabled"
+    fi
+
+    # Verify version file exists
+    if test -f /opt/llama-cpp-version.txt; then
+        echo "[INFO] Built from commit: $(cat /opt/llama-cpp-version.txt)"
+    fi
+
+    echo "Container validation complete"
+
+%help
+    llama.cpp inference server container for V100S GPUs.
+
+    Usage:
+      # Single-node inference
+      apptainer run --nv llama-server.sif \
+        --model /path/to/model.gguf \
+        --host 0.0.0.0 --port 8080 \
+        --ctx-size 8192 --n-gpu-layers 99
+
+      # Distributed inference (RPC worker)
+      apptainer exec --nv llama-server.sif \
+        llama-rpc-server --host 0.0.0.0 --port 50052
+
+      # Distributed inference (head node with RPC)
+      apptainer run --nv llama-server.sif \
+        --model /path/to/model.gguf \
+        --rpc worker1:50052,worker2:50052 \
+        --host 0.0.0.0 --port 8080

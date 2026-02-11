@@ -1,0 +1,46 @@
+# AI Inference Auto-Start Daemon - Systemd Service
+#
+# TEMPORARY: Remove when MCP integration complete (beefcake2-40om, y51x)
+#
+# Installation (on slurm-ctl):
+#   sudo cp ai-inference-daemon.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable ai-inference-daemon
+#   sudo systemctl start ai-inference-daemon
+#
+# Removal:
+#   sudo systemctl stop ai-inference-daemon
+#   sudo systemctl disable ai-inference-daemon
+#   sudo rm /etc/systemd/system/ai-inference-daemon.service
+#   sudo systemctl daemon-reload
+
+[Unit]
+Description=AI Inference Auto-Start Daemon (TEMPORARY)
+Documentation=file:///cluster/shared/scripts/llama-cpp/ai-inference-daemon.sh
+After=network.target slurmd.service
+Wants=slurmd.service
+
+[Service]
+Type=simple
+ExecStart=/cluster/shared/scripts/llama-cpp/ai-inference-daemon.sh
+Restart=on-failure
+RestartSec=30
+
+# Run as slurm user (has sbatch permissions)
+User=root
+Group=root
+
+# Environment
+Environment="AI_DAEMON_INTERVAL=60"
+Environment="AI_DAEMON_TIER=fast"
+Environment="SLURM_SCRIPTS_PATH=/cluster/shared/scripts/llama-cpp"
+Environment="SLURM_ENDPOINTS_PATH=/cluster/shared/ai/endpoints"
+Environment="AI_DAEMON_LOG=/var/log/ai-inference-daemon.log"
+
+# Logging
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ai-inference-daemon
+
+[Install]
+WantedBy=multi-user.target

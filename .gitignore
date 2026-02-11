@@ -1,0 +1,44 @@
+# Build artifacts
+/target/
+**/target/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Environment
+.env
+.env.*
+
+# Secrets
+*.pem
+*.key
+id_rsa*
+
+# RocksDB data
+*.sst
+*.log
+LOCK
+MANIFEST-*
+CURRENT
+OPTIONS-*
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Logs
+*.log
+
+# Temporary
+/scratch/
+/tmp/

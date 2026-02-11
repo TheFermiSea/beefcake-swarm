@@ -1,0 +1,19 @@
+[package]
+name = "swarm-agents"
+version.workspace = true
+edition.workspace = true
+description = "Rig-based agent orchestrator for autonomous coding swarm"
+
+[[bin]]
+name = "swarm-agents"
+path = "src/main.rs"
+
+[dependencies]
+rig-core = "0.30"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+reqwest = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+anyhow = { workspace = true }
