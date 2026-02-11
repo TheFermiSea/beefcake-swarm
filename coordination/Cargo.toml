@@ -23,6 +23,7 @@ clap = { version = "4", features = ["derive"] }
 
 # Benchmark/feedback loop dependencies
 regex = "1"
+ignore = "0.4"
 
 # Ensemble coordination dependencies
 rocksdb = "0.24"

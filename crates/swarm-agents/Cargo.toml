@@ -10,6 +10,7 @@ path = "src/main.rs"
 
 [dependencies]
 rig-core = "0.30"
+coordination = { path = "../../coordination" }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -17,3 +18,6 @@ reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+
+[dev-dependencies]
+tempfile = "3"
