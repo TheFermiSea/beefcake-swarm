@@ -5,7 +5,7 @@
 # Sets up the ai-proxy LXC container (CT 800 on pve3) with:
 # - SSH key-based access
 # - Base toolchain (Node.js 22, Rust, git)
-# - Coding agent CLIs (Claude Code, Codex, Gemini CLI)
+# - Coding agent CLIs (Claude Code, Codex, OpenCode, Factory Droid, Crush)
 # - Beads issue tracker
 # - CLIProxyPlus endpoint verification
 #
@@ -119,10 +119,239 @@ install_agents() {
         npm install -g @openai/codex 2>/dev/null || log "Codex not available via npm, skip"
     fi
 
+    # OpenCode
+    if ! command -v opencode &>/dev/null; then
+        log "Installing OpenCode..."
+        curl -fsSL https://opencode.ai/install | bash
+    else
+        log "OpenCode already installed: $(opencode --version 2>/dev/null || echo 'installed')"
+    fi
+
+    # Factory Droid
+    if ! command -v droid &>/dev/null; then
+        log "Installing Factory Droid..."
+        curl -fsSL https://app.factory.ai/cli | sh
+    else
+        log "Factory Droid already installed: $(droid --version 2>/dev/null || echo 'installed')"
+    fi
+
+    # Crush (Charmbracelet)
+    if ! command -v crush &>/dev/null; then
+        log "Installing Crush..."
+        npm install -g @charmland/crush
+    else
+        log "Crush already installed: $(crush --version 2>/dev/null || echo 'installed')"
+    fi
+
     # Create data directory
     mkdir -p /data/projects
 
     log "Agent installation complete"
+}
+
+###############################################################################
+# Step 0c2: Configure Agent CLIs (OpenCode, Factory Droid, Crush)
+###############################################################################
+configure_agents() {
+    log "Configuring coding agent CLIs..."
+
+    # --- OpenCode ---
+    local opencode_dir="$HOME/.config/opencode"
+    mkdir -p "$opencode_dir"
+    cat > "$opencode_dir/config.json" << 'OCEOF'
+{
+  "providers": {
+    "beefcake-proxy": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://localhost:8317/v1",
+        "apiKey": "rust-daq-proxy-key"
+      },
+      "models": {
+        "claude-opus-4-6": {
+          "name": "claude-opus-4-6",
+          "context_length": 200000,
+          "max_tokens": 16384
+        },
+        "claude-sonnet-4-5-20250929": {
+          "name": "claude-sonnet-4-5-20250929",
+          "context_length": 200000,
+          "max_tokens": 16384
+        },
+        "gpt-5.2-codex": {
+          "name": "gpt-5.2-codex",
+          "context_length": 128000,
+          "max_tokens": 16384
+        },
+        "gemini-3-pro-preview": {
+          "name": "gemini-3-pro-preview",
+          "context_length": 2000000,
+          "max_tokens": 65536
+        }
+      }
+    },
+    "beefcake-72b": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://slurm-ctl.tailc46cd0.ts.net:8081/v1",
+        "apiKey": "not-needed"
+      },
+      "models": {
+        "or1-behemoth": {
+          "name": "or1-behemoth-q4_k_m",
+          "context_length": 32768,
+          "max_tokens": 8192
+        }
+      }
+    },
+    "beefcake-14b": {
+      "npm": "@ai-sdk/openai-compatible",
+      "options": {
+        "baseURL": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1",
+        "apiKey": "not-needed"
+      },
+      "models": {
+        "strand-coder": {
+          "name": "strand-rust-coder-14b-q8_0",
+          "context_length": 16384,
+          "max_tokens": 4096
+        }
+      }
+    }
+  }
+}
+OCEOF
+    log "  OpenCode config written to $opencode_dir/config.json"
+
+    # --- Factory Droid ---
+    local factory_dir="$HOME/.factory"
+    mkdir -p "$factory_dir"
+    cat > "$factory_dir/config.json" << 'FDEOF'
+{
+  "customModels": [
+    {
+      "model": "claude-opus-4-6",
+      "displayName": "Claude Opus 4.6 (proxy)",
+      "baseUrl": "http://localhost:8317/v1",
+      "apiKey": "rust-daq-proxy-key",
+      "provider": "generic-chat-completion-api",
+      "maxOutputTokens": 16384
+    },
+    {
+      "model": "claude-sonnet-4-5-20250929",
+      "displayName": "Claude Sonnet 4.5 (proxy)",
+      "baseUrl": "http://localhost:8317/v1",
+      "apiKey": "rust-daq-proxy-key",
+      "provider": "generic-chat-completion-api",
+      "maxOutputTokens": 16384
+    },
+    {
+      "model": "gpt-5.2-codex",
+      "displayName": "GPT-5.2 Codex (proxy)",
+      "baseUrl": "http://localhost:8317/v1",
+      "apiKey": "rust-daq-proxy-key",
+      "provider": "generic-chat-completion-api",
+      "maxOutputTokens": 16384
+    },
+    {
+      "model": "gemini-3-pro-preview",
+      "displayName": "Gemini 3 Pro (proxy)",
+      "baseUrl": "http://localhost:8317/v1",
+      "apiKey": "rust-daq-proxy-key",
+      "provider": "generic-chat-completion-api",
+      "maxOutputTokens": 65536
+    },
+    {
+      "model": "or1-behemoth-q4_k_m",
+      "displayName": "Beefcake 72B (local)",
+      "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8081/v1",
+      "apiKey": "not-needed",
+      "provider": "generic-chat-completion-api",
+      "maxOutputTokens": 8192
+    },
+    {
+      "model": "strand-rust-coder-14b-q8_0",
+      "displayName": "Beefcake 14B (local)",
+      "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1",
+      "apiKey": "not-needed",
+      "provider": "generic-chat-completion-api",
+      "maxOutputTokens": 4096
+    }
+  ]
+}
+FDEOF
+    log "  Factory Droid config written to $factory_dir/config.json"
+
+    # --- Crush (Charmbracelet) ---
+    local crush_dir="$HOME/.config/crush"
+    mkdir -p "$crush_dir"
+    cat > "$crush_dir/config.json" << 'CREOF'
+{
+  "beefcake-proxy": {
+    "name": "Beefcake Proxy (Cloud)",
+    "base_url": "http://localhost:8317/v1/",
+    "type": "openai-compat",
+    "api_key": "rust-daq-proxy-key",
+    "models": [
+      {
+        "name": "Claude Opus 4.6",
+        "id": "claude-opus-4-6",
+        "context_window": 200000,
+        "default_max_tokens": 16384
+      },
+      {
+        "name": "Claude Sonnet 4.5",
+        "id": "claude-sonnet-4-5-20250929",
+        "context_window": 200000,
+        "default_max_tokens": 16384
+      },
+      {
+        "name": "GPT-5.2 Codex",
+        "id": "gpt-5.2-codex",
+        "context_window": 128000,
+        "default_max_tokens": 16384
+      },
+      {
+        "name": "Gemini 3 Pro",
+        "id": "gemini-3-pro-preview",
+        "context_window": 2000000,
+        "default_max_tokens": 65536
+      }
+    ]
+  },
+  "beefcake-72b": {
+    "name": "Beefcake 72B (Local)",
+    "base_url": "http://slurm-ctl.tailc46cd0.ts.net:8081/v1/",
+    "type": "openai-compat",
+    "api_key": "not-needed",
+    "models": [
+      {
+        "name": "OR1 Behemoth 72B",
+        "id": "or1-behemoth-q4_k_m",
+        "context_window": 32768,
+        "default_max_tokens": 8192
+      }
+    ]
+  },
+  "beefcake-14b": {
+    "name": "Beefcake 14B (Local)",
+    "base_url": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1/",
+    "type": "openai-compat",
+    "api_key": "not-needed",
+    "models": [
+      {
+        "name": "Strand Rust Coder 14B",
+        "id": "strand-rust-coder-14b-q8_0",
+        "context_window": 16384,
+        "default_max_tokens": 4096
+      }
+    ]
+  }
+}
+CREOF
+    log "  Crush config written to $crush_dir/config.json"
+
+    log "Agent CLI configuration complete"
 }
 
 ###############################################################################
@@ -206,12 +435,25 @@ verify() {
 
     # Check agents
     log "Checking coding agents..."
-    if command -v claude &>/dev/null; then
-        log "  claude: OK"
-    else
-        log "  claude: NOT INSTALLED"
-        ((failures++)) || true
-    fi
+    for agent in claude codex opencode droid crush; do
+        if command -v "$agent" &>/dev/null; then
+            log "  $agent: OK"
+        else
+            log "  $agent: NOT INSTALLED"
+            ((failures++)) || true
+        fi
+    done
+
+    # Check agent configs
+    log "Checking agent configurations..."
+    for cfg in "$HOME/.config/opencode/config.json" "$HOME/.factory/config.json" "$HOME/.config/crush/config.json"; do
+        if [[ -f "$cfg" ]]; then
+            log "  $cfg: OK"
+        else
+            log "  $cfg: MISSING (run configure_agents)"
+            ((failures++)) || true
+        fi
+    done
 
     if [[ $failures -eq 0 ]]; then
         log "VERIFICATION PASSED — all checks OK"
@@ -226,6 +468,7 @@ verify() {
 full_setup() {
     install_toolchain
     install_agents
+    configure_agents
     configure_environment
     verify
 }
@@ -243,6 +486,9 @@ case "${1:-help}" in
     agents)
         install_agents
         ;;
+    configure-agents)
+        configure_agents
+        ;;
     configure)
         configure_environment
         ;;
@@ -253,13 +499,14 @@ case "${1:-help}" in
         full_setup
         ;;
     help|*)
-        echo "Usage: $0 {inject-ssh-key|toolchain|agents|configure|verify|setup}"
+        echo "Usage: $0 {inject-ssh-key|toolchain|agents|configure-agents|configure|verify|setup}"
         echo ""
-        echo "  inject-ssh-key  Inject SSH key into CT 800 (run from local machine)"
-        echo "  toolchain       Install Node.js, Rust, git, build-essential"
-        echo "  agents          Install Claude Code, Codex, Gemini CLI"
-        echo "  configure       Set up environment variables"
-        echo "  verify          Run end-to-end verification"
-        echo "  setup           Full setup (Steps 0b-0e, run ON ai-proxy)"
+        echo "  inject-ssh-key    Inject SSH key into CT 800 (run from local machine)"
+        echo "  toolchain         Install Node.js, Rust, git, build-essential"
+        echo "  agents            Install Claude Code, Codex, OpenCode, Droid, Crush"
+        echo "  configure-agents  Write config files for OpenCode, Droid, Crush"
+        echo "  configure         Set up environment variables"
+        echo "  verify            Run end-to-end verification"
+        echo "  setup             Full setup (Steps 0b-0e, run ON ai-proxy)"
         ;;
 esac
