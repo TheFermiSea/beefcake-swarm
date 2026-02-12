@@ -30,8 +30,9 @@
 #
 # MoE offloading: -ot flag pushes Qwen3-Coder-Next's MoE expert FFN layers
 # to CPU. Harmless for dense models like strand-14B (no matching tensors).
-# VRAM budget: ~15GB strand + ~8GB Qwen3 attention = ~23GB of 32GB.
+# VRAM budget: ~15GB strand + ~8GB Qwen3 attention + ~1-3GB KV (q4_0) = ~24-26GB of 32GB.
 # CPU budget: ~40GB for MoE weights + OS headroom.
+# Context: 64K tokens shared across all models. KV cache uses q4_0 quantization.
 #
 # Thread allocation (32 total):
 #   MoE expert computation: 16 threads
@@ -51,7 +52,7 @@ LLAMA_BIN="${LLAMA_BIN:-/cluster/shared/llama-cpp/bin}"
 CUDA_LIB="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/targets/x86_64-linux/lib"
 CUDA_COMPAT="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/compat"
 PORT="${PORT:-8080}"
-CTX_SIZE="${CTX_SIZE:-8192}"
+CTX_SIZE="${CTX_SIZE:-65536}"
 THREADS="${THREADS:-32}"
 MODELS_MAX="${MODELS_MAX:-2}"  # Max concurrent models in VRAM
 
@@ -180,7 +181,9 @@ LD_LIBRARY_PATH="$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB${LD_LIBRARY_PATH:+:$LD_LIBRAR
     --jinja \
     --embedding \
     --cont-batching \
-    --metrics &
+    --metrics \
+    --cache-type-k q4_0 \
+    --cache-type-v q4_0 &
 SERVER_PID=$!
 echo "[$(date)] Server started (PID $SERVER_PID)"
 
