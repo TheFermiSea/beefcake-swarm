@@ -19,7 +19,7 @@
 #
 # Purpose: Complex architecture decisions, reasoning tasks
 # Throughput: 6-12 tok/s, 2-4s TTFT
-# Context: 8K tokens default (conservative; test up to 16K)
+# Context: 128K tokens (q4_0 KV cache ~10GB + ~40GB model = ~50GB in 64GB VRAM)
 #
 # Uses llama.cpp RPC with LAYER SPLIT across 2x V100S GPUs (64GB total).
 # 2+1 topology: vasp-01+vasp-03 for 72B, vasp-02 dedicated to 14B fast tier.
@@ -47,8 +47,8 @@ CUDA_LIB="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/targets/x86_64-linux/
 CUDA_COMPAT="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/compat"
 HEAD_PORT="${HEAD_PORT:-8081}"  # Port 8081 for reasoning tier (8080 = fast tier)
 RPC_PORT="${RPC_PORT:-50052}"
-CTX_SIZE="${CTX_SIZE:-8192}"
-N_PREDICT="${N_PREDICT:-8192}"  # Max output tokens per request (reasoning needs room)
+CTX_SIZE="${CTX_SIZE:-131072}"
+N_PREDICT="${N_PREDICT:-32768}"  # Max output tokens per request (reasoning needs room)
 THREADS="${THREADS:-8}"
 
 # Architectural configuration
