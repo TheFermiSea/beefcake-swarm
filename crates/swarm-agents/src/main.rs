@@ -85,28 +85,13 @@ fn format_work_packet(packet: &WorkPacket) -> String {
     prompt
 }
 
-/// MVP stub: "apply" implementer output. In the real loop this parses the LLM
-/// response into file edits. For now it creates an empty commit so the verifier
-/// has something to diff.
-fn apply_implementer_changes(worktree_path: &std::path::Path, _response: &str) -> Result<()> {
-    warn!("apply_implementer_changes is an MVP stub — creating empty commit");
-
-    let output = std::process::Command::new("git")
-        .args([
-            "commit",
-            "--allow-empty",
-            "-m",
-            "swarm: implementer stub commit",
-        ])
-        .current_dir(worktree_path)
-        .output()?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        anyhow::bail!("Failed to create stub commit: {stderr}");
-    }
-
-    Ok(())
+/// Apply implementer output by parsing the LLM response into file edits.
+///
+/// TODO(Phase 2): Implement patch/edit parsing from LLM response.
+/// Until then, this returns an error to prevent false-positive merges.
+fn apply_implementer_changes(_worktree_path: &std::path::Path, _response: &str) -> Result<()> {
+    error!("apply_implementer_changes is not yet implemented — cannot apply changes");
+    anyhow::bail!("apply_implementer_changes is not implemented; cannot apply changes");
 }
 
 /// Get the git diff of the worktree vs its parent branch.
@@ -267,10 +252,12 @@ async fn main() -> Result<()> {
             // Validator: blind review of the diff
             let diff = git_diff(&wt_path)?;
             if diff.is_empty() {
-                info!(iteration, "No diff to validate (empty commit stub)");
-                escalation.record_iteration(error_cats, error_count, true);
-                success = true;
-                break;
+                warn!(
+                    iteration,
+                    "Empty diff — no real changes applied, treating as failure"
+                );
+                escalation.record_iteration(error_cats, error_count, false);
+                continue;
             }
 
             match validator.validate(&diff).await {
@@ -302,7 +289,8 @@ async fn main() -> Result<()> {
     if success {
         info!(id = %issue.id, "Issue resolved — merging worktree");
         if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
-            error!(id = %issue.id, "Merge failed: {e}");
+            error!(id = %issue.id, "Merge failed: {e} — resetting issue to open");
+            let _ = beads.update_status(&issue.id, "open");
             return Err(e);
         }
         beads.close(&issue.id, Some("Resolved by swarm orchestrator"))?;

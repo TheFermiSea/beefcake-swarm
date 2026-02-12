@@ -41,7 +41,7 @@ impl ContextPacker {
         }
     }
 
-    /// Initial pack: walks worktree, gathers file headers + symbols (no prior failures).
+    /// Initial pack: walks worktree, gathers file headers within token budget (no prior failures).
     pub fn pack_initial(&self, bead_id: &str, objective: &str) -> WorkPacket {
         let rust_files = self.file_walker.rust_files();
 
@@ -173,12 +173,22 @@ mod tests {
             .output()
             .unwrap();
         std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
             .args(["add", "."])
             .current_dir(dir.path())
             .output()
             .unwrap();
         std::process::Command::new("git")
-            .args(["commit", "-m", "init", "--allow-empty"])
+            .args(["commit", "-m", "init"])
             .current_dir(dir.path())
             .output()
             .unwrap();

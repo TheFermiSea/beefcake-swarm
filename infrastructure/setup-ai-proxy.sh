@@ -573,7 +573,7 @@ export CLI_PROXY_KEY="rust-daq-proxy-key"
 export OPENAI_API_KEY="rust-daq-proxy-key"
 export OPENAI_BASE_URL="http://localhost:8317/v1"
 export ANTHROPIC_API_KEY="rust-daq-proxy-key"
-export ANTHROPIC_BASE_URL="http://localhost:8317/v1"
+export ANTHROPIC_BASE_URL="http://localhost:8317"
 
 # Cargo/Rust
 if [ -f "$HOME/.cargo/env" ]; then
