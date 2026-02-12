@@ -48,7 +48,7 @@ CUDA_COMPAT="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/compat"
 HEAD_PORT="${HEAD_PORT:-8081}"  # Port 8081 for reasoning tier (8080 = fast tier)
 RPC_PORT="${RPC_PORT:-50052}"
 CTX_SIZE="${CTX_SIZE:-131072}"
-N_PREDICT="${N_PREDICT:-32768}"  # Max output tokens per request (reasoning needs room)
+N_PREDICT="${N_PREDICT:--1}"  # -1 = unlimited (default). Reasoning models need full context for CoT.
 THREADS="${THREADS:-8}"
 
 # Architectural configuration
