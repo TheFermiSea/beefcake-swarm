@@ -151,44 +151,182 @@ install_agents() {
 
 ###############################################################################
 # Step 0c2: Configure Agent CLIs (OpenCode, Factory Droid, Crush)
+#
+# All 30 proxy models organized by provider:
+#   Antigravity (12): Gemini-hosted Claude, Gemini 3 previews, GPT-OSS, Tab models
+#   Anthropic (8): Direct subscription Claude models
+#   Codex/OpenAI (9): GPT-5.x series
+#   Google (1): Gemini 2.5 Pro
+#   Local (2): OR1 72B, Strand 14B (via SLURM)
 ###############################################################################
 configure_agents() {
     log "Configuring coding agent CLIs..."
 
     # --- OpenCode ---
     # Uses config.json with "provider" key, @ai-sdk/openai-compatible npm adapter
+    # Models grouped by provider — each provider shows as a header in the UI
     local opencode_dir="$HOME/.config/opencode"
     mkdir -p "$opencode_dir"
     cat > "$opencode_dir/config.json" << 'OCEOF'
 {
   "$schema": "https://opencode.ai/config.json",
   "provider": {
-    "beefcake-proxy": {
+    "antigravity": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Beefcake Proxy (Cloud)",
+      "name": "Antigravity (Cloud)",
       "options": {
         "baseURL": "http://localhost:8317/v1",
         "apiKey": "rust-daq-proxy-key"
       },
       "models": {
-        "claude-opus-4-6": {
-          "name": "Claude Opus 4.6",
-          "limit": { "context": 200000, "output": 16384 }
-        },
         "claude-opus-4-6-thinking": {
           "name": "Claude Opus 4.6 Thinking",
           "limit": { "context": 200000, "output": 32768 }
+        },
+        "gemini-claude-opus-4-5-thinking": {
+          "name": "Gemini Claude Opus 4.5 Thinking",
+          "limit": { "context": 200000, "output": 32768 }
+        },
+        "gemini-claude-sonnet-4-5-thinking": {
+          "name": "Gemini Claude Sonnet 4.5 Thinking",
+          "limit": { "context": 200000, "output": 32768 }
+        },
+        "gemini-claude-sonnet-4-5": {
+          "name": "Gemini Claude Sonnet 4.5",
+          "limit": { "context": 200000, "output": 16384 }
+        },
+        "gemini-3-pro-preview": {
+          "name": "Gemini 3 Pro Preview",
+          "limit": { "context": 2000000, "output": 65536 }
+        },
+        "gemini-3-pro-image-preview": {
+          "name": "Gemini 3 Pro Image Preview",
+          "limit": { "context": 2000000, "output": 65536 }
+        },
+        "gemini-3-flash-preview": {
+          "name": "Gemini 3 Flash Preview",
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "gemini-2.5-flash": {
+          "name": "Gemini 2.5 Flash",
+          "limit": { "context": 1000000, "output": 65536 }
+        },
+        "gemini-2.5-flash-lite": {
+          "name": "Gemini 2.5 Flash Lite",
+          "limit": { "context": 1000000, "output": 8192 }
+        },
+        "gpt-oss-120b-medium": {
+          "name": "GPT-OSS 120B Medium",
+          "limit": { "context": 128000, "output": 16384 }
+        },
+        "tab_flash_lite_preview": {
+          "name": "Tab Flash Lite Preview",
+          "limit": { "context": 1000000, "output": 8192 }
+        },
+        "tab_jump_flash_lite_preview": {
+          "name": "Tab Jump Flash Lite Preview",
+          "limit": { "context": 1000000, "output": 8192 }
+        }
+      }
+    },
+    "anthropic-sub": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Anthropic (Subscription)",
+      "options": {
+        "baseURL": "http://localhost:8317/v1",
+        "apiKey": "rust-daq-proxy-key"
+      },
+      "models": {
+        "claude-opus-4-5-20251101": {
+          "name": "Claude Opus 4.5",
+          "limit": { "context": 200000, "output": 32768 }
+        },
+        "claude-opus-4-1-20250805": {
+          "name": "Claude Opus 4.1",
+          "limit": { "context": 200000, "output": 16384 }
+        },
+        "claude-opus-4-20250514": {
+          "name": "Claude Opus 4",
+          "limit": { "context": 200000, "output": 16384 }
         },
         "claude-sonnet-4-5-20250929": {
           "name": "Claude Sonnet 4.5",
           "limit": { "context": 200000, "output": 16384 }
         },
+        "claude-sonnet-4-20250514": {
+          "name": "Claude Sonnet 4",
+          "limit": { "context": 200000, "output": 16384 }
+        },
+        "claude-3-7-sonnet-20250219": {
+          "name": "Claude 3.7 Sonnet",
+          "limit": { "context": 200000, "output": 16384 }
+        },
+        "claude-haiku-4-5-20251001": {
+          "name": "Claude Haiku 4.5",
+          "limit": { "context": 200000, "output": 8192 }
+        },
+        "claude-3-5-haiku-20241022": {
+          "name": "Claude 3.5 Haiku",
+          "limit": { "context": 200000, "output": 8192 }
+        }
+      }
+    },
+    "codex-sub": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Codex (Subscription)",
+      "options": {
+        "baseURL": "http://localhost:8317/v1",
+        "apiKey": "rust-daq-proxy-key"
+      },
+      "models": {
         "gpt-5.2-codex": {
           "name": "GPT-5.2 Codex",
           "limit": { "context": 128000, "output": 16384 }
         },
-        "gemini-3-pro-preview": {
-          "name": "Gemini 3 Pro",
+        "gpt-5.2": {
+          "name": "GPT-5.2",
+          "limit": { "context": 128000, "output": 16384 }
+        },
+        "gpt-5.1-codex-max": {
+          "name": "GPT-5.1 Codex Max",
+          "limit": { "context": 128000, "output": 32768 }
+        },
+        "gpt-5.1-codex": {
+          "name": "GPT-5.1 Codex",
+          "limit": { "context": 128000, "output": 16384 }
+        },
+        "gpt-5.1-codex-mini": {
+          "name": "GPT-5.1 Codex Mini",
+          "limit": { "context": 128000, "output": 16384 }
+        },
+        "gpt-5.1": {
+          "name": "GPT-5.1",
+          "limit": { "context": 128000, "output": 16384 }
+        },
+        "gpt-5-codex": {
+          "name": "GPT-5 Codex",
+          "limit": { "context": 128000, "output": 16384 }
+        },
+        "gpt-5-codex-mini": {
+          "name": "GPT-5 Codex Mini",
+          "limit": { "context": 128000, "output": 16384 }
+        },
+        "gpt-5": {
+          "name": "GPT-5",
+          "limit": { "context": 128000, "output": 16384 }
+        }
+      }
+    },
+    "google": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "Google",
+      "options": {
+        "baseURL": "http://localhost:8317/v1",
+        "apiKey": "rust-daq-proxy-key"
+      },
+      "models": {
+        "gemini-2.5-pro": {
+          "name": "Gemini 2.5 Pro",
           "limit": { "context": 2000000, "output": 65536 }
         }
       }
@@ -228,78 +366,154 @@ OCEOF
 
     # --- Factory Droid ---
     # Uses settings.json (NOT config.json) with customModels array
+    # Display names use [Provider] prefix for identification
     local factory_dir="$HOME/.factory"
     mkdir -p "$factory_dir"
     cat > "$factory_dir/settings.json" << 'FDEOF'
 {
   "logoAnimation": "off",
   "customModels": [
-    {
-      "model": "claude-opus-4-6",
-      "displayName": "Claude Opus 4.6 (proxy)",
-      "baseUrl": "http://localhost:8317/v1",
-      "apiKey": "rust-daq-proxy-key",
-      "provider": "generic-chat-completion-api",
-      "maxOutputTokens": 16384
-    },
-    {
-      "model": "claude-opus-4-6-thinking",
-      "displayName": "Claude Opus 4.6 Thinking (proxy)",
-      "baseUrl": "http://localhost:8317/v1",
-      "apiKey": "rust-daq-proxy-key",
-      "provider": "generic-chat-completion-api",
-      "maxOutputTokens": 32768
-    },
-    {
-      "model": "claude-sonnet-4-5-20250929",
-      "displayName": "Claude Sonnet 4.5 (proxy)",
-      "baseUrl": "http://localhost:8317/v1",
-      "apiKey": "rust-daq-proxy-key",
-      "provider": "generic-chat-completion-api",
-      "maxOutputTokens": 16384
-    },
-    {
-      "model": "gpt-5.2-codex",
-      "displayName": "GPT-5.2 Codex (proxy)",
-      "baseUrl": "http://localhost:8317/v1",
-      "apiKey": "rust-daq-proxy-key",
-      "provider": "generic-chat-completion-api",
-      "maxOutputTokens": 16384
-    },
-    {
-      "model": "gemini-3-pro-preview",
-      "displayName": "Gemini 3 Pro (proxy)",
-      "baseUrl": "http://localhost:8317/v1",
-      "apiKey": "rust-daq-proxy-key",
-      "provider": "generic-chat-completion-api",
-      "maxOutputTokens": 65536
-    },
-    {
-      "model": "or1-behemoth-q4_k_m",
-      "displayName": "Beefcake 72B (local)",
-      "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8081/v1",
-      "apiKey": "not-needed",
-      "provider": "generic-chat-completion-api",
-      "maxOutputTokens": 8192
-    },
-    {
-      "model": "strand-rust-coder-14b-q8_0",
-      "displayName": "Beefcake 14B (local)",
-      "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1",
-      "apiKey": "not-needed",
-      "provider": "generic-chat-completion-api",
-      "maxOutputTokens": 4096
-    }
+    { "model": "claude-opus-4-6-thinking", "displayName": "[Antigravity] Claude Opus 4.6 Thinking", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "gemini-claude-opus-4-5-thinking", "displayName": "[Antigravity] Gemini-Claude Opus 4.5 Thinking", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "gemini-claude-sonnet-4-5-thinking", "displayName": "[Antigravity] Gemini-Claude Sonnet 4.5 Thinking", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gemini-claude-sonnet-4-5", "displayName": "[Antigravity] Gemini-Claude Sonnet 4.5", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gemini-3-pro-preview", "displayName": "[Antigravity] Gemini 3 Pro Preview", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
+    { "model": "gemini-3-pro-image-preview", "displayName": "[Antigravity] Gemini 3 Pro Image Preview", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "gemini-3-flash-preview", "displayName": "[Antigravity] Gemini 3 Flash Preview", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "gemini-2.5-flash", "displayName": "[Antigravity] Gemini 2.5 Flash", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gemini-2.5-flash-lite", "displayName": "[Antigravity] Gemini 2.5 Flash Lite", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "gpt-oss-120b-medium", "displayName": "[Antigravity] GPT-OSS 120B Medium", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "tab_flash_lite_preview", "displayName": "[Antigravity] Tab Flash Lite Preview", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "tab_jump_flash_lite_preview", "displayName": "[Antigravity] Tab Jump Flash Lite Preview", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "claude-opus-4-5-20251101", "displayName": "[Anthropic Sub] Claude Opus 4.5", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-opus-4-1-20250805", "displayName": "[Anthropic Sub] Claude Opus 4.1", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-opus-4-20250514", "displayName": "[Anthropic Sub] Claude Opus 4", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-sonnet-4-5-20250929", "displayName": "[Anthropic Sub] Claude Sonnet 4.5", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-sonnet-4-20250514", "displayName": "[Anthropic Sub] Claude Sonnet 4", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-haiku-4-5-20251001", "displayName": "[Anthropic Sub] Claude Haiku 4.5", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "claude-3-7-sonnet-20250219", "displayName": "[Anthropic Sub] Claude 3.7 Sonnet", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "claude-3-5-haiku-20241022", "displayName": "[Anthropic Sub] Claude 3.5 Haiku", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 4096 },
+    { "model": "gpt-5.2-codex", "displayName": "[Codex Sub] GPT-5.2 Codex", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5.2", "displayName": "[Codex Sub] GPT-5.2", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5.1-codex-max", "displayName": "[Codex Sub] GPT-5.1 Codex Max", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5.1-codex", "displayName": "[Codex Sub] GPT-5.1 Codex", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5.1-codex-mini", "displayName": "[Codex Sub] GPT-5.1 Codex Mini", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "gpt-5.1", "displayName": "[Codex Sub] GPT-5.1", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5-codex", "displayName": "[Codex Sub] GPT-5 Codex", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5-codex-mini", "displayName": "[Codex Sub] GPT-5 Codex Mini", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "gpt-5", "displayName": "[Codex Sub] GPT-5", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gemini-2.5-pro", "displayName": "[Google] Gemini 2.5 Pro", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
+    { "model": "or1-behemoth-q4_k_m", "displayName": "[Local] Beefcake 72B", "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8081/v1", "apiKey": "not-needed", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "strand-rust-coder-14b-q8_0", "displayName": "[Local] Beefcake 14B", "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1", "apiKey": "not-needed", "provider": "generic-chat-completion-api", "maxOutputTokens": 4096 }
   ]
 }
 FDEOF
     log "  Factory Droid settings written to $factory_dir/settings.json"
 
     # --- Crush (Charmbracelet) ---
-    # Crush uses environment variables for provider auto-detection.
-    # OPENAI_API_KEY/BASE_URL and ANTHROPIC_API_KEY/BASE_URL are set in
-    # /etc/profile.d/ai-swarm.sh (see configure_environment).
-    log "  Crush uses env vars from /etc/profile.d/ai-swarm.sh"
+    # Config file: ~/.config/crush/crush.json (NOT config.json)
+    # Uses "openai" type for OpenAI-compat endpoints, grouped by provider
+    # Also auto-discovers via OPENAI/ANTHROPIC env vars (see configure_environment)
+    local crush_dir="$HOME/.config/crush"
+    mkdir -p "$crush_dir"
+    cat > "$crush_dir/crush.json" << 'CREOF'
+{
+  "default_provider": "antigravity",
+  "providers": {
+    "antigravity": {
+      "name": "Antigravity (Cloud)",
+      "base_url": "http://localhost:8317/v1/",
+      "type": "openai",
+      "api_key": "rust-daq-proxy-key",
+      "models": [
+        { "name": "[Antigravity] Claude Opus 4.6 Thinking", "id": "claude-opus-4-6-thinking", "context_window": 200000, "default_max_tokens": 32768 },
+        { "name": "[Antigravity] Gemini Claude Opus 4.5 Thinking", "id": "gemini-claude-opus-4-5-thinking", "context_window": 200000, "default_max_tokens": 32768 },
+        { "name": "[Antigravity] Gemini Claude Sonnet 4.5 Thinking", "id": "gemini-claude-sonnet-4-5-thinking", "context_window": 200000, "default_max_tokens": 32768 },
+        { "name": "[Antigravity] Gemini Claude Sonnet 4.5", "id": "gemini-claude-sonnet-4-5", "context_window": 200000, "default_max_tokens": 16384 },
+        { "name": "[Antigravity] Gemini 3 Pro Preview", "id": "gemini-3-pro-preview", "context_window": 2000000, "default_max_tokens": 65536 },
+        { "name": "[Antigravity] Gemini 3 Pro Image Preview", "id": "gemini-3-pro-image-preview", "context_window": 2000000, "default_max_tokens": 65536 },
+        { "name": "[Antigravity] Gemini 3 Flash Preview", "id": "gemini-3-flash-preview", "context_window": 1000000, "default_max_tokens": 65536 },
+        { "name": "[Antigravity] Gemini 2.5 Flash", "id": "gemini-2.5-flash", "context_window": 1000000, "default_max_tokens": 65536 },
+        { "name": "[Antigravity] Gemini 2.5 Flash Lite", "id": "gemini-2.5-flash-lite", "context_window": 1000000, "default_max_tokens": 8192 },
+        { "name": "[Antigravity] GPT-OSS 120B Medium", "id": "gpt-oss-120b-medium", "context_window": 128000, "default_max_tokens": 16384 },
+        { "name": "[Antigravity] Tab Flash Lite Preview", "id": "tab_flash_lite_preview", "context_window": 1000000, "default_max_tokens": 8192 },
+        { "name": "[Antigravity] Tab Jump Flash Lite Preview", "id": "tab_jump_flash_lite_preview", "context_window": 1000000, "default_max_tokens": 8192 }
+      ]
+    },
+    "anthropic-sub": {
+      "name": "Anthropic (Subscription)",
+      "base_url": "http://localhost:8317/v1/",
+      "type": "openai",
+      "api_key": "rust-daq-proxy-key",
+      "models": [
+        { "name": "[Anthropic] Claude Opus 4.5", "id": "claude-opus-4-5-20251101", "context_window": 200000, "default_max_tokens": 32768 },
+        { "name": "[Anthropic] Claude Opus 4.1", "id": "claude-opus-4-1-20250805", "context_window": 200000, "default_max_tokens": 16384 },
+        { "name": "[Anthropic] Claude Opus 4", "id": "claude-opus-4-20250514", "context_window": 200000, "default_max_tokens": 16384 },
+        { "name": "[Anthropic] Claude Sonnet 4.5", "id": "claude-sonnet-4-5-20250929", "context_window": 200000, "default_max_tokens": 16384 },
+        { "name": "[Anthropic] Claude Sonnet 4", "id": "claude-sonnet-4-20250514", "context_window": 200000, "default_max_tokens": 16384 },
+        { "name": "[Anthropic] Claude 3.7 Sonnet", "id": "claude-3-7-sonnet-20250219", "context_window": 200000, "default_max_tokens": 16384 },
+        { "name": "[Anthropic] Claude Haiku 4.5", "id": "claude-haiku-4-5-20251001", "context_window": 200000, "default_max_tokens": 8192 },
+        { "name": "[Anthropic] Claude 3.5 Haiku", "id": "claude-3-5-haiku-20241022", "context_window": 200000, "default_max_tokens": 8192 }
+      ]
+    },
+    "codex-sub": {
+      "name": "Codex (Subscription)",
+      "base_url": "http://localhost:8317/v1/",
+      "type": "openai",
+      "api_key": "rust-daq-proxy-key",
+      "models": [
+        { "name": "[Codex] GPT-5.2 Codex", "id": "gpt-5.2-codex", "context_window": 128000, "default_max_tokens": 16384 },
+        { "name": "[Codex] GPT-5.2", "id": "gpt-5.2", "context_window": 128000, "default_max_tokens": 16384 },
+        { "name": "[Codex] GPT-5.1 Codex Max", "id": "gpt-5.1-codex-max", "context_window": 128000, "default_max_tokens": 32768 },
+        { "name": "[Codex] GPT-5.1 Codex", "id": "gpt-5.1-codex", "context_window": 128000, "default_max_tokens": 16384 },
+        { "name": "[Codex] GPT-5.1 Codex Mini", "id": "gpt-5.1-codex-mini", "context_window": 128000, "default_max_tokens": 16384 },
+        { "name": "[Codex] GPT-5.1", "id": "gpt-5.1", "context_window": 128000, "default_max_tokens": 16384 },
+        { "name": "[Codex] GPT-5 Codex", "id": "gpt-5-codex", "context_window": 128000, "default_max_tokens": 16384 },
+        { "name": "[Codex] GPT-5 Codex Mini", "id": "gpt-5-codex-mini", "context_window": 128000, "default_max_tokens": 16384 },
+        { "name": "[Codex] GPT-5", "id": "gpt-5", "context_window": 128000, "default_max_tokens": 16384 }
+      ]
+    },
+    "google": {
+      "name": "Google",
+      "base_url": "http://localhost:8317/v1/",
+      "type": "openai",
+      "api_key": "rust-daq-proxy-key",
+      "models": [
+        { "name": "[Google] Gemini 2.5 Pro", "id": "gemini-2.5-pro", "context_window": 2000000, "default_max_tokens": 65536 }
+      ]
+    },
+    "beefcake-72b": {
+      "name": "Beefcake 72B (Local)",
+      "base_url": "http://slurm-ctl.tailc46cd0.ts.net:8081/v1/",
+      "type": "openai",
+      "api_key": "not-needed",
+      "models": [
+        { "name": "[Local] OR1 Behemoth 72B", "id": "or1-behemoth-q4_k_m", "context_window": 32768, "default_max_tokens": 8192 }
+      ]
+    },
+    "beefcake-14b": {
+      "name": "Beefcake 14B (Local)",
+      "base_url": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1/",
+      "type": "openai",
+      "api_key": "not-needed",
+      "models": [
+        { "name": "[Local] Strand Rust Coder 14B", "id": "strand-rust-coder-14b-q8_0", "context_window": 16384, "default_max_tokens": 4096 }
+      ]
+    }
+  },
+  "models": {
+    "large": {
+      "model": "claude-opus-4-5-20251101",
+      "provider": "anthropic-sub"
+    },
+    "small": {
+      "model": "claude-sonnet-4-5-20250929",
+      "provider": "anthropic-sub"
+    }
+  }
+}
+CREOF
+    log "  Crush config written to $crush_dir/crush.json"
 
     log "Agent CLI configuration complete"
 }
@@ -403,7 +617,7 @@ verify() {
 
     # Check agent configs
     log "Checking agent configurations..."
-    for cfg in "$HOME/.config/opencode/config.json" "$HOME/.factory/settings.json"; do
+    for cfg in "$HOME/.config/opencode/config.json" "$HOME/.factory/settings.json" "$HOME/.config/crush/crush.json"; do
         if [[ -f "$cfg" ]]; then
             log "  $cfg: OK"
         else
