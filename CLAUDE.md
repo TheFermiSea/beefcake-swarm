@@ -64,7 +64,7 @@ Human Intervention (blocking beads issue)
 
 - `flywheel/` — Forked from `Dicklesworthstone/agentic_coding_flywheel_setup`. TypeScript/Node. Mining prompts and task decomposition strategies; discarding Docker/cloud, adapting to SLURM/NFS.
 - `indexing/` — Python scripts for code indexing (CocoIndex for semantic search/RAG).
-- `inference/` — SLURM job scripts (`run-14b.slurm`, `run-72b-distributed.slurm`), systemd daemon, build/validate scripts.
+- `inference/` — SLURM job scripts (`run-14b.slurm` serves strand-14B + Qwen3-Coder-Next on vasp-02, `run-72b-distributed.slurm` on vasp-01+03), systemd daemon, build/validate scripts.
 - `infrastructure/` — Monitoring: GPU dashboard, HPC watchdog, ai-proxy setup.
 - `docs/` — Architecture docs, deployment guides, inference endpoint specs.
 
@@ -73,7 +73,13 @@ Human Intervention (blocking beads issue)
 | Tier | Endpoint | Model | Throughput |
 |------|----------|-------|------------|
 | Fast (14B) | http://vasp-02:8080 | strand-rust-coder-14b-q8_0 | ~53 tok/s |
+| Coder (80B MoE) | http://vasp-02:8080 | Qwen3-Coder-Next | ~5-15 tok/s |
 | Reasoning (72B) | http://vasp-01:8081 | or1-behemoth-q4_k_m | ~13 tok/s |
+
+Role specialization:
+- **strand-14B** = "Mechanic" — fast Rust-specific fixes, borrow checker cascades, type errors
+- **Qwen3-Coder-Next** = "Implementer" — general coding, multi-file changes, 256K context (MoE offload to CPU)
+- **OR1-Behemoth** = "Architect" — complex reasoning, architecture decisions
 
 Start inference:
 ```bash

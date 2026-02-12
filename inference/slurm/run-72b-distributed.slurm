@@ -33,7 +33,7 @@
 # - q4_0 KV cache: Reduces KV memory footprint in 64GB total VRAM
 #
 # Note: llama.cpp RPC uses TCP sockets over IPoIB, not native InfiniBand RDMA
-# Note: vasp-01 is time-shared with Qwen3-Coder-Next (review tier, lowest priority)
+# Note: vasp-01 is now dedicated to 72B (Qwen3-Coder-Next moved to vasp-02 router)
 #
 # This job is preemptible - VASP jobs have priority.
 ###############################################################################

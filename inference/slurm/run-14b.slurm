@@ -6,8 +6,8 @@
 #SBATCH --ntasks=1
 #SBATCH --nodelist=vasp-02
 #SBATCH --gres=gpu:v100s:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=32G
+#SBATCH --cpus-per-task=32
+#SBATCH --mem=128G
 #SBATCH --time=24:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:SIGTERM@30
@@ -15,16 +15,29 @@
 #SBATCH --error=/scratch/ai/logs/llama-14b-%j.err
 
 ###############################################################################
-# Single-Node Inference Server (Router Mode) - Pinned to vasp-02
+# Multi-Model Inference Server (Router Mode) - Pinned to vasp-02
 #
-# Purpose: Fast inference for self-healing compiler loops
-# Throughput: 25-45 tok/s (14B), <1s TTFT
+# Purpose: Fast inference (strand-14B) + general coding (Qwen3-Coder-Next)
 #
-# 2+1 topology: vasp-02 is dedicated to the fast tier (14B).
-# vasp-01+vasp-03 handle the reasoning tier (72B distributed).
+# Models:
+#   strand-14B:          "Mechanic" — fast Rust fixes, ~53 tok/s, <1s TTFT
+#   Qwen3-Coder-Next:   "Implementer" — multi-file coding, 256K ctx, ~5-15 tok/s
+#
+# Topology: vasp-02 serves fast+coder tiers. vasp-01+03 handle reasoning (72B).
 #
 # Router mode: Serves multiple models from --models-dir, loads on-demand
 # based on "model" field in API requests. Uses LRU eviction when at capacity.
+#
+# MoE offloading: -ot flag pushes Qwen3-Coder-Next's MoE expert FFN layers
+# to CPU. Harmless for dense models like strand-14B (no matching tensors).
+# VRAM budget: ~15GB strand + ~8GB Qwen3 attention = ~23GB of 32GB.
+# CPU budget: ~40GB for MoE weights + OS headroom.
+#
+# Thread allocation (32 total):
+#   MoE expert computation: 16 threads
+#   CocoIndex RAG:          4 threads
+#   cargo build/test:       8 threads
+#   OS headroom:            4 threads
 #
 # This job is preemptible - VASP jobs have priority. The server will be
 # gracefully terminated (30s warning) when a VASP job needs the GPU.
@@ -39,7 +52,7 @@ CUDA_LIB="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/targets/x86_64-linux/
 CUDA_COMPAT="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/compat"
 PORT="${PORT:-8080}"
 CTX_SIZE="${CTX_SIZE:-8192}"
-THREADS="${THREADS:-4}"
+THREADS="${THREADS:-32}"
 MODELS_MAX="${MODELS_MAX:-2}"  # Max concurrent models in VRAM
 
 # Endpoint registration (for service discovery)
@@ -101,16 +114,19 @@ fi
 echo "[$(date)] Available models in $MODELS_DIR:"
 ls -lh "$MODELS_DIR"/*.gguf 2>/dev/null || echo "  (no .gguf files found)"
 
-# Prefetch commonly used model to page cache
+# Prefetch commonly used models to page cache
 DEFAULT_MODEL="$MODELS_DIR/strand-rust-coder-14b-q8_0.gguf"
-if [[ -f "$DEFAULT_MODEL" ]]; then
-    echo "[$(date)] Prefetching default model to page cache..."
-    if command -v vmtouch &> /dev/null; then
-        vmtouch -vt "$DEFAULT_MODEL" 2>/dev/null || true
-    else
-        cat "$DEFAULT_MODEL" > /dev/null 2>&1 || true
+CODER_MODEL="$MODELS_DIR/Qwen3-Coder-Next-UD-Q4_K_XL.gguf"
+for model in "$DEFAULT_MODEL" "$CODER_MODEL"; do
+    if [[ -f "$model" ]]; then
+        echo "[$(date)] Prefetching $(basename "$model") to page cache..."
+        if command -v vmtouch &> /dev/null; then
+            vmtouch -vt "$model" 2>/dev/null || true
+        else
+            cat "$model" > /dev/null 2>&1 || true
+        fi
     fi
-fi
+done
 
 # Check binary exists
 if [[ ! -x "$LLAMA_BIN/llama-server" ]]; then
@@ -126,11 +142,13 @@ cat > "$ENDPOINT_FILE" <<EOF
     "job_id": "${SLURM_JOB_ID}",
     "mode": "router",
     "models_dir": "${MODELS_DIR}",
-    "tier": "fast",
+    "models": ["strand-rust-coder-14b-q8_0", "Qwen3-Coder-Next"],
+    "tier": "fast+coder",
     "node": "${SLURM_NODELIST}",
     "host": "$(hostname -f)",
     "port": ${PORT},
     "endpoint": "http://$(hostname -f):${PORT}/v1/chat/completions",
+    "anthropic_endpoint": "http://$(hostname -f):${PORT}/v1/messages",
     "models_endpoint": "http://$(hostname -f):${PORT}/v1/models",
     "started_at": "$(date -Iseconds)"
 }
@@ -144,6 +162,9 @@ echo "[$(date)] Starting llama-server..."
 # Run inference server in router mode (native binary, no container)
 # --models-dir: Serve multiple models from directory
 # --models-autoload: Load models on-demand based on API requests
+# -ot: MoE expert FFN layer offloading to CPU (Qwen3-Coder-Next).
+#       Harmless for dense models like strand-14B (no matching tensors).
+# --jinja: Jinja2 chat template support (required by Qwen3-Coder-Next)
 LD_LIBRARY_PATH="$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 "$LLAMA_BIN/llama-server" \
     --models-dir "$MODELS_DIR" \
@@ -153,8 +174,10 @@ LD_LIBRARY_PATH="$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB${LD_LIBRARY_PATH:+:$LD_LIBRAR
     --port "$PORT" \
     --ctx-size "$CTX_SIZE" \
     --n-gpu-layers 99 \
+    -ot ".ffn_.*_exps.=CPU" \
     --threads "$THREADS" \
     --flash-attn on \
+    --jinja \
     --embedding \
     --cont-batching \
     --metrics &

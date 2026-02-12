@@ -6,9 +6,8 @@
 # It should be REMOVED when MCP integration is complete (beefcake2-40om, y51x).
 #
 # Manages inference tiers (2+1 GPU split):
-#   - Fast (14B router mode) on vasp-03 (:8080)
-#   - Reasoning (72B Q4_K_M distributed) on vasp-01 + vasp-02 (:8081)
-#   - Review (Qwen3-Coder-Next MoE) time-shared on vasp-01 (:8002) - opportunistic
+#   - Fast+Coder (14B + Qwen3-Coder-Next router mode) on vasp-02 (:8080)
+#   - Reasoning (72B Q4_K_M distributed) on vasp-01 + vasp-03 (:8081)
 #
 # Tracked in: beads issue beefcake2-j9c3
 #
@@ -46,7 +45,6 @@ inference_job_exists() {
     case $tier in
         fast)      job_name="llama-14b" ;;
         reasoning) job_name="llama-72b" ;;
-        review)    job_name="qwen3-coder" ;;
         *)         return 1 ;;
     esac
     squeue -n "$job_name" -h -t RUNNING,PENDING 2>/dev/null | grep -q .
@@ -59,7 +57,6 @@ inference_endpoint_healthy() {
     case $tier in
         fast)      pattern="*-14b.json" ;;
         reasoning) pattern="*-72b.json" ;;
-        review)    pattern="*-qwen3-coder.json" ;;
         *)         return 1 ;;
     esac
 
@@ -80,7 +77,6 @@ submit_inference_job() {
     case $tier in
         fast)      script="run-14b.slurm" ;;
         reasoning) script="run-72b-distributed.slurm" ;;
-        review)    script="run-qwen3-coder-next.slurm" ;;
         *)         log "ERROR: Unknown tier: $tier"; return 1 ;;
     esac
 
@@ -120,11 +116,6 @@ check_tier() {
     submit_inference_job "$tier"
 }
 
-# Check if both primary inference tiers (fast + reasoning) have running jobs
-ai_tiers_running() {
-    inference_job_exists "fast" && inference_job_exists "reasoning"
-}
-
 check_and_start_all() {
     # If VASP jobs are active, do nothing
     if vasp_queue_active; then
@@ -132,16 +123,10 @@ check_and_start_all() {
         return 0
     fi
 
-    # Check primary tiers first
+    # Fast+coder tier (strand-14B + Qwen3-Coder-Next on vasp-02)
     check_tier "fast" || true
+    # Reasoning tier (OR1-Behemoth 72B on vasp-01+03)
     check_tier "reasoning" || true
-
-    # Review tier is opportunistic - only start when both primary tiers are running
-    if ai_tiers_running; then
-        check_tier "review" || true
-    else
-        log "[review] skipped - waiting for fast and reasoning tiers"
-    fi
 }
 
 # Single check mode
@@ -152,7 +137,7 @@ fi
 
 # Daemon mode
 log "AI Inference Daemon starting (interval: ${CHECK_INTERVAL}s)"
-log "Managing: fast (vasp-03:8080) + reasoning (vasp-01,vasp-02:8081) + review (vasp-01:8002, opportunistic)"
+log "Managing: fast+coder (vasp-02:8080, strand-14B + Qwen3-Coder-Next) + reasoning (vasp-01,vasp-03:8081)"
 log "VASP partitions monitored: $VASP_PARTITIONS"
 
 echo $$ > "$PID_FILE"

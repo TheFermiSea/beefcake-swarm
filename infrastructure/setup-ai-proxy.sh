@@ -157,7 +157,7 @@ install_agents() {
 #   Anthropic (8): Direct subscription Claude models
 #   Codex/OpenAI (9): GPT-5.x series
 #   Google (1): Gemini 2.5 Pro
-#   Local (2): OR1 72B, Strand 14B (via SLURM)
+#   Local (3): OR1 72B, Strand 14B, Qwen3-Coder-Next 80B MoE (via SLURM)
 ###############################################################################
 configure_agents() {
     log "Configuring coding agent CLIs..."
@@ -345,9 +345,9 @@ configure_agents() {
         }
       }
     },
-    "beefcake-14b": {
+    "beefcake-coder": {
       "npm": "@ai-sdk/openai-compatible",
-      "name": "Beefcake 14B (Local)",
+      "name": "Beefcake Coder (Local)",
       "options": {
         "baseURL": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1",
         "apiKey": "not-needed"
@@ -356,6 +356,10 @@ configure_agents() {
         "strand-rust-coder-14b-q8_0": {
           "name": "Strand Rust Coder 14B",
           "limit": { "context": 16384, "output": 4096 }
+        },
+        "Qwen3-Coder-Next-UD-Q4_K_XL.gguf": {
+          "name": "Qwen3 Coder Next 80B MoE",
+          "limit": { "context": 32768, "output": 8192 }
         }
       }
     }
@@ -404,7 +408,8 @@ OCEOF
     { "model": "gpt-5", "displayName": "[Codex Sub] GPT-5", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
     { "model": "gemini-2.5-pro", "displayName": "[Google] Gemini 2.5 Pro", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
     { "model": "or1-behemoth-q4_k_m", "displayName": "[Local] Beefcake 72B", "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8081/v1", "apiKey": "not-needed", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
-    { "model": "strand-rust-coder-14b-q8_0", "displayName": "[Local] Beefcake 14B", "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1", "apiKey": "not-needed", "provider": "generic-chat-completion-api", "maxOutputTokens": 4096 }
+    { "model": "strand-rust-coder-14b-q8_0", "displayName": "[Local] Beefcake 14B", "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1", "apiKey": "not-needed", "provider": "generic-chat-completion-api", "maxOutputTokens": 4096 },
+    { "model": "Qwen3-Coder-Next-UD-Q4_K_XL.gguf", "displayName": "[Local] Qwen3 Coder Next 80B", "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1", "apiKey": "not-needed", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 }
   ]
 }
 FDEOF
@@ -491,13 +496,14 @@ FDEOF
         { "name": "[Local] OR1 Behemoth 72B", "id": "or1-behemoth-q4_k_m", "context_window": 32768, "default_max_tokens": 8192 }
       ]
     },
-    "beefcake-14b": {
-      "name": "Beefcake 14B (Local)",
+    "beefcake-coder": {
+      "name": "Beefcake Coder (Local)",
       "base_url": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1/",
       "type": "openai",
       "api_key": "not-needed",
       "models": [
-        { "name": "[Local] Strand Rust Coder 14B", "id": "strand-rust-coder-14b-q8_0", "context_window": 16384, "default_max_tokens": 4096 }
+        { "name": "[Local] Strand Rust Coder 14B", "id": "strand-rust-coder-14b-q8_0", "context_window": 16384, "default_max_tokens": 4096 },
+        { "name": "[Local] Qwen3 Coder Next 80B", "id": "Qwen3-Coder-Next-UD-Q4_K_XL.gguf", "context_window": 32768, "default_max_tokens": 8192 }
       ]
     }
   },

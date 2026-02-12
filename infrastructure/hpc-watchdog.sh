@@ -95,9 +95,8 @@ run_patrol() {
     
     # Check model endpoints
     echo "Model Endpoints:"
-    check_endpoint "Qwen3-Coder-Next" "10.0.0.20" 8080 || ((failures++))
-    check_endpoint "Strand-Rust-Coder" "10.0.0.21" 8080 || ((failures++))
-    check_endpoint "CocoIndex RAG" "10.0.0.22" 8080 || ((failures++))
+    check_endpoint "Strand-14B + Qwen3-Coder-Next (vasp-02)" "10.0.0.21" 8080 || ((failures++))
+    check_endpoint "OR1-Behemoth-72B (vasp-01)" "10.0.0.20" 8081 || ((failures++))
     echo ""
     
     # Check GPU health (if reachable)
