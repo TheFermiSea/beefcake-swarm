@@ -156,65 +156,68 @@ configure_agents() {
     log "Configuring coding agent CLIs..."
 
     # --- OpenCode ---
+    # Uses config.json with "provider" key, @ai-sdk/openai-compatible npm adapter
     local opencode_dir="$HOME/.config/opencode"
     mkdir -p "$opencode_dir"
     cat > "$opencode_dir/config.json" << 'OCEOF'
 {
-  "providers": {
+  "$schema": "https://opencode.ai/config.json",
+  "provider": {
     "beefcake-proxy": {
       "npm": "@ai-sdk/openai-compatible",
+      "name": "Beefcake Proxy (Cloud)",
       "options": {
         "baseURL": "http://localhost:8317/v1",
         "apiKey": "rust-daq-proxy-key"
       },
       "models": {
         "claude-opus-4-6": {
-          "name": "claude-opus-4-6",
-          "context_length": 200000,
-          "max_tokens": 16384
+          "name": "Claude Opus 4.6",
+          "limit": { "context": 200000, "output": 16384 }
+        },
+        "claude-opus-4-6-thinking": {
+          "name": "Claude Opus 4.6 Thinking",
+          "limit": { "context": 200000, "output": 32768 }
         },
         "claude-sonnet-4-5-20250929": {
-          "name": "claude-sonnet-4-5-20250929",
-          "context_length": 200000,
-          "max_tokens": 16384
+          "name": "Claude Sonnet 4.5",
+          "limit": { "context": 200000, "output": 16384 }
         },
         "gpt-5.2-codex": {
-          "name": "gpt-5.2-codex",
-          "context_length": 128000,
-          "max_tokens": 16384
+          "name": "GPT-5.2 Codex",
+          "limit": { "context": 128000, "output": 16384 }
         },
         "gemini-3-pro-preview": {
-          "name": "gemini-3-pro-preview",
-          "context_length": 2000000,
-          "max_tokens": 65536
+          "name": "Gemini 3 Pro",
+          "limit": { "context": 2000000, "output": 65536 }
         }
       }
     },
     "beefcake-72b": {
       "npm": "@ai-sdk/openai-compatible",
+      "name": "Beefcake 72B (Local)",
       "options": {
         "baseURL": "http://slurm-ctl.tailc46cd0.ts.net:8081/v1",
         "apiKey": "not-needed"
       },
       "models": {
-        "or1-behemoth": {
-          "name": "or1-behemoth-q4_k_m",
-          "context_length": 32768,
-          "max_tokens": 8192
+        "or1-behemoth-q4_k_m": {
+          "name": "OR1 Behemoth 72B",
+          "limit": { "context": 32768, "output": 8192 }
         }
       }
     },
     "beefcake-14b": {
       "npm": "@ai-sdk/openai-compatible",
+      "name": "Beefcake 14B (Local)",
       "options": {
         "baseURL": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1",
         "apiKey": "not-needed"
       },
       "models": {
-        "strand-coder": {
-          "name": "strand-rust-coder-14b-q8_0",
-          "context_length": 16384,
-          "max_tokens": 4096
+        "strand-rust-coder-14b-q8_0": {
+          "name": "Strand Rust Coder 14B",
+          "limit": { "context": 16384, "output": 4096 }
         }
       }
     }
@@ -224,10 +227,12 @@ OCEOF
     log "  OpenCode config written to $opencode_dir/config.json"
 
     # --- Factory Droid ---
+    # Uses settings.json (NOT config.json) with customModels array
     local factory_dir="$HOME/.factory"
     mkdir -p "$factory_dir"
-    cat > "$factory_dir/config.json" << 'FDEOF'
+    cat > "$factory_dir/settings.json" << 'FDEOF'
 {
+  "logoAnimation": "off",
   "customModels": [
     {
       "model": "claude-opus-4-6",
@@ -236,6 +241,14 @@ OCEOF
       "apiKey": "rust-daq-proxy-key",
       "provider": "generic-chat-completion-api",
       "maxOutputTokens": 16384
+    },
+    {
+      "model": "claude-opus-4-6-thinking",
+      "displayName": "Claude Opus 4.6 Thinking (proxy)",
+      "baseUrl": "http://localhost:8317/v1",
+      "apiKey": "rust-daq-proxy-key",
+      "provider": "generic-chat-completion-api",
+      "maxOutputTokens": 32768
     },
     {
       "model": "claude-sonnet-4-5-20250929",
@@ -280,76 +293,13 @@ OCEOF
   ]
 }
 FDEOF
-    log "  Factory Droid config written to $factory_dir/config.json"
+    log "  Factory Droid settings written to $factory_dir/settings.json"
 
     # --- Crush (Charmbracelet) ---
-    local crush_dir="$HOME/.config/crush"
-    mkdir -p "$crush_dir"
-    cat > "$crush_dir/config.json" << 'CREOF'
-{
-  "beefcake-proxy": {
-    "name": "Beefcake Proxy (Cloud)",
-    "base_url": "http://localhost:8317/v1/",
-    "type": "openai-compat",
-    "api_key": "rust-daq-proxy-key",
-    "models": [
-      {
-        "name": "Claude Opus 4.6",
-        "id": "claude-opus-4-6",
-        "context_window": 200000,
-        "default_max_tokens": 16384
-      },
-      {
-        "name": "Claude Sonnet 4.5",
-        "id": "claude-sonnet-4-5-20250929",
-        "context_window": 200000,
-        "default_max_tokens": 16384
-      },
-      {
-        "name": "GPT-5.2 Codex",
-        "id": "gpt-5.2-codex",
-        "context_window": 128000,
-        "default_max_tokens": 16384
-      },
-      {
-        "name": "Gemini 3 Pro",
-        "id": "gemini-3-pro-preview",
-        "context_window": 2000000,
-        "default_max_tokens": 65536
-      }
-    ]
-  },
-  "beefcake-72b": {
-    "name": "Beefcake 72B (Local)",
-    "base_url": "http://slurm-ctl.tailc46cd0.ts.net:8081/v1/",
-    "type": "openai-compat",
-    "api_key": "not-needed",
-    "models": [
-      {
-        "name": "OR1 Behemoth 72B",
-        "id": "or1-behemoth-q4_k_m",
-        "context_window": 32768,
-        "default_max_tokens": 8192
-      }
-    ]
-  },
-  "beefcake-14b": {
-    "name": "Beefcake 14B (Local)",
-    "base_url": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1/",
-    "type": "openai-compat",
-    "api_key": "not-needed",
-    "models": [
-      {
-        "name": "Strand Rust Coder 14B",
-        "id": "strand-rust-coder-14b-q8_0",
-        "context_window": 16384,
-        "default_max_tokens": 4096
-      }
-    ]
-  }
-}
-CREOF
-    log "  Crush config written to $crush_dir/config.json"
+    # Crush uses environment variables for provider auto-detection.
+    # OPENAI_API_KEY/BASE_URL and ANTHROPIC_API_KEY/BASE_URL are set in
+    # /etc/profile.d/ai-swarm.sh (see configure_environment).
+    log "  Crush uses env vars from /etc/profile.d/ai-swarm.sh"
 
     log "Agent CLI configuration complete"
 }
@@ -369,16 +319,23 @@ export CLAUDE_MODEL="claude-opus-4-6"
 export LOCAL_FAST_ENDPOINT="http://slurm-ctl.tailc46cd0.ts.net:8080/v1/chat/completions"
 export LOCAL_REASONING_ENDPOINT="http://slurm-ctl.tailc46cd0.ts.net:8081/v1/chat/completions"
 
-# CLIProxyPlus (all cloud providers)
+# CLIProxyPlus (all cloud providers via single endpoint)
 export CLI_PROXY_ENDPOINT="http://localhost:8317/v1/chat/completions"
 export CLI_PROXY_KEY="rust-daq-proxy-key"
+
+# Crush + other OpenAI-compat tools — uses env vars for provider detection
+export OPENAI_API_KEY="rust-daq-proxy-key"
+export OPENAI_BASE_URL="http://localhost:8317/v1"
+export ANTHROPIC_API_KEY="rust-daq-proxy-key"
+export ANTHROPIC_BASE_URL="http://localhost:8317/v1"
 
 # Cargo/Rust
 if [ -f "$HOME/.cargo/env" ]; then
     . "$HOME/.cargo/env"
 fi
 
-# Path
+# Path — include droid, opencode
+export PATH="/root/.local/bin:/root/.opencode/bin:$PATH"
 export PATH="/data/projects/beefcake2/tools/rust-cluster-mcp/target/release:$PATH"
 ENVEOF
 
@@ -446,7 +403,7 @@ verify() {
 
     # Check agent configs
     log "Checking agent configurations..."
-    for cfg in "$HOME/.config/opencode/config.json" "$HOME/.factory/config.json" "$HOME/.config/crush/config.json"; do
+    for cfg in "$HOME/.config/opencode/config.json" "$HOME/.factory/settings.json"; do
         if [[ -f "$cfg" ]]; then
             log "  $cfg: OK"
         else
@@ -454,6 +411,14 @@ verify() {
             ((failures++)) || true
         fi
     done
+
+    # Check Crush env vars
+    if [[ -n "${OPENAI_API_KEY:-}" ]] && [[ -n "${ANTHROPIC_API_KEY:-}" ]]; then
+        log "  Crush env vars: OK"
+    else
+        log "  Crush env vars: MISSING (source /etc/profile.d/ai-swarm.sh)"
+        ((failures++)) || true
+    fi
 
     if [[ $failures -eq 0 ]]; then
         log "VERIFICATION PASSED — all checks OK"
