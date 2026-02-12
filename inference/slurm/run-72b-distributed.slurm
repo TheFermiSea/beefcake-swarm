@@ -48,6 +48,7 @@ CUDA_COMPAT="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/compat"
 HEAD_PORT="${HEAD_PORT:-8081}"  # Port 8081 for reasoning tier (8080 = fast tier)
 RPC_PORT="${RPC_PORT:-50052}"
 CTX_SIZE="${CTX_SIZE:-8192}"
+N_PREDICT="${N_PREDICT:-8192}"  # Max output tokens per request (reasoning needs room)
 THREADS="${THREADS:-8}"
 
 # Architectural configuration
@@ -388,6 +389,7 @@ SERVER_ARGS=(
     --host 0.0.0.0
     --port "$HEAD_PORT"
     --ctx-size "$CTX_SIZE"
+    --n-predict "$N_PREDICT"
     --split-mode layer
     --tensor-split 1,1
     --n-gpu-layers 80
