@@ -25,7 +25,7 @@ impl SwarmTier {
         match self {
             Self::Implementer => "strand-rust-coder-14b-q8_0",
             Self::Integrator => "or1-behemoth-q4_k_m",
-            Self::Adversary => "qwen3-coder-next-q4_k_xl",
+            Self::Adversary => "Qwen3-Coder-Next-UD-Q4_K_XL.gguf",
             Self::Cloud => "cloud-brain-trust",
         }
     }

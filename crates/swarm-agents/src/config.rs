@@ -1,4 +1,5 @@
 use serde::Deserialize;
+use std::path::PathBuf;
 
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
@@ -22,6 +23,10 @@ pub struct Endpoint {
 pub struct SwarmConfig {
     pub fast_endpoint: Endpoint,
     pub reasoning_endpoint: Endpoint,
+    /// Maximum retries per issue before giving up.
+    pub max_retries: u32,
+    /// Base directory for worktrees (None = auto-detect).
+    pub worktree_base: Option<PathBuf>,
 }
 
 impl Default for SwarmConfig {
@@ -37,6 +42,8 @@ impl Default for SwarmConfig {
                 model: "or1-behemoth-q4_k_m".to_string(),
                 tier: Tier::Reasoning,
             },
+            max_retries: 3,
+            worktree_base: None,
         }
     }
 }

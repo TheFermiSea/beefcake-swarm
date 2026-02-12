@@ -30,7 +30,7 @@ def text_to_embedding(text: cocoindex.DataSlice[str]) -> cocoindex.DataSlice[lis
         EmbedText(
             api_type=LlmApiType.OPENAI,
             model="nomic-embed-code.Q8_0",
-            address="http://10.0.0.22:8080/v1",
+            address="http://10.0.0.21:8080/v1",
             api_key=api_key_ref,
             output_dimension=3584
         )

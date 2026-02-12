@@ -48,6 +48,7 @@
 #![allow(dead_code)]
 
 pub mod benchmark;
+pub mod context_packer;
 pub mod council;
 pub mod ensemble;
 pub mod escalation;
@@ -112,3 +113,6 @@ pub use escalation::{
 
 // Re-export work packet types
 pub use work_packet::{Constraint, FileContext, KeySymbol, WorkPacket, WorkPacketGenerator};
+
+// Re-export context packer types
+pub use context_packer::{ContextPacker, FileWalker};

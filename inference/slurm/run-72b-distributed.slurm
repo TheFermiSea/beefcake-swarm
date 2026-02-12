@@ -19,7 +19,7 @@
 #
 # Purpose: Complex architecture decisions, reasoning tasks
 # Throughput: 6-12 tok/s, 2-4s TTFT
-# Context: 8K tokens default (conservative; test up to 16K)
+# Context: 128K tokens (q4_0 KV cache ~10GB + ~40GB model = ~50GB in 64GB VRAM)
 #
 # Uses llama.cpp RPC with LAYER SPLIT across 2x V100S GPUs (64GB total).
 # 2+1 topology: vasp-01+vasp-03 for 72B, vasp-02 dedicated to 14B fast tier.
@@ -33,7 +33,7 @@
 # - q4_0 KV cache: Reduces KV memory footprint in 64GB total VRAM
 #
 # Note: llama.cpp RPC uses TCP sockets over IPoIB, not native InfiniBand RDMA
-# Note: vasp-01 is time-shared with Qwen3-Coder-Next (review tier, lowest priority)
+# Note: vasp-01 is now dedicated to 72B (Qwen3-Coder-Next moved to vasp-02 router)
 #
 # This job is preemptible - VASP jobs have priority.
 ###############################################################################
@@ -47,7 +47,8 @@ CUDA_LIB="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/targets/x86_64-linux/
 CUDA_COMPAT="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/compat"
 HEAD_PORT="${HEAD_PORT:-8081}"  # Port 8081 for reasoning tier (8080 = fast tier)
 RPC_PORT="${RPC_PORT:-50052}"
-CTX_SIZE="${CTX_SIZE:-8192}"
+CTX_SIZE="${CTX_SIZE:-131072}"
+N_PREDICT="${N_PREDICT:--1}"  # -1 = unlimited (default). Reasoning models need full context for CoT.
 THREADS="${THREADS:-8}"
 
 # Architectural configuration
@@ -388,6 +389,14 @@ SERVER_ARGS=(
     --host 0.0.0.0
     --port "$HEAD_PORT"
     --ctx-size "$CTX_SIZE"
+    --n-predict "$N_PREDICT"
+    # YaRN RoPE scaling for extended context (base model trained at 32K)
+    # GGUF has context_length=40960 with no YaRN metadata, so we override both:
+    # 1. context_length → 131072 to prevent slot capping at 40960
+    # 2. rope-scaling yarn with orig-ctx 32768 for proper frequency interpolation
+    --override-kv "qwen3.context_length=int:131072"
+    --rope-scaling yarn
+    --yarn-orig-ctx 32768
     --split-mode layer
     --tensor-split 1,1
     --n-gpu-layers 80
