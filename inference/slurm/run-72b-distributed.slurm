@@ -390,6 +390,13 @@ SERVER_ARGS=(
     --port "$HEAD_PORT"
     --ctx-size "$CTX_SIZE"
     --n-predict "$N_PREDICT"
+    # YaRN RoPE scaling for extended context (base model trained at 32K)
+    # GGUF has context_length=40960 with no YaRN metadata, so we override both:
+    # 1. context_length → 131072 to prevent slot capping at 40960
+    # 2. rope-scaling yarn with orig-ctx 32768 for proper frequency interpolation
+    --override-kv "qwen3.context_length=int:131072"
+    --rope-scaling yarn
+    --yarn-orig-ctx 32768
     --split-mode layer
     --tensor-split 1,1
     --n-gpu-layers 80
