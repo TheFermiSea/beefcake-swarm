@@ -515,6 +515,32 @@ FDEOF
 CREOF
     log "  Crush config written to $crush_dir/crush.json"
 
+    # --- Claude Code ---
+    # Uses ~/.claude/settings.json with env overrides
+    # Proxy supports Anthropic Messages API (/v1/messages, /v1/messages/count_tokens)
+    # so Claude Code can use ALL proxy models (Anthropic, Antigravity, Codex, Google)
+    # Switch models at runtime: /model <name> or claude --model <name>
+    local claude_dir="$HOME/.claude"
+    mkdir -p "$claude_dir"
+    cat > "$claude_dir/settings.json" << 'CLEOF'
+{
+  "env": {
+    "ANTHROPIC_BASE_URL": "http://localhost:8317",
+    "ANTHROPIC_AUTH_TOKEN": "rust-daq-proxy-key",
+    "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-4-5-20251101",
+    "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-4-5-20250929",
+    "ANTHROPIC_DEFAULT_HAIKU_MODEL": "claude-haiku-4-5-20251001",
+    "DISABLE_PROMPT_CACHING": "1"
+  },
+  "model": "sonnet"
+}
+CLEOF
+    log "  Claude Code settings written to $claude_dir/settings.json"
+    log "  Available models via /model: any of the 30 proxy models"
+    log "  Aliases: opus → Opus 4.5, sonnet → Sonnet 4.5, haiku → Haiku 4.5"
+    log "  Antigravity: claude --model gemini-3-pro-preview"
+    log "  Codex: claude --model gpt-5.2-codex"
+
     log "Agent CLI configuration complete"
 }
 
@@ -617,7 +643,7 @@ verify() {
 
     # Check agent configs
     log "Checking agent configurations..."
-    for cfg in "$HOME/.config/opencode/config.json" "$HOME/.factory/settings.json" "$HOME/.config/crush/crush.json"; do
+    for cfg in "$HOME/.claude/settings.json" "$HOME/.config/opencode/config.json" "$HOME/.factory/settings.json" "$HOME/.config/crush/crush.json"; do
         if [[ -f "$cfg" ]]; then
             log "  $cfg: OK"
         else
