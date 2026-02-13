@@ -1,6 +1,7 @@
 mod beads_bridge;
 mod config;
 mod implementer;
+mod tools;
 mod validator;
 mod worktree_bridge;
 
