@@ -104,22 +104,26 @@ fn format_task_prompt(packet: &WorkPacket, cloud_guidance: Option<&str>) -> Stri
 /// Stage and commit all changes in the worktree.
 ///
 /// Returns `true` if there were changes to commit, `false` if clean.
-fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> {
-    // Stage all changes
-    let add = std::process::Command::new("git")
-        .args(["add", "-A"])
+/// Uses `git add .` (not `-A`) to respect `.gitignore` and avoid staging
+/// agent-generated artifacts.
+async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> {
+    // Stage changes (respects .gitignore)
+    let add = tokio::process::Command::new("git")
+        .args(["add", "."])
         .current_dir(wt_path)
-        .output()?;
+        .output()
+        .await?;
     if !add.status.success() {
         let stderr = String::from_utf8_lossy(&add.stderr);
         anyhow::bail!("git add failed: {stderr}");
     }
 
     // Check if there are staged changes
-    let status = std::process::Command::new("git")
+    let status = tokio::process::Command::new("git")
         .args(["diff", "--cached", "--quiet"])
         .current_dir(wt_path)
-        .output()?;
+        .output()
+        .await?;
 
     if status.status.success() {
         // Exit code 0 means no diff — nothing to commit
@@ -128,10 +132,11 @@ fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> {
 
     // Commit
     let msg = format!("swarm: iteration {iteration} changes");
-    let commit = std::process::Command::new("git")
+    let commit = tokio::process::Command::new("git")
         .args(["commit", "-m", &msg])
         .current_dir(wt_path)
-        .output()?;
+        .output()
+        .await?;
     if !commit.status.success() {
         let stderr = String::from_utf8_lossy(&commit.stderr);
         anyhow::bail!("git commit failed: {stderr}");
@@ -141,11 +146,12 @@ fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> {
 }
 
 /// Get the git diff of the worktree vs its parent branch.
-fn git_diff(worktree_path: &Path) -> Result<String> {
-    let output = std::process::Command::new("git")
+async fn git_diff(worktree_path: &Path) -> Result<String> {
+    let output = tokio::process::Command::new("git")
         .args(["diff", "HEAD~1..HEAD"])
         .current_dir(worktree_path)
-        .output()?;
+        .output()
+        .await?;
 
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
@@ -379,11 +385,12 @@ async fn main() -> Result<()> {
         };
 
         // --- Git commit changes made by the agent ---
-        let has_changes = match git_commit_changes(&wt_path, iteration) {
+        let has_changes = match git_commit_changes(&wt_path, iteration).await {
             Ok(changed) => changed,
             Err(e) => {
-                warn!(iteration, "git commit error: {e}");
-                false
+                // Propagate git failures — don't mask system errors as "no changes"
+                error!(iteration, "git commit failed: {e}");
+                return Err(e);
             }
         };
 
@@ -419,7 +426,7 @@ async fn main() -> Result<()> {
 
         if report.all_green {
             // --- Reviewer: blind review of the diff ---
-            let diff = git_diff(&wt_path)?;
+            let diff = git_diff(&wt_path).await?;
             if diff.is_empty() {
                 warn!(
                     iteration,

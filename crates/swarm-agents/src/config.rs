@@ -104,8 +104,6 @@ pub struct ClientSet {
     pub local: openai::CompletionsClient,
     /// Client for vasp-01:8081 (serves Reasoning model)
     pub reasoning: openai::CompletionsClient,
-    /// Client for ai-proxy:8317 (cloud escalation, optional)
-    pub cloud: Option<openai::CompletionsClient>,
 }
 
 impl ClientSet {
@@ -122,23 +120,7 @@ impl ClientSet {
             .build()
             .context("Failed to build reasoning client (vasp-01)")?;
 
-        let cloud = if let Some(ref ce) = config.cloud_endpoint {
-            Some(
-                openai::CompletionsClient::builder()
-                    .api_key(&ce.api_key)
-                    .base_url(&ce.url)
-                    .build()
-                    .context("Failed to build cloud client (ai-proxy)")?,
-            )
-        } else {
-            None
-        };
-
-        Ok(Self {
-            local,
-            reasoning,
-            cloud,
-        })
+        Ok(Self { local, reasoning })
     }
 }
 
