@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Model Selection & Routing
+- **Rust Tasks:** Use the `/ask-local` command (wraps `or1-behemoth-q4_k_m.gguf`) for deep Rust analysis and generation.
+  - Example: `/ask-local "or1-behemoth-q4_k_m.gguf" "Explain the borrow checker error in src/lib.rs"`
+- **Code Gen:** Use the `/ask-local` command (wraps `Qwen3-Coder-Next`) for scaffolding and boilerplate.
+  - Example: `/ask-local "Qwen3-Coder-Next" "Generate a struct for User with fields..."`
+- **General/Complex:** Use the default Claude model (Sonnet 3.5 / Opus).
+- **Research:** Always check **NotebookLM** first using `/ask-notebook` or `notebook_query`.
+
 ## Build & Test Commands
 
 ```bash
@@ -138,3 +146,26 @@ ssh root@10.0.0.5 "sbatch /cluster/shared/scripts/llama-cpp/run-72b-distributed.
 - `coordination/tests/` — Several integration tests reference `rust_cluster_mcp` as an unresolved crate (should be `coordination`). These tests won't compile until import paths are fixed.
 - `crates/swarm-agents/` — Has dead code warnings on structs/methods that are defined but not yet wired into the Phase 2 orchestrator loop.
 - `#![allow(dead_code)]` is enabled in coordination's `lib.rs` and `main.rs` due to rmcp macro-generated code triggering false positives.
+
+## Agent Teams
+
+Enabled via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`.
+
+### Team Structure
+- **Lead (Opus 4.6)**: Picks beads issues, assigns to teammates, reviews results
+- **Teammates (Sonnet 4.5)**: Each works on one beads issue on a separate branch
+
+### Teammate Workflow
+1. Claim issue: `bd update <id> --status in_progress`
+2. Create branch: `git checkout -b swarm/<issue-id>`
+3. Implement the fix/feature
+4. Quality gates auto-run on task completion (fmt, clippy, check, test)
+5. Commit with conventional format and push branch
+
+### Local Model Access (optional)
+Teammates can query local Rust-expert models via curl for a second opinion:
+- strand-14B (fast fixes): `curl http://vasp-02:8080/v1/chat/completions -d '{"model":"strand-rust-coder-14b-q8_0.gguf",...}'`
+- OR1-Behemoth (reasoning): `curl http://vasp-01:8081/v1/chat/completions -d '{"model":"or1-behemoth-q4_k_m.gguf",...}'`
+
+### Branch Strategy
+Each teammate works on `swarm/<issue-id>`. Lead assigns non-overlapping issues.

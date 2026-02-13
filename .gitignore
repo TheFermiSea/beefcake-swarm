@@ -39,6 +39,9 @@ venv/
 # Logs
 *.log
 
+# Claude Code local settings (credentials)
+.claude/settings.local.json
+
 # Temporary
 /scratch/
 /tmp/
