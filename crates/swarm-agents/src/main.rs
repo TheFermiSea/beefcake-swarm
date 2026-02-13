@@ -156,26 +156,55 @@ async fn git_diff(worktree_path: &Path) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
-/// Determine if the Rust specialist coder should handle this task
-/// based on error categories from the last verifier run.
+/// Coder routing decision with confidence level.
+#[derive(Debug)]
+enum CoderRoute {
+    /// strand-14B: deep Rust expertise, fast on single-file fixes
+    RustCoder,
+    /// Qwen3-Coder-Next: 256K context, multi-file scaffolding
+    GeneralCoder,
+}
+
+/// Route to the appropriate coder based on error category distribution.
 ///
-/// Rust-specific errors (borrow checker, lifetimes, trait bounds) go to
-/// strand-14B. Everything else goes to the general coder.
-fn should_use_rust_coder(error_cats: &[ErrorCategory]) -> bool {
+/// Uses a weighted scoring system rather than a simple `any()` check:
+/// - Rust-specific categories (borrow checker, lifetimes, traits) score toward strand-14B
+/// - Structural categories (imports, syntax, macros) score toward Qwen3-Coder-Next
+/// - Mixed errors with majority Rust → strand-14B; majority structural → general
+/// - No errors (first iteration) → general coder for scaffolding
+fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
     if error_cats.is_empty() {
-        // No errors yet (first iteration) — use general coder for scaffolding
-        return false;
+        // First iteration — use general coder for scaffolding/multi-file work
+        return CoderRoute::GeneralCoder;
     }
-    error_cats.iter().any(|cat| {
-        matches!(
-            cat,
-            ErrorCategory::BorrowChecker
-                | ErrorCategory::Lifetime
-                | ErrorCategory::TraitBound
-                | ErrorCategory::TypeMismatch
-                | ErrorCategory::Async
-        )
-    })
+
+    let mut rust_score: i32 = 0;
+    let mut general_score: i32 = 0;
+
+    for cat in error_cats {
+        match cat {
+            // Deep Rust expertise required — strand-14B excels here
+            ErrorCategory::BorrowChecker => rust_score += 3,
+            ErrorCategory::Lifetime => rust_score += 3,
+            ErrorCategory::TraitBound => rust_score += 2,
+            ErrorCategory::Async => rust_score += 2,
+            ErrorCategory::TypeMismatch => rust_score += 1,
+
+            // Structural/multi-file work — Qwen3-Coder-Next's 256K context helps
+            ErrorCategory::ImportResolution => general_score += 3,
+            ErrorCategory::Macro => general_score += 2,
+            ErrorCategory::Syntax => general_score += 1,
+
+            // Ambiguous — slight general bias (may need broader context)
+            ErrorCategory::Other => general_score += 1,
+        }
+    }
+
+    if rust_score > general_score {
+        CoderRoute::RustCoder
+    } else {
+        CoderRoute::GeneralCoder
+    }
 }
 
 #[tokio::main]
@@ -193,6 +222,7 @@ async fn main() -> Result<()> {
         reasoning = %config.reasoning_endpoint.url,
         cloud = config.cloud_endpoint.is_some(),
         max_retries = config.max_retries,
+        prompt_version = prompts::PROMPT_VERSION,
         "Swarm orchestrator starting"
     );
 
@@ -314,12 +344,15 @@ async fn main() -> Result<()> {
                     .cloned()
                     .unwrap_or_default();
 
-                if should_use_rust_coder(&recent_cats) {
-                    info!(iteration, "Routing to rust_coder (strand-14B)");
-                    rust_coder.prompt(&task_prompt).await
-                } else {
-                    info!(iteration, "Routing to general_coder (Qwen3-Coder-Next)");
-                    general_coder.prompt(&task_prompt).await
+                match route_to_coder(&recent_cats) {
+                    CoderRoute::RustCoder => {
+                        info!(iteration, "Routing to rust_coder (strand-14B)");
+                        rust_coder.prompt(&task_prompt).await
+                    }
+                    CoderRoute::GeneralCoder => {
+                        info!(iteration, "Routing to general_coder (Qwen3-Coder-Next)");
+                        general_coder.prompt(&task_prompt).await
+                    }
                 }
             }
             SwarmTier::Integrator => {
@@ -350,9 +383,14 @@ async fn main() -> Result<()> {
                         }
                     }
                 } else {
-                    error!("Cloud tier requested but no cloud agent configured");
-                    error!("Flagging issue for human intervention");
-                    break;
+                    // Fallback: cloud unavailable — route to Manager (Integrator tier)
+                    // instead of giving up entirely
+                    warn!(
+                        iteration,
+                        "Cloud tier requested but no cloud agent configured — \
+                         falling back to Manager (Integrator tier)"
+                    );
+                    manager.prompt(&task_prompt).await
                 }
             }
         };

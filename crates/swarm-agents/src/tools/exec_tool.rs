@@ -13,7 +13,10 @@ use serde::Deserialize;
 use super::ToolError;
 
 /// Commands that are allowed to be executed.
-const ALLOWED_COMMANDS: &[&str] = &["cargo", "git", "ls", "cat", "head", "tail", "wc", "find"];
+///
+/// Agents have dedicated read_file/write_file/list_files tools, so shell-based
+/// file reading (cat, head, tail) is excluded to reduce attack surface.
+const ALLOWED_COMMANDS: &[&str] = &["cargo", "git", "ls", "wc", "find", "grep", "rg"];
 
 /// Default timeout for command execution.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -49,8 +52,8 @@ impl Tool for RunCommandTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "run_command".into(),
-            description: "Run a shell command in the workspace. Only cargo, git, ls, cat, \
-                          head, tail, wc, find are allowed."
+            description: "Run a shell command in the workspace. Only cargo, git, ls, wc, \
+                          find, grep, rg are allowed. Use read_file for reading files."
                 .into(),
             parameters: serde_json::json!({
                 "type": "object",

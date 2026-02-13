@@ -1,4 +1,11 @@
 //! System prompt constants for each agent role in the swarm.
+//!
+//! Prompt versioning: bump `PROMPT_VERSION` whenever preamble content changes.
+//! This enables tracing which prompt version produced a given agent response,
+//! useful for debugging regressions in agent behavior.
+
+/// Prompt version. Bump on any preamble content change.
+pub const PROMPT_VERSION: &str = "2.1.0";
 
 /// Manager/orchestrator preamble (OR1-Behemoth 72B).
 ///
