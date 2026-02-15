@@ -11,17 +11,19 @@ REPO_DIR="/cluster/shared/code/beefcake-swarm"
 WT_DIR="/cluster/shared/wt"
 # Use node-local scratch to avoid NFS root_squash permission issues
 CARGO_CACHE="/scratch/swarm-cargo-cache"
+CARGO_TARGET="/scratch/swarm-target"
 SIF="/cluster/shared/containers/swarm-agent.sif"
 
-mkdir -p "$WT_DIR" "$CARGO_CACHE"
+mkdir -p "$WT_DIR" "$CARGO_CACHE" "$CARGO_TARGET"
 
+# --cleanenv: clean environment (only explicit --env vars), no filesystem restrictions
+# Avoids --containall which fights NFS root_squash on write paths
 apptainer exec \
-    --containall \
-    --bind "${REPO_DIR}:/workspace" \
-    --bind "${WT_DIR}:${WT_DIR}" \
-    --bind "${CARGO_CACHE}:/opt/cargo-cache" \
-    --pwd /workspace \
+    --cleanenv \
+    --pwd "${REPO_DIR}" \
     --env "RUST_LOG=${RUST_LOG:-info}" \
+    --env "CARGO_HOME=${CARGO_CACHE}" \
+    --env "CARGO_TARGET_DIR=${CARGO_TARGET}" \
     --env "SWARM_FAST_URL=http://vasp-02:8080/v1" \
     --env "SWARM_FAST_MODEL=Qwen3-Coder-Next-UD-Q4_K_XL.gguf" \
     --env "SWARM_CODER_URL=http://vasp-02:8080/v1" \
@@ -32,5 +34,6 @@ apptainer exec \
     --env "SWARM_CLOUD_API_KEY=rust-daq-proxy-key" \
     --env "SWARM_CLOUD_MODEL=claude-sonnet-4-5" \
     --env "SWARM_BEADS_BIN=bd" \
+    --env "PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     "$SIF" \
     cargo run -p swarm-agents --release
