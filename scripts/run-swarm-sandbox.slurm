@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --job-name=swarm-orch
-#SBATCH --partition=batch
+#SBATCH --partition=normal
 #SBATCH --nodes=1
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=8G
