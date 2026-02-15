@@ -6,6 +6,8 @@
 #SBATCH --mem=8G
 #SBATCH --time=01:00:00
 #SBATCH --output=/cluster/shared/ai/logs/swarm-orch-%j.log
+#SBATCH --uid=brian
+#SBATCH --gid=hpc
 
 REPO_DIR="/cluster/shared/code/beefcake-swarm"
 WT_DIR="/cluster/shared/wt"
