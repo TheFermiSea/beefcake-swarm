@@ -40,7 +40,7 @@ impl MockBeads {
 }
 
 impl IssueTracker for MockBeads {
-    fn list_open(&self) -> Result<Vec<BeadsIssue>> {
+    fn list_ready(&self) -> Result<Vec<BeadsIssue>> {
         Ok(vec![BeadsIssue {
             id: "mock-001".into(),
             title: "Fix type mismatch in count()".into(),

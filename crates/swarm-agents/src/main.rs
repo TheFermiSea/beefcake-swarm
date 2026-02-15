@@ -59,8 +59,8 @@ async fn main() -> Result<()> {
     let repo_root = std::env::current_dir()?;
     let worktree_bridge = WorktreeBridge::new(config.worktree_base.clone(), &repo_root)?;
 
-    // --- Pick highest-priority open issue ---
-    let issues = match beads.list_open() {
+    // --- Pick highest-priority ready (unblocked) issue ---
+    let issues = match beads.list_ready() {
         Ok(issues) => issues,
         Err(e) => {
             warn!("Beads not available: {e}");
@@ -70,7 +70,7 @@ async fn main() -> Result<()> {
     };
 
     if issues.is_empty() {
-        info!("No open issues. Orchestrator exiting.");
+        info!("No ready issues. Orchestrator exiting.");
         return Ok(());
     }
 

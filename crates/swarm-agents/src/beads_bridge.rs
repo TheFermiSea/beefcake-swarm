@@ -18,7 +18,7 @@ pub struct BeadsIssue {
 /// `BeadsBridge` implements this for the real beads CLI.
 /// Tests can provide a mock implementation.
 pub trait IssueTracker {
-    fn list_open(&self) -> Result<Vec<BeadsIssue>>;
+    fn list_ready(&self) -> Result<Vec<BeadsIssue>>;
     fn update_status(&self, id: &str, status: &str) -> Result<()>;
     fn close(&self, id: &str, reason: Option<&str>) -> Result<()>;
 }
@@ -67,20 +67,20 @@ impl BeadsBridge {
 }
 
 impl IssueTracker for BeadsBridge {
-    /// List open issues, sorted by priority.
-    fn list_open(&self) -> Result<Vec<BeadsIssue>> {
+    /// List ready issues (open and not blocked), sorted by priority.
+    fn list_ready(&self) -> Result<Vec<BeadsIssue>> {
         let output = Command::new(&self.bin)
-            .args(["list", "--status=open", "--json"])
+            .args(["ready", "--json"])
             .output()
-            .context(format!("Failed to run `{} list`. Is beads_rust installed?", self.bin))?;
+            .context(format!("Failed to run `{} ready`. Is beads_rust installed?", self.bin))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("{} list failed: {stderr}", self.bin);
+            anyhow::bail!("{} ready failed: {stderr}", self.bin);
         }
 
         let issues: Vec<BeadsIssue> =
-            serde_json::from_slice(&output.stdout).context(format!("Failed to parse {} list output", self.bin))?;
+            serde_json::from_slice(&output.stdout).context(format!("Failed to parse {} ready output", self.bin))?;
 
         Ok(issues)
     }
