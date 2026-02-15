@@ -19,5 +19,10 @@ pub mod tools;
 pub mod types;
 
 pub use error::{HarnessError, HarnessResult};
+pub use git_manager::GitManager;
+pub use progress::ProgressTracker;
+pub use session::{
+    clear_session_state, load_session_state, save_session_state, SessionManager, SessionSummary,
+};
 pub use tools::{create_shared_state, HarnessState, SharedHarnessState};
 pub use types::*;

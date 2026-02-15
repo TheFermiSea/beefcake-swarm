@@ -62,9 +62,11 @@ pub mod verifier;
 pub mod work_packet;
 
 // Re-export key harness types
+pub use harness::{load_session_state, save_session_state};
 pub use harness::{
-    FeatureCategory, FeatureSpec, HarnessConfig, HarnessError, HarnessResult, HarnessState,
-    ProgressEntry, ProgressMarker, SessionState, SessionStatus, StartupContext,
+    FeatureCategory, FeatureSpec, GitManager, HarnessConfig, HarnessError, HarnessResult,
+    HarnessState, InterventionType, PendingIntervention, ProgressEntry, ProgressMarker,
+    ProgressTracker, SessionManager, SessionState, SessionStatus, SessionSummary, StartupContext,
 };
 
 // Re-export key ensemble types
