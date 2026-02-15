@@ -16,10 +16,16 @@ SIF="/cluster/shared/containers/swarm-agent.sif"
 
 mkdir -p "$WT_DIR" "$CARGO_CACHE" "$CARGO_TARGET"
 
-# --cleanenv: clean environment (only explicit --env vars), no filesystem restrictions
-# Avoids --containall which fights NFS root_squash on write paths
+# --cleanenv: clean environment (only explicit --env vars)
+# --writable-tmpfs: allows writes to SIF overlay areas
+# Explicit --bind for writable paths so Apptainer doesn't overlay them
 apptainer exec \
     --cleanenv \
+    --writable-tmpfs \
+    --bind "${REPO_DIR}:${REPO_DIR}" \
+    --bind "${WT_DIR}:${WT_DIR}" \
+    --bind "${CARGO_CACHE}:${CARGO_CACHE}" \
+    --bind "${CARGO_TARGET}:${CARGO_TARGET}" \
     --pwd "${REPO_DIR}" \
     --env "RUST_LOG=${RUST_LOG:-info}" \
     --env "CARGO_HOME=${CARGO_CACHE}" \
