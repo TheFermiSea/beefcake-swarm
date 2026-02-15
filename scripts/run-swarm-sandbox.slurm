@@ -9,7 +9,8 @@
 
 REPO_DIR="/cluster/shared/code/beefcake-swarm"
 WT_DIR="/cluster/shared/wt"
-CARGO_CACHE="/cluster/shared/cargo-cache"
+# Use node-local scratch to avoid NFS root_squash permission issues
+CARGO_CACHE="/scratch/swarm-cargo-cache"
 SIF="/cluster/shared/containers/swarm-agent.sif"
 
 mkdir -p "$WT_DIR" "$CARGO_CACHE"
