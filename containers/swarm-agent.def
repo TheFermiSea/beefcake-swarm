@@ -1,0 +1,18 @@
+Bootstrap: docker
+From: rust:1.84-bookworm
+
+%post
+    apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+    rustup component add clippy rustfmt
+    cargo install --git https://github.com/Dicklesworthstone/beads_rust
+    # Pre-warm cargo registry
+    mkdir -p /opt/cargo-cache
+
+%environment
+    export PATH="/usr/local/cargo/bin:$PATH"
+    export CARGO_HOME="/opt/cargo-cache"
+    export RUST_LOG="${RUST_LOG:-info}"
+
+%labels
+    Author beefcake-swarm
+    Description Sandbox for swarm-agents orchestrator
