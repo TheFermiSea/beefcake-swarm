@@ -40,7 +40,7 @@ apptainer exec \
     --env "SWARM_REASONING_MODEL=or1-behemoth-q4_k_m.gguf" \
     --env "SWARM_CLOUD_URL=http://10.0.0.5:8317/v1" \
     --env "SWARM_CLOUD_API_KEY=rust-daq-proxy-key" \
-    --env "SWARM_CLOUD_MODEL=claude-opus-4-5-20251101" \
+    --env "SWARM_CLOUD_MODEL=claude-opus-4-6-thinking" \
     --env "SWARM_BEADS_BIN=bd" \
     --env "PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     "$SIF" \
