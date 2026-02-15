@@ -18,8 +18,8 @@ use coordination::feedback::ErrorCategory;
 use coordination::save_session_state;
 use coordination::{
     ContextPacker, EscalationEngine, EscalationState, GitManager, InterventionType,
-    PendingIntervention, ProgressTracker, SessionManager, SwarmTier, Verifier, VerifierConfig,
-    VerifierReport, WorkPacket,
+    PendingIntervention, ProgressTracker, SessionManager, SwarmTier, TierBudget, Verifier,
+    VerifierConfig, VerifierReport, WorkPacket,
 };
 
 /// Coder routing decision with confidence level.
@@ -74,20 +74,14 @@ pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
 }
 
 /// Format a WorkPacket into a structured prompt for agent consumption.
-pub fn format_task_prompt(packet: &WorkPacket, cloud_guidance: Option<&str>) -> String {
+pub fn format_task_prompt(packet: &WorkPacket) -> String {
     let mut prompt = String::new();
 
     prompt.push_str(&format!("# Task: {}\n\n", packet.objective));
     prompt.push_str(&format!(
-        "**Branch:** {} | **Iteration:** {} | **Tier:** {}\n\n",
-        packet.branch, packet.iteration, packet.target_tier
+        "**Issue:** {} | **Branch:** {} | **Iteration:** {} | **Tier:** {}\n\n",
+        packet.bead_id, packet.branch, packet.iteration, packet.target_tier
     ));
-
-    if let Some(guidance) = cloud_guidance {
-        prompt.push_str("## Architectural Guidance (from cloud escalation)\n");
-        prompt.push_str(guidance);
-        prompt.push_str("\n\n");
-    }
 
     if !packet.constraints.is_empty() {
         prompt.push_str("## Constraints\n");
@@ -277,14 +271,31 @@ pub async fn process_issue(
     let general_coder = factory.build_general_coder(&wt_path);
     let reviewer = factory.build_reviewer();
     let manager = factory.build_manager(&wt_path);
-    let cloud_agent = factory.build_cloud_agent();
 
     // --- Escalation state ---
+    //
+    // Start at Integrator tier (cloud-backed manager) from the beginning.
+    // Cloud models (Opus 4.6) are the managers; local models are workers.
+    // Integrator gets 6 iterations, Cloud overflow gets 4 more (same manager).
     let engine = EscalationEngine::new();
-    let mut escalation = EscalationState::new(&issue.id);
+    let mut escalation = EscalationState::new(&issue.id)
+        .with_initial_tier(SwarmTier::Integrator)
+        .with_budget(
+            SwarmTier::Integrator,
+            TierBudget {
+                max_iterations: 6,
+                max_consultations: 6,
+            },
+        )
+        .with_budget(
+            SwarmTier::Cloud,
+            TierBudget {
+                max_iterations: 4,
+                max_consultations: 4,
+            },
+        );
     let mut success = false;
     let mut last_report: Option<VerifierReport> = None;
-    let mut cloud_guidance: Option<String> = None;
 
     // --- Main loop: implement → verify → review → escalate ---
     loop {
@@ -331,9 +342,17 @@ pub async fn process_issue(
             "Packed context"
         );
 
-        let task_prompt = format_task_prompt(&packet, cloud_guidance.as_deref());
+        let task_prompt = format_task_prompt(&packet);
 
         // --- Route to agent based on current tier ---
+        //
+        // Hierarchy (cloud available):
+        //   Implementer: local coders (strand-14B, Qwen3-Coder-Next)
+        //   Integrator+Cloud: cloud-backed manager (Opus 4.6) with all local workers as tools
+        //
+        // Hierarchy (no cloud):
+        //   Implementer: local coders
+        //   Integrator+Cloud: local manager (OR1-Behemoth) with coders as tools
         let agent_response: Result<String, _> = match tier {
             SwarmTier::Implementer | SwarmTier::Adversary => {
                 let recent_cats: Vec<ErrorCategory> = escalation
@@ -353,48 +372,14 @@ pub async fn process_issue(
                     }
                 }
             }
-            SwarmTier::Integrator => {
-                info!(iteration, "Routing to manager (OR1-Behemoth)");
+            SwarmTier::Integrator | SwarmTier::Cloud => {
+                info!(
+                    iteration,
+                    "Routing to manager (cloud-backed or OR1 fallback)"
+                );
                 manager.prompt(&task_prompt).await
             }
-            SwarmTier::Cloud => {
-                if let Some(ref cloud) = cloud_agent {
-                    info!(iteration, "Routing to cloud escalation");
-                    match cloud.prompt(&task_prompt).await {
-                        Ok(guidance) => {
-                            info!(
-                                iteration,
-                                guidance_len = guidance.len(),
-                                "Cloud guidance received"
-                            );
-                            cloud_guidance = Some(guidance);
-                            escalation.record_iteration(vec![], 0, false);
-                            continue;
-                        }
-                        Err(e) => {
-                            error!(iteration, "Cloud agent failed: {e}");
-                            let _ = progress.log_error(
-                                session.session_id(),
-                                iteration,
-                                format!("Cloud agent failed: {e}"),
-                            );
-                            escalation.record_iteration(vec![], 0, false);
-                            continue;
-                        }
-                    }
-                } else {
-                    warn!(
-                        iteration,
-                        "Cloud tier requested but no cloud agent configured — \
-                         falling back to Manager (Integrator tier)"
-                    );
-                    manager.prompt(&task_prompt).await
-                }
-            }
         };
-
-        // Clear cloud guidance after it's been consumed
-        cloud_guidance = None;
 
         // Handle agent failure
         let _response = match agent_response {
@@ -798,19 +783,10 @@ mod tests {
     #[test]
     fn test_format_task_prompt_basic() {
         let packet = test_packet("Fix type error", "swarm/test-1", 1);
-        let prompt = format_task_prompt(&packet, None);
+        let prompt = format_task_prompt(&packet);
         assert!(prompt.contains("Fix type error"));
         assert!(prompt.contains("swarm/test-1"));
         assert!(prompt.contains("200 LOC"));
-    }
-
-    #[test]
-    fn test_format_task_prompt_with_cloud_guidance() {
-        let mut packet = test_packet("Refactor module", "swarm/test-2", 3);
-        packet.max_patch_loc = 500;
-        let prompt = format_task_prompt(&packet, Some("Use the newtype pattern"));
-        assert!(prompt.contains("Architectural Guidance"));
-        assert!(prompt.contains("newtype pattern"));
     }
 
     // ========================================================================

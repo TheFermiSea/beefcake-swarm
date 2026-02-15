@@ -208,6 +208,22 @@ impl EscalationState {
         }
     }
 
+    /// Set the initial tier (builder pattern).
+    ///
+    /// Allows the orchestrator to override the default starting tier.
+    pub fn with_initial_tier(mut self, tier: SwarmTier) -> Self {
+        self.current_tier = tier;
+        self
+    }
+
+    /// Override a tier's budget (builder pattern).
+    ///
+    /// Allows the orchestrator to customize iteration/consultation limits.
+    pub fn with_budget(mut self, tier: SwarmTier, budget: TierBudget) -> Self {
+        self.tier_budgets.insert(tier, budget);
+        self
+    }
+
     /// Record an iteration result
     pub fn record_iteration(
         &mut self,

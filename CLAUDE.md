@@ -59,14 +59,15 @@ Key modules:
 ### Escalation Ladder
 
 ```
-Implementer (14B, 6 iterations max)
-    ↓ error repeat 2x OR >3 compile failures
-Integrator (72B, 2 consultations) → produces repair plan
-    ↓ still stuck
-Cloud Council (Gemini/Claude/GPT) → architecture decision
-    ↓ no consensus
+Cloud Manager (Opus 4.6 via CLIAPIProxy, 10 iterations)
+    → delegates to local workers: OR1-Behemoth (reasoning), strand-14B (Rust), Qwen3-Coder-Next (general)
+    → runs verifier after each worker completes
+    ↓ all budgets exhausted
 Human Intervention (blocking beads issue)
 ```
+
+Cloud models are the managers from iteration 1. Local models are workers.
+When cloud is unavailable, OR1-Behemoth serves as fallback local manager.
 
 ### Non-Workspace Directories
 

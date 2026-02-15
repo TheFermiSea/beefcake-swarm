@@ -1,21 +1,20 @@
-//! Cloud escalation agent (CLIAPIProxy on ai-proxy:8317).
+//! Cloud client builder (CLIAPIProxy on ai-proxy:8317).
 //!
-//! Used when local models are stuck after multiple failed attempts.
-//! Text-only — no tools. Provides architectural guidance.
+//! The cloud endpoint is now used as the Manager tier (see `manager.rs`).
+//! This module is retained for building standalone cloud clients if needed.
 
 use anyhow::{Context, Result};
 use rig::client::CompletionClient;
 use rig::providers::openai;
 
 use crate::config::CloudEndpoint;
-use crate::prompts;
 
 use super::coder::OaiAgent;
 
-/// Build the cloud escalation agent.
+/// Build a standalone cloud agent (text-only, no tools).
 ///
-/// Creates its own CompletionsClient with the CLIAPIProxy API key.
-/// NO tools — text-only architectural guidance.
+/// Primarily used for testing. In production, the cloud model serves as
+/// the Manager with full tool access (see `manager::build_cloud_manager`).
 pub fn build_cloud_agent(endpoint: &CloudEndpoint) -> Result<OaiAgent> {
     let client = openai::CompletionsClient::builder()
         .api_key(&endpoint.api_key)
@@ -25,9 +24,8 @@ pub fn build_cloud_agent(endpoint: &CloudEndpoint) -> Result<OaiAgent> {
 
     Ok(client
         .agent(&endpoint.model)
-        .name("cloud_escalation")
-        .description("Cloud AI for architectural decisions when local models are stuck")
-        .preamble(prompts::CLOUD_PREAMBLE)
+        .name("cloud_standalone")
+        .description("Standalone cloud agent for testing")
         .temperature(0.3)
         .build())
 }
