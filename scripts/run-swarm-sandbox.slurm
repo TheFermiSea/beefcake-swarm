@@ -33,9 +33,9 @@ apptainer exec \
     --env "CARGO_HOME=${CARGO_CACHE}" \
     --env "CARGO_TARGET_DIR=${CARGO_TARGET}" \
     --env "SWARM_FAST_URL=http://vasp-02:8080/v1" \
-    --env "SWARM_FAST_MODEL=Qwen3-Coder-Next-UD-Q4_K_XL.gguf" \
+    --env "SWARM_FAST_MODEL=Qwen3-Coder-Next-UD-Q4_K_XL" \
     --env "SWARM_CODER_URL=http://vasp-02:8080/v1" \
-    --env "SWARM_CODER_MODEL=Qwen3-Coder-Next-UD-Q4_K_XL.gguf" \
+    --env "SWARM_CODER_MODEL=Qwen3-Coder-Next-UD-Q4_K_XL" \
     --env "SWARM_REASONING_URL=http://vasp-01:8081/v1" \
     --env "SWARM_REASONING_MODEL=or1-behemoth-q4_k_m.gguf" \
     --env "SWARM_CLOUD_URL=http://100.105.113.58:8317/v1" \

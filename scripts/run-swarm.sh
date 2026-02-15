@@ -2,9 +2,9 @@
 set -euo pipefail
 export RUST_LOG="${RUST_LOG:-info}"
 export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-02:8080/v1}"
-export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3-Coder-Next-UD-Q4_K_XL.gguf}"
+export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3-Coder-Next-UD-Q4_K_XL}"
 export SWARM_CODER_URL="${SWARM_CODER_URL:-http://vasp-02:8080/v1}"
-export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3-Coder-Next-UD-Q4_K_XL.gguf}"
+export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3-Coder-Next-UD-Q4_K_XL}"
 export SWARM_REASONING_URL="${SWARM_REASONING_URL:-http://vasp-01:8081/v1}"
 export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-or1-behemoth-q4_k_m.gguf}"
 export SWARM_CLOUD_URL="${SWARM_CLOUD_URL:-http://100.105.113.58:8317/v1}"
