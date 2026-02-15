@@ -91,7 +91,7 @@ impl SwarmConfig {
     fn cloud_from_env() -> Option<CloudEndpoint> {
         let url = std::env::var("SWARM_CLOUD_URL").ok()?;
         let api_key = std::env::var("SWARM_CLOUD_API_KEY").ok()?;
-        let model = std::env::var("SWARM_CLOUD_MODEL").unwrap_or_else(|_| "claude-opus-4-6".into());
+        let model = std::env::var("SWARM_CLOUD_MODEL").unwrap_or_else(|_| "claude-opus-4-5-20251101".into());
         Some(CloudEndpoint {
             url,
             api_key,
@@ -121,14 +121,14 @@ impl SwarmConfig {
             },
             reasoning_endpoint: Endpoint {
                 url: proxy_url.clone(),
-                model: "claude-opus-4-6".into(),
+                model: "claude-opus-4-5-20251101".into(),
                 tier: Tier::Reasoning,
                 api_key: proxy_key.clone(),
             },
             cloud_endpoint: Some(CloudEndpoint {
                 url: proxy_url,
                 api_key: proxy_key,
-                model: "claude-opus-4-6".into(),
+                model: "claude-opus-4-5-20251101".into(),
             }),
             max_retries: 3,
             worktree_base: None,
