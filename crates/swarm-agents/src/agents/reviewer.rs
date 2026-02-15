@@ -40,3 +40,46 @@ impl ReviewResult {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_pass() {
+        let result = ReviewResult::parse("PASS\n- Looks good\n- Minor style nit");
+        assert!(result.passed);
+        assert!(result.feedback.contains("Looks good"));
+    }
+
+    #[test]
+    fn test_parse_fail() {
+        let result = ReviewResult::parse("FAIL\n- Missing error handling\n- Unsafe unwrap");
+        assert!(!result.passed);
+        assert!(result.feedback.contains("Missing error handling"));
+    }
+
+    #[test]
+    fn test_parse_empty() {
+        let result = ReviewResult::parse("");
+        assert!(!result.passed);
+    }
+
+    #[test]
+    fn test_parse_lowercase_pass() {
+        let result = ReviewResult::parse("pass\n- All good");
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn test_parse_mixed_case() {
+        let result = ReviewResult::parse("  Pass  \n- Approved");
+        assert!(result.passed);
+    }
+
+    #[test]
+    fn test_parse_fail_without_prefix() {
+        let result = ReviewResult::parse("This code has issues\n- Bug on line 5");
+        assert!(!result.passed);
+    }
+}

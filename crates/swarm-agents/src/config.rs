@@ -22,6 +22,7 @@ pub struct Endpoint {
     pub url: String,
     pub model: String,
     pub tier: Tier,
+    pub api_key: String,
 }
 
 /// Cloud escalation endpoint (CLIAPIProxy on ai-proxy).
@@ -58,6 +59,8 @@ impl Default for SwarmConfig {
                 model: std::env::var("SWARM_FAST_MODEL")
                     .unwrap_or_else(|_| "strand-rust-coder-14b-q8_0.gguf".into()),
                 tier: Tier::Fast,
+                api_key: std::env::var("SWARM_FAST_API_KEY")
+                    .unwrap_or_else(|_| "not-needed".into()),
             },
             coder_endpoint: Endpoint {
                 url: std::env::var("SWARM_CODER_URL")
@@ -65,6 +68,8 @@ impl Default for SwarmConfig {
                 model: std::env::var("SWARM_CODER_MODEL")
                     .unwrap_or_else(|_| "Qwen3-Coder-Next-UD-Q4_K_XL.gguf".into()),
                 tier: Tier::Coder,
+                api_key: std::env::var("SWARM_CODER_API_KEY")
+                    .unwrap_or_else(|_| "not-needed".into()),
             },
             reasoning_endpoint: Endpoint {
                 url: std::env::var("SWARM_REASONING_URL")
@@ -72,6 +77,8 @@ impl Default for SwarmConfig {
                 model: std::env::var("SWARM_REASONING_MODEL")
                     .unwrap_or_else(|_| "or1-behemoth-q4_k_m.gguf".into()),
                 tier: Tier::Reasoning,
+                api_key: std::env::var("SWARM_REASONING_API_KEY")
+                    .unwrap_or_else(|_| "not-needed".into()),
             },
             cloud_endpoint: Self::cloud_from_env(),
             max_retries: 6,
@@ -92,6 +99,42 @@ impl SwarmConfig {
             model,
         })
     }
+
+    /// Configuration pointing all tiers at the local CLIAPIProxy.
+    ///
+    /// Used for integration tests that run against `localhost:8317`.
+    pub fn proxy_config() -> Self {
+        let proxy_url = "http://localhost:8317/v1".to_string();
+        let proxy_key = "rust-daq-proxy-key".to_string();
+
+        Self {
+            fast_endpoint: Endpoint {
+                url: proxy_url.clone(),
+                model: "gemini-2.5-flash".into(),
+                tier: Tier::Fast,
+                api_key: proxy_key.clone(),
+            },
+            coder_endpoint: Endpoint {
+                url: proxy_url.clone(),
+                model: "claude-sonnet-4-5".into(),
+                tier: Tier::Coder,
+                api_key: proxy_key.clone(),
+            },
+            reasoning_endpoint: Endpoint {
+                url: proxy_url.clone(),
+                model: "claude-opus-4-6".into(),
+                tier: Tier::Reasoning,
+                api_key: proxy_key.clone(),
+            },
+            cloud_endpoint: Some(CloudEndpoint {
+                url: proxy_url,
+                api_key: proxy_key,
+                model: "claude-sonnet-4-5".into(),
+            }),
+            max_retries: 3,
+            worktree_base: None,
+        }
+    }
 }
 
 /// Pre-built rig CompletionsClients, deduplicated by endpoint URL.
@@ -109,13 +152,13 @@ pub struct ClientSet {
 impl ClientSet {
     pub fn from_config(config: &SwarmConfig) -> Result<Self> {
         let local = openai::CompletionsClient::builder()
-            .api_key("not-needed")
+            .api_key(&config.fast_endpoint.api_key)
             .base_url(&config.fast_endpoint.url)
             .build()
             .context("Failed to build local client (vasp-02)")?;
 
         let reasoning = openai::CompletionsClient::builder()
-            .api_key("not-needed")
+            .api_key(&config.reasoning_endpoint.api_key)
             .base_url(&config.reasoning_endpoint.url)
             .build()
             .context("Failed to build reasoning client (vasp-01)")?;
@@ -124,16 +167,56 @@ impl ClientSet {
     }
 }
 
-/// Check if an inference endpoint is reachable (GET /health or /v1/models).
-pub async fn check_endpoint(url: &str) -> bool {
+/// Check if an inference endpoint is reachable (GET /v1/models).
+///
+/// If `api_key` is provided (and not `"not-needed"`), sends a Bearer auth header.
+pub async fn check_endpoint(url: &str, api_key: Option<&str>) -> bool {
     let models_url = format!("{url}/models");
-    match reqwest::Client::new()
+    let client = reqwest::Client::new();
+    let mut req = client
         .get(&models_url)
-        .timeout(std::time::Duration::from_secs(5))
-        .send()
-        .await
-    {
+        .timeout(std::time::Duration::from_secs(5));
+
+    if let Some(key) = api_key {
+        if key != "not-needed" {
+            req = req.bearer_auth(key);
+        }
+    }
+
+    match req.send().await {
         Ok(resp) => resp.status().is_success(),
         Err(_) => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_default_config() {
+        let config = SwarmConfig::default();
+        assert_eq!(config.max_retries, 6);
+        assert!(config.fast_endpoint.url.contains("vasp-02"));
+        assert!(config.reasoning_endpoint.url.contains("vasp-01"));
+        assert_eq!(config.fast_endpoint.api_key, "not-needed");
+    }
+
+    #[test]
+    fn test_proxy_config() {
+        let config = SwarmConfig::proxy_config();
+        assert_eq!(config.max_retries, 3);
+        assert!(config.fast_endpoint.url.contains("localhost:8317"));
+        assert!(config.coder_endpoint.url.contains("localhost:8317"));
+        assert!(config.reasoning_endpoint.url.contains("localhost:8317"));
+        assert_eq!(config.fast_endpoint.api_key, "rust-daq-proxy-key");
+        assert!(config.cloud_endpoint.is_some());
+    }
+
+    #[test]
+    fn test_client_set_from_config() {
+        let config = SwarmConfig::proxy_config();
+        let clients = ClientSet::from_config(&config);
+        assert!(clients.is_ok());
     }
 }
