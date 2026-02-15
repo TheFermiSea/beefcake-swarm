@@ -4,6 +4,10 @@ version.workspace = true
 edition.workspace = true
 description = "Rig-based agent orchestrator for autonomous coding swarm"
 
+[lib]
+name = "swarm_agents"
+path = "src/lib.rs"
+
 [[bin]]
 name = "swarm-agents"
 path = "src/main.rs"
@@ -18,6 +22,11 @@ reqwest = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 anyhow = { workspace = true }
+thiserror = "2"
+schemars = "0.8"
 
 [dev-dependencies]
 tempfile = "3"
+chrono = "0.4"
+tokio = { workspace = true, features = ["full", "test-util"] }
+tracing-subscriber = { workspace = true }

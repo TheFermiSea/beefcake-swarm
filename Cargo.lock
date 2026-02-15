@@ -1943,12 +1943,15 @@ name = "swarm-agents"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "coordination",
  "reqwest",
  "rig-core",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.18",
  "tokio",
  "tracing",
  "tracing-subscriber",

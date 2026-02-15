@@ -1,0 +1,59 @@
+//! Coder agent builders: Rust specialist and general-purpose.
+
+use std::path::Path;
+
+use rig::agent::Agent;
+use rig::client::CompletionClient;
+use rig::providers::openai;
+
+use crate::prompts;
+use crate::tools::exec_tool::RunCommandTool;
+use crate::tools::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
+
+/// Type alias for agents built from OpenAI-compatible endpoints.
+pub type OaiAgent = Agent<openai::completion::CompletionModel>;
+
+/// Build the Rust specialist coder (strand-rust-coder-14B).
+///
+/// Tools: read_file, write_file, run_command.
+/// Used for borrow checker, lifetime, trait bound, and type mismatch errors.
+pub fn build_rust_coder(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+) -> OaiAgent {
+    client
+        .agent(model)
+        .name("rust_coder")
+        .description("Rust specialist for borrow checker, lifetimes, trait bounds, type errors")
+        .preamble(prompts::RUST_CODER_PREAMBLE)
+        .temperature(0.2)
+        .tool(ReadFileTool::new(wt_path))
+        .tool(WriteFileTool::new(wt_path))
+        .tool(RunCommandTool::new(wt_path))
+        .default_max_turns(10)
+        .build()
+}
+
+/// Build the general-purpose coder (Qwen3-Coder-Next).
+///
+/// Tools: read_file, write_file, list_files, run_command.
+/// Used for multi-file changes, scaffolding, and cross-cutting refactors.
+pub fn build_general_coder(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+) -> OaiAgent {
+    client
+        .agent(model)
+        .name("general_coder")
+        .description("General coding agent for multi-file scaffolding and cross-cutting changes")
+        .preamble(prompts::GENERAL_CODER_PREAMBLE)
+        .temperature(0.3)
+        .tool(ReadFileTool::new(wt_path))
+        .tool(WriteFileTool::new(wt_path))
+        .tool(ListFilesTool::new(wt_path))
+        .tool(RunCommandTool::new(wt_path))
+        .default_max_turns(15)
+        .build()
+}
