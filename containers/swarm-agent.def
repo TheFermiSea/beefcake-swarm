@@ -2,7 +2,7 @@ Bootstrap: docker
 From: rust:1.88-bookworm
 
 %post
-    apt-get update && apt-get install -y git && rm -rf /var/lib/apt/lists/*
+    apt-get update && apt-get install -y git clang libclang-dev && rm -rf /var/lib/apt/lists/*
     rustup component add clippy rustfmt
     cargo install --git https://github.com/Dicklesworthstone/beads_rust
     ln -sf /usr/local/cargo/bin/br /usr/local/cargo/bin/bd
