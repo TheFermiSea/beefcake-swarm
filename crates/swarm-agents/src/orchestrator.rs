@@ -606,10 +606,7 @@ fn create_stuck_intervention(
 ) {
     let intervention = PendingIntervention::new(
         InterventionType::ReviewRequired,
-        format!(
-            "Stuck after iteration {}: {}. Manual review needed.",
-            iteration, reason
-        ),
+        format!("Stuck after iteration {iteration}: {reason}. Manual review needed."),
     )
     .with_feature(session.current_feature().unwrap_or("unknown"));
 
