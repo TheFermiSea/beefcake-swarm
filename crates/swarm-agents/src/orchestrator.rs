@@ -451,6 +451,19 @@ pub async fn process_issue(
             continue;
         }
 
+        // --- Auto-format before verifier ---
+        // Workers don't always produce perfectly formatted code.
+        // Formatting is deterministic — auto-fix it rather than failing on it.
+        let fmt_output = std::process::Command::new("cargo")
+            .args(["fmt", "--all"])
+            .current_dir(&wt_path)
+            .output();
+        if let Ok(ref out) = fmt_output {
+            if !out.status.success() {
+                warn!(iteration, "cargo fmt failed (non-fatal): {}", String::from_utf8_lossy(&out.stderr));
+            }
+        }
+
         // --- Verifier: run deterministic quality gates ---
         let verifier = Verifier::new(&wt_path, VerifierConfig::default());
         let report = verifier.run_pipeline().await;
