@@ -31,7 +31,7 @@ pub fn build_rust_coder(
         .tool(ReadFileTool::new(wt_path))
         .tool(WriteFileTool::new(wt_path))
         .tool(RunCommandTool::new(wt_path))
-        .default_max_turns(10)
+        .default_max_turns(25)
         .build()
 }
 
@@ -54,7 +54,7 @@ pub fn build_reasoning_worker(
         .tool(WriteFileTool::new(wt_path))
         .tool(ListFilesTool::new(wt_path))
         .tool(RunCommandTool::new(wt_path))
-        .default_max_turns(20)
+        .default_max_turns(30)
         .build()
 }
 
@@ -77,6 +77,6 @@ pub fn build_general_coder(
         .tool(WriteFileTool::new(wt_path))
         .tool(ListFilesTool::new(wt_path))
         .tool(RunCommandTool::new(wt_path))
-        .default_max_turns(15)
+        .default_max_turns(25)
         .build()
 }

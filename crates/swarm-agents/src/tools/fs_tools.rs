@@ -120,8 +120,28 @@ impl Tool for WriteFileTool {
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let bytes = args.content.len();
-        std::fs::write(&full_path, &args.content)?;
+
+        // Heuristic: detect double-JSON-encoded content from local models.
+        // If content is wrapped in quotes and contains literal \n but no real
+        // newlines, it was likely JSON-stringified by the model.
+        let content = if args.content.starts_with('"')
+            && args.content.ends_with('"')
+            && args.content.contains("\\n")
+            && !args.content[1..args.content.len() - 1].contains('\n')
+        {
+            match serde_json::from_str::<String>(&args.content) {
+                Ok(unescaped) => {
+                    tracing::warn!("write_file: detected double-escaped content, unescaping");
+                    unescaped
+                }
+                Err(_) => args.content,
+            }
+        } else {
+            args.content
+        };
+
+        let bytes = content.len();
+        std::fs::write(&full_path, &content)?;
         Ok(format!("Wrote {bytes} bytes to {}", args.path))
     }
 }

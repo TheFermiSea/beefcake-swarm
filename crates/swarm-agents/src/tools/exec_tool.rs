@@ -16,7 +16,10 @@ use super::ToolError;
 ///
 /// Agents have dedicated read_file/write_file/list_files tools, so shell-based
 /// file reading (cat, head, tail) is excluded to reduce attack surface.
-const ALLOWED_COMMANDS: &[&str] = &["cargo", "git", "bd", "ls", "wc", "find", "grep", "rg"];
+const ALLOWED_COMMANDS: &[&str] = &[
+    "cargo", "git", "bd", "ls", "wc", "find", "grep", "rg",
+    "cat", "head", "tail", "sed", "awk", "sort", "uniq", "diff", "touch", "mkdir",
+];
 
 /// Default timeout for command execution.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -52,9 +55,9 @@ impl Tool for RunCommandTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "run_command".into(),
-            description: "Run a shell command in the workspace. Only cargo, git, bd, ls, wc, \
-                          find, grep, rg are allowed. Use read_file for reading files. \
-                          Use bd for beads issue tracking (create, update, show, dep add)."
+            description: "Run a shell command in the workspace. Allowed: cargo, git, bd, ls, \
+                          wc, find, grep, rg, cat, head, tail, sed, awk, sort, uniq, diff, \
+                          touch, mkdir. Use bd for beads issue tracking."
                 .into(),
             parameters: serde_json::json!({
                 "type": "object",
