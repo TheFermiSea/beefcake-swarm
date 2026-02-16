@@ -46,6 +46,10 @@ apptainer exec \
     --env "SWARM_CLOUD_API_KEY=rust-daq-proxy-key" \
     --env "SWARM_CLOUD_MODEL=claude-opus-4-6-thinking" \
     --env "SWARM_BEADS_BIN=bd" \
+    --env "GIT_AUTHOR_NAME=Swarm Agent" \
+    --env "GIT_COMMITTER_NAME=Swarm Agent" \
+    --env "GIT_AUTHOR_EMAIL=swarm@beefcake.local" \
+    --env "GIT_COMMITTER_EMAIL=swarm@beefcake.local" \
     --env "PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     "$SIF" \
     cargo run -p swarm-agents --release
