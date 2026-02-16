@@ -14,11 +14,18 @@ use super::ToolError;
 
 /// Commands that are allowed to be executed.
 ///
-/// Agents have dedicated read_file/write_file/list_files tools, so shell-based
-/// file reading (cat, head, tail) is excluded to reduce attack surface.
+/// Prefer modern Rust CLI tools (rg, fd, bat, sd, delta) over their classic
+/// Unix counterparts. Both are allowed since LLMs may default to classic syntax.
 const ALLOWED_COMMANDS: &[&str] = &[
-    "cargo", "git", "bd", "ls", "wc", "find", "grep", "rg",
-    "cat", "head", "tail", "sed", "awk", "sort", "uniq", "diff", "touch", "mkdir",
+    // Core build/vcs/tracking
+    "cargo", "git", "bd",
+    // Modern Rust CLI tools (preferred)
+    "rg", "fd", "bat", "sd", "delta",
+    // Classic Unix fallbacks (LLMs default to these)
+    "ls", "wc", "find", "grep", "cat", "head", "tail",
+    "sed", "awk", "sort", "uniq", "diff",
+    // File operations
+    "touch", "mkdir",
 ];
 
 /// Default timeout for command execution.
@@ -55,8 +62,10 @@ impl Tool for RunCommandTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "run_command".into(),
-            description: "Run a shell command in the workspace. Allowed: cargo, git, bd, ls, \
-                          wc, find, grep, rg, cat, head, tail, sed, awk, sort, uniq, diff, \
+            description: "Run a shell command in the workspace. \
+                          Prefer modern tools: rg (not grep), fd (not find), bat (not cat), \
+                          sd (not sed), delta (not diff). \
+                          Also allowed: cargo, git, bd, ls, wc, head, tail, awk, sort, uniq, \
                           touch, mkdir. Use bd for beads issue tracking."
                 .into(),
             parameters: serde_json::json!({

@@ -8,6 +8,8 @@ From: rust:1.88-bookworm
     rustup toolchain install nightly
     cargo +nightly install --git https://github.com/Dicklesworthstone/beads_rust
     ln -sf /usr/local/cargo/bin/br /usr/local/cargo/bin/bd
+    # Modern Rust CLI tools for agent use
+    cargo install ripgrep fd-find bat sd git-delta
     # Pre-warm cargo registry
     mkdir -p /opt/cargo-cache
 
