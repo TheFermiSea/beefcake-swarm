@@ -30,6 +30,9 @@ pub struct VerifierConfig {
     pub stderr_max_bytes: usize,
     /// Additional cargo flags (e.g., --features, --manifest-path)
     pub extra_cargo_args: Vec<String>,
+    /// Scope cargo commands to specific packages (e.g., ["swarm-agents"])
+    /// When empty, commands target the entire workspace.
+    pub packages: Vec<String>,
 }
 
 impl Default for VerifierConfig {
@@ -43,6 +46,7 @@ impl Default for VerifierConfig {
             gate_timeout_secs: 300,
             stderr_max_bytes: 4096,
             extra_cargo_args: Vec::new(),
+            packages: Vec::new(),
         }
     }
 }
@@ -151,7 +155,15 @@ impl Verifier {
         let start = Instant::now();
 
         let mut cmd = Command::new("cargo");
-        cmd.arg("fmt").arg("--all").arg("--check");
+        cmd.arg("fmt");
+        if self.config.packages.is_empty() {
+            cmd.arg("--all");
+        } else {
+            for pkg in &self.config.packages {
+                cmd.args(["--package", pkg]);
+            }
+        }
+        cmd.arg("--check");
         for arg in &self.config.extra_cargo_args {
             cmd.arg(arg);
         }
@@ -195,7 +207,11 @@ impl Verifier {
     fn run_clippy_gate(&self) -> GateResult {
         let start = Instant::now();
         let compiler = Compiler::new(&self.working_dir);
-        let result = compiler.clippy();
+        let result = if self.config.packages.is_empty() {
+            compiler.clippy()
+        } else {
+            compiler.clippy_packages(&self.config.packages)
+        };
         self.compile_result_to_gate("clippy", result, start.elapsed())
     }
 
@@ -203,7 +219,11 @@ impl Verifier {
     fn run_check_gate(&self) -> GateResult {
         let start = Instant::now();
         let compiler = Compiler::new(&self.working_dir);
-        let result = compiler.check();
+        let result = if self.config.packages.is_empty() {
+            compiler.check()
+        } else {
+            compiler.check_packages(&self.config.packages)
+        };
         self.compile_result_to_gate("check", result, start.elapsed())
     }
 
@@ -213,6 +233,9 @@ impl Verifier {
 
         let mut cmd = Command::new("cargo");
         cmd.arg("test");
+        for pkg in &self.config.packages {
+            cmd.args(["-p", pkg]);
+        }
         for arg in &self.config.extra_cargo_args {
             cmd.arg(arg);
         }

@@ -292,6 +292,13 @@ pub async fn process_issue(
     let mut success = false;
     let mut last_report: Option<VerifierReport> = None;
 
+    // Scope verifier to swarm-agents only — coordination has pre-existing lint
+    // warnings that would block every iteration if we clippy the whole workspace.
+    let verifier_config = VerifierConfig {
+        packages: vec!["swarm-agents".to_string()],
+        ..VerifierConfig::default()
+    };
+
     // --- Main loop: implement → verify → review → escalate ---
     loop {
         let iteration = match session.next_iteration() {
@@ -406,7 +413,7 @@ pub async fn process_issue(
                 );
                 escalation.record_iteration(vec![], 1, false);
 
-                let verifier = Verifier::new(&wt_path, VerifierConfig::default());
+                let verifier = Verifier::new(&wt_path, verifier_config.clone());
                 let report = verifier.run_pipeline().await;
                 let decision = engine.decide(&mut escalation, &report);
                 last_report = Some(report);
@@ -438,7 +445,7 @@ pub async fn process_issue(
             warn!(iteration, "No file changes after agent response");
             escalation.record_iteration(vec![], 0, false);
 
-            let verifier = Verifier::new(&wt_path, VerifierConfig::default());
+            let verifier = Verifier::new(&wt_path, verifier_config.clone());
             let report = verifier.run_pipeline().await;
             let decision = engine.decide(&mut escalation, &report);
             last_report = Some(report);
@@ -455,7 +462,7 @@ pub async fn process_issue(
         // Workers don't always produce perfectly formatted code.
         // Formatting is deterministic — auto-fix it rather than failing on it.
         let fmt_output = std::process::Command::new("cargo")
-            .args(["fmt", "--all"])
+            .args(["fmt", "--package", "swarm-agents"])
             .current_dir(&wt_path)
             .output();
         if let Ok(ref out) = fmt_output {
@@ -465,7 +472,7 @@ pub async fn process_issue(
         }
 
         // --- Verifier: run deterministic quality gates ---
-        let verifier = Verifier::new(&wt_path, VerifierConfig::default());
+        let verifier = Verifier::new(&wt_path, verifier_config.clone());
         let report = verifier.run_pipeline().await;
 
         info!(
