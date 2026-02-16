@@ -48,7 +48,7 @@ pub fn build_cloud_manager(
         .tool(RunVerifierTool::new(wt_path))
         .tool(ReadFileTool::new(wt_path))
         .tool(ListFilesTool::new(wt_path))
-        .default_max_turns(25)
+        .default_max_turns(50)
         .build()
 }
 
@@ -77,6 +77,6 @@ pub fn build_local_manager(
         .tool(RunVerifierTool::new(wt_path))
         .tool(ReadFileTool::new(wt_path))
         .tool(ListFilesTool::new(wt_path))
-        .default_max_turns(25)
+        .default_max_turns(50)
         .build()
 }
