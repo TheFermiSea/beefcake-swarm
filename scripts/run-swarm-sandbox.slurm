@@ -18,6 +18,10 @@ SIF="/cluster/shared/containers/swarm-agent.sif"
 
 mkdir -p "$WT_DIR" "$CARGO_CACHE" "$CARGO_TARGET"
 
+# Fix .git object permissions so worktrees can write to the ODB.
+# Required because a previous `git pull` as root may have locked these.
+chown -R brian:hpc "${REPO_DIR}/.git"
+
 # --cleanenv: clean environment (only explicit --env vars)
 # --writable-tmpfs: allows writes to SIF overlay areas
 # Explicit --bind for writable paths so Apptainer doesn't overlay them

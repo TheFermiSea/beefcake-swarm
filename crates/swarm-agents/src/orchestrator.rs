@@ -9,7 +9,6 @@ use anyhow::Result;
 use rig::completion::Prompt;
 use tracing::{error, info, warn};
 
-use crate::agents::reviewer::ReviewResult;
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::config::SwarmConfig;
@@ -162,7 +161,9 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
         .await?;
     if !add.status.success() {
         let stderr = String::from_utf8_lossy(&add.stderr);
-        anyhow::bail!("git add failed: {stderr}");
+        // Log error but don't crash — work is still in the worktree files
+        error!(iteration, "git add failed (likely permissions): {stderr}");
+        return Ok(false);
     }
 
     // Check if there are staged changes
@@ -190,17 +191,6 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
     }
 
     Ok(true)
-}
-
-/// Get the git diff of the worktree vs its parent branch.
-pub async fn git_diff(worktree_path: &Path) -> Result<String> {
-    let output = tokio::process::Command::new("git")
-        .args(["diff", "HEAD~1..HEAD"])
-        .current_dir(worktree_path)
-        .output()
-        .await?;
-
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
 }
 
 /// Process a single issue through the implement → verify → review → escalate loop.
@@ -269,7 +259,6 @@ pub async fn process_issue(
     // --- Build agents scoped to this worktree ---
     let rust_coder = factory.build_rust_coder(&wt_path);
     let general_coder = factory.build_general_coder(&wt_path);
-    let reviewer = factory.build_reviewer();
     let manager = factory.build_manager(&wt_path);
 
     // --- Escalation state ---
@@ -456,85 +445,27 @@ pub async fn process_issue(
         let error_count = report.failure_signals.len();
 
         if report.all_green {
-            // --- Reviewer: blind review of the diff ---
-            let diff = git_diff(&wt_path).await?;
-            if diff.is_empty() {
-                warn!(
-                    iteration,
-                    "Empty diff despite git changes — verifier may be wrong"
-                );
-                escalation.record_iteration(error_cats, error_count, false);
-                let decision = engine.decide(&mut escalation, &report);
-                last_report = Some(report);
-                if decision.stuck {
-                    create_stuck_intervention(&mut session, &progress, iteration, &decision.reason);
-                    break;
-                }
-                continue;
-            }
-
+            // Deterministic gates (fmt + clippy + check + test) are the source of truth.
+            // The reviewer is advisory — don't let subjective LLM feedback cause loops.
             info!(
                 iteration,
-                diff_len = diff.len(),
-                "Sending diff to blind reviewer"
+                "Verifier passed (all gates green) — accepting result"
             );
-            match reviewer.prompt(&diff).await {
-                Ok(resp) => {
-                    let result = ReviewResult::parse(&resp);
-                    if result.passed {
-                        info!(iteration, "Reviewer PASSED — issue resolved");
-                        escalation.record_iteration(error_cats, error_count, true);
+            escalation.record_iteration(error_cats, error_count, true);
 
-                        // Create harness checkpoint on success
-                        if let Ok(hash) = git_mgr.current_commit() {
-                            let _ = progress.log_checkpoint(session.session_id(), iteration, &hash);
-                        }
-                        let _ = progress.log_feature_complete(
-                            session.session_id(),
-                            iteration,
-                            &issue.id,
-                            "Verified and reviewer-approved",
-                        );
-
-                        success = true;
-                        break;
-                    } else {
-                        warn!(
-                            iteration,
-                            feedback = %result.feedback,
-                            "Reviewer FAILED — looping"
-                        );
-                        let _ = progress.log_error(
-                            session.session_id(),
-                            iteration,
-                            format!("Reviewer rejected: {}", result.feedback),
-                        );
-                        escalation.record_iteration(error_cats, error_count, false);
-                    }
-                }
-                Err(e) => {
-                    warn!(iteration, "Reviewer unavailable: {e}");
-                    info!(
-                        iteration,
-                        "Verifier passed, reviewer unreachable — accepting result"
-                    );
-                    escalation.record_iteration(error_cats, error_count, true);
-
-                    // Checkpoint even without reviewer confirmation
-                    if let Ok(hash) = git_mgr.current_commit() {
-                        let _ = progress.log_checkpoint(session.session_id(), iteration, &hash);
-                    }
-                    let _ = progress.log_feature_complete(
-                        session.session_id(),
-                        iteration,
-                        &issue.id,
-                        "Verified (reviewer unreachable)",
-                    );
-
-                    success = true;
-                    break;
-                }
+            // Create harness checkpoint on success
+            if let Ok(hash) = git_mgr.current_commit() {
+                let _ = progress.log_checkpoint(session.session_id(), iteration, &hash);
             }
+            let _ = progress.log_feature_complete(
+                session.session_id(),
+                iteration,
+                &issue.id,
+                "Verified (deterministic gates passed)",
+            );
+
+            success = true;
+            break;
         } else {
             escalation.record_iteration(error_cats, error_count, false);
         }

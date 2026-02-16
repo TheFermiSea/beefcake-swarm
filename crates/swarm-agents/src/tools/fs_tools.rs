@@ -117,6 +117,12 @@ impl Tool for WriteFileTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let full_path = sandbox_check(&self.working_dir, &args.path)?;
+        if !args.path.contains('/') {
+            tracing::warn!(
+                path = %args.path,
+                "write_file: path has no directory component, writing to worktree root"
+            );
+        }
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
