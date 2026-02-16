@@ -4,10 +4,16 @@
 //! progress logging, and human intervention requests.
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Result;
 use rig::completion::Prompt;
 use tracing::{error, info, warn};
+
+/// Maximum wall-clock time for a single agent prompt call.
+/// Prevents runaway managers that exceed their turn limits (rig doesn't enforce
+/// `default_max_turns` on the outer agent in `.prompt()` calls).
+const AGENT_TIMEOUT: Duration = Duration::from_secs(10 * 60); // 10 minutes
 
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
@@ -342,7 +348,7 @@ pub async fn process_issue(
         // Hierarchy (no cloud):
         //   Implementer: local coders
         //   Integrator+Cloud: local manager (OR1-Behemoth) with coders as tools
-        let agent_response: Result<String, _> = match tier {
+        let agent_future = match tier {
             SwarmTier::Implementer | SwarmTier::Adversary => {
                 let recent_cats: Vec<ErrorCategory> = escalation
                     .recent_error_categories
@@ -366,12 +372,27 @@ pub async fn process_issue(
                     iteration,
                     "Routing to manager (cloud-backed or OR1 fallback)"
                 );
-                manager.prompt(&task_prompt).await
+                // Wrap manager call with timeout to enforce turn limits.
+                // Rig doesn't enforce default_max_turns on the outer .prompt() agent,
+                // so managers can run indefinitely. This hard-caps wall-clock time.
+                match tokio::time::timeout(AGENT_TIMEOUT, manager.prompt(&task_prompt)).await {
+                    Ok(result) => result,
+                    Err(_elapsed) => {
+                        warn!(
+                            iteration,
+                            timeout_secs = AGENT_TIMEOUT.as_secs(),
+                            "Manager exceeded timeout — proceeding with changes on disk"
+                        );
+                        // Return a synthetic "timed out" response so the verifier still runs.
+                        // Any file changes the manager made are already on disk.
+                        Ok("Manager timed out. Changes are on disk for verifier.".to_string())
+                    }
+                }
             }
         };
 
         // Handle agent failure
-        let _response = match agent_response {
+        let _response = match agent_future {
             Ok(r) => {
                 info!(iteration, response_len = r.len(), "Agent responded");
                 r
