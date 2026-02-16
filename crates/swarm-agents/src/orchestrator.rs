@@ -13,7 +13,7 @@ use tracing::{error, info, warn};
 /// Maximum wall-clock time for a single agent prompt call.
 /// Prevents runaway managers that exceed their turn limits (rig doesn't enforce
 /// `default_max_turns` on the outer agent in `.prompt()` calls).
-const AGENT_TIMEOUT: Duration = Duration::from_secs(10 * 60); // 10 minutes
+const AGENT_TIMEOUT: Duration = Duration::from_secs(20 * 60); // 20 minutes
 
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
