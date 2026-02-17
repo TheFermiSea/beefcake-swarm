@@ -78,7 +78,10 @@ impl Tool for QueryNotebookTool {
                 args.role
             ))
         } else {
-            Ok(format!("## Knowledge Base Response ({})\n\n{}", args.role, response))
+            Ok(format!(
+                "## Knowledge Base Response ({})\n\n{}",
+                args.role, response
+            ))
         }
     }
 }

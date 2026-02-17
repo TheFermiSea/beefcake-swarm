@@ -53,25 +53,26 @@ async fn main() -> Result<()> {
     }
 
     // --- Initialize NotebookLM knowledge base ---
-    let knowledge_base: Option<Arc<dyn KnowledgeBase>> =
-        if let Some(ref registry_path) = config.notebook_registry_path {
-            match NotebookBridge::from_registry(registry_path) {
-                Ok(bridge) if bridge.is_available() => {
-                    info!("NotebookLM knowledge base initialized");
-                    Some(Arc::new(bridge))
-                }
-                Ok(_) => {
-                    warn!("NotebookLM registry found but `nlm` CLI not available — running without knowledge base");
-                    None
-                }
-                Err(e) => {
-                    warn!("NotebookLM registry not loaded: {e} — running without knowledge base");
-                    None
-                }
+    let knowledge_base: Option<Arc<dyn KnowledgeBase>> = if let Some(ref registry_path) =
+        config.notebook_registry_path
+    {
+        match NotebookBridge::from_registry(registry_path) {
+            Ok(bridge) if bridge.is_available() => {
+                info!("NotebookLM knowledge base initialized");
+                Some(Arc::new(bridge))
             }
-        } else {
-            None
-        };
+            Ok(_) => {
+                warn!("NotebookLM registry found but `nlm` CLI not available — running without knowledge base");
+                None
+            }
+            Err(e) => {
+                warn!("NotebookLM registry not loaded: {e} — running without knowledge base");
+                None
+            }
+        }
+    } else {
+        None
+    };
 
     // --- Build agent factory ---
     let mut factory = AgentFactory::new(&config)?;
@@ -114,10 +115,10 @@ async fn main() -> Result<()> {
     );
 
     // --- Process the issue ---
-    let kb_ref: Option<&dyn KnowledgeBase> =
-        knowledge_base.as_ref().map(|kb| kb.as_ref() as &dyn KnowledgeBase);
-    orchestrator::process_issue(&config, &factory, &worktree_bridge, issue, &beads, kb_ref)
-        .await?;
+    let kb_ref: Option<&dyn KnowledgeBase> = knowledge_base
+        .as_ref()
+        .map(|kb| kb.as_ref() as &dyn KnowledgeBase);
+    orchestrator::process_issue(&config, &factory, &worktree_bridge, issue, &beads, kb_ref).await?;
 
     Ok(())
 }

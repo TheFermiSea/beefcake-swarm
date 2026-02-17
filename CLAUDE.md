@@ -101,6 +101,45 @@ ssh root@10.0.0.5 "sbatch /cluster/shared/scripts/llama-cpp/run-72b-distributed.
 - `br` (beads_rust): `cargo install --git https://github.com/Dicklesworthstone/beads_rust` — Binary-only CLI, NOT a Rust library. Must invoke via subprocess (see `beads_bridge.rs`).
 - `bv` (beads_viewer): `go install github.com/Dicklesworthstone/beads_viewer@latest`
 - `gastown`: `go install github.com/steveyegge/gastown@latest` — Git worktree isolation per agent task.
+- `nlm` (notebooklm-mcp-cli): `uv tool install notebooklm-mcp-cli` — NotebookLM CLI for knowledge base queries. Auth: `nlm login`.
+
+## NotebookLM Knowledge Base
+
+The swarm uses NotebookLM as an external RAG layer for institutional memory. Complements CocoIndex (code structure) and Beads (issue tracking).
+
+**Notebook Registry:** `notebook_registry.toml` maps roles to notebook IDs.
+
+| Role | Notebook | Auto-Query | Purpose |
+|------|----------|------------|---------|
+| `project_brain` | beefcake-swarm: Project Brain | Yes | Architecture decisions, implementation summaries |
+| `debugging_kb` | beefcake-swarm: Debugging KB | Yes | Error patterns, known fixes, resolution playbooks |
+| `codebase` | beefcake-swarm: Codebase | No | Repomix-packed code for structural queries |
+| `research` | beefcake-swarm: Research | No | Library docs, migration guides |
+| `security` | beefcake-swarm: Security | No | OWASP, Rust security best practices |
+| `visuals` | beefcake-swarm: Visuals | No | Dependency graphs, architecture diagrams |
+
+**Query commands:**
+```bash
+nlm query --notebook "<ID>" "What is the escalation ladder?"
+nlm source add --notebook "<ID>" --file "doc.md"
+```
+
+**Orchestrator integration points:**
+1. Pre-task: queries Project Brain for architectural context; on retries queries Debugging KB
+2. Pre-escalation: checks Debugging KB for known fixes before escalating tier
+3. Post-success: uploads resolution summary to Project Brain; tricky bugs (3+ iterations) also go to Debugging KB
+4. Manager tool: `query_notebook` Rig tool available to cloud and local managers
+
+**Complementary tool boundaries:**
+
+| Tool | Scope |
+|------|-------|
+| CocoIndex | Code structure — callers, implementors, file navigation |
+| NotebookLM | Knowledge — decisions, patterns, docs, error playbooks |
+| Beads | Issue tracking — what needs to be done |
+| Repomix | Feeds NotebookLM with packed codebase context |
+
+**Environment:** `SWARM_NLM_BIN` overrides the `nlm` binary name (default: `"nlm"`).
 
 ## Environment Variables
 

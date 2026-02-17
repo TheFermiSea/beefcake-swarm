@@ -76,10 +76,7 @@ pub fn capture_error_pattern(
             Ok(())
         }
         Err(e) => {
-            warn!(
-                issue_id,
-                "Failed to capture error pattern (non-fatal): {e}"
-            );
+            warn!(issue_id, "Failed to capture error pattern (non-fatal): {e}");
             Ok(()) // Non-fatal
         }
     }
@@ -94,12 +91,7 @@ pub fn sync_codebase_notebook(kb: &dyn KnowledgeBase, repo_root: &std::path::Pat
 
     info!("Running repomix to pack codebase...");
     let repomix = std::process::Command::new("repomix")
-        .args([
-            "--style",
-            "xml",
-            "--output",
-            &output_path.to_string_lossy(),
-        ])
+        .args(["--style", "xml", "--output", &output_path.to_string_lossy()])
         .current_dir(repo_root)
         .output()
         .context("Failed to run repomix. Is it installed? (npm i -g repomix)")?;

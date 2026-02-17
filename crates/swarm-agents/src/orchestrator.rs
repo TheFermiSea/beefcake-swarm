@@ -436,8 +436,7 @@ async fn cloud_validate(
     };
 
     let models = [
-        std::env::var("SWARM_VALIDATOR_MODEL_1")
-            .unwrap_or_else(|_| "gemini-3-pro-preview".into()),
+        std::env::var("SWARM_VALIDATOR_MODEL_1").unwrap_or_else(|_| "gemini-3-pro-preview".into()),
         std::env::var("SWARM_VALIDATOR_MODEL_2")
             .unwrap_or_else(|_| "claude-sonnet-4-5-20250929".into()),
     ];
@@ -470,7 +469,11 @@ async fn cloud_validate(
                 warn!(model, "Cloud validation error: {e}");
             }
             Err(_) => {
-                warn!(model, "Cloud validation timed out ({}s)", VALIDATION_TIMEOUT.as_secs());
+                warn!(
+                    model,
+                    "Cloud validation timed out ({}s)",
+                    VALIDATION_TIMEOUT.as_secs()
+                );
             }
         }
     }
@@ -852,8 +855,7 @@ pub async fn process_issue(
             // don't block acceptance — avoids subjective LLM feedback loops.
             if let Some(ref cloud_client) = factory.clients.cloud {
                 if let Some(ref initial_commit) = session.state().initial_commit {
-                    let validations =
-                        cloud_validate(cloud_client, &wt_path, initial_commit).await;
+                    let validations = cloud_validate(cloud_client, &wt_path, initial_commit).await;
                     for v in &validations {
                         if v.passed {
                             info!(model = %v.model, "Cloud validation: PASS");
@@ -884,8 +886,7 @@ pub async fn process_issue(
                 .map(|c| format!("{c:?}"))
                 .collect();
             if !error_cats.is_empty() {
-                let question =
-                    format!("Known fix for Rust errors: {}", error_cats.join(", "));
+                let question = format!("Known fix for Rust errors: {}", error_cats.join(", "));
                 if let Ok(response) = kb.query("debugging_kb", &question) {
                     if !response.is_empty() {
                         info!(

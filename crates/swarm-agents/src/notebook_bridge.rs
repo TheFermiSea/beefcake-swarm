@@ -181,8 +181,15 @@ impl KnowledgeBase for NotebookBridge {
             }
         };
 
-        self.run_command(&["source", "add", "--notebook", notebook_id, "--file", file_path])
-            .map(|_| ())
+        self.run_command(&[
+            "source",
+            "add",
+            "--notebook",
+            notebook_id,
+            "--file",
+            file_path,
+        ])
+        .map(|_| ())
     }
 
     fn is_available(&self) -> bool {
@@ -197,7 +204,13 @@ impl KnowledgeBase for NotebookBridge {
 /// Sanitize a string for use as a filename.
 fn sanitize_filename(s: &str) -> String {
     s.chars()
-        .map(|c| if c.is_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -357,9 +370,7 @@ auto_update = false
             .unwrap();
         assert_eq!(result, "The escalation ladder has 4 tiers.");
 
-        let result = mock
-            .query("debugging_kb", "How to fix E0382?")
-            .unwrap();
+        let result = mock.query("debugging_kb", "How to fix E0382?").unwrap();
         assert_eq!(result, ""); // No response configured
 
         let queries = mock.captured_queries.lock().unwrap();

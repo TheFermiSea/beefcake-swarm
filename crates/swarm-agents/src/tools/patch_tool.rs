@@ -48,11 +48,7 @@ impl EditFileTool {
 /// to single spaces, trim each line, but preserve line structure.
 fn normalize_whitespace(s: &str) -> String {
     s.lines()
-        .map(|line| {
-            line.split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ")
-        })
+        .map(|line| line.split_whitespace().collect::<Vec<_>>().join(" "))
         .collect::<Vec<_>>()
         .join("\n")
 }

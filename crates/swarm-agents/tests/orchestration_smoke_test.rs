@@ -145,7 +145,8 @@ fn main() {
 
     // Run the orchestration loop
     let result =
-        orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, None).await;
+        orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, None)
+            .await;
 
     // The loop should not panic regardless of outcome
     match &result {
