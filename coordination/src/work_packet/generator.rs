@@ -17,8 +17,9 @@ use std::sync::LazyLock;
 
 /// Regex for extracting file paths from cargo fmt/check stderr output.
 /// Matches patterns like ` --> path/to/file.rs:123:45` or `Error writing files: ... path.rs`
-static STDERR_FILE_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"-->\s*([^\s:]+\.rs):(\d+)").unwrap());
+static STDERR_FILE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"-->\s*([^\s:]+\.rs):(\d+)").expect("STDERR_FILE_PATTERN regex should compile")
+});
 
 /// Regex patterns for extracting Rust symbols from source code
 static STRUCT_PATTERN: LazyLock<Regex> =

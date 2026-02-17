@@ -102,24 +102,51 @@ fn fuzzy_find_unique(content: &str, old_content: &str) -> Option<(usize, usize)>
     let match_start_line = matches[0];
     let match_end_line = match_start_line + needle_lines.len();
 
-    // Convert line indices back to byte offsets in the original content
+    // Convert line indices back to byte offsets in the original content.
+    // We scan the raw bytes to correctly handle both LF and CRLF line endings.
     let mut byte_offset = 0;
     let mut start_byte = 0;
-    for (i, line) in content.lines().enumerate() {
-        if i == match_start_line {
+    let bytes = content.as_bytes();
+    let mut line_idx = 0;
+
+    while byte_offset <= bytes.len() {
+        if line_idx == match_start_line {
             start_byte = byte_offset;
         }
-        if i == match_end_line {
-            // end_byte is exclusive — points past the trailing newline
+        if line_idx == match_end_line {
             return Some((start_byte, byte_offset));
         }
-        byte_offset += line.len() + 1; // +1 for newline
+        if byte_offset >= bytes.len() {
+            break;
+        }
+        // Find next newline
+        match memchr_newline(bytes, byte_offset) {
+            Some(nl_pos) => {
+                // Skip past the \n (str::lines() already handles \r\n by stripping \r,
+                // so byte_offset after \n is correct for both LF and CRLF)
+                byte_offset = nl_pos + 1;
+                line_idx += 1;
+            }
+            None => {
+                // Last line without trailing newline
+                byte_offset = bytes.len();
+                line_idx += 1;
+            }
+        }
     }
     // If match extends to end of file
     if match_end_line == content_lines.len() {
         return Some((start_byte, content.len()));
     }
     None
+}
+
+/// Find the position of the next newline byte (`\n`) starting from `offset`.
+fn memchr_newline(bytes: &[u8], offset: usize) -> Option<usize> {
+    bytes[offset..]
+        .iter()
+        .position(|&b| b == b'\n')
+        .map(|p| offset + p)
 }
 
 impl Tool for EditFileTool {
@@ -260,13 +287,23 @@ impl Tool for EditFileTool {
 }
 
 /// Detect and unescape double-JSON-encoded content from local models.
+/// Only unescapes when escape sequences (`\n`, `\t`, `\"`, `\\`) are present,
+/// preventing legitimate quoted text like `"hello"` from being stripped.
 fn unescape_if_double_encoded(s: &str) -> String {
-    if s.starts_with('"') && s.ends_with('"') {
-        match serde_json::from_str::<String>(s) {
-            Ok(unescaped) if unescaped != s => unescaped,
-            _ => s.to_string(),
+    if s.starts_with('"') && s.ends_with('"') && s.len() > 2 {
+        let inner = &s[1..s.len() - 1];
+        let has_escapes = inner.contains("\\n")
+            || inner.contains("\\t")
+            || inner.contains("\\r")
+            || inner.contains("\\\"")
+            || inner.contains("\\\\")
+            || inner.contains("\\u");
+        if has_escapes {
+            match serde_json::from_str::<String>(s) {
+                Ok(unescaped) if unescaped != s => return unescaped,
+                _ => {}
+            }
         }
-    } else {
-        s.to_string()
     }
+    s.to_string()
 }

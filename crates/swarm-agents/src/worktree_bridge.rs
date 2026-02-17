@@ -1,5 +1,6 @@
 //! Worktree Bridge — Git worktree isolation for agent tasks
-//!\n//! Each agent task runs in an isolated git worktree to prevent conflicts.
+//!
+//! Each agent task runs in an isolated git worktree to prevent conflicts.
 //! Uses direct `git worktree` commands (Gastown is overkill for single-agent use).
 
 use anyhow::{bail, Context, Result};
@@ -146,25 +147,49 @@ impl WorktreeBridge {
             bail!("git worktree add failed: {stderr}");
         }
 
-        // Ensure orchestrator artifacts are gitignored in the worktree.
-        // The auto-fix step uses `git add .` which would otherwise stage these.
-        let gitignore = wt_path.join(".gitignore");
-        let artifacts = ".swarm-progress.txt\n.swarm-session.json\n";
-        let needs_append = if gitignore.exists() {
-            let content = std::fs::read_to_string(&gitignore).unwrap_or_default();
-            !content.contains(".swarm-progress.txt")
+        // Write orchestrator artifact exclusions to the worktree's local exclude file
+        // instead of modifying the tracked .gitignore. This prevents `git add .` from
+        // staging .gitignore changes into agent-authored commits.
+        let git_dir = wt_path.join(".git");
+        let exclude_dir = if git_dir.is_file() {
+            // Worktrees have a .git file pointing to the real git dir
+            let pointer = std::fs::read_to_string(&git_dir).unwrap_or_default();
+            let real_dir = pointer
+                .strip_prefix("gitdir: ")
+                .unwrap_or("")
+                .trim()
+                .to_string();
+            if real_dir.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(real_dir).join("info"))
+            }
+        } else if git_dir.is_dir() {
+            Some(git_dir.join("info"))
         } else {
-            true
+            None
         };
-        if needs_append {
-            use std::io::Write;
-            if let Ok(mut f) = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&gitignore)
-            {
-                let _ = f.write_all(b"\n# Orchestrator artifacts\n");
-                let _ = f.write_all(artifacts.as_bytes());
+
+        if let Some(info_dir) = exclude_dir {
+            let _ = std::fs::create_dir_all(&info_dir);
+            let exclude_file = info_dir.join("exclude");
+            let needs_write = if exclude_file.exists() {
+                let content = std::fs::read_to_string(&exclude_file).unwrap_or_default();
+                !content.contains(".swarm-progress.txt")
+            } else {
+                true
+            };
+            if needs_write {
+                use std::io::Write;
+                if let Ok(mut f) = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&exclude_file)
+                {
+                    let _ = f.write_all(
+                        b"\n# Orchestrator artifacts\n.swarm-progress.txt\n.swarm-session.json\n",
+                    );
+                }
             }
         }
 
@@ -182,20 +207,20 @@ impl WorktreeBridge {
         let wt_path = self.base_dir.join(&safe_id);
         let branch = format!("swarm/{safe_id}");
 
-        // Clean up orchestrator-generated files that aren't part of the source code.
+        // Clean up orchestrator-generated artifact files that aren't part of the source code.
         // These are created by the harness (ProgressTracker, SessionManager) during the
         // orchestration loop and must not block the merge.
         if wt_path.exists() {
-            for artifact in &[".swarm-progress.txt", ".swarm-session.json", ".gitignore"] {
+            for artifact in &[".swarm-progress.txt", ".swarm-session.json"] {
                 let artifact_path = wt_path.join(artifact);
                 if artifact_path.exists() {
                     let _ = std::fs::remove_file(&artifact_path);
                 }
             }
 
-            // Discard any remaining untracked/modified non-source files
+            // Remove untracked files only (not tracked modifications)
             let _ = Command::new("git")
-                .args(["checkout", "--", "."])
+                .args(["clean", "-fd"])
                 .current_dir(&wt_path)
                 .output();
         }

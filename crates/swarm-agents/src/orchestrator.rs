@@ -342,9 +342,7 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
         .await?;
     if !add.status.success() {
         let stderr = String::from_utf8_lossy(&add.stderr);
-        // Log error but don't crash — work is still in the worktree files
-        error!(iteration, "git add failed (likely permissions): {stderr}");
-        return Ok(false);
+        anyhow::bail!("git add failed (iteration {iteration}): {stderr}");
     }
 
     // Check if there are staged changes
@@ -763,10 +761,11 @@ pub async fn process_issue(
         // Workers don't always produce perfectly formatted code.
         // Run fmt BEFORE committing so format changes are included in the commit.
         // This prevents uncommitted changes from blocking the merge step.
-        let fmt_output = std::process::Command::new("cargo")
+        let fmt_output = tokio::process::Command::new("cargo")
             .args(["fmt", "--package", "swarm-agents"])
             .current_dir(&wt_path)
-            .output();
+            .output()
+            .await;
         if let Ok(ref out) = fmt_output {
             if !out.status.success() {
                 warn!(

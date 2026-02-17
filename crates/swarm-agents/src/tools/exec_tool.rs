@@ -25,9 +25,12 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "touch", "mkdir",
 ];
 
-/// Shell metacharacters that indicate command chaining or redirection.
-/// Rejecting these prevents allowlist bypass via `cargo test; rm -rf /`.
-const SHELL_METACHARACTERS: &[char] = &[';', '|', '&', '$', '`', '(', ')', '<', '>', '\n', '\r'];
+/// Characters that indicate command chaining or injection intent.
+/// Since we execute directly (no shell), these aren't technically dangerous,
+/// but they signal the LLM is trying to chain commands, which we block.
+/// Note: `(`, `)`, `$` are NOT included — they're common in regex patterns
+/// like `rg '(foo|bar)'` and are harmless without a shell.
+const DANGEROUS_METACHARACTERS: &[char] = &[';', '|', '&', '`', '\n', '\r'];
 
 /// Default timeout for command execution.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -83,33 +86,35 @@ impl Tool for RunCommandTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        // Reject shell metacharacters to prevent allowlist bypass.
-        // Without this, `cargo test; rm -rf /` would pass the allowlist check
-        // (first token is "cargo") but execute arbitrary commands via shell.
+        // Reject characters that indicate command chaining or injection intent.
         if let Some(bad) = args
             .command
             .chars()
-            .find(|c| SHELL_METACHARACTERS.contains(c))
+            .find(|c| DANGEROUS_METACHARACTERS.contains(c))
         {
             return Err(ToolError::CommandNotAllowed {
                 command: format!("shell metacharacter '{bad}' not allowed in commands"),
             });
         }
 
-        let parts: Vec<&str> = args.command.split_whitespace().collect();
+        // Use shell-words parsing to properly handle quoted arguments
+        // (e.g., `rg "foo bar"` → ["rg", "foo bar"] instead of ["rg", "\"foo", "bar\""])
+        let parts = shlex::split(&args.command).ok_or_else(|| ToolError::CommandNotAllowed {
+            command: "invalid quoting in command".to_string(),
+        })?;
         let program = parts.first().ok_or_else(|| ToolError::CommandNotAllowed {
             command: String::new(),
         })?;
 
         // Allowlist check
-        if !ALLOWED_COMMANDS.contains(program) {
+        if !ALLOWED_COMMANDS.contains(&program.as_str()) {
             return Err(ToolError::CommandNotAllowed {
                 command: program.to_string(),
             });
         }
 
         // Determine timeout
-        let timeout_secs = if *program == "cargo" && parts.contains(&"test") {
+        let timeout_secs = if program == "cargo" && parts.iter().any(|p| p == "test") {
             TEST_TIMEOUT_SECS
         } else {
             DEFAULT_TIMEOUT_SECS
@@ -117,7 +122,7 @@ impl Tool for RunCommandTool {
 
         let working_dir = self.working_dir.clone();
         let program_owned = program.to_string();
-        let arg_list: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
+        let arg_list: Vec<String> = parts[1..].to_vec();
 
         // Run in a blocking task to avoid blocking the async runtime.
         // Execute directly (no shell) to prevent metacharacter injection.

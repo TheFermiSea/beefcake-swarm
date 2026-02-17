@@ -9,6 +9,7 @@ use swarm_agents::tools::fs_tools::{
 };
 use swarm_agents::tools::patch_tool::{EditFileArgs, EditFileTool};
 use swarm_agents::tools::sandbox_check;
+use swarm_agents::tools::ToolError;
 
 // ---------------------------------------------------------------------------
 // ReadFileTool
@@ -134,8 +135,8 @@ async fn test_write_file_preserves_normal_quoted_content() {
     let dir = tempfile::tempdir().unwrap();
     let tool = WriteFileTool::new(dir.path());
 
-    // Content that happens to start/end with quotes but is NOT double-encoded
-    // (e.g., a file that legitimately contains just a JSON string)
+    // Content that happens to start/end with quotes but has no escape sequences.
+    // Should be preserved as-is (not stripped to "hello world").
     let content = "\"hello world\"";
 
     let result = tool
@@ -147,8 +148,8 @@ async fn test_write_file_preserves_normal_quoted_content() {
 
     assert!(result.is_ok());
     let on_disk = fs::read_to_string(dir.path().join("test.txt")).unwrap();
-    // Should unescape to just: hello world
-    assert_eq!(on_disk, "hello world");
+    // Quotes preserved because no escape sequences detected
+    assert_eq!(on_disk, "\"hello world\"");
 }
 
 // ---------------------------------------------------------------------------
@@ -426,42 +427,41 @@ async fn test_run_command_rejects_ampersand() {
 }
 
 #[tokio::test]
-async fn test_run_command_rejects_dollar_expansion() {
-    let dir = tempfile::tempdir().unwrap();
-    let tool = RunCommandTool::new(dir.path());
-
-    let result = tool
-        .call(RunCommandArgs {
-            command: "echo $HOME".into(),
-        })
-        .await;
-    assert!(result.is_err());
-}
-
-#[tokio::test]
 async fn test_run_command_rejects_backtick() {
     let dir = tempfile::tempdir().unwrap();
     let tool = RunCommandTool::new(dir.path());
 
     let result = tool
         .call(RunCommandArgs {
-            command: "echo `whoami`".into(),
+            command: "cargo test `whoami`".into(),
         })
         .await;
     assert!(result.is_err());
 }
 
 #[tokio::test]
-async fn test_run_command_rejects_redirect() {
+async fn test_run_command_allows_dollar_and_parens_in_args() {
+    // Since we execute directly (no shell), $ and () are harmless and
+    // commonly appear in regex patterns like `rg '(foo|bar)'` or `rg '$HOME'`.
     let dir = tempfile::tempdir().unwrap();
     let tool = RunCommandTool::new(dir.path());
 
+    // Create a test file so rg has something to search
+    fs::write(dir.path().join("test.txt"), "hello (world) $HOME").unwrap();
+
     let result = tool
         .call(RunCommandArgs {
-            command: "ls > /tmp/exfil.txt".into(),
+            command: "rg \"(world)\" test.txt".into(),
         })
         .await;
-    assert!(result.is_err());
+    // Should succeed (rg available) or fail due to rg not installed,
+    // but NOT be rejected by metachar filter
+    match &result {
+        Err(ToolError::CommandNotAllowed { .. }) => {
+            panic!("should not reject parentheses in arguments")
+        }
+        _ => {} // Any other result is fine
+    }
 }
 
 // ---------------------------------------------------------------------------

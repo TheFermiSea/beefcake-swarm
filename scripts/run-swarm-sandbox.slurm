@@ -44,7 +44,7 @@ apptainer exec \
     --env "SWARM_REASONING_URL=http://vasp-01:8081/v1" \
     --env "SWARM_REASONING_MODEL=or1-behemoth-q4_k_m.gguf" \
     --env "SWARM_CLOUD_URL=http://10.0.0.5:8317/v1" \
-    --env "SWARM_CLOUD_API_KEY=rust-daq-proxy-key" \
+    --env "SWARM_CLOUD_API_KEY=${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}" \
     --env "SWARM_CLOUD_MODEL=claude-opus-4-6-thinking" \
     --env "SWARM_VALIDATOR_MODEL_1=gemini-3-pro-preview" \
     --env "SWARM_VALIDATOR_MODEL_2=claude-sonnet-4-5-20250929" \

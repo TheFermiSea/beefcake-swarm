@@ -6,7 +6,7 @@ From: rust:1.88-bookworm
     rustup component add clippy rustfmt
     # beads_rust depends on rich_rust which requires nightly (let_chains feature)
     rustup toolchain install nightly
-    cargo +nightly install --git https://github.com/Dicklesworthstone/beads_rust
+    cargo +nightly install --git https://github.com/Dicklesworthstone/beads_rust --rev e805fe98fe83aa0d65dcfb2872e8732675d7b406
     ln -sf /usr/local/cargo/bin/br /usr/local/cargo/bin/bd
     # Modern Rust CLI tools for agent use
     cargo install ripgrep fd-find bat sd git-delta
