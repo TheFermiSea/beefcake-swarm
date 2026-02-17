@@ -11,8 +11,11 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use tracing::{info, warn};
 
-/// Timeout for individual CLI invocations.
-const NLM_TIMEOUT_SECS: u64 = 30;
+/// Number of retries on authentication errors.
+const AUTH_RETRY_COUNT: u32 = 1;
+
+/// Delay between auth retries (seconds) — gives CSRF refresh time to settle.
+const AUTH_RETRY_DELAY_SECS: u64 = 2;
 
 /// A single notebook entry in the registry.
 #[derive(Debug, Clone, Deserialize)]
@@ -109,24 +112,47 @@ impl NotebookBridge {
         &self.registry
     }
 
-    /// Run an `nlm` command with timeout, returning stdout on success.
+    /// Run an `nlm` command, returning stdout on success.
+    ///
+    /// On authentication errors (RPC Error 16 / "Authentication expired"),
+    /// retries once after a short delay. The CLI's internal 3-layer recovery
+    /// (CSRF refresh → disk reload → headless Chrome) runs on each attempt,
+    /// so a retry gives the CSRF token refresh a second chance after the
+    /// ~20-minute session timeout.
     fn run_command(&self, args: &[&str]) -> Result<String> {
-        let output = Command::new(&self.bin)
-            .args(args)
-            .env("NLM_TIMEOUT", NLM_TIMEOUT_SECS.to_string())
-            .output()
-            .context(format!("Failed to run `{} {}`", self.bin, args.join(" ")))?;
+        let cmd_label = format!("{} {}", self.bin, args.first().unwrap_or(&""));
 
-        if !output.status.success() {
+        for attempt in 0..=AUTH_RETRY_COUNT {
+            let output = Command::new(&self.bin)
+                .args(args)
+                .output()
+                .context(format!("Failed to run `{cmd_label}`"))?;
+
+            if output.status.success() {
+                return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+            }
+
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!(
-                "{} {} failed: {stderr}",
-                self.bin,
-                args.first().unwrap_or(&"")
-            );
+
+            // Check if this is an auth error worth retrying
+            let is_auth_error = stderr.contains("Authentication expired")
+                || stderr.contains("RPC Error 16")
+                || stderr.contains("AuthenticationError");
+
+            if is_auth_error && attempt < AUTH_RETRY_COUNT {
+                warn!(
+                    cmd = %cmd_label,
+                    attempt = attempt + 1,
+                    "NotebookLM auth expired, retrying after {AUTH_RETRY_DELAY_SECS}s"
+                );
+                std::thread::sleep(std::time::Duration::from_secs(AUTH_RETRY_DELAY_SECS));
+                continue;
+            }
+
+            anyhow::bail!("{cmd_label} failed: {stderr}");
         }
 
-        Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+        unreachable!()
     }
 }
 
