@@ -418,18 +418,24 @@ impl WorkPacketGenerator {
     /// 2. All changes since branching from main (works post-commit on worktree branches)
     /// 3. Porcelain status fallback
     fn git_changed_files(&self) -> Vec<String> {
+        let mut all_files = HashSet::new();
+
         // 1. Unstaged changes — works before git commit
-        let files = self.run_git_diff(&["diff", "--name-only", "HEAD"]);
-        if !files.is_empty() {
-            return files;
+        for f in self.run_git_diff(&["diff", "--name-only", "HEAD"]) {
+            all_files.insert(f);
         }
 
         // 2. Changes since branch point from main.
         // Worktree branches are `swarm/<issue-id>` off main.
         // Three-dot diff finds the merge-base automatically.
-        let files = self.run_git_diff(&["diff", "--name-only", "main...HEAD"]);
-        if !files.is_empty() {
-            return files;
+        // Always run this (don't short-circuit) because step 1 may only
+        // return non-source files like .swarm-progress.txt.
+        for f in self.run_git_diff(&["diff", "--name-only", "main...HEAD"]) {
+            all_files.insert(f);
+        }
+
+        if !all_files.is_empty() {
+            return all_files.into_iter().collect();
         }
 
         // 3. Fallback: porcelain status
