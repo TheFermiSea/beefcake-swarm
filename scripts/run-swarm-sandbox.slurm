@@ -18,9 +18,15 @@ SIF="/cluster/shared/containers/swarm-agent.sif"
 
 mkdir -p "$WT_DIR" "$CARGO_CACHE" "$CARGO_TARGET"
 
+# Load cloud API key from file if not set via environment
+if [ -z "${SWARM_CLOUD_API_KEY:-}" ] && [ -f /cluster/shared/ai/.cloud-api-key ]; then
+    SWARM_CLOUD_API_KEY="$(cat /cluster/shared/ai/.cloud-api-key)"
+    export SWARM_CLOUD_API_KEY
+fi
+
 # Fix .git object permissions so worktrees can write to the ODB.
 # Required because a previous `git pull` as root may have locked these.
-chown -R brian:hpc "${REPO_DIR}/.git"
+chown -R brian:hpc "${REPO_DIR}/.git" 2>/dev/null || true
 
 # --cleanenv: clean environment (only explicit --env vars)
 # --writable-tmpfs: allows writes to SIF overlay areas
