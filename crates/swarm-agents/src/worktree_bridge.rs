@@ -117,6 +117,16 @@ impl WorktreeBridge {
             bail!("git worktree add failed: {stderr}");
         }
 
+        // Write a .gitignore to prevent orchestrator artifacts from being committed.
+        // The auto-fix step uses `git add .` which would otherwise stage these.
+        let gitignore = wt_path.join(".gitignore");
+        if !gitignore.exists() {
+            let _ = std::fs::write(
+                &gitignore,
+                ".swarm-progress.txt\n.swarm-session.json\n.gitignore\n",
+            );
+        }
+
         Ok(wt_path)
     }
 
@@ -135,7 +145,7 @@ impl WorktreeBridge {
         // These are created by the harness (ProgressTracker, SessionManager) during the
         // orchestration loop and must not block the merge.
         if wt_path.exists() {
-            for artifact in &[".swarm-progress.txt", ".swarm-session.json"] {
+            for artifact in &[".swarm-progress.txt", ".swarm-session.json", ".gitignore"] {
                 let artifact_path = wt_path.join(artifact);
                 if artifact_path.exists() {
                     let _ = std::fs::remove_file(&artifact_path);
