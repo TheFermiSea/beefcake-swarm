@@ -727,6 +727,10 @@ pub async fn process_issue(
 
         if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
             error!(id = %issue.id, "Merge failed: {e} — resetting issue to open");
+            // Cleanup the worktree to prevent leaks
+            if let Err(cleanup_err) = worktree_bridge.cleanup(&issue.id) {
+                warn!(id = %issue.id, "Cleanup failed: {cleanup_err}");
+            }
             let _ = beads.update_status(&issue.id, "open");
             return Err(e);
         }

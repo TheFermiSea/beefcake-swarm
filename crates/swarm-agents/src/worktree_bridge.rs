@@ -208,6 +208,83 @@ impl WorktreeBridge {
         Ok(())
     }
 
+    /// Cleanup a worktree for merge failure recovery.
+    ///
+    /// Best-effort cleanup that:
+    /// 1. Aborts any in-progress merge
+    /// 2. Force-removes the worktree (with fallback to remove_dir_all)
+    /// 3. Prunes worktree bookkeeping
+    /// 4. Force-deletes the branch
+    ///
+    /// Always returns `Ok(())` regardless of individual step failures.
+    pub fn cleanup(&self, issue_id: &str) -> Result<()> {
+        let safe_id = Self::sanitize_id(issue_id);
+        let wt_path = self.base_dir.join(&safe_id);
+        let branch = format!("swarm/{safe_id}");
+
+        // Abort any in-progress merge (may have left repo in conflicted state)
+        let _ = Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(&self.repo_root)
+            .output();
+
+        // Force-remove the worktree
+        if wt_path.exists() {
+            let remove = Command::new("git")
+                .args([
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &wt_path.display().to_string(),
+                ])
+                .current_dir(&self.repo_root)
+                .output();
+
+            match remove {
+                Ok(ref out) if !out.status.success() => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    tracing::warn!("cleanup: git worktree remove --force failed: {stderr}");
+                    // Fallback: try removing the directory directly
+                    if wt_path.exists() {
+                        let _ = std::fs::remove_dir_all(&wt_path);
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!("cleanup: failed to run git worktree remove: {e}");
+                    if wt_path.exists() {
+                        let _ = std::fs::remove_dir_all(&wt_path);
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Prune worktree bookkeeping for removed directories
+        let _ = Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&self.repo_root)
+            .output();
+
+        // Force-delete the branch (capital -D since it's unmerged)
+        let del = Command::new("git")
+            .args(["branch", "-D", &branch])
+            .current_dir(&self.repo_root)
+            .output();
+
+        match del {
+            Ok(ref out) if !out.status.success() => {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                tracing::warn!("cleanup: git branch -D failed: {stderr}");
+            }
+            Err(e) => {
+                tracing::warn!("cleanup: failed to run git branch -D: {e}");
+            }
+            _ => {}
+        }
+
+        Ok(())
+    }
+
     /// List active worktrees.
     pub fn list(&self) -> Result<Vec<WorktreeInfo>> {
         let output = Command::new("git")
@@ -323,5 +400,100 @@ mod tests {
 
         // Creating the same one again should fail
         assert!(bridge.create("test-issue").is_err());
+    }
+
+    #[test]
+    fn test_cleanup_removes_worktree() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let wt_base = tempfile::tempdir().unwrap();
+
+        // Set up a proper git repo with an initial commit
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(repo_dir.path().join("README.md"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
+            .expect("bridge creation");
+
+        // Create a worktree
+        let wt_path = bridge.create("cleanup-test").expect("create worktree");
+        assert!(wt_path.exists());
+
+        // Cleanup should remove it
+        bridge.cleanup("cleanup-test").expect("cleanup");
+        assert!(!wt_path.exists());
+
+        // Branch should be gone too
+        let branches = Command::new("git")
+            .args(["branch", "--list", "swarm/cleanup-test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        let branch_list = String::from_utf8_lossy(&branches.stdout);
+        assert!(branch_list.trim().is_empty());
+    }
+
+    #[test]
+    fn test_cleanup_nonexistent_is_ok() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let wt_base = tempfile::tempdir().unwrap();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(repo_dir.path().join("README.md"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
+            .expect("bridge creation");
+
+        // Cleanup of non-existent worktree should succeed (best-effort)
+        bridge
+            .cleanup("does-not-exist")
+            .expect("cleanup non-existent");
     }
 }
