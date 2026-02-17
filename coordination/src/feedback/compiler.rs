@@ -27,19 +27,28 @@ impl Compiler {
 
     /// Run `cargo check` scoped to specific packages
     pub fn check_packages(&self, packages: &[String]) -> CompileResult {
-        let pkg_args: Vec<String> = packages.iter().flat_map(|p| vec!["-p".to_string(), p.clone()]).collect();
+        let pkg_args: Vec<String> = packages
+            .iter()
+            .flat_map(|p| vec!["-p".to_string(), p.clone()])
+            .collect();
         let pkg_refs: Vec<&str> = pkg_args.iter().map(|s| s.as_str()).collect();
         self.run_cargo(&["check", "--message-format=json"], &pkg_refs)
     }
 
     /// Run `cargo clippy` with JSON message format
     pub fn clippy(&self) -> CompileResult {
-        self.run_cargo(&["clippy", "--message-format=json", "--", "-D", "warnings"], &[])
+        self.run_cargo(
+            &["clippy", "--message-format=json", "--", "-D", "warnings"],
+            &[],
+        )
     }
 
     /// Run `cargo clippy` scoped to specific packages
     pub fn clippy_packages(&self, packages: &[String]) -> CompileResult {
-        let pkg_args: Vec<String> = packages.iter().flat_map(|p| vec!["-p".to_string(), p.clone()]).collect();
+        let pkg_args: Vec<String> = packages
+            .iter()
+            .flat_map(|p| vec!["-p".to_string(), p.clone()])
+            .collect();
         let pkg_refs: Vec<&str> = pkg_args.iter().map(|s| s.as_str()).collect();
         let mut all_args = vec!["clippy"];
         all_args.extend_from_slice(&pkg_refs);

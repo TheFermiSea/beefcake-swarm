@@ -15,6 +15,11 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::LazyLock;
 
+/// Regex for extracting file paths from cargo fmt/check stderr output.
+/// Matches patterns like ` --> path/to/file.rs:123:45` or `Error writing files: ... path.rs`
+static STDERR_FILE_PATTERN: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"-->\s*([^\s:]+\.rs):(\d+)").unwrap());
+
 /// Regex patterns for extracting Rust symbols from source code
 static STRUCT_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^pub\s+struct\s+(\w+)").unwrap());
@@ -292,6 +297,55 @@ impl WorkPacketGenerator {
                     });
                 }
             }
+
+            // If failure_signals didn't yield file contexts (e.g., fmt errors which
+            // don't produce ParsedErrors), extract file paths from gate stderr.
+            if contexts.is_empty() {
+                for gate in &report.gates {
+                    if let Some(stderr) = &gate.stderr_excerpt {
+                        for cap in STDERR_FILE_PATTERN.captures_iter(stderr) {
+                            let file = cap[1].to_string();
+                            let line: usize = cap[2].parse().unwrap_or(1);
+
+                            // Make path relative to working dir if it's absolute
+                            let rel_file = file
+                                .strip_prefix(&format!("{}/", self.working_dir.display()))
+                                .unwrap_or(&file)
+                                .to_string();
+
+                            if files_seen.contains(&rel_file) {
+                                continue;
+                            }
+                            files_seen.insert(rel_file.clone());
+
+                            let full_path = self.working_dir.join(&rel_file);
+                            let content = match std::fs::read_to_string(&full_path) {
+                                Ok(c) => c,
+                                Err(_) => continue,
+                            };
+
+                            let lines: Vec<&str> = content.lines().collect();
+                            let start = line.saturating_sub(11);
+                            let end = (line + 10).min(lines.len());
+
+                            let context_content: String = lines[start..end]
+                                .iter()
+                                .enumerate()
+                                .map(|(i, l)| format!("{:4} | {}", start + i + 1, l))
+                                .collect::<Vec<_>>()
+                                .join("\n");
+
+                            contexts.push(FileContext {
+                                file: rel_file,
+                                start_line: start + 1,
+                                end_line: end,
+                                content: context_content,
+                                relevance: format!("{} gate error at line {}", gate.gate, line),
+                            });
+                        }
+                    }
+                }
+            }
         }
 
         // Also include brief context for any touched files without explicit errors
@@ -357,42 +411,65 @@ impl WorkPacketGenerator {
             .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
     }
 
-    /// Get files changed relative to the branch point
+    /// Get files changed relative to the branch point.
+    ///
+    /// Tries multiple strategies since git state varies across iterations:
+    /// 1. Unstaged changes vs HEAD (works mid-iteration before commit)
+    /// 2. All changes since branching from main (works post-commit on worktree branches)
+    /// 3. Porcelain status fallback
     fn git_changed_files(&self) -> Vec<String> {
-        // Try diff against main first
-        let output = Command::new("git")
-            .args(["diff", "--name-only", "HEAD"])
-            .current_dir(&self.working_dir)
-            .output();
-
-        match output {
-            Ok(o) if o.status.success() => String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .map(String::from)
-                .collect(),
-            _ => {
-                // Fallback: list tracked files that are modified
-                Command::new("git")
-                    .args(["status", "--porcelain", "-s"])
-                    .current_dir(&self.working_dir)
-                    .output()
-                    .ok()
-                    .map(|o| {
-                        String::from_utf8_lossy(&o.stdout)
-                            .lines()
-                            .filter_map(|line| {
-                                let trimmed = line.trim();
-                                if trimmed.len() > 3 {
-                                    Some(trimmed[3..].to_string())
-                                } else {
-                                    None
-                                }
-                            })
-                            .collect()
-                    })
-                    .unwrap_or_default()
-            }
+        // 1. Unstaged changes — works before git commit
+        let files = self.run_git_diff(&["diff", "--name-only", "HEAD"]);
+        if !files.is_empty() {
+            return files;
         }
+
+        // 2. Changes since branch point from main.
+        // Worktree branches are `swarm/<issue-id>` off main.
+        // Three-dot diff finds the merge-base automatically.
+        let files = self.run_git_diff(&["diff", "--name-only", "main...HEAD"]);
+        if !files.is_empty() {
+            return files;
+        }
+
+        // 3. Fallback: porcelain status
+        Command::new("git")
+            .args(["status", "--porcelain", "-s"])
+            .current_dir(&self.working_dir)
+            .output()
+            .ok()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter_map(|line| {
+                        let trimmed = line.trim();
+                        if trimmed.len() > 3 {
+                            Some(trimmed[3..].to_string())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Run a git diff command and return the list of file paths.
+    fn run_git_diff(&self, args: &[&str]) -> Vec<String> {
+        Command::new("git")
+            .args(args)
+            .current_dir(&self.working_dir)
+            .output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout)
+                    .lines()
+                    .filter(|l| !l.is_empty())
+                    .map(String::from)
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
