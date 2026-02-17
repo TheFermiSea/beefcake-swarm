@@ -5,6 +5,7 @@
 
 pub mod exec_tool;
 pub mod fs_tools;
+pub mod patch_tool;
 pub mod verifier_tool;
 
 use std::path::{Path, PathBuf};

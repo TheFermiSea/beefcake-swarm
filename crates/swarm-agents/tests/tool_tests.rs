@@ -7,6 +7,7 @@ use swarm_agents::tools::exec_tool::{RunCommandArgs, RunCommandTool};
 use swarm_agents::tools::fs_tools::{
     ListFilesArgs, ListFilesTool, ReadFileArgs, ReadFileTool, WriteFileArgs, WriteFileTool,
 };
+use swarm_agents::tools::patch_tool::{EditFileArgs, EditFileTool};
 use swarm_agents::tools::sandbox_check;
 
 // ---------------------------------------------------------------------------
@@ -180,6 +181,162 @@ async fn test_list_files_skips_hidden() {
 
     assert!(!result.contains(".hidden"));
     assert!(result.contains("visible.rs"));
+}
+
+// ---------------------------------------------------------------------------
+// EditFileTool
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_edit_file_exact_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lib.rs");
+    fs::write(&file, "fn foo() {\n    println!(\"hello\");\n}\n").unwrap();
+
+    let tool = EditFileTool::new(dir.path());
+    let result = tool
+        .call(EditFileArgs {
+            path: "lib.rs".into(),
+            old_content: "    println!(\"hello\");".into(),
+            new_content: "    println!(\"world\");".into(),
+        })
+        .await;
+
+    assert!(result.is_ok());
+    let on_disk = fs::read_to_string(&file).unwrap();
+    assert!(on_disk.contains("world"));
+    assert!(!on_disk.contains("hello"));
+    // Surrounding code preserved
+    assert!(on_disk.contains("fn foo()"));
+}
+
+#[tokio::test]
+async fn test_edit_file_no_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lib.rs");
+    fs::write(&file, "fn foo() {}\n").unwrap();
+
+    let tool = EditFileTool::new(dir.path());
+    let result = tool
+        .call(EditFileArgs {
+            path: "lib.rs".into(),
+            old_content: "fn bar() {}".into(),
+            new_content: "fn baz() {}".into(),
+        })
+        .await;
+
+    assert!(result.is_err());
+    // File should be unchanged
+    let on_disk = fs::read_to_string(&file).unwrap();
+    assert_eq!(on_disk, "fn foo() {}\n");
+}
+
+#[tokio::test]
+async fn test_edit_file_ambiguous_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lib.rs");
+    fs::write(&file, "let x = 1;\nlet y = 2;\nlet x = 1;\n").unwrap();
+
+    let tool = EditFileTool::new(dir.path());
+    let result = tool
+        .call(EditFileArgs {
+            path: "lib.rs".into(),
+            old_content: "let x = 1;".into(),
+            new_content: "let x = 99;".into(),
+        })
+        .await;
+
+    // Should fail: matches 2 locations
+    assert!(result.is_err());
+    // File should be unchanged
+    let on_disk = fs::read_to_string(&file).unwrap();
+    assert_eq!(on_disk, "let x = 1;\nlet y = 2;\nlet x = 1;\n");
+}
+
+#[tokio::test]
+async fn test_edit_file_whitespace_fuzzy_match() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lib.rs");
+    // File uses 4-space indent
+    fs::write(&file, "fn foo() {\n    let x = 1;\n}\n").unwrap();
+
+    let tool = EditFileTool::new(dir.path());
+    // old_content uses 2-space indent — should still match via fuzzy
+    let result = tool
+        .call(EditFileArgs {
+            path: "lib.rs".into(),
+            old_content: "fn foo() {\n  let x = 1;\n}".into(),
+            new_content: "fn foo() {\n    let x = 2;\n}".into(),
+        })
+        .await;
+
+    assert!(result.is_ok());
+    let on_disk = fs::read_to_string(&file).unwrap();
+    assert!(on_disk.contains("let x = 2;"));
+}
+
+#[tokio::test]
+async fn test_edit_file_delete_block() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lib.rs");
+    fs::write(&file, "fn foo() {}\n\nfn bar() {}\n\nfn baz() {}\n").unwrap();
+
+    let tool = EditFileTool::new(dir.path());
+    let result = tool
+        .call(EditFileArgs {
+            path: "lib.rs".into(),
+            old_content: "\nfn bar() {}\n".into(),
+            new_content: "".into(),
+        })
+        .await;
+
+    assert!(result.is_ok());
+    let on_disk = fs::read_to_string(&file).unwrap();
+    assert!(!on_disk.contains("bar"));
+    assert!(on_disk.contains("foo"));
+    assert!(on_disk.contains("baz"));
+}
+
+#[tokio::test]
+async fn test_edit_file_sandbox_escape_blocked() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = EditFileTool::new(dir.path());
+    let result = tool
+        .call(EditFileArgs {
+            path: "../../../etc/passwd".into(),
+            old_content: "root".into(),
+            new_content: "hacked".into(),
+        })
+        .await;
+
+    assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn test_edit_file_multiline_replace() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("main.rs");
+    fs::write(
+        &file,
+        "use std::io;\n\nfn main() {\n    println!(\"v1\");\n    println!(\"v2\");\n}\n",
+    )
+    .unwrap();
+
+    let tool = EditFileTool::new(dir.path());
+    let result = tool
+        .call(EditFileArgs {
+            path: "main.rs".into(),
+            old_content: "    println!(\"v1\");\n    println!(\"v2\");".into(),
+            new_content: "    println!(\"v3\");".into(),
+        })
+        .await;
+
+    assert!(result.is_ok());
+    let on_disk = fs::read_to_string(&file).unwrap();
+    assert!(on_disk.contains("v3"));
+    assert!(!on_disk.contains("v1"));
+    assert!(!on_disk.contains("v2"));
+    assert!(on_disk.contains("use std::io;"));
 }
 
 // ---------------------------------------------------------------------------

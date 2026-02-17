@@ -1,0 +1,40 @@
+id: no-bare-expect
+language: Rust
+severity: hint
+message: "Use descriptive .expect() messages — include context about what failed"
+note: |
+  Bad:  `config.get("key").expect("failed")`
+  Good: `config.get("key").expect("missing 'key' in swarm config")`
+
+  Descriptive messages help debug agent crashes from SLURM logs.
+rule:
+  pattern: $EXPR.expect($MSG)
+constraints:
+  MSG:
+    regex: "^\"(failed|error|bug|impossible|unreachable|should not happen|internal error)\"$"
+ignores:
+  - "**/*test*"
+  - "**/tests/**"
+files:
+  - "crates/**/src/**/*.rs"
+  - "coordination/src/**/*.rs"
+---
+id: no-silent-error-drop
+language: Rust
+severity: warning
+message: "Silently dropping errors with `let _ =` hides failures — log or propagate"
+note: |
+  `let _ = fallible_op();` silently discards errors. In a long-running agent,
+  silent failures accumulate and cause mysterious behavior.
+  Use `if let Err(e) = op() { tracing::warn!(...) }` or propagate with `?`.
+rule:
+  all:
+    - pattern: let _ = $EXPR;
+    - has:
+        kind: call_expression
+        stopBy: end
+ignores:
+  - "**/*test*"
+  - "**/tests/**"
+files:
+  - "crates/**/src/**/*.rs"

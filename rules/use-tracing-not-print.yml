@@ -1,0 +1,31 @@
+id: no-println-in-prod
+language: Rust
+severity: warning
+message: "Use tracing::info!() instead of println!() for structured logging"
+note: |
+  The orchestrator uses `tracing` for structured, level-filtered logging.
+  `println!()` bypasses log levels and isn't captured in SLURM job logs properly.
+  Use `tracing::info!()`, `tracing::debug!()`, or `tracing::warn!()` instead.
+rule:
+  pattern: println!($$$ARGS)
+ignores:
+  - "**/*test*"
+  - "**/tests/**"
+  - "**/main.rs"
+files:
+  - "crates/**/src/**/*.rs"
+  - "coordination/src/**/*.rs"
+---
+id: no-eprintln-in-prod
+language: Rust
+severity: warning
+message: "Use tracing::warn!() or tracing::error!() instead of eprintln!()"
+rule:
+  pattern: eprintln!($$$ARGS)
+ignores:
+  - "**/*test*"
+  - "**/tests/**"
+  - "**/main.rs"
+files:
+  - "crates/**/src/**/*.rs"
+  - "coordination/src/**/*.rs"

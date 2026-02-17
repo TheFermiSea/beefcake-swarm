@@ -1,0 +1,16 @@
+id: no-unwrap-in-prod
+language: Rust
+severity: warning
+message: "Avoid .unwrap() in production code — use ? or .expect() with context"
+note: |
+  `.unwrap()` panics on None/Err with no context, crashing the agent mid-task.
+  Use `?` to propagate errors, or `.expect("reason")` if the invariant is truly guaranteed.
+  `.unwrap()` is fine in tests.
+rule:
+  pattern: $EXPR.unwrap()
+ignores:
+  - "**/*test*"
+  - "**/tests/**"
+files:
+  - "crates/**/src/**/*.rs"
+  - "coordination/src/**/*.rs"

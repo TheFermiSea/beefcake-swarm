@@ -1,0 +1,44 @@
+id: no-panic-in-prod
+language: Rust
+severity: error
+message: "panic!() in production code will crash the orchestrator or agent"
+note: |
+  Use `anyhow::bail!()`, return `Err(...)`, or `tracing::error!()` + graceful degradation.
+  The swarm must recover from errors, not crash.
+rule:
+  pattern: panic!($$$ARGS)
+ignores:
+  - "**/*test*"
+  - "**/tests/**"
+files:
+  - "crates/**/src/**/*.rs"
+  - "coordination/src/**/*.rs"
+---
+id: no-todo-macro
+language: Rust
+severity: warning
+message: "todo!() will panic at runtime — implement or create a beads issue"
+note: |
+  Replace with a beads issue: `bd create --title="Implement: ..." --type=task`
+  then return an appropriate error or default value.
+rule:
+  pattern: todo!($$$ARGS)
+ignores:
+  - "**/*test*"
+  - "**/tests/**"
+files:
+  - "crates/**/src/**/*.rs"
+  - "coordination/src/**/*.rs"
+---
+id: no-unimplemented
+language: Rust
+severity: warning
+message: "unimplemented!() will panic at runtime — implement or return Err"
+rule:
+  pattern: unimplemented!($$$ARGS)
+ignores:
+  - "**/*test*"
+  - "**/tests/**"
+files:
+  - "crates/**/src/**/*.rs"
+  - "coordination/src/**/*.rs"
