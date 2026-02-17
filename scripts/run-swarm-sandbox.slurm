@@ -33,7 +33,7 @@ apptainer exec \
     --bind "${CARGO_CACHE}:${CARGO_CACHE}" \
     --bind "${CARGO_TARGET}:${CARGO_TARGET}" \
     --pwd "${REPO_DIR}" \
-    --env "RUST_LOG=${RUST_LOG:-swarm_agents=info,coordination=info,rig=debug}" \
+    --env "RUST_LOG=${RUST_LOG:-swarm_agents=info,coordination=info,rig=debug,rig_core=info}" \
     --env "CARGO_HOME=${CARGO_CACHE}" \
     --env "CARGO_TARGET_DIR=${CARGO_TARGET}" \
     --env "SWARM_FAST_URL=http://vasp-02:8080/v1" \
