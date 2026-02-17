@@ -84,14 +84,19 @@ pub fn capture_error_pattern(
 
 /// Sync the codebase to the Codebase notebook via repomix.
 ///
-/// Runs `repomix --style xml` to pack the repo, then uploads the result.
+/// Runs `repomix --style markdown` to pack the repo, then uploads the result.
 /// This is expensive and should be run sparingly (e.g., via CLI flag).
 pub fn sync_codebase_notebook(kb: &dyn KnowledgeBase, repo_root: &std::path::Path) -> Result<()> {
-    let output_path = std::env::temp_dir().join("beefcake-swarm-repomix.xml");
+    let output_path = std::env::temp_dir().join("beefcake-swarm-repomix.md");
 
     info!("Running repomix to pack codebase...");
     let repomix = std::process::Command::new("repomix")
-        .args(["--style", "xml", "--output", &output_path.to_string_lossy()])
+        .args([
+            "--style",
+            "markdown",
+            "--output",
+            &output_path.to_string_lossy(),
+        ])
         .current_dir(repo_root)
         .output()
         .context("Failed to run repomix. Is it installed? (npm i -g repomix)")?;

@@ -141,7 +141,7 @@ impl KnowledgeBase for NotebookBridge {
         };
 
         info!(role, "Querying NotebookLM");
-        self.run_command(&["query", "--notebook", notebook_id, question])
+        self.run_command(&["query", "notebook", notebook_id, question])
     }
 
     fn add_source_text(&self, role: &str, title: &str, content: &str) -> Result<()> {
@@ -153,23 +153,16 @@ impl KnowledgeBase for NotebookBridge {
             }
         };
 
-        // Write content to a temp file, then upload
-        let tmp_dir = std::env::temp_dir();
-        let tmp_file = tmp_dir.join(format!("nlm-source-{}.md", sanitize_filename(title)));
-        std::fs::write(&tmp_file, content)?;
-
-        let result = self.run_command(&[
+        self.run_command(&[
             "source",
             "add",
-            "--notebook",
             notebook_id,
-            "--file",
-            &tmp_file.to_string_lossy(),
-        ]);
-
-        // Clean up temp file regardless of result
-        let _ = std::fs::remove_file(&tmp_file);
-        result.map(|_| ())
+            "--text",
+            content,
+            "--title",
+            title,
+        ])
+        .map(|_| ())
     }
 
     fn add_source_file(&self, role: &str, file_path: &str) -> Result<()> {
@@ -181,15 +174,8 @@ impl KnowledgeBase for NotebookBridge {
             }
         };
 
-        self.run_command(&[
-            "source",
-            "add",
-            "--notebook",
-            notebook_id,
-            "--file",
-            file_path,
-        ])
-        .map(|_| ())
+        self.run_command(&["source", "add", notebook_id, "--file", file_path])
+            .map(|_| ())
     }
 
     fn is_available(&self) -> bool {
@@ -199,19 +185,6 @@ impl KnowledgeBase for NotebookBridge {
             .map(|o| o.status.success())
             .unwrap_or(false)
     }
-}
-
-/// Sanitize a string for use as a filename.
-fn sanitize_filename(s: &str) -> String {
-    s.chars()
-        .map(|c| {
-            if c.is_alphanumeric() || c == '-' || c == '_' {
-                c
-            } else {
-                '_'
-            }
-        })
-        .collect()
 }
 
 /// A no-op knowledge base for when NotebookLM is unavailable.
@@ -384,13 +357,6 @@ auto_update = false
         assert!(!noop.is_available());
         assert_eq!(noop.query("any", "question").unwrap(), "");
         assert!(noop.add_source_text("any", "title", "content").is_ok());
-    }
-
-    #[test]
-    fn test_sanitize_filename() {
-        assert_eq!(sanitize_filename("hello world!"), "hello_world_");
-        assert_eq!(sanitize_filename("fix/E0382"), "fix_E0382");
-        assert_eq!(sanitize_filename("my-file_name"), "my-file_name");
     }
 
     #[test]

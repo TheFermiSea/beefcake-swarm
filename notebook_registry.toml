@@ -7,37 +7,37 @@
 # auto_update: whether the orchestrator writes back to this notebook
 
 [notebooks.project_brain]
-id = ""
+id = "9ecc5027-d983-4461-bbf7-fbb389bfcf03"
 role = "project_brain"
 auto_query = true
 auto_update = true
 
 [notebooks.debugging_kb]
-id = ""
+id = "8266d75a-0e25-4ea8-9785-106b127c50c6"
 role = "debugging_kb"
 auto_query = true
 auto_update = true
 
 [notebooks.codebase]
-id = ""
+id = "befb5cd5-45b0-4803-8eed-51bc1babff04"
 role = "codebase"
 auto_query = false
 auto_update = false
 
 [notebooks.research]
-id = ""
+id = "b8d9e091-8be8-4af4-8301-89052b04a04e"
 role = "research"
 auto_query = false
 auto_update = false
 
 [notebooks.security]
-id = ""
+id = "1a2ccd75-02ab-4172-b539-b1dfd69685c9"
 role = "security"
 auto_query = false
 auto_update = false
 
 [notebooks.visuals]
-id = ""
+id = "4d2a4adf-b51f-41ab-b239-417049abb0ec"
 role = "visuals"
 auto_query = false
 auto_update = false

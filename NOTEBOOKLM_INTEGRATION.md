@@ -75,11 +75,11 @@ Edit `notebook_registry.toml` and fill in the notebook IDs from step 2.
 ### 4. Seed Notebooks
 ```bash
 # Project Brain
-nlm source add --notebook "<BRAIN_ID>" --file CLAUDE.md
+nlm source add "<BRAIN_ID>" --file CLAUDE.md
 
 # Codebase
-repomix --style xml --output /tmp/beefcake-swarm-repomix.xml
-nlm source add --notebook "<CODEBASE_ID>" --file /tmp/beefcake-swarm-repomix.xml
+repomix --style markdown --output /tmp/beefcake-swarm-repomix.md
+nlm source add "<CODEBASE_ID>" --file /tmp/beefcake-swarm-repomix.md
 ```
 
 ## Complementary Tools
@@ -102,8 +102,9 @@ nlm source add --notebook "<CODEBASE_ID>" --file /tmp/beefcake-swarm-repomix.xml
 | Login | `nlm login` |
 | List Notebooks | `nlm notebook list` |
 | Create Notebook | `nlm notebook create "Title"` |
-| Add File Source | `nlm source add --notebook "ID" --file "doc.txt"` |
-| Query (RAG) | `nlm query --notebook "ID" "Question..."` |
+| Add File Source | `nlm source add "ID" --file "doc.txt"` |
+| Add Text Source | `nlm source add "ID" --text "content" --title "title"` |
+| Query (RAG) | `nlm query notebook "ID" "Question..."` |
 
 ## Testing
 
@@ -114,5 +115,5 @@ cargo test -p swarm-agents
 # Manual verification
 nlm --help                                    # CLI available
 nlm notebook list                             # Auth working
-nlm query --notebook "<ID>" "test query"      # Query working
+nlm query notebook "<ID>" "test query"      # Query working
 ```

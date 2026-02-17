@@ -120,8 +120,8 @@ The swarm uses NotebookLM as an external RAG layer for institutional memory. Com
 
 **Query commands:**
 ```bash
-nlm query --notebook "<ID>" "What is the escalation ladder?"
-nlm source add --notebook "<ID>" --file "doc.md"
+nlm query notebook "<ID>" "What is the escalation ladder?"
+nlm source add "<ID>" --file "doc.md"
 ```
 
 **Orchestrator integration points:**
