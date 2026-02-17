@@ -25,6 +25,10 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "touch", "mkdir",
 ];
 
+/// Shell metacharacters that indicate command chaining or redirection.
+/// Rejecting these prevents allowlist bypass via `cargo test; rm -rf /`.
+const SHELL_METACHARACTERS: &[char] = &[';', '|', '&', '$', '`', '(', ')', '<', '>', '\n', '\r'];
+
 /// Default timeout for command execution.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
 
@@ -79,6 +83,19 @@ impl Tool for RunCommandTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        // Reject shell metacharacters to prevent allowlist bypass.
+        // Without this, `cargo test; rm -rf /` would pass the allowlist check
+        // (first token is "cargo") but execute arbitrary commands via shell.
+        if let Some(bad) = args
+            .command
+            .chars()
+            .find(|c| SHELL_METACHARACTERS.contains(c))
+        {
+            return Err(ToolError::CommandNotAllowed {
+                command: format!("shell metacharacter '{}' not allowed in commands", bad),
+            });
+        }
+
         let parts: Vec<&str> = args.command.split_whitespace().collect();
         let program = parts.first().ok_or_else(|| ToolError::CommandNotAllowed {
             command: String::new(),
@@ -92,19 +109,21 @@ impl Tool for RunCommandTool {
         }
 
         // Determine timeout
-        let timeout_secs = if args.command.contains("cargo test") {
+        let timeout_secs = if *program == "cargo" && parts.contains(&"test") {
             TEST_TIMEOUT_SECS
         } else {
             DEFAULT_TIMEOUT_SECS
         };
 
         let working_dir = self.working_dir.clone();
-        let command = args.command.clone();
+        let program_owned = program.to_string();
+        let arg_list: Vec<String> = parts[1..].iter().map(|s| s.to_string()).collect();
 
-        // Run in a blocking task to avoid blocking the async runtime
+        // Run in a blocking task to avoid blocking the async runtime.
+        // Execute directly (no shell) to prevent metacharacter injection.
         let result = tokio::task::spawn_blocking(move || {
-            let output = std::process::Command::new("sh")
-                .args(["-c", &command])
+            let output = std::process::Command::new(&program_owned)
+                .args(&arg_list)
                 .current_dir(&working_dir)
                 .output();
 
