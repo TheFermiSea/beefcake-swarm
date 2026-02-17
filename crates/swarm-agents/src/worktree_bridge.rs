@@ -360,6 +360,34 @@ mod tests {
     }
 
     #[test]
+    fn test_sanitize_id_edge_cases() {
+        // Unicode/emoji: each char is replaced with '_'
+        assert_eq!(WorktreeBridge::sanitize_id("issue-🔥-hot"), "issue-_-hot");
+        // Spaces
+        assert_eq!(WorktreeBridge::sanitize_id("hello world"), "hello_world");
+        // All special chars
+        assert_eq!(WorktreeBridge::sanitize_id("@#$%^&*()"), "__________");
+        // Only dashes
+        assert_eq!(WorktreeBridge::sanitize_id("---"), "---");
+        // Only underscores
+        assert_eq!(WorktreeBridge::sanitize_id("___"), "___");
+        // Newlines/tabs
+        assert_eq!(WorktreeBridge::sanitize_id("a\nb\tc"), "a_b_c");
+        // Single valid char
+        assert_eq!(WorktreeBridge::sanitize_id("x"), "x");
+        // Single invalid char
+        assert_eq!(WorktreeBridge::sanitize_id("/"), "_");
+        // Mixed case preserved
+        assert_eq!(WorktreeBridge::sanitize_id("AbCdEf"), "AbCdEf");
+        // Numbers only
+        assert_eq!(WorktreeBridge::sanitize_id("12345"), "12345");
+        // Leading special then valid
+        assert_eq!(WorktreeBridge::sanitize_id("!!valid"), "__valid");
+        // Trailing special
+        assert_eq!(WorktreeBridge::sanitize_id("valid!!"), "valid__");
+    }
+
+    #[test]
     fn test_worktree_path() {
         let bridge = WorktreeBridge {
             base_dir: PathBuf::from("/tmp/test-wt"),
