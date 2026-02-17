@@ -32,6 +32,7 @@ apptainer exec \
     --bind "${WT_DIR}:${WT_DIR}" \
     --bind "${CARGO_CACHE}:${CARGO_CACHE}" \
     --bind "${CARGO_TARGET}:${CARGO_TARGET}" \
+    --bind "/cluster/shared/tools:/cluster/shared/tools" \
     --pwd "${REPO_DIR}" \
     --env "RUST_LOG=${RUST_LOG:-swarm_agents=info,coordination=info,rig=debug,rig_core=info}" \
     --env "CARGO_HOME=${CARGO_CACHE}" \
@@ -48,10 +49,12 @@ apptainer exec \
     --env "SWARM_VALIDATOR_MODEL_1=gemini-3-pro-preview" \
     --env "SWARM_VALIDATOR_MODEL_2=claude-sonnet-4-5-20250929" \
     --env "SWARM_BEADS_BIN=bd" \
+    --env "SWARM_NLM_BIN=/cluster/shared/tools/nlm/bin/nlm" \
+    --env "NOTEBOOKLM_MCP_CLI_PATH=/cluster/shared/tools/nlm/config" \
     --env "GIT_AUTHOR_NAME=Swarm Agent" \
     --env "GIT_COMMITTER_NAME=Swarm Agent" \
     --env "GIT_AUTHOR_EMAIL=swarm@beefcake.local" \
     --env "GIT_COMMITTER_EMAIL=swarm@beefcake.local" \
-    --env "PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
+    --env "PATH=/cluster/shared/tools/nlm/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     "$SIF" \
     stdbuf -oL -eL cargo run -p swarm-agents --release
