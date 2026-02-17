@@ -131,6 +131,24 @@ impl WorktreeBridge {
         let wt_path = self.base_dir.join(&safe_id);
         let branch = format!("swarm/{safe_id}");
 
+        // Clean up orchestrator-generated files that aren't part of the source code.
+        // These are created by the harness (ProgressTracker, SessionManager) during the
+        // orchestration loop and must not block the merge.
+        if wt_path.exists() {
+            for artifact in &[".swarm-progress.txt", ".swarm-session.json"] {
+                let artifact_path = wt_path.join(artifact);
+                if artifact_path.exists() {
+                    let _ = std::fs::remove_file(&artifact_path);
+                }
+            }
+
+            // Discard any remaining untracked/modified non-source files
+            let _ = Command::new("git")
+                .args(["checkout", "--", "."])
+                .current_dir(&wt_path)
+                .output();
+        }
+
         // Check for uncommitted changes in the worktree
         if wt_path.exists() {
             let status = Command::new("git")
