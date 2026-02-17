@@ -16,6 +16,9 @@ use crate::notebook_bridge::KnowledgeBase;
 use crate::prompts;
 use crate::tools::fs_tools::{ListFilesTool, ReadFileTool};
 use crate::tools::notebook_tool::QueryNotebookTool;
+use crate::tools::proxy_wrappers::{
+    ProxyListFiles, ProxyQueryNotebook, ProxyReadFile, ProxyRunVerifier,
+};
 use crate::tools::verifier_tool::RunVerifierTool;
 
 use super::coder::OaiAgent;
@@ -62,15 +65,16 @@ pub fn build_cloud_manager(
         builder = builder.tool(rw);
     }
 
-    // Deterministic tools
+    // Deterministic tools — proxy-prefixed for CLIAPIProxy compatibility.
+    // The proxy prepends `proxy_` to tool names; pre-prefixing prevents mismatch.
     builder = builder
-        .tool(RunVerifierTool::new(wt_path))
-        .tool(ReadFileTool::new(wt_path))
-        .tool(ListFilesTool::new(wt_path));
+        .tool(ProxyRunVerifier(RunVerifierTool::new(wt_path)))
+        .tool(ProxyReadFile(ReadFileTool::new(wt_path)))
+        .tool(ProxyListFiles(ListFilesTool::new(wt_path)));
 
     // Knowledge base tool (optional — gracefully absent if not configured)
     if let Some(kb) = workers.notebook_bridge {
-        builder = builder.tool(QueryNotebookTool::new(kb));
+        builder = builder.tool(ProxyQueryNotebook(QueryNotebookTool::new(kb)));
     }
 
     builder.default_max_turns(20).build()

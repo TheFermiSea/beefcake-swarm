@@ -23,9 +23,22 @@ pub fn build_rust_coder(
     model: &str,
     wt_path: &Path,
 ) -> OaiAgent {
+    build_rust_coder_named(client, model, wt_path, "rust_coder")
+}
+
+/// Build the Rust specialist coder with a custom agent name.
+///
+/// Used to create proxy-prefixed variants for the cloud manager
+/// (CLIAPIProxy prepends `proxy_` to tool names, so we pre-prefix).
+pub fn build_rust_coder_named(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+    name: &str,
+) -> OaiAgent {
     client
         .agent(model)
-        .name("rust_coder")
+        .name(name)
         .description("Rust specialist for borrow checker, lifetimes, trait bounds, type errors")
         .preamble(prompts::RUST_CODER_PREAMBLE)
         .temperature(0.2)
@@ -46,9 +59,19 @@ pub fn build_reasoning_worker(
     model: &str,
     wt_path: &Path,
 ) -> OaiAgent {
+    build_reasoning_worker_named(client, model, wt_path, "reasoning_worker")
+}
+
+/// Build the reasoning worker with a custom agent name.
+pub fn build_reasoning_worker_named(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+    name: &str,
+) -> OaiAgent {
     client
         .agent(model)
-        .name("reasoning_worker")
+        .name(name)
         .description("Deep reasoning specialist for complex Rust architecture and debugging")
         .preamble(prompts::REASONING_WORKER_PREAMBLE)
         .temperature(0.2)
@@ -70,9 +93,19 @@ pub fn build_general_coder(
     model: &str,
     wt_path: &Path,
 ) -> OaiAgent {
+    build_general_coder_named(client, model, wt_path, "general_coder")
+}
+
+/// Build the general-purpose coder with a custom agent name.
+pub fn build_general_coder_named(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+    name: &str,
+) -> OaiAgent {
     client
         .agent(model)
-        .name("general_coder")
+        .name(name)
         .description("General coding agent for multi-file scaffolding and cross-cutting changes")
         .preamble(prompts::GENERAL_CODER_PREAMBLE)
         .temperature(0.3)

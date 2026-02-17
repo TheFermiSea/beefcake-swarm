@@ -729,9 +729,16 @@ pub async fn process_issue(
         };
 
         // Handle agent failure
-        let _response = match agent_future {
+        let response = match agent_future {
             Ok(r) => {
-                info!(iteration, response_len = r.len(), "Agent responded");
+                // Log the actual response text for debugging (truncated to 500 chars)
+                let preview = if r.len() > 500 { &r[..500] } else { &r };
+                info!(
+                    iteration,
+                    response_len = r.len(),
+                    response_preview = %preview,
+                    "Agent responded"
+                );
                 r
             }
             Err(e) => {
@@ -791,7 +798,11 @@ pub async fn process_issue(
         };
 
         if !has_changes {
-            warn!(iteration, "No file changes after agent response");
+            warn!(
+                iteration,
+                response_len = response.len(),
+                "No file changes after agent response — manager may not have called workers"
+            );
             escalation.record_iteration(vec![], 0, false);
 
             let verifier = Verifier::new(&wt_path, verifier_config.clone());

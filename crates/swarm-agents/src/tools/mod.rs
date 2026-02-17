@@ -7,6 +7,7 @@ pub mod exec_tool;
 pub mod fs_tools;
 pub mod notebook_tool;
 pub mod patch_tool;
+pub mod proxy_wrappers;
 pub mod verifier_tool;
 
 use std::path::{Path, PathBuf};
