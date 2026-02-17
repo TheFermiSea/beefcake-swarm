@@ -92,7 +92,7 @@ impl Tool for RunCommandTool {
             .find(|c| SHELL_METACHARACTERS.contains(c))
         {
             return Err(ToolError::CommandNotAllowed {
-                command: format!("shell metacharacter '{}' not allowed in commands", bad),
+                command: format!("shell metacharacter '{bad}' not allowed in commands"),
             });
         }
 
