@@ -38,15 +38,15 @@ let response: String = agent.prompt("Write a function to sort a Vec<i32>").await
 
 **If JSON adherence is flaky**: Use llama.cpp GBNF grammar constraint via the `grammar` parameter in the API request.
 
-### beads_rust (Task Tracking)
+### beads (Task Tracking)
 
-Binary-only (`br`), not a Rust library — must use via CLI subprocess.
+Go binary (`bd`), invoked via CLI subprocess.
 
 ```bash
-br list --status=open --json    # Machine-readable output
-br create --title="..." --type=task --priority=2
-br update <id> --status=in_progress
-br close <id> --reason="Done"
+bd list --status=open --json    # Machine-readable output
+bd create --title="..." --type=task --priority=2
+bd update <id> --status=in_progress
+bd close <id> --reason="Done"
 ```
 
 The `beads_bridge.rs` module wraps these CLI calls.

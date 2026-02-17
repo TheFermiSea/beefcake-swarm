@@ -98,7 +98,7 @@ ssh root@10.0.0.5 "sbatch /cluster/shared/scripts/llama-cpp/run-72b-distributed.
 
 ## External Tools (install separately)
 
-- `br` (beads_rust): `cargo install --git https://github.com/Dicklesworthstone/beads_rust` — Binary-only CLI, NOT a Rust library. Must invoke via subprocess (see `beads_bridge.rs`).
+- `bd` (beads): `curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash` — Go binary, issue tracker CLI. Invoked via subprocess (see `beads_bridge.rs`).
 - `bv` (beads_viewer): `go install github.com/Dicklesworthstone/beads_viewer@latest`
 - `gastown`: `go install github.com/steveyegge/gastown@latest` — Git worktree isolation per agent task.
 - `nlm` (notebooklm-mcp-cli): `uv tool install notebooklm-mcp-cli` — NotebookLM CLI for knowledge base queries. Auth: `nlm login`.

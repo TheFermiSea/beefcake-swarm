@@ -23,9 +23,9 @@ pub trait IssueTracker {
     fn close(&self, id: &str, reason: Option<&str>) -> Result<()>;
 }
 
-/// Bridge to the beads CLI binary (`bd` / `br`).
+/// Bridge to the beads CLI binary (`bd`).
 ///
-/// beads_rust is a binary-only tool — no lib.rs — so we shell out.
+/// beads is a Go binary — we shell out to it.
 /// The binary name is read from the `SWARM_BEADS_BIN` env var, defaulting to `"bd"`.
 pub struct BeadsBridge {
     bin: String,
@@ -73,7 +73,7 @@ impl IssueTracker for BeadsBridge {
             .args(["ready", "--json"])
             .output()
             .context(format!(
-                "Failed to run `{} ready`. Is beads_rust installed?",
+                "Failed to run `{} ready`. Is beads installed?",
                 self.bin
             ))?;
 
