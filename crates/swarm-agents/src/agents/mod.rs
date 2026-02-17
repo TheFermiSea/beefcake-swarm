@@ -87,20 +87,42 @@ impl AgentFactory {
     ///
     /// When cloud is available: Cloud model (Opus 4.6) manages local workers
     /// including OR1-Behemoth as a reasoning tool.
+    /// Worker agents are registered with `proxy_` prefixed names to work around
+    /// the CLIAPIProxy tool name prefixing behavior.
     ///
     /// Fallback: OR1-Behemoth manages coders directly (no reasoning worker).
+    /// No proxy prefix needed — local models don't mangle tool names.
     pub fn build_manager(&self, wt_path: &Path) -> OaiAgent {
-        let rust_coder = self.build_rust_coder(wt_path);
-        let general_coder = self.build_general_coder(wt_path);
-        let reviewer = self.build_reviewer();
-
         if let Some(ref cloud_client) = self.clients.cloud {
             let cloud_ep = self.config.cloud_endpoint.as_ref().unwrap();
             info!(
                 model = %cloud_ep.model,
-                "Building cloud-backed manager with local workers"
+                "Building cloud-backed manager with proxy-prefixed workers"
             );
-            let reasoning_worker = self.build_reasoning_worker(wt_path);
+            // Workers get proxy_ prefix for CLIAPIProxy compatibility
+            let rust_coder = coder::build_rust_coder_named(
+                &self.clients.local,
+                &self.config.fast_endpoint.model,
+                wt_path,
+                "proxy_rust_coder",
+            );
+            let general_coder = coder::build_general_coder_named(
+                &self.clients.local,
+                &self.config.coder_endpoint.model,
+                wt_path,
+                "proxy_general_coder",
+            );
+            let reviewer = reviewer::build_reviewer_named(
+                &self.clients.local,
+                &self.config.fast_endpoint.model,
+                "proxy_reviewer",
+            );
+            let reasoning_worker = coder::build_reasoning_worker_named(
+                &self.clients.reasoning,
+                &self.config.reasoning_endpoint.model,
+                wt_path,
+                "proxy_reasoning_worker",
+            );
             let workers = manager::ManagerWorkers {
                 rust_coder,
                 general_coder,
@@ -114,6 +136,10 @@ impl AgentFactory {
                 model = %self.config.reasoning_endpoint.model,
                 "No cloud endpoint — building local manager (OR1-Behemoth)"
             );
+            // Local manager doesn't need proxy prefix
+            let rust_coder = self.build_rust_coder(wt_path);
+            let general_coder = self.build_general_coder(wt_path);
+            let reviewer = self.build_reviewer();
             let workers = manager::ManagerWorkers {
                 rust_coder,
                 general_coder,
