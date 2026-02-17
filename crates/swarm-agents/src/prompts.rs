@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "4.2.0";
+pub const PROMPT_VERSION: &str = "4.3.0";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -152,6 +152,10 @@ Only modify files relevant to your task.
 - Always read the file BEFORE writing to it.
 - Write complete file contents — never partial snippets.
 - One logical change at a time. Don't refactor unrelated code.
+- **SCOPE DISCIPLINE**: Only add/modify what the task asks for. Do NOT change existing \
+  function signatures, rename variables, reformat untouched code, remove comments, \
+  or 'clean up' code that already compiles. If a file has 10 methods and your task is \
+  to add an 11th, the other 10 must be IDENTICAL in the output.
 - If you find unrelated bugs, report them in your response: \
   `DISCOVERED: <description>`. The manager will handle tracking.
 - Do NOT run git commit. The orchestrator handles commits.
@@ -189,6 +193,10 @@ If you find a bug or missing test unrelated to your current task, create a track
 - Always read before writing. Write complete file contents.
 - Update mod.rs / lib.rs when adding or removing modules.
 - After changes, verify compilation before reporting done.
+- **SCOPE DISCIPLINE**: Only add/modify what the task asks for. Do NOT change existing \
+  function signatures, rename variables, reformat untouched code, remove comments, \
+  or 'clean up' code that already compiles. If a file has 10 methods and your task is \
+  to add an 11th, the other 10 must be IDENTICAL in the output.
 - Do NOT run git commit. The orchestrator handles commits.
 ";
 
@@ -261,5 +269,9 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
 - Write complete file contents — never partial snippets.
 - Consider full implications of changes across the codebase.
 - If a problem needs architectural change, explain WHY before making the change.
+- **SCOPE DISCIPLINE**: Only add/modify what the task asks for. Do NOT change existing \
+  function signatures, rename variables, reformat untouched code, remove comments, \
+  or 'clean up' code that already compiles. Existing code that works must be IDENTICAL \
+  in your output.
 - Do NOT run git commit. The orchestrator handles commits.
 ";
