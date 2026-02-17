@@ -33,7 +33,7 @@ apptainer exec \
     --bind "${CARGO_CACHE}:${CARGO_CACHE}" \
     --bind "${CARGO_TARGET}:${CARGO_TARGET}" \
     --pwd "${REPO_DIR}" \
-    --env "RUST_LOG=${RUST_LOG:-swarm_agents=info,coordination=info,rig=warn}" \
+    --env "RUST_LOG=${RUST_LOG:-swarm_agents=info,coordination=info,rig=info}" \
     --env "CARGO_HOME=${CARGO_CACHE}" \
     --env "CARGO_TARGET_DIR=${CARGO_TARGET}" \
     --env "SWARM_FAST_URL=http://vasp-02:8080/v1" \
@@ -52,4 +52,4 @@ apptainer exec \
     --env "GIT_COMMITTER_EMAIL=swarm@beefcake.local" \
     --env "PATH=/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     "$SIF" \
-    cargo run -p swarm-agents --release
+    stdbuf -oL -eL cargo run -p swarm-agents --release
