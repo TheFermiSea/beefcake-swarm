@@ -1,6 +1,5 @@
 //! Worktree Bridge — Git worktree isolation for agent tasks
-//!
-//! Each agent task runs in an isolated git worktree to prevent conflicts.
+//!\n//! Each agent task runs in an isolated git worktree to prevent conflicts.
 //! Uses direct `git worktree` commands (Gastown is overkill for single-agent use).
 
 use anyhow::{bail, Context, Result};
@@ -98,6 +97,36 @@ impl WorktreeBridge {
                 "Worktree already exists for {issue_id}: {}",
                 wt_path.display()
             );
+        }
+
+        // Clean up stale branches from previous failed runs
+        // 1. Prune worktree bookkeeping
+        let _ = Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&self.repo_root)
+            .output();
+
+        // 2. Check if branch already exists
+        let check_output = Command::new("git")
+            .args(["branch", "--list", &branch])
+            .current_dir(&self.repo_root)
+            .output()
+            .context("Failed to check for existing branch")?;
+
+        let branch_list = String::from_utf8_lossy(&check_output.stdout);
+        if !branch_list.trim().is_empty() {
+            // 3. If branch exists, delete it
+            tracing::warn!("Branch {} already exists, deleting", branch);
+            let del_output = Command::new("git")
+                .args(["branch", "-D", &branch])
+                .current_dir(&self.repo_root)
+                .output()
+                .context("Failed to delete existing branch")?;
+
+            if !del_output.status.success() {
+                let stderr = String::from_utf8_lossy(&del_output.stderr);
+                bail!("Failed to delete existing branch {branch}: {stderr}");
+            }
         }
 
         let output = Command::new("git")
@@ -545,5 +574,67 @@ mod tests {
         bridge
             .cleanup("does-not-exist")
             .expect("cleanup non-existent");
+    }
+
+    #[test]
+    fn test_create_cleans_stale_branch() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let wt_base = tempfile::tempdir().unwrap();
+
+        // Set up a proper git repo with an initial commit
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(repo_dir.path().join("README.md"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
+            .expect("bridge creation");
+
+        // Simulate a stale branch from a previous failed run
+        let _ = Command::new("git")
+            .args(["branch", "swarm/test-stale"])
+            .current_dir(repo_dir.path())
+            .output();
+
+        // Verify branch exists
+        let check = Command::new("git")
+            .args(["branch", "--list", "swarm/test-stale"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        let branch_list = String::from_utf8_lossy(&check.stdout);
+        assert!(!branch_list.trim().is_empty());
+
+        // Create should clean up the stale branch and succeed
+        let wt_path = bridge
+            .create("test-stale")
+            .expect("create worktree with stale branch");
+        assert!(wt_path.exists());
+
+        // List should include our new worktree
+        let list = bridge.list().expect("list worktrees");
+        assert!(list.iter().any(|w| w.branch == "swarm/test-stale"));
     }
 }
