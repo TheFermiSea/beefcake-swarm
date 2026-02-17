@@ -13,7 +13,7 @@ use tracing::{error, info, warn};
 /// Maximum wall-clock time for a single agent prompt call.
 /// Prevents runaway managers that exceed their turn limits (rig doesn't enforce
 /// `default_max_turns` on the outer agent in `.prompt()` calls).
-const AGENT_TIMEOUT: Duration = Duration::from_secs(20 * 60); // 20 minutes
+const AGENT_TIMEOUT: Duration = Duration::from_secs(45 * 60); // 45 minutes
 
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
@@ -427,7 +427,21 @@ pub async fn process_issue(
             }
         };
 
-        // --- Git commit changes made by the agent ---
+        // --- Auto-format before commit ---
+        // Workers don't always produce perfectly formatted code.
+        // Run fmt BEFORE committing so format changes are included in the commit.
+        // This prevents uncommitted changes from blocking the merge step.
+        let fmt_output = std::process::Command::new("cargo")
+            .args(["fmt", "--package", "swarm-agents"])
+            .current_dir(&wt_path)
+            .output();
+        if let Ok(ref out) = fmt_output {
+            if !out.status.success() {
+                warn!(iteration, "cargo fmt failed (non-fatal): {}", String::from_utf8_lossy(&out.stderr));
+            }
+        }
+
+        // --- Git commit changes made by the agent (+ auto-format) ---
         let has_changes = match git_commit_changes(&wt_path, iteration).await {
             Ok(changed) => changed,
             Err(e) => {
@@ -456,19 +470,6 @@ pub async fn process_issue(
                 break;
             }
             continue;
-        }
-
-        // --- Auto-format before verifier ---
-        // Workers don't always produce perfectly formatted code.
-        // Formatting is deterministic — auto-fix it rather than failing on it.
-        let fmt_output = std::process::Command::new("cargo")
-            .args(["fmt", "--package", "swarm-agents"])
-            .current_dir(&wt_path)
-            .output();
-        if let Ok(ref out) = fmt_output {
-            if !out.status.success() {
-                warn!(iteration, "cargo fmt failed (non-fatal): {}", String::from_utf8_lossy(&out.stderr));
-            }
         }
 
         // --- Verifier: run deterministic quality gates ---
