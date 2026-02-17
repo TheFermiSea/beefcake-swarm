@@ -45,3 +45,7 @@ venv/
 # Temporary
 /scratch/
 /tmp/
+
+# Orchestrator artifacts
+.swarm-progress.txt
+.swarm-session.json
