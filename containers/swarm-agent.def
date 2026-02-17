@@ -1,0 +1,21 @@
+Bootstrap: docker
+From: rust:1.88-bookworm
+
+%post
+    apt-get update && apt-get install -y git clang libclang-dev && rm -rf /var/lib/apt/lists/*
+    rustup component add clippy rustfmt
+    # Install beads (Go) — prebuilt binary from GitHub releases
+    curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+    # Modern Rust CLI tools for agent use
+    cargo install ripgrep fd-find bat sd git-delta
+    # Pre-warm cargo registry
+    mkdir -p /opt/cargo-cache
+
+%environment
+    export PATH="/usr/local/cargo/bin:$PATH"
+    export CARGO_HOME="/opt/cargo-cache"
+    export RUST_LOG="${RUST_LOG:-info}"
+
+%labels
+    Author beefcake-swarm
+    Description Sandbox for swarm-agents orchestrator

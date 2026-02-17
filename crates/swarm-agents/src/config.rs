@@ -48,6 +48,8 @@ pub struct SwarmConfig {
     pub max_retries: u32,
     /// Base directory for worktrees (None = auto-detect).
     pub worktree_base: Option<PathBuf>,
+    /// Path to the notebook registry TOML file.
+    pub notebook_registry_path: Option<PathBuf>,
 }
 
 impl Default for SwarmConfig {
@@ -81,8 +83,9 @@ impl Default for SwarmConfig {
                     .unwrap_or_else(|_| "not-needed".into()),
             },
             cloud_endpoint: Self::cloud_from_env(),
-            max_retries: 6,
+            max_retries: 10,
             worktree_base: None,
+            notebook_registry_path: Some(PathBuf::from("./notebook_registry.toml")),
         }
     }
 }
@@ -91,8 +94,8 @@ impl SwarmConfig {
     fn cloud_from_env() -> Option<CloudEndpoint> {
         let url = std::env::var("SWARM_CLOUD_URL").ok()?;
         let api_key = std::env::var("SWARM_CLOUD_API_KEY").ok()?;
-        let model =
-            std::env::var("SWARM_CLOUD_MODEL").unwrap_or_else(|_| "claude-sonnet-4-5".into());
+        let model = std::env::var("SWARM_CLOUD_MODEL")
+            .unwrap_or_else(|_| "claude-opus-4-6-thinking".into());
         Some(CloudEndpoint {
             url,
             api_key,
@@ -122,17 +125,18 @@ impl SwarmConfig {
             },
             reasoning_endpoint: Endpoint {
                 url: proxy_url.clone(),
-                model: "claude-opus-4-6".into(),
+                model: "claude-opus-4-6-thinking".into(),
                 tier: Tier::Reasoning,
                 api_key: proxy_key.clone(),
             },
             cloud_endpoint: Some(CloudEndpoint {
                 url: proxy_url,
                 api_key: proxy_key,
-                model: "claude-sonnet-4-5".into(),
+                model: "claude-opus-4-6-thinking".into(),
             }),
             max_retries: 3,
             worktree_base: None,
+            notebook_registry_path: None,
         }
     }
 }
@@ -147,6 +151,9 @@ pub struct ClientSet {
     pub local: openai::CompletionsClient,
     /// Client for vasp-01:8081 (serves Reasoning model)
     pub reasoning: openai::CompletionsClient,
+    /// Client for CLIAPIProxy (cloud models: Opus 4.6, G3-Pro, etc.)
+    /// Used as the Manager tier when available.
+    pub cloud: Option<openai::CompletionsClient>,
 }
 
 impl ClientSet {
@@ -163,7 +170,23 @@ impl ClientSet {
             .build()
             .context("Failed to build reasoning client (vasp-01)")?;
 
-        Ok(Self { local, reasoning })
+        let cloud = config
+            .cloud_endpoint
+            .as_ref()
+            .map(|ep| {
+                openai::CompletionsClient::builder()
+                    .api_key(&ep.api_key)
+                    .base_url(&ep.url)
+                    .build()
+            })
+            .transpose()
+            .context("Failed to build cloud client (CLIAPIProxy)")?;
+
+        Ok(Self {
+            local,
+            reasoning,
+            cloud,
+        })
     }
 }
 
@@ -196,7 +219,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = SwarmConfig::default();
-        assert_eq!(config.max_retries, 6);
+        assert_eq!(config.max_retries, 10);
         assert!(config.fast_endpoint.url.contains("vasp-02"));
         assert!(config.reasoning_endpoint.url.contains("vasp-01"));
         assert_eq!(config.fast_endpoint.api_key, "not-needed");

@@ -40,7 +40,7 @@ impl MockBeads {
 }
 
 impl IssueTracker for MockBeads {
-    fn list_open(&self) -> Result<Vec<BeadsIssue>> {
+    fn list_ready(&self) -> Result<Vec<BeadsIssue>> {
         Ok(vec![BeadsIssue {
             id: "mock-001".into(),
             title: "Fix type mismatch in count()".into(),
@@ -145,7 +145,8 @@ fn main() {
 
     // Run the orchestration loop
     let result =
-        orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads).await;
+        orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, None)
+            .await;
 
     // The loop should not panic regardless of outcome
     match &result {

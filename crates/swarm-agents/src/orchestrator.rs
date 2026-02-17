@@ -4,22 +4,34 @@
 //! progress logging, and human intervention requests.
 
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::Result;
 use rig::completion::Prompt;
+use rig::providers::openai;
 use tracing::{error, info, warn};
 
-use crate::agents::reviewer::ReviewResult;
+/// Maximum wall-clock time for a single agent prompt call.
+/// Prevents runaway managers that exceed their turn limits (rig doesn't enforce
+/// `default_max_turns` on the outer agent in `.prompt()` calls).
+const AGENT_TIMEOUT: Duration = Duration::from_secs(45 * 60); // 45 minutes
+
+/// Timeout for each cloud validation call (2 minutes per model).
+const VALIDATION_TIMEOUT: Duration = Duration::from_secs(120);
+
+use crate::agents::reviewer::{self, ReviewResult};
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::config::SwarmConfig;
+use crate::knowledge_sync;
+use crate::notebook_bridge::KnowledgeBase;
 use crate::worktree_bridge::WorktreeBridge;
 use coordination::feedback::ErrorCategory;
 use coordination::save_session_state;
 use coordination::{
     ContextPacker, EscalationEngine, EscalationState, GitManager, InterventionType,
-    PendingIntervention, ProgressTracker, SessionManager, SwarmTier, Verifier, VerifierConfig,
-    VerifierReport, WorkPacket,
+    PendingIntervention, ProgressTracker, SessionManager, SwarmTier, TierBudget, Verifier,
+    VerifierConfig, VerifierReport, WorkPacket,
 };
 
 /// Coder routing decision with confidence level.
@@ -74,20 +86,14 @@ pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
 }
 
 /// Format a WorkPacket into a structured prompt for agent consumption.
-pub fn format_task_prompt(packet: &WorkPacket, cloud_guidance: Option<&str>) -> String {
+pub fn format_task_prompt(packet: &WorkPacket) -> String {
     let mut prompt = String::new();
 
     prompt.push_str(&format!("# Task: {}\n\n", packet.objective));
     prompt.push_str(&format!(
-        "**Branch:** {} | **Iteration:** {} | **Tier:** {}\n\n",
-        packet.branch, packet.iteration, packet.target_tier
+        "**Issue:** {} | **Branch:** {} | **Iteration:** {} | **Tier:** {}\n\n",
+        packet.bead_id, packet.branch, packet.iteration, packet.target_tier
     ));
-
-    if let Some(guidance) = cloud_guidance {
-        prompt.push_str("## Architectural Guidance (from cloud escalation)\n");
-        prompt.push_str(guidance);
-        prompt.push_str("\n\n");
-    }
 
     if !packet.constraints.is_empty() {
         prompt.push_str("## Constraints\n");
@@ -146,12 +152,180 @@ pub fn format_task_prompt(packet: &WorkPacket, cloud_guidance: Option<&str>) -> 
         prompt.push('\n');
     }
 
+    // Knowledge layer fields (populated by NotebookBridge)
+    if !packet.relevant_heuristics.is_empty() {
+        prompt.push_str("## Knowledge Base Context\n");
+        for h in &packet.relevant_heuristics {
+            prompt.push_str(&format!("{h}\n"));
+        }
+        prompt.push('\n');
+    }
+
+    if !packet.relevant_playbooks.is_empty() {
+        prompt.push_str("## Known Fix Patterns\n");
+        for p in &packet.relevant_playbooks {
+            prompt.push_str(&format!("{p}\n"));
+        }
+        prompt.push('\n');
+    }
+
+    if !packet.decisions.is_empty() {
+        prompt.push_str("## Relevant Decisions\n");
+        for d in &packet.decisions {
+            prompt.push_str(&format!("- {d}\n"));
+        }
+        prompt.push('\n');
+    }
+
     prompt.push_str(&format!(
         "**Max patch size:** {} LOC\n",
         packet.max_patch_loc
     ));
 
     prompt
+}
+
+/// Try to auto-fix trivial verifier failures without LLM delegation.
+///
+/// Runs `cargo clippy --fix` for MachineApplicable suggestions and `cargo fmt`
+/// to resolve formatting issues. If fixes are applied, re-runs the verifier
+/// and returns the new report if it's now green.
+///
+/// This is the "Janitor" layer: handle mechanical fixes before involving expensive models.
+pub async fn try_auto_fix(
+    wt_path: &Path,
+    verifier_config: &VerifierConfig,
+    iteration: u32,
+) -> Option<VerifierReport> {
+    // Build package args for scoped commands
+    let mut pkg_args: Vec<&str> = Vec::new();
+    for pkg in &verifier_config.packages {
+        pkg_args.push("-p");
+        pkg_args.push(pkg);
+    }
+
+    // Step 1: Try cargo clippy --fix for MachineApplicable suggestions
+    let mut clippy_args = vec!["clippy", "--fix", "--allow-dirty", "--allow-staged"];
+    clippy_args.extend_from_slice(&pkg_args);
+    clippy_args.extend_from_slice(&["--", "-D", "warnings"]);
+
+    let clippy_fix = tokio::process::Command::new("cargo")
+        .args(&clippy_args)
+        .current_dir(wt_path)
+        .output()
+        .await;
+
+    let clippy_fixed = match clippy_fix {
+        Ok(ref out) if out.status.success() => {
+            info!(iteration, "auto-fix: cargo clippy --fix succeeded");
+            true
+        }
+        Ok(ref out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            // clippy --fix often "fails" because it can't fix everything — that's OK.
+            // It still applies what it can.
+            warn!(
+                iteration,
+                "auto-fix: cargo clippy --fix partial: {}",
+                &stderr[..stderr.len().min(200)]
+            );
+            true // Still worth re-checking
+        }
+        Err(e) => {
+            warn!(iteration, "auto-fix: cargo clippy --fix failed to run: {e}");
+            false
+        }
+    };
+
+    // Step 2: Run cargo fmt to fix formatting
+    let mut fmt_args = vec!["fmt"];
+    for pkg in &verifier_config.packages {
+        fmt_args.push("--package");
+        fmt_args.push(pkg);
+    }
+
+    let fmt_fix = tokio::process::Command::new("cargo")
+        .args(&fmt_args)
+        .current_dir(wt_path)
+        .output()
+        .await;
+
+    let fmt_fixed = match fmt_fix {
+        Ok(ref out) if out.status.success() => {
+            info!(iteration, "auto-fix: cargo fmt succeeded");
+            true
+        }
+        Ok(ref out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            warn!(
+                iteration,
+                "auto-fix: cargo fmt failed (syntax error?): {}",
+                &stderr[..stderr.len().min(200)]
+            );
+            false
+        }
+        Err(e) => {
+            warn!(iteration, "auto-fix: cargo fmt failed to run: {e}");
+            false
+        }
+    };
+
+    if !clippy_fixed && !fmt_fixed {
+        return None; // Nothing was attempted
+    }
+
+    // Check if there are actual changes to commit
+    let status = tokio::process::Command::new("git")
+        .args(["diff", "--quiet"])
+        .current_dir(wt_path)
+        .output()
+        .await;
+
+    let has_changes = matches!(status, Ok(ref out) if !out.status.success());
+    if !has_changes {
+        info!(iteration, "auto-fix: no changes produced");
+        return None;
+    }
+
+    // Commit auto-fix changes
+    let _ = tokio::process::Command::new("git")
+        .args(["add", "."])
+        .current_dir(wt_path)
+        .output()
+        .await;
+
+    let msg = format!("swarm: auto-fix iteration {iteration} (clippy --fix + fmt)");
+    let _ = tokio::process::Command::new("git")
+        .args(["commit", "-m", &msg])
+        .current_dir(wt_path)
+        .output()
+        .await;
+
+    info!(
+        iteration,
+        "auto-fix: committed changes, re-running verifier"
+    );
+
+    // Re-run the full verifier pipeline
+    let verifier = Verifier::new(wt_path, verifier_config.clone());
+    let report = verifier.run_pipeline().await;
+
+    if report.all_green {
+        info!(
+            iteration,
+            summary = %report.summary(),
+            "auto-fix: verifier now passes! Skipping LLM delegation"
+        );
+        Some(report)
+    } else {
+        info!(
+            iteration,
+            summary = %report.summary(),
+            "auto-fix: verifier still failing after auto-fix"
+        );
+        // Return the updated report so the next iteration uses it
+        Some(report)
+    }
 }
 
 /// Stage and commit all changes in the worktree.
@@ -168,7 +342,7 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
         .await?;
     if !add.status.success() {
         let stderr = String::from_utf8_lossy(&add.stderr);
-        anyhow::bail!("git add failed: {stderr}");
+        anyhow::bail!("git add failed (iteration {iteration}): {stderr}");
     }
 
     // Check if there are staged changes
@@ -198,15 +372,111 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
     Ok(true)
 }
 
-/// Get the git diff of the worktree vs its parent branch.
-pub async fn git_diff(worktree_path: &Path) -> Result<String> {
-    let output = tokio::process::Command::new("git")
-        .args(["diff", "HEAD~1..HEAD"])
-        .current_dir(worktree_path)
-        .output()
-        .await?;
+/// Result of a single cloud model validation.
+struct CloudValidationResult {
+    model: String,
+    passed: bool,
+    feedback: String,
+}
 
-    Ok(String::from_utf8_lossy(&output.stdout).to_string())
+/// Run cloud validation on the worktree diff using external high-end models.
+///
+/// Sends the git diff (since initial commit) to each configured cloud validator
+/// model for blind PASS/FAIL review. This is **advisory** — the orchestrator
+/// logs results but doesn't block on FAIL to avoid subjective LLM feedback loops.
+///
+/// Validator models are configured via env vars:
+/// - `SWARM_VALIDATOR_MODEL_1` (default: `gemini-3-pro-preview`)
+/// - `SWARM_VALIDATOR_MODEL_2` (default: `claude-sonnet-4-5-20250929`)
+async fn cloud_validate(
+    cloud_client: &openai::CompletionsClient,
+    wt_path: &Path,
+    initial_commit: &str,
+) -> Vec<CloudValidationResult> {
+    // Get the full diff since the initial commit
+    let diff = match std::process::Command::new("git")
+        .args(["diff", initial_commit, "HEAD"])
+        .current_dir(wt_path)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        }
+        Ok(output) => {
+            warn!(
+                "git diff failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Vec::new();
+        }
+        Err(e) => {
+            warn!("Failed to run git diff: {e}");
+            return Vec::new();
+        }
+    };
+
+    if diff.trim().is_empty() {
+        info!("No diff to validate — skipping cloud validation");
+        return Vec::new();
+    }
+
+    // Truncate very large diffs to avoid token limits
+    let max_diff_chars = 32_000;
+    let diff_for_review = if diff.len() > max_diff_chars {
+        format!(
+            "{}\n\n... [truncated — {} total chars, showing first {}]",
+            &diff[..max_diff_chars],
+            diff.len(),
+            max_diff_chars,
+        )
+    } else {
+        diff
+    };
+
+    let models = [
+        std::env::var("SWARM_VALIDATOR_MODEL_1").unwrap_or_else(|_| "gemini-3-pro-preview".into()),
+        std::env::var("SWARM_VALIDATOR_MODEL_2")
+            .unwrap_or_else(|_| "claude-sonnet-4-5-20250929".into()),
+    ];
+
+    let review_prompt = format!(
+        "You are reviewing a Rust code change from an autonomous coding agent. \
+         The change has already passed all deterministic gates (cargo fmt, clippy, \
+         cargo check, cargo test). Your job is to catch logic errors, edge cases, \
+         and design issues that the compiler cannot detect.\n\n\
+         Respond with PASS or FAIL on the first line, then structured feedback.\n\n\
+         ```diff\n{diff_for_review}\n```"
+    );
+
+    let mut results = Vec::new();
+    for model in &models {
+        info!(model, "Running cloud validation");
+        let validator = reviewer::build_reviewer(cloud_client, model);
+        match tokio::time::timeout(VALIDATION_TIMEOUT, validator.prompt(&review_prompt)).await {
+            Ok(Ok(response)) => {
+                let review = ReviewResult::parse(&response);
+                let status = if review.passed { "PASS" } else { "FAIL" };
+                info!(model, status, "Cloud validation complete");
+                results.push(CloudValidationResult {
+                    model: model.clone(),
+                    passed: review.passed,
+                    feedback: review.feedback,
+                });
+            }
+            Ok(Err(e)) => {
+                warn!(model, "Cloud validation error: {e}");
+            }
+            Err(_) => {
+                warn!(
+                    model,
+                    "Cloud validation timed out ({}s)",
+                    VALIDATION_TIMEOUT.as_secs()
+                );
+            }
+        }
+    }
+
+    results
 }
 
 /// Process a single issue through the implement → verify → review → escalate loop.
@@ -224,6 +494,7 @@ pub async fn process_issue(
     worktree_bridge: &WorktreeBridge,
     issue: &BeadsIssue,
     beads: &dyn IssueTracker,
+    knowledge_base: Option<&dyn KnowledgeBase>,
 ) -> Result<bool> {
     // --- Claim issue ---
     beads.update_status(&issue.id, "in_progress")?;
@@ -275,16 +546,39 @@ pub async fn process_issue(
     // --- Build agents scoped to this worktree ---
     let rust_coder = factory.build_rust_coder(&wt_path);
     let general_coder = factory.build_general_coder(&wt_path);
-    let reviewer = factory.build_reviewer();
     let manager = factory.build_manager(&wt_path);
-    let cloud_agent = factory.build_cloud_agent();
 
     // --- Escalation state ---
+    //
+    // Start at Integrator tier (cloud-backed manager) from the beginning.
+    // Cloud models (Opus 4.6) are the managers; local models are workers.
+    // Integrator gets 6 iterations, Cloud overflow gets 4 more (same manager).
     let engine = EscalationEngine::new();
-    let mut escalation = EscalationState::new(&issue.id);
+    let mut escalation = EscalationState::new(&issue.id)
+        .with_initial_tier(SwarmTier::Integrator)
+        .with_budget(
+            SwarmTier::Integrator,
+            TierBudget {
+                max_iterations: 6,
+                max_consultations: 6,
+            },
+        )
+        .with_budget(
+            SwarmTier::Cloud,
+            TierBudget {
+                max_iterations: 4,
+                max_consultations: 4,
+            },
+        );
     let mut success = false;
     let mut last_report: Option<VerifierReport> = None;
-    let mut cloud_guidance: Option<String> = None;
+
+    // Scope verifier to swarm-agents only — coordination has pre-existing lint
+    // warnings that would block every iteration if we clippy the whole workspace.
+    let verifier_config = VerifierConfig {
+        packages: vec!["swarm-agents".to_string()],
+        ..VerifierConfig::default()
+    };
 
     // --- Main loop: implement → verify → review → escalate ---
     loop {
@@ -319,11 +613,43 @@ pub async fn process_issue(
 
         // Pack context with tier-appropriate token budget
         let packer = ContextPacker::new(&wt_path, tier);
-        let packet = if let Some(ref report) = last_report {
+        let mut packet = if let Some(ref report) = last_report {
             packer.pack_retry(&issue.id, &issue.title, &escalation, report)
         } else {
             packer.pack_initial(&issue.id, &issue.title)
         };
+
+        // --- Integration Point 1: Pre-task knowledge enrichment ---
+        if let Some(kb) = knowledge_base {
+            // Query Project Brain for architectural context
+            let brain_question = format!(
+                "What architectural context is relevant for: {}? Issue: {}",
+                issue.title, issue.id
+            );
+            if let Ok(response) = kb.query("project_brain", &brain_question) {
+                if !response.is_empty() {
+                    packet.relevant_heuristics.push(response);
+                    info!(iteration, "Enriched packet with Project Brain context");
+                }
+            }
+
+            // On retries, also query Debugging KB for error-specific patterns
+            if last_report.is_some() && !packet.failure_signals.is_empty() {
+                let error_desc = packet
+                    .failure_signals
+                    .iter()
+                    .map(|s| format!("{}: {}", s.category, s.message))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let debug_question = format!("Known fixes for these Rust errors: {error_desc}");
+                if let Ok(response) = kb.query("debugging_kb", &debug_question) {
+                    if !response.is_empty() {
+                        packet.relevant_playbooks.push(response);
+                        info!(iteration, "Enriched packet with Debugging KB patterns");
+                    }
+                }
+            }
+        }
 
         info!(
             tokens = packet.estimated_tokens(),
@@ -331,10 +657,35 @@ pub async fn process_issue(
             "Packed context"
         );
 
-        let task_prompt = format_task_prompt(&packet, cloud_guidance.as_deref());
+        let mut task_prompt = format_task_prompt(&packet);
+
+        // Inject verifier stderr into prompt when failure_signals are thin.
+        // Fmt errors don't produce ParsedErrors, so the packet may lack error details.
+        // The raw stderr contains the actual error output the model needs to see.
+        if let Some(ref report) = last_report {
+            if !report.all_green && packet.failure_signals.is_empty() {
+                task_prompt.push_str("\n## Verifier Output (raw)\n");
+                for gate in &report.gates {
+                    if let Some(stderr) = &gate.stderr_excerpt {
+                        task_prompt.push_str(&format!(
+                            "### {} gate ({})\n```\n{}\n```\n\n",
+                            gate.gate, gate.outcome, stderr
+                        ));
+                    }
+                }
+            }
+        }
 
         // --- Route to agent based on current tier ---
-        let agent_response: Result<String, _> = match tier {
+        //
+        // Hierarchy (cloud available):
+        //   Implementer: local coders (strand-14B, Qwen3-Coder-Next)
+        //   Integrator+Cloud: cloud-backed manager (Opus 4.6) with all local workers as tools
+        //
+        // Hierarchy (no cloud):
+        //   Implementer: local coders
+        //   Integrator+Cloud: local manager (OR1-Behemoth) with coders as tools
+        let agent_future = match tier {
             SwarmTier::Implementer | SwarmTier::Adversary => {
                 let recent_cats: Vec<ErrorCategory> = escalation
                     .recent_error_categories
@@ -353,51 +704,32 @@ pub async fn process_issue(
                     }
                 }
             }
-            SwarmTier::Integrator => {
-                info!(iteration, "Routing to manager (OR1-Behemoth)");
-                manager.prompt(&task_prompt).await
-            }
-            SwarmTier::Cloud => {
-                if let Some(ref cloud) = cloud_agent {
-                    info!(iteration, "Routing to cloud escalation");
-                    match cloud.prompt(&task_prompt).await {
-                        Ok(guidance) => {
-                            info!(
-                                iteration,
-                                guidance_len = guidance.len(),
-                                "Cloud guidance received"
-                            );
-                            cloud_guidance = Some(guidance);
-                            escalation.record_iteration(vec![], 0, false);
-                            continue;
-                        }
-                        Err(e) => {
-                            error!(iteration, "Cloud agent failed: {e}");
-                            let _ = progress.log_error(
-                                session.session_id(),
-                                iteration,
-                                format!("Cloud agent failed: {e}"),
-                            );
-                            escalation.record_iteration(vec![], 0, false);
-                            continue;
-                        }
+            SwarmTier::Integrator | SwarmTier::Cloud => {
+                info!(
+                    iteration,
+                    "Routing to manager (cloud-backed or OR1 fallback)"
+                );
+                // Wrap manager call with timeout to enforce turn limits.
+                // Rig doesn't enforce default_max_turns on the outer .prompt() agent,
+                // so managers can run indefinitely. This hard-caps wall-clock time.
+                match tokio::time::timeout(AGENT_TIMEOUT, manager.prompt(&task_prompt)).await {
+                    Ok(result) => result,
+                    Err(_elapsed) => {
+                        warn!(
+                            iteration,
+                            timeout_secs = AGENT_TIMEOUT.as_secs(),
+                            "Manager exceeded timeout — proceeding with changes on disk"
+                        );
+                        // Return a synthetic "timed out" response so the verifier still runs.
+                        // Any file changes the manager made are already on disk.
+                        Ok("Manager timed out. Changes are on disk for verifier.".to_string())
                     }
-                } else {
-                    warn!(
-                        iteration,
-                        "Cloud tier requested but no cloud agent configured — \
-                         falling back to Manager (Integrator tier)"
-                    );
-                    manager.prompt(&task_prompt).await
                 }
             }
         };
 
-        // Clear cloud guidance after it's been consumed
-        cloud_guidance = None;
-
         // Handle agent failure
-        let _response = match agent_response {
+        let _response = match agent_future {
             Ok(r) => {
                 info!(iteration, response_len = r.len(), "Agent responded");
                 r
@@ -411,7 +743,7 @@ pub async fn process_issue(
                 );
                 escalation.record_iteration(vec![], 1, false);
 
-                let verifier = Verifier::new(&wt_path, VerifierConfig::default());
+                let verifier = Verifier::new(&wt_path, verifier_config.clone());
                 let report = verifier.run_pipeline().await;
                 let decision = engine.decide(&mut escalation, &report);
                 last_report = Some(report);
@@ -425,7 +757,26 @@ pub async fn process_issue(
             }
         };
 
-        // --- Git commit changes made by the agent ---
+        // --- Auto-format before commit ---
+        // Workers don't always produce perfectly formatted code.
+        // Run fmt BEFORE committing so format changes are included in the commit.
+        // This prevents uncommitted changes from blocking the merge step.
+        let fmt_output = tokio::process::Command::new("cargo")
+            .args(["fmt", "--package", "swarm-agents"])
+            .current_dir(&wt_path)
+            .output()
+            .await;
+        if let Ok(ref out) = fmt_output {
+            if !out.status.success() {
+                warn!(
+                    iteration,
+                    "cargo fmt failed (non-fatal): {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+        }
+
+        // --- Git commit changes made by the agent (+ auto-format) ---
         let has_changes = match git_commit_changes(&wt_path, iteration).await {
             Ok(changed) => changed,
             Err(e) => {
@@ -443,7 +794,7 @@ pub async fn process_issue(
             warn!(iteration, "No file changes after agent response");
             escalation.record_iteration(vec![], 0, false);
 
-            let verifier = Verifier::new(&wt_path, VerifierConfig::default());
+            let verifier = Verifier::new(&wt_path, verifier_config.clone());
             let report = verifier.run_pipeline().await;
             let decision = engine.decide(&mut escalation, &report);
             last_report = Some(report);
@@ -457,8 +808,8 @@ pub async fn process_issue(
         }
 
         // --- Verifier: run deterministic quality gates ---
-        let verifier = Verifier::new(&wt_path, VerifierConfig::default());
-        let report = verifier.run_pipeline().await;
+        let verifier = Verifier::new(&wt_path, verifier_config.clone());
+        let mut report = verifier.run_pipeline().await;
 
         info!(
             iteration,
@@ -467,91 +818,84 @@ pub async fn process_issue(
             "Verifier report"
         );
 
+        // --- Auto-fix: try to resolve trivial failures without LLM delegation ---
+        if !report.all_green {
+            if let Some(fixed_report) = try_auto_fix(&wt_path, &verifier_config, iteration).await {
+                report = fixed_report;
+            }
+        }
+
         let error_cats = report.unique_error_categories();
         let error_count = report.failure_signals.len();
 
         if report.all_green {
-            // --- Reviewer: blind review of the diff ---
-            let diff = git_diff(&wt_path).await?;
-            if diff.is_empty() {
-                warn!(
-                    iteration,
-                    "Empty diff despite git changes — verifier may be wrong"
-                );
-                escalation.record_iteration(error_cats, error_count, false);
-                let decision = engine.decide(&mut escalation, &report);
-                last_report = Some(report);
-                if decision.stuck {
-                    create_stuck_intervention(&mut session, &progress, iteration, &decision.reason);
-                    break;
-                }
-                continue;
-            }
-
+            // Deterministic gates (fmt + clippy + check + test) are the source of truth.
+            // The reviewer is advisory — don't let subjective LLM feedback cause loops.
             info!(
                 iteration,
-                diff_len = diff.len(),
-                "Sending diff to blind reviewer"
+                "Verifier passed (all gates green) — accepting result"
             );
-            match reviewer.prompt(&diff).await {
-                Ok(resp) => {
-                    let result = ReviewResult::parse(&resp);
-                    if result.passed {
-                        info!(iteration, "Reviewer PASSED — issue resolved");
-                        escalation.record_iteration(error_cats, error_count, true);
+            escalation.record_iteration(error_cats, error_count, true);
 
-                        // Create harness checkpoint on success
-                        if let Ok(hash) = git_mgr.current_commit() {
-                            let _ = progress.log_checkpoint(session.session_id(), iteration, &hash);
+            // Create harness checkpoint on success
+            if let Ok(hash) = git_mgr.current_commit() {
+                let _ = progress.log_checkpoint(session.session_id(), iteration, &hash);
+            }
+            let _ = progress.log_feature_complete(
+                session.session_id(),
+                iteration,
+                &issue.id,
+                "Verified (deterministic gates passed)",
+            );
+
+            // --- Cloud validation (advisory) ---
+            // After deterministic gates pass, send the diff to high-end cloud models
+            // (G3 Pro + Sonnet 4.5) for logic/design review. Results are logged but
+            // don't block acceptance — avoids subjective LLM feedback loops.
+            if let Some(ref cloud_client) = factory.clients.cloud {
+                if let Some(ref initial_commit) = session.state().initial_commit {
+                    let validations = cloud_validate(cloud_client, &wt_path, initial_commit).await;
+                    for v in &validations {
+                        if v.passed {
+                            info!(model = %v.model, "Cloud validation: PASS");
+                        } else {
+                            warn!(
+                                model = %v.model,
+                                "Cloud validation: FAIL (advisory) — {}",
+                                v.feedback.lines().take(5).collect::<Vec<_>>().join(" | ")
+                            );
                         }
-                        let _ = progress.log_feature_complete(
-                            session.session_id(),
-                            iteration,
-                            &issue.id,
-                            "Verified and reviewer-approved",
-                        );
-
-                        success = true;
-                        break;
-                    } else {
-                        warn!(
-                            iteration,
-                            feedback = %result.feedback,
-                            "Reviewer FAILED — looping"
-                        );
-                        let _ = progress.log_error(
-                            session.session_id(),
-                            iteration,
-                            format!("Reviewer rejected: {}", result.feedback),
-                        );
-                        escalation.record_iteration(error_cats, error_count, false);
                     }
-                }
-                Err(e) => {
-                    warn!(iteration, "Reviewer unavailable: {e}");
-                    info!(
-                        iteration,
-                        "Verifier passed, reviewer unreachable — accepting result"
-                    );
-                    escalation.record_iteration(error_cats, error_count, true);
-
-                    // Checkpoint even without reviewer confirmation
-                    if let Ok(hash) = git_mgr.current_commit() {
-                        let _ = progress.log_checkpoint(session.session_id(), iteration, &hash);
-                    }
-                    let _ = progress.log_feature_complete(
-                        session.session_id(),
-                        iteration,
-                        &issue.id,
-                        "Verified (reviewer unreachable)",
-                    );
-
-                    success = true;
-                    break;
                 }
             }
+
+            success = true;
+            break;
         } else {
             escalation.record_iteration(error_cats, error_count, false);
+        }
+
+        // --- Integration Point 2: Pre-escalation knowledge check ---
+        // Before escalating, check if the Debugging KB has a known fix.
+        // If found, log it so the next iteration's pre-task enrichment picks it up.
+        if let Some(kb) = knowledge_base {
+            let error_cats: Vec<String> = report
+                .unique_error_categories()
+                .iter()
+                .map(|c| format!("{c:?}"))
+                .collect();
+            if !error_cats.is_empty() {
+                let question = format!("Known fix for Rust errors: {}", error_cats.join(", "));
+                if let Ok(response) = kb.query("debugging_kb", &question) {
+                    if !response.is_empty() {
+                        info!(
+                            iteration,
+                            kb_suggestion_len = response.len(),
+                            "Found known fix in Debugging KB — will inject in next iteration"
+                        );
+                    }
+                }
+            }
         }
 
         // --- Escalation decision ---
@@ -581,6 +925,39 @@ pub async fn process_issue(
 
     // --- Outcome ---
     if success {
+        // --- Integration Point 3: Post-success knowledge capture ---
+        if let Some(kb) = knowledge_base {
+            let _ = knowledge_sync::capture_resolution(
+                kb,
+                &issue.id,
+                &issue.title,
+                session.iteration(),
+                &format!("{:?}", escalation.current_tier),
+                &[], // Files touched not tracked at this level yet
+            );
+
+            // If it took 3+ iterations (tricky bug), also capture the error pattern
+            if session.iteration() >= 3 {
+                let error_cats: Vec<String> = escalation
+                    .recent_error_categories
+                    .iter()
+                    .flatten()
+                    .map(|c| format!("{c:?}"))
+                    .collect();
+                let _ = knowledge_sync::capture_error_pattern(
+                    kb,
+                    &issue.id,
+                    &error_cats,
+                    session.iteration(),
+                    &format!(
+                        "Resolved after {} iterations at {:?} tier",
+                        session.iteration(),
+                        escalation.current_tier
+                    ),
+                );
+            }
+        }
+
         session.complete();
         let _ = progress.log_session_end(
             session.session_id(),
@@ -598,6 +975,10 @@ pub async fn process_issue(
 
         if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
             error!(id = %issue.id, "Merge failed: {e} — resetting issue to open");
+            // Cleanup the worktree to prevent leaks
+            if let Err(cleanup_err) = worktree_bridge.cleanup(&issue.id) {
+                warn!(id = %issue.id, "Cleanup failed: {cleanup_err}");
+            }
             let _ = beads.update_status(&issue.id, "open");
             return Err(e);
         }
@@ -649,10 +1030,7 @@ fn create_stuck_intervention(
 ) {
     let intervention = PendingIntervention::new(
         InterventionType::ReviewRequired,
-        format!(
-            "Stuck after iteration {}: {}. Manual review needed.",
-            iteration, reason
-        ),
+        format!("Stuck after iteration {iteration}: {reason}. Manual review needed."),
     )
     .with_feature(session.current_feature().unwrap_or("unknown"));
 
@@ -798,19 +1176,10 @@ mod tests {
     #[test]
     fn test_format_task_prompt_basic() {
         let packet = test_packet("Fix type error", "swarm/test-1", 1);
-        let prompt = format_task_prompt(&packet, None);
+        let prompt = format_task_prompt(&packet);
         assert!(prompt.contains("Fix type error"));
         assert!(prompt.contains("swarm/test-1"));
         assert!(prompt.contains("200 LOC"));
-    }
-
-    #[test]
-    fn test_format_task_prompt_with_cloud_guidance() {
-        let mut packet = test_packet("Refactor module", "swarm/test-2", 3);
-        packet.max_patch_loc = 500;
-        let prompt = format_task_prompt(&packet, Some("Use the newtype pattern"));
-        assert!(prompt.contains("Architectural Guidance"));
-        assert!(prompt.contains("newtype pattern"));
     }
 
     // ========================================================================

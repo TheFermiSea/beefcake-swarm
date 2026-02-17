@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::process::Command;
 
-/// A beads issue as returned by `br list --json`.
+/// A beads issue as returned by `bd list --json`.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BeadsIssue {
     pub id: String,
@@ -15,17 +15,18 @@ pub struct BeadsIssue {
 
 /// Abstraction over issue tracking backends.
 ///
-/// `BeadsBridge` implements this for the real `br` CLI.
+/// `BeadsBridge` implements this for the real beads CLI.
 /// Tests can provide a mock implementation.
 pub trait IssueTracker {
-    fn list_open(&self) -> Result<Vec<BeadsIssue>>;
+    fn list_ready(&self) -> Result<Vec<BeadsIssue>>;
     fn update_status(&self, id: &str, status: &str) -> Result<()>;
     fn close(&self, id: &str, reason: Option<&str>) -> Result<()>;
 }
 
-/// Bridge to the `br` (beads_rust) CLI binary.
+/// Bridge to the beads CLI binary (`bd`).
 ///
-/// beads_rust is a binary-only tool — no lib.rs — so we shell out.
+/// beads is a Go binary — we shell out to it.
+/// The binary name is read from the `SWARM_BEADS_BIN` env var, defaulting to `"bd"`.
 pub struct BeadsBridge {
     bin: String,
 }
@@ -39,7 +40,7 @@ impl Default for BeadsBridge {
 impl BeadsBridge {
     pub fn new() -> Self {
         Self {
-            bin: "br".to_string(),
+            bin: std::env::var("SWARM_BEADS_BIN").unwrap_or_else(|_| "bd".into()),
         }
     }
 
@@ -53,11 +54,11 @@ impl BeadsBridge {
                 &format!("--priority={priority}"),
             ])
             .output()
-            .context("Failed to run `br create`")?;
+            .context(format!("Failed to run `{} create`", self.bin))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("br create failed: {stderr}");
+            anyhow::bail!("{} create failed: {stderr}", self.bin);
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
@@ -66,20 +67,23 @@ impl BeadsBridge {
 }
 
 impl IssueTracker for BeadsBridge {
-    /// List open issues, sorted by priority.
-    fn list_open(&self) -> Result<Vec<BeadsIssue>> {
+    /// List ready issues (open and not blocked), sorted by priority.
+    fn list_ready(&self) -> Result<Vec<BeadsIssue>> {
         let output = Command::new(&self.bin)
-            .args(["list", "--status=open", "--json"])
+            .args(["ready", "--json"])
             .output()
-            .context("Failed to run `br list`. Is beads_rust installed?")?;
+            .context(format!(
+                "Failed to run `{} ready`. Is beads installed?",
+                self.bin
+            ))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("br list failed: {stderr}");
+            anyhow::bail!("{} ready failed: {stderr}", self.bin);
         }
 
-        let issues: Vec<BeadsIssue> =
-            serde_json::from_slice(&output.stdout).context("Failed to parse br list output")?;
+        let issues: Vec<BeadsIssue> = serde_json::from_slice(&output.stdout)
+            .context(format!("Failed to parse {} ready output", self.bin))?;
 
         Ok(issues)
     }
@@ -89,11 +93,11 @@ impl IssueTracker for BeadsBridge {
         let output = Command::new(&self.bin)
             .args(["update", id, &format!("--status={status}")])
             .output()
-            .context("Failed to run `br update`")?;
+            .context(format!("Failed to run `{} update`", self.bin))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("br update failed: {stderr}");
+            anyhow::bail!("{} update failed: {stderr}", self.bin);
         }
 
         Ok(())
@@ -109,11 +113,11 @@ impl IssueTracker for BeadsBridge {
         let output = Command::new(&self.bin)
             .args(&args)
             .output()
-            .context("Failed to run `br close`")?;
+            .context(format!("Failed to run `{} close`", self.bin))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("br close failed: {stderr}");
+            anyhow::bail!("{} close failed: {stderr}", self.bin);
         }
 
         Ok(())

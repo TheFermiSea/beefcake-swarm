@@ -1,0 +1,25 @@
+# systemd service: TCP proxy on slurm-ctl (10.0.0.5) forwarding to ai-proxy CLIAPIProxy.
+#
+# Compute nodes (vasp-02, vasp-01) cannot reach ai-proxy directly (no Tailscale).
+# slurm-ctl CAN reach ai-proxy (100.105.113.58) via Tailscale.
+# This service forwards port 8317 on slurm-ctl to ai-proxy:8317.
+#
+# Install:
+#   scp infrastructure/cloud-proxy.service root@10.0.0.5:/etc/systemd/system/
+#   ssh root@10.0.0.5 "apt-get install -y socat && systemctl daemon-reload && systemctl enable --now cloud-proxy"
+#
+# Swarm agents then use: SWARM_CLOUD_URL=http://10.0.0.5:8317/v1
+
+[Unit]
+Description=TCP proxy to CLIAPIProxy on ai-proxy (Tailscale)
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/socat TCP-LISTEN:8317,fork,reuseaddr TCP:100.105.113.58:8317
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

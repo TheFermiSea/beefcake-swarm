@@ -1,0 +1,32 @@
+id: no-unsafe-blocks
+language: Rust
+severity: error
+message: "unsafe blocks require explicit justification in this codebase"
+note: |
+  This is an agent orchestrator handling untrusted LLM output.
+  Any unsafe code must be reviewed and justified with a safety comment.
+  If you need unsafe, add `// SAFETY: <explanation>` above the block.
+rule:
+  kind: unsafe_block
+files:
+  - "crates/**/src/**/*.rs"
+  - "coordination/src/**/*.rs"
+---
+id: no-process-command-unchecked
+language: Rust
+severity: warning
+message: "Direct Command::new() bypasses the sandbox — use RunCommandTool instead"
+note: |
+  All command execution in the swarm should go through `RunCommandTool`
+  which enforces the allowlist, metacharacter rejection, and timeout.
+  Direct `Command::new()` in non-tool code is a sandbox escape risk.
+rule:
+  pattern: Command::new($CMD)
+files:
+  - "crates/swarm-agents/src/**/*.rs"
+ignores:
+  - "**/exec_tool.rs"
+  - "**/worktree_bridge.rs"
+  - "**/beads_bridge.rs"
+  - "**/*test*"
+  - "**/tests/**"

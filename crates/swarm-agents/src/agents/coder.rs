@@ -9,6 +9,7 @@ use rig::providers::openai;
 use crate::prompts;
 use crate::tools::exec_tool::RunCommandTool;
 use crate::tools::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
+use crate::tools::patch_tool::EditFileTool;
 
 /// Type alias for agents built from OpenAI-compatible endpoints.
 pub type OaiAgent = Agent<openai::completion::CompletionModel>;
@@ -30,8 +31,33 @@ pub fn build_rust_coder(
         .temperature(0.2)
         .tool(ReadFileTool::new(wt_path))
         .tool(WriteFileTool::new(wt_path))
+        .tool(EditFileTool::new(wt_path))
         .tool(RunCommandTool::new(wt_path))
-        .default_max_turns(10)
+        .default_max_turns(50)
+        .build()
+}
+
+/// Build the reasoning worker (OR1-Behemoth 72B).
+///
+/// Tools: read_file, write_file, list_files, run_command.
+/// Used by the cloud manager for deep analysis, repair plans, and complex fixes.
+pub fn build_reasoning_worker(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+) -> OaiAgent {
+    client
+        .agent(model)
+        .name("reasoning_worker")
+        .description("Deep reasoning specialist for complex Rust architecture and debugging")
+        .preamble(prompts::REASONING_WORKER_PREAMBLE)
+        .temperature(0.2)
+        .tool(ReadFileTool::new(wt_path))
+        .tool(WriteFileTool::new(wt_path))
+        .tool(EditFileTool::new(wt_path))
+        .tool(ListFilesTool::new(wt_path))
+        .tool(RunCommandTool::new(wt_path))
+        .default_max_turns(50)
         .build()
 }
 
@@ -52,8 +78,9 @@ pub fn build_general_coder(
         .temperature(0.3)
         .tool(ReadFileTool::new(wt_path))
         .tool(WriteFileTool::new(wt_path))
+        .tool(EditFileTool::new(wt_path))
         .tool(ListFilesTool::new(wt_path))
         .tool(RunCommandTool::new(wt_path))
-        .default_max_turns(15)
+        .default_max_turns(50)
         .build()
 }

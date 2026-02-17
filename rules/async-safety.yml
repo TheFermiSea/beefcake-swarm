@@ -1,0 +1,21 @@
+id: no-std-thread-sleep
+language: Rust
+severity: error
+message: "std::thread::sleep blocks the async runtime — use tokio::time::sleep().await"
+note: |
+  In async code, `std::thread::sleep()` blocks the entire Tokio worker thread,
+  starving other tasks. Use `tokio::time::sleep(duration).await` instead.
+rule:
+  pattern: std::thread::sleep($DURATION)
+files:
+  - "crates/**/src/**/*.rs"
+  - "coordination/src/**/*.rs"
+---
+id: no-blocking-stdin
+language: Rust
+severity: error
+message: "std::io::stdin() blocks the async runtime — use tokio::io if needed"
+rule:
+  pattern: std::io::stdin()
+files:
+  - "crates/**/src/**/*.rs"

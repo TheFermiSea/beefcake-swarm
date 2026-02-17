@@ -1,0 +1,24 @@
+id: tool-missing-sandbox-check
+language: Rust
+severity: error
+message: "Tool::call() with file path must validate via sandbox_check()"
+note: |
+  Every tool that accepts a file path from the LLM must call `sandbox_check()`
+  before any filesystem operation. Without this, a prompt-injected path like
+  `../../../etc/passwd` could escape the worktree sandbox.
+rule:
+  all:
+    - kind: function_item
+    - has:
+        kind: identifier
+        regex: "^call$"
+        stopBy: end
+    - has:
+        pattern: std::fs::$OP($$$)
+        stopBy: end
+    - not:
+        has:
+          pattern: sandbox_check($$$)
+          stopBy: end
+files:
+  - "crates/swarm-agents/src/tools/**/*.rs"

@@ -117,13 +117,59 @@ impl Tool for WriteFileTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let full_path = sandbox_check(&self.working_dir, &args.path)?;
+        if !args.path.contains('/') {
+            tracing::warn!(
+                path = %args.path,
+                "write_file: path has no directory component, writing to worktree root"
+            );
+        }
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
-        let bytes = args.content.len();
-        std::fs::write(&full_path, &args.content)?;
+
+        // Heuristic: detect double-JSON-encoded content from local models.
+        // Qwen3-Coder-Next sometimes wraps the entire file in quotes with
+        // escaped characters. After rig's JSON parse the content arrives as
+        // a valid Rust string that starts/ends with `"` and contains escape
+        // sequences like `\n`, `\t`, `\"`. Only unescape if escape sequences
+        // are present — otherwise `"hello"` would be silently stripped to `hello`.
+        let content = if args.content.starts_with('"')
+            && args.content.ends_with('"')
+            && has_json_escape_sequences(&args.content)
+        {
+            match serde_json::from_str::<String>(&args.content) {
+                Ok(unescaped) if unescaped != args.content => {
+                    tracing::warn!(
+                        path = %args.path,
+                        orig_len = args.content.len(),
+                        unescaped_len = unescaped.len(),
+                        "write_file: detected double-escaped content, unescaping"
+                    );
+                    unescaped
+                }
+                _ => args.content,
+            }
+        } else {
+            args.content
+        };
+
+        let bytes = content.len();
+        std::fs::write(&full_path, &content)?;
         Ok(format!("Wrote {bytes} bytes to {}", args.path))
     }
+}
+
+/// Check if a quoted string contains JSON escape sequences (e.g., `\n`, `\t`, `\"`).
+/// Used to distinguish double-encoded content from legitimate quoted text.
+fn has_json_escape_sequences(s: &str) -> bool {
+    // Look inside the outer quotes for backslash-escaped characters
+    let inner = &s[1..s.len() - 1];
+    inner.contains("\\n")
+        || inner.contains("\\t")
+        || inner.contains("\\r")
+        || inner.contains("\\\"")
+        || inner.contains("\\\\")
+        || inner.contains("\\u")
 }
 
 // ---------------------------------------------------------------------------

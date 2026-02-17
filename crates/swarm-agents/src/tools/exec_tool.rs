@@ -14,9 +14,23 @@ use super::ToolError;
 
 /// Commands that are allowed to be executed.
 ///
-/// Agents have dedicated read_file/write_file/list_files tools, so shell-based
-/// file reading (cat, head, tail) is excluded to reduce attack surface.
-const ALLOWED_COMMANDS: &[&str] = &["cargo", "git", "ls", "wc", "find", "grep", "rg"];
+/// Prefer modern Rust CLI tools (rg, fd, bat, sd, delta) over their classic
+/// Unix counterparts. Both are allowed since LLMs may default to classic syntax.
+const ALLOWED_COMMANDS: &[&str] = &[
+    // Core build/vcs/tracking
+    "cargo", "git", "bd", // Modern Rust CLI tools (preferred)
+    "rg", "fd", "bat", "sd", "delta", // Classic Unix fallbacks (LLMs default to these)
+    "ls", "wc", "find", "grep", "cat", "head", "tail", "sed", "awk", "sort", "uniq", "diff",
+    // File operations
+    "touch", "mkdir",
+];
+
+/// Characters that indicate command chaining or injection intent.
+/// Since we execute directly (no shell), these aren't technically dangerous,
+/// but they signal the LLM is trying to chain commands, which we block.
+/// Note: `(`, `)`, `$` are NOT included — they're common in regex patterns
+/// like `rg '(foo|bar)'` and are harmless without a shell.
+const DANGEROUS_METACHARACTERS: &[char] = &[';', '|', '&', '`', '\n', '\r'];
 
 /// Default timeout for command execution.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
@@ -52,8 +66,11 @@ impl Tool for RunCommandTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "run_command".into(),
-            description: "Run a shell command in the workspace. Only cargo, git, ls, wc, \
-                          find, grep, rg are allowed. Use read_file for reading files."
+            description: "Run a shell command in the workspace. \
+                          Prefer modern tools: rg (not grep), fd (not find), bat (not cat), \
+                          sd (not sed), delta (not diff). \
+                          Also allowed: cargo, git, bd, ls, wc, head, tail, awk, sort, uniq, \
+                          touch, mkdir. Use bd for beads issue tracking."
                 .into(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -69,32 +86,49 @@ impl Tool for RunCommandTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let parts: Vec<&str> = args.command.split_whitespace().collect();
+        // Reject characters that indicate command chaining or injection intent.
+        if let Some(bad) = args
+            .command
+            .chars()
+            .find(|c| DANGEROUS_METACHARACTERS.contains(c))
+        {
+            return Err(ToolError::CommandNotAllowed {
+                command: format!("shell metacharacter '{bad}' not allowed in commands"),
+            });
+        }
+
+        // Use shell-words parsing to properly handle quoted arguments
+        // (e.g., `rg "foo bar"` → ["rg", "foo bar"] instead of ["rg", "\"foo", "bar\""])
+        let parts = shlex::split(&args.command).ok_or_else(|| ToolError::CommandNotAllowed {
+            command: "invalid quoting in command".to_string(),
+        })?;
         let program = parts.first().ok_or_else(|| ToolError::CommandNotAllowed {
             command: String::new(),
         })?;
 
         // Allowlist check
-        if !ALLOWED_COMMANDS.contains(program) {
+        if !ALLOWED_COMMANDS.contains(&program.as_str()) {
             return Err(ToolError::CommandNotAllowed {
                 command: program.to_string(),
             });
         }
 
         // Determine timeout
-        let timeout_secs = if args.command.contains("cargo test") {
+        let timeout_secs = if program == "cargo" && parts.iter().any(|p| p == "test") {
             TEST_TIMEOUT_SECS
         } else {
             DEFAULT_TIMEOUT_SECS
         };
 
         let working_dir = self.working_dir.clone();
-        let command = args.command.clone();
+        let program_owned = program.to_string();
+        let arg_list: Vec<String> = parts[1..].to_vec();
 
-        // Run in a blocking task to avoid blocking the async runtime
+        // Run in a blocking task to avoid blocking the async runtime.
+        // Execute directly (no shell) to prevent metacharacter injection.
         let result = tokio::task::spawn_blocking(move || {
-            let output = std::process::Command::new("sh")
-                .args(["-c", &command])
+            let output = std::process::Command::new(&program_owned)
+                .args(&arg_list)
                 .current_dir(&working_dir)
                 .output();
 

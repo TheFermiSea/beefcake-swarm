@@ -22,23 +22,50 @@ impl Compiler {
 
     /// Run `cargo check` with JSON message format
     pub fn check(&self) -> CompileResult {
-        self.run_cargo(&["check", "--message-format=json"])
+        self.run_cargo(&["check", "--message-format=json"], &[])
+    }
+
+    /// Run `cargo check` scoped to specific packages
+    pub fn check_packages(&self, packages: &[String]) -> CompileResult {
+        let pkg_args: Vec<String> = packages
+            .iter()
+            .flat_map(|p| vec!["-p".to_string(), p.clone()])
+            .collect();
+        let pkg_refs: Vec<&str> = pkg_args.iter().map(|s| s.as_str()).collect();
+        self.run_cargo(&["check", "--message-format=json"], &pkg_refs)
     }
 
     /// Run `cargo clippy` with JSON message format
     pub fn clippy(&self) -> CompileResult {
-        self.run_cargo(&["clippy", "--message-format=json", "--", "-D", "warnings"])
+        self.run_cargo(
+            &["clippy", "--message-format=json", "--", "-D", "warnings"],
+            &[],
+        )
+    }
+
+    /// Run `cargo clippy` scoped to specific packages
+    pub fn clippy_packages(&self, packages: &[String]) -> CompileResult {
+        let pkg_args: Vec<String> = packages
+            .iter()
+            .flat_map(|p| vec!["-p".to_string(), p.clone()])
+            .collect();
+        let pkg_refs: Vec<&str> = pkg_args.iter().map(|s| s.as_str()).collect();
+        let mut all_args = vec!["clippy"];
+        all_args.extend_from_slice(&pkg_refs);
+        all_args.extend_from_slice(&["--message-format=json", "--", "-D", "warnings"]);
+        self.run_cargo(&all_args, &[])
     }
 
     /// Run `cargo build` with JSON message format
     pub fn build(&self) -> CompileResult {
-        self.run_cargo(&["build", "--message-format=json"])
+        self.run_cargo(&["build", "--message-format=json"], &[])
     }
 
     /// Run cargo command and parse output
-    fn run_cargo(&self, args: &[&str]) -> CompileResult {
+    fn run_cargo(&self, args: &[&str], extra_args: &[&str]) -> CompileResult {
         let output = Command::new("cargo")
             .args(args)
+            .args(extra_args)
             .current_dir(&self.working_dir)
             .output();
 

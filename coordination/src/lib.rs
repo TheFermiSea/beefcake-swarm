@@ -46,6 +46,7 @@
 //! ```
 
 #![allow(dead_code)]
+#![allow(clippy::uninlined_format_args)]
 
 pub mod benchmark;
 pub mod context_packer;
