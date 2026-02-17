@@ -637,4 +637,84 @@ mod tests {
         let list = bridge.list().expect("list worktrees");
         assert!(list.iter().any(|w| w.branch == "swarm/test-stale"));
     }
+
+    #[test]
+    fn test_merge_conflict_reports_error() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let wt_base = tempfile::tempdir().unwrap();
+
+        // Set up git repo with initial commit
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(repo_dir.path().join("README.md"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
+            .expect("bridge creation");
+
+        // Create worktree
+        let wt_path = bridge.create("conflict-test").expect("create worktree");
+
+        // Make a change in the worktree and commit
+        std::fs::write(wt_path.join("README.md"), "worktree change").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "worktree change"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+
+        // Make a conflicting change on the main branch
+        std::fs::write(repo_dir.path().join("README.md"), "main change").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "main change"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        // Merge should fail due to conflict
+        let result = bridge.merge_and_remove("conflict-test");
+        assert!(result.is_err(), "merge_and_remove should fail on conflict");
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Merge failed"),
+            "error should mention merge failure, got: {err_msg}"
+        );
+
+        // Cleanup should succeed even after failed merge
+        bridge
+            .cleanup("conflict-test")
+            .expect("cleanup after conflict");
+    }
 }
