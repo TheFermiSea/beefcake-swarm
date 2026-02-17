@@ -10,6 +10,6 @@ export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-or1-behemoth-q4_k_m.gguf}
 export SWARM_CLOUD_URL="${SWARM_CLOUD_URL:-http://10.0.0.5:8317/v1}"
 : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
 export SWARM_CLOUD_API_KEY
-export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6-thinking}"
+export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-5-20251101}"
 export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
 exec cargo run -p swarm-agents "$@"
