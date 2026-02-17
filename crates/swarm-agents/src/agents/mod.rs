@@ -12,11 +12,13 @@ pub mod manager;
 pub mod reviewer;
 
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
 use tracing::info;
 
 use crate::config::{ClientSet, SwarmConfig};
+use crate::notebook_bridge::KnowledgeBase;
 use coder::OaiAgent;
 
 /// Factory that builds all agents from a `SwarmConfig`.
@@ -26,6 +28,8 @@ use coder::OaiAgent;
 pub struct AgentFactory {
     pub clients: ClientSet,
     pub config: SwarmConfig,
+    /// Shared knowledge base for the notebook tool (None if unavailable).
+    pub notebook_bridge: Option<Arc<dyn KnowledgeBase>>,
 }
 
 impl AgentFactory {
@@ -34,7 +38,14 @@ impl AgentFactory {
         Ok(Self {
             clients,
             config: config.clone(),
+            notebook_bridge: None,
         })
+    }
+
+    /// Set the knowledge base for the notebook tool.
+    pub fn with_notebook_bridge(mut self, kb: Arc<dyn KnowledgeBase>) -> Self {
+        self.notebook_bridge = Some(kb);
+        self
     }
 
     /// Build the Rust specialist coder (strand-14B on vasp-02).
@@ -90,26 +101,30 @@ impl AgentFactory {
                 "Building cloud-backed manager with local workers"
             );
             let reasoning_worker = self.build_reasoning_worker(wt_path);
-            manager::build_cloud_manager(
-                cloud_client,
-                &cloud_ep.model,
-                reasoning_worker,
+            let workers = manager::ManagerWorkers {
                 rust_coder,
                 general_coder,
                 reviewer,
-                wt_path,
-            )
+                reasoning_worker: Some(reasoning_worker),
+                notebook_bridge: self.notebook_bridge.clone(),
+            };
+            manager::build_cloud_manager(cloud_client, &cloud_ep.model, workers, wt_path)
         } else {
             info!(
                 model = %self.config.reasoning_endpoint.model,
                 "No cloud endpoint — building local manager (OR1-Behemoth)"
             );
-            manager::build_local_manager(
-                &self.clients.reasoning,
-                &self.config.reasoning_endpoint.model,
+            let workers = manager::ManagerWorkers {
                 rust_coder,
                 general_coder,
                 reviewer,
+                reasoning_worker: None,
+                notebook_bridge: self.notebook_bridge.clone(),
+            };
+            manager::build_local_manager(
+                &self.clients.reasoning,
+                &self.config.reasoning_endpoint.model,
+                workers,
                 wt_path,
             )
         }

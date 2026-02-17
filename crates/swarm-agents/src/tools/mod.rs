@@ -5,6 +5,7 @@
 
 pub mod exec_tool;
 pub mod fs_tools;
+pub mod notebook_tool;
 pub mod patch_tool;
 pub mod verifier_tool;
 
@@ -30,6 +31,9 @@ pub enum ToolError {
 
     #[error("verifier error: {0}")]
     Verifier(String),
+
+    #[error("notebook error: {0}")]
+    Notebook(String),
 }
 
 /// Validate that a resolved path stays within the sandbox root.

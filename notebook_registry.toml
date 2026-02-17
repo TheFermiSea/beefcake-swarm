@@ -1,0 +1,43 @@
+# NotebookLM notebook registry — maps roles to notebook IDs.
+#
+# Each notebook serves a specific role in the swarm's knowledge layer.
+# IDs are populated after running `nlm notebook create` for each.
+#
+# auto_query: whether the orchestrator queries this notebook automatically
+# auto_update: whether the orchestrator writes back to this notebook
+
+[notebooks.project_brain]
+id = ""
+role = "project_brain"
+auto_query = true
+auto_update = true
+
+[notebooks.debugging_kb]
+id = ""
+role = "debugging_kb"
+auto_query = true
+auto_update = true
+
+[notebooks.codebase]
+id = ""
+role = "codebase"
+auto_query = false
+auto_update = false
+
+[notebooks.research]
+id = ""
+role = "research"
+auto_query = false
+auto_update = false
+
+[notebooks.security]
+id = ""
+role = "security"
+auto_query = false
+auto_update = false
+
+[notebooks.visuals]
+id = ""
+role = "visuals"
+auto_query = false
+auto_update = false

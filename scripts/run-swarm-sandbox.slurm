@@ -45,6 +45,8 @@ apptainer exec \
     --env "SWARM_CLOUD_URL=http://10.0.0.5:8317/v1" \
     --env "SWARM_CLOUD_API_KEY=rust-daq-proxy-key" \
     --env "SWARM_CLOUD_MODEL=claude-opus-4-6-thinking" \
+    --env "SWARM_VALIDATOR_MODEL_1=gemini-3-pro-preview" \
+    --env "SWARM_VALIDATOR_MODEL_2=claude-sonnet-4-5-20250929" \
     --env "SWARM_BEADS_BIN=bd" \
     --env "GIT_AUTHOR_NAME=Swarm Agent" \
     --env "GIT_COMMITTER_NAME=Swarm Agent" \

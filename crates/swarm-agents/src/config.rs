@@ -48,6 +48,8 @@ pub struct SwarmConfig {
     pub max_retries: u32,
     /// Base directory for worktrees (None = auto-detect).
     pub worktree_base: Option<PathBuf>,
+    /// Path to the notebook registry TOML file.
+    pub notebook_registry_path: Option<PathBuf>,
 }
 
 impl Default for SwarmConfig {
@@ -83,6 +85,7 @@ impl Default for SwarmConfig {
             cloud_endpoint: Self::cloud_from_env(),
             max_retries: 10,
             worktree_base: None,
+            notebook_registry_path: Some(PathBuf::from("./notebook_registry.toml")),
         }
     }
 }
@@ -133,6 +136,7 @@ impl SwarmConfig {
             }),
             max_retries: 3,
             worktree_base: None,
+            notebook_registry_path: None,
         }
     }
 }

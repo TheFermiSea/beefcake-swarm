@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use rig::completion::Prompt;
+use rig::providers::openai;
 use tracing::{error, info, warn};
 
 /// Maximum wall-clock time for a single agent prompt call.
@@ -15,9 +16,15 @@ use tracing::{error, info, warn};
 /// `default_max_turns` on the outer agent in `.prompt()` calls).
 const AGENT_TIMEOUT: Duration = Duration::from_secs(45 * 60); // 45 minutes
 
+/// Timeout for each cloud validation call (2 minutes per model).
+const VALIDATION_TIMEOUT: Duration = Duration::from_secs(120);
+
+use crate::agents::reviewer::{self, ReviewResult};
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::config::SwarmConfig;
+use crate::knowledge_sync;
+use crate::notebook_bridge::KnowledgeBase;
 use crate::worktree_bridge::WorktreeBridge;
 use coordination::feedback::ErrorCategory;
 use coordination::save_session_state;
@@ -141,6 +148,31 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
                 prompt.push_str(&format!(":{line}"));
             }
             prompt.push('\n');
+        }
+        prompt.push('\n');
+    }
+
+    // Knowledge layer fields (populated by NotebookBridge)
+    if !packet.relevant_heuristics.is_empty() {
+        prompt.push_str("## Knowledge Base Context\n");
+        for h in &packet.relevant_heuristics {
+            prompt.push_str(&format!("{h}\n"));
+        }
+        prompt.push('\n');
+    }
+
+    if !packet.relevant_playbooks.is_empty() {
+        prompt.push_str("## Known Fix Patterns\n");
+        for p in &packet.relevant_playbooks {
+            prompt.push_str(&format!("{p}\n"));
+        }
+        prompt.push('\n');
+    }
+
+    if !packet.decisions.is_empty() {
+        prompt.push_str("## Relevant Decisions\n");
+        for d in &packet.decisions {
+            prompt.push_str(&format!("- {d}\n"));
         }
         prompt.push('\n');
     }
@@ -342,6 +374,110 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
     Ok(true)
 }
 
+/// Result of a single cloud model validation.
+struct CloudValidationResult {
+    model: String,
+    passed: bool,
+    feedback: String,
+}
+
+/// Run cloud validation on the worktree diff using external high-end models.
+///
+/// Sends the git diff (since initial commit) to each configured cloud validator
+/// model for blind PASS/FAIL review. This is **advisory** — the orchestrator
+/// logs results but doesn't block on FAIL to avoid subjective LLM feedback loops.
+///
+/// Validator models are configured via env vars:
+/// - `SWARM_VALIDATOR_MODEL_1` (default: `gemini-3-pro-preview`)
+/// - `SWARM_VALIDATOR_MODEL_2` (default: `claude-sonnet-4-5-20250929`)
+async fn cloud_validate(
+    cloud_client: &openai::CompletionsClient,
+    wt_path: &Path,
+    initial_commit: &str,
+) -> Vec<CloudValidationResult> {
+    // Get the full diff since the initial commit
+    let diff = match std::process::Command::new("git")
+        .args(["diff", initial_commit, "HEAD"])
+        .current_dir(wt_path)
+        .output()
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        }
+        Ok(output) => {
+            warn!(
+                "git diff failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            return Vec::new();
+        }
+        Err(e) => {
+            warn!("Failed to run git diff: {e}");
+            return Vec::new();
+        }
+    };
+
+    if diff.trim().is_empty() {
+        info!("No diff to validate — skipping cloud validation");
+        return Vec::new();
+    }
+
+    // Truncate very large diffs to avoid token limits
+    let max_diff_chars = 32_000;
+    let diff_for_review = if diff.len() > max_diff_chars {
+        format!(
+            "{}\n\n... [truncated — {} total chars, showing first {}]",
+            &diff[..max_diff_chars],
+            diff.len(),
+            max_diff_chars,
+        )
+    } else {
+        diff
+    };
+
+    let models = [
+        std::env::var("SWARM_VALIDATOR_MODEL_1")
+            .unwrap_or_else(|_| "gemini-3-pro-preview".into()),
+        std::env::var("SWARM_VALIDATOR_MODEL_2")
+            .unwrap_or_else(|_| "claude-sonnet-4-5-20250929".into()),
+    ];
+
+    let review_prompt = format!(
+        "You are reviewing a Rust code change from an autonomous coding agent. \
+         The change has already passed all deterministic gates (cargo fmt, clippy, \
+         cargo check, cargo test). Your job is to catch logic errors, edge cases, \
+         and design issues that the compiler cannot detect.\n\n\
+         Respond with PASS or FAIL on the first line, then structured feedback.\n\n\
+         ```diff\n{diff_for_review}\n```"
+    );
+
+    let mut results = Vec::new();
+    for model in &models {
+        info!(model, "Running cloud validation");
+        let validator = reviewer::build_reviewer(cloud_client, model);
+        match tokio::time::timeout(VALIDATION_TIMEOUT, validator.prompt(&review_prompt)).await {
+            Ok(Ok(response)) => {
+                let review = ReviewResult::parse(&response);
+                let status = if review.passed { "PASS" } else { "FAIL" };
+                info!(model, status, "Cloud validation complete");
+                results.push(CloudValidationResult {
+                    model: model.clone(),
+                    passed: review.passed,
+                    feedback: review.feedback,
+                });
+            }
+            Ok(Err(e)) => {
+                warn!(model, "Cloud validation error: {e}");
+            }
+            Err(_) => {
+                warn!(model, "Cloud validation timed out ({}s)", VALIDATION_TIMEOUT.as_secs());
+            }
+        }
+    }
+
+    results
+}
+
 /// Process a single issue through the implement → verify → review → escalate loop.
 ///
 /// Integrates coordination's harness for:
@@ -357,6 +493,7 @@ pub async fn process_issue(
     worktree_bridge: &WorktreeBridge,
     issue: &BeadsIssue,
     beads: &dyn IssueTracker,
+    knowledge_base: Option<&dyn KnowledgeBase>,
 ) -> Result<bool> {
     // --- Claim issue ---
     beads.update_status(&issue.id, "in_progress")?;
@@ -475,11 +612,43 @@ pub async fn process_issue(
 
         // Pack context with tier-appropriate token budget
         let packer = ContextPacker::new(&wt_path, tier);
-        let packet = if let Some(ref report) = last_report {
+        let mut packet = if let Some(ref report) = last_report {
             packer.pack_retry(&issue.id, &issue.title, &escalation, report)
         } else {
             packer.pack_initial(&issue.id, &issue.title)
         };
+
+        // --- Integration Point 1: Pre-task knowledge enrichment ---
+        if let Some(kb) = knowledge_base {
+            // Query Project Brain for architectural context
+            let brain_question = format!(
+                "What architectural context is relevant for: {}? Issue: {}",
+                issue.title, issue.id
+            );
+            if let Ok(response) = kb.query("project_brain", &brain_question) {
+                if !response.is_empty() {
+                    packet.relevant_heuristics.push(response);
+                    info!(iteration, "Enriched packet with Project Brain context");
+                }
+            }
+
+            // On retries, also query Debugging KB for error-specific patterns
+            if last_report.is_some() && !packet.failure_signals.is_empty() {
+                let error_desc = packet
+                    .failure_signals
+                    .iter()
+                    .map(|s| format!("{}: {}", s.category, s.message))
+                    .collect::<Vec<_>>()
+                    .join("; ");
+                let debug_question = format!("Known fixes for these Rust errors: {error_desc}");
+                if let Ok(response) = kb.query("debugging_kb", &debug_question) {
+                    if !response.is_empty() {
+                        packet.relevant_playbooks.push(response);
+                        info!(iteration, "Enriched packet with Debugging KB patterns");
+                    }
+                }
+            }
+        }
 
         info!(
             tokens = packet.estimated_tokens(),
@@ -677,10 +846,56 @@ pub async fn process_issue(
                 "Verified (deterministic gates passed)",
             );
 
+            // --- Cloud validation (advisory) ---
+            // After deterministic gates pass, send the diff to high-end cloud models
+            // (G3 Pro + Sonnet 4.5) for logic/design review. Results are logged but
+            // don't block acceptance — avoids subjective LLM feedback loops.
+            if let Some(ref cloud_client) = factory.clients.cloud {
+                if let Some(ref initial_commit) = session.state().initial_commit {
+                    let validations =
+                        cloud_validate(cloud_client, &wt_path, initial_commit).await;
+                    for v in &validations {
+                        if v.passed {
+                            info!(model = %v.model, "Cloud validation: PASS");
+                        } else {
+                            warn!(
+                                model = %v.model,
+                                "Cloud validation: FAIL (advisory) — {}",
+                                v.feedback.lines().take(5).collect::<Vec<_>>().join(" | ")
+                            );
+                        }
+                    }
+                }
+            }
+
             success = true;
             break;
         } else {
             escalation.record_iteration(error_cats, error_count, false);
+        }
+
+        // --- Integration Point 2: Pre-escalation knowledge check ---
+        // Before escalating, check if the Debugging KB has a known fix.
+        // If found, log it so the next iteration's pre-task enrichment picks it up.
+        if let Some(kb) = knowledge_base {
+            let error_cats: Vec<String> = report
+                .unique_error_categories()
+                .iter()
+                .map(|c| format!("{c:?}"))
+                .collect();
+            if !error_cats.is_empty() {
+                let question =
+                    format!("Known fix for Rust errors: {}", error_cats.join(", "));
+                if let Ok(response) = kb.query("debugging_kb", &question) {
+                    if !response.is_empty() {
+                        info!(
+                            iteration,
+                            kb_suggestion_len = response.len(),
+                            "Found known fix in Debugging KB — will inject in next iteration"
+                        );
+                    }
+                }
+            }
         }
 
         // --- Escalation decision ---
@@ -710,6 +925,39 @@ pub async fn process_issue(
 
     // --- Outcome ---
     if success {
+        // --- Integration Point 3: Post-success knowledge capture ---
+        if let Some(kb) = knowledge_base {
+            let _ = knowledge_sync::capture_resolution(
+                kb,
+                &issue.id,
+                &issue.title,
+                session.iteration(),
+                &format!("{:?}", escalation.current_tier),
+                &[], // Files touched not tracked at this level yet
+            );
+
+            // If it took 3+ iterations (tricky bug), also capture the error pattern
+            if session.iteration() >= 3 {
+                let error_cats: Vec<String> = escalation
+                    .recent_error_categories
+                    .iter()
+                    .flatten()
+                    .map(|c| format!("{c:?}"))
+                    .collect();
+                let _ = knowledge_sync::capture_error_pattern(
+                    kb,
+                    &issue.id,
+                    &error_cats,
+                    session.iteration(),
+                    &format!(
+                        "Resolved after {} iterations at {:?} tier",
+                        session.iteration(),
+                        escalation.current_tier
+                    ),
+                );
+            }
+        }
+
         session.complete();
         let _ = progress.log_session_end(
             session.session_id(),
