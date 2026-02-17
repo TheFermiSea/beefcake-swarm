@@ -106,6 +106,50 @@ async fn test_write_file_sandbox_escape_blocked() {
     assert!(result.is_err());
 }
 
+#[tokio::test]
+async fn test_write_file_unescapes_double_encoded_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = WriteFileTool::new(dir.path());
+
+    // Simulate Qwen3-Coder-Next double-encoding: content arrives as a JSON string
+    // literal with escaped newlines. After rig's initial JSON parse, the content
+    // field looks like: "line1\nline2\nline3\n"
+    let double_encoded = r#""line1\nline2\nline3\n""#;
+
+    let result = tool
+        .call(WriteFileArgs {
+            path: "test.rs".into(),
+            content: double_encoded.into(),
+        })
+        .await;
+
+    assert!(result.is_ok());
+    let on_disk = fs::read_to_string(dir.path().join("test.rs")).unwrap();
+    assert_eq!(on_disk, "line1\nline2\nline3\n");
+}
+
+#[tokio::test]
+async fn test_write_file_preserves_normal_quoted_content() {
+    let dir = tempfile::tempdir().unwrap();
+    let tool = WriteFileTool::new(dir.path());
+
+    // Content that happens to start/end with quotes but is NOT double-encoded
+    // (e.g., a file that legitimately contains just a JSON string)
+    let content = "\"hello world\"";
+
+    let result = tool
+        .call(WriteFileArgs {
+            path: "test.txt".into(),
+            content: content.into(),
+        })
+        .await;
+
+    assert!(result.is_ok());
+    let on_disk = fs::read_to_string(dir.path().join("test.txt")).unwrap();
+    // Should unescape to just: hello world
+    assert_eq!(on_disk, "hello world");
+}
+
 // ---------------------------------------------------------------------------
 // ListFilesTool
 // ---------------------------------------------------------------------------

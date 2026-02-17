@@ -128,19 +128,22 @@ impl Tool for WriteFileTool {
         }
 
         // Heuristic: detect double-JSON-encoded content from local models.
-        // If content is wrapped in quotes and contains literal \n but no real
-        // newlines, it was likely JSON-stringified by the model.
-        let content = if args.content.starts_with('"')
-            && args.content.ends_with('"')
-            && args.content.contains("\\n")
-            && !args.content[1..args.content.len() - 1].contains('\n')
-        {
+        // Qwen3-Coder-Next sometimes wraps the entire file in quotes with
+        // escaped characters. After rig's JSON parse the content arrives as
+        // a valid Rust string that starts/ends with `"`. Try JSON-unescaping;
+        // if it produces valid content use it, otherwise keep the original.
+        let content = if args.content.starts_with('"') && args.content.ends_with('"') {
             match serde_json::from_str::<String>(&args.content) {
-                Ok(unescaped) => {
-                    tracing::warn!("write_file: detected double-escaped content, unescaping");
+                Ok(unescaped) if unescaped != args.content => {
+                    tracing::warn!(
+                        path = %args.path,
+                        orig_len = args.content.len(),
+                        unescaped_len = unescaped.len(),
+                        "write_file: detected double-escaped content, unescaping"
+                    );
                     unescaped
                 }
-                Err(_) => args.content,
+                _ => args.content,
             }
         } else {
             args.content
