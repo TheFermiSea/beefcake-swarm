@@ -366,7 +366,7 @@ mod tests {
         // Spaces
         assert_eq!(WorktreeBridge::sanitize_id("hello world"), "hello_world");
         // All special chars
-        assert_eq!(WorktreeBridge::sanitize_id("@#$%^&*()"), "__________");
+        assert_eq!(WorktreeBridge::sanitize_id("@#$%^&*()"), "_________");
         // Only dashes
         assert_eq!(WorktreeBridge::sanitize_id("---"), "---");
         // Only underscores
