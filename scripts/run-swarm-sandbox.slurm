@@ -33,7 +33,7 @@ chown -R brian:hpc "${REPO_DIR}/.git" 2>/dev/null || true
 # a sqlite DB from the JSONL export on first access.
 BEADS_META="${REPO_DIR}/.beads/metadata.json"
 if [ -f "$BEADS_META" ] && grep -q '"dolt"' "$BEADS_META"; then
-    echo '{"database":"beads.db","jsonl_export":"issues.jsonl"}' > "$BEADS_META"
+    echo '{"database":"beads.db","jsonl_export":"issues.jsonl","backend":"sqlite"}' > "$BEADS_META"
     echo "Patched beads metadata to sqlite backend"
 fi
 
