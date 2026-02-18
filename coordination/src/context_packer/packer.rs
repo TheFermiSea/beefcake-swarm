@@ -9,7 +9,14 @@ use crate::verifier::report::VerifierReport;
 use crate::work_packet::generator::WorkPacketGenerator;
 use crate::work_packet::types::{FileContext, WorkPacket};
 use chrono::Utc;
+use regex::Regex;
 use std::path::{Path, PathBuf};
+use std::sync::LazyLock;
+
+/// Regex for extracting file paths from cargo stderr output (e.g., ` --> path/to/file.rs:123:45`).
+static STDERR_FILE_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"-->\s*([^\s:]+\.rs):(\d+)").expect("STDERR_FILE_RE regex should compile")
+});
 
 /// Token budgets per tier (4 chars ≈ 1 token, matching `estimated_tokens()`)
 fn max_context_tokens(tier: SwarmTier) -> usize {
@@ -70,7 +77,14 @@ impl ContextPacker {
         packet
     }
 
-    /// Retry pack: delegates to WorkPacketGenerator with error context.
+    /// Retry pack: delegates to WorkPacketGenerator with error context,
+    /// then overrides file contexts to include FULL content of changed/failing files.
+    ///
+    /// The generator's default `extract_error_contexts()` only includes ~20-line
+    /// windows around error locations. For retries, the worker needs to see the
+    /// full file content to fix cascading errors and understand the broader context.
+    /// Without this, iteration 2+ gets ~300-700 tokens vs ~24K on iteration 1
+    /// (the "retry context collapse" bug from job 1653).
     pub fn pack_retry(
         &self,
         bead_id: &str,
@@ -86,8 +100,165 @@ impl ContextPacker {
             Some(verifier_report),
         );
 
+        // Override file contexts with FULL content of error/changed files.
+        // Priority: (1) files with errors, (2) files modified since initial commit.
+        packet.file_contexts =
+            self.build_retry_file_contexts(verifier_report, &packet.files_touched);
+
         self.trim_to_budget(&mut packet);
         packet
+    }
+
+    /// Build file contexts for retry iterations with FULL file content.
+    ///
+    /// Unlike `pack_initial` (which includes 30-line headers for many files),
+    /// retry contexts include the COMPLETE content of the most relevant files
+    /// so the worker can actually see and fix the code.
+    fn build_retry_file_contexts(
+        &self,
+        report: &VerifierReport,
+        files_touched: &[String],
+    ) -> Vec<FileContext> {
+        use std::collections::HashSet;
+
+        let mut contexts = Vec::new();
+        let mut files_seen = HashSet::new();
+        let mut total_chars = 0usize;
+        let char_budget = self.max_context_tokens * 4; // 4 chars per token
+
+        // 1. Files with errors — highest priority, include FULL content
+        for signal in &report.failure_signals {
+            if let Some(file) = &signal.file {
+                if files_seen.contains(file) {
+                    continue;
+                }
+                files_seen.insert(file.clone());
+
+                let full_path = self.working_dir.join(file);
+                let content = match std::fs::read_to_string(&full_path) {
+                    Ok(c) => c,
+                    Err(_) => continue,
+                };
+
+                let lines: Vec<&str> = content.lines().collect();
+                let line_count = lines.len();
+                let context_content: String = lines
+                    .iter()
+                    .enumerate()
+                    .map(|(i, l)| format!("{:4} | {}", i + 1, l))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let ctx_chars = context_content.len() + file.len() + 100;
+                if total_chars + ctx_chars > char_budget {
+                    break;
+                }
+                total_chars += ctx_chars;
+
+                let error_line = signal.line.unwrap_or(0);
+                contexts.push(FileContext {
+                    file: file.clone(),
+                    start_line: 1,
+                    end_line: line_count,
+                    content: context_content,
+                    relevance: format!(
+                        "ERROR: {} at line {} (full file)",
+                        signal.category, error_line
+                    ),
+                });
+            }
+        }
+
+        // Also check gate stderr for file references not in failure_signals
+        for gate in &report.gates {
+            if let Some(stderr) = &gate.stderr_excerpt {
+                // Extract file paths from stderr using --> path.rs:line pattern
+                for cap in STDERR_FILE_RE.captures_iter(stderr)
+                {
+                    let file = cap[1].to_string();
+                    let rel_file = file
+                        .strip_prefix(&format!("{}/", self.working_dir.display()))
+                        .unwrap_or(&file)
+                        .to_string();
+
+                    if files_seen.contains(&rel_file) {
+                        continue;
+                    }
+                    files_seen.insert(rel_file.clone());
+
+                    let full_path = self.working_dir.join(&rel_file);
+                    let content = match std::fs::read_to_string(&full_path) {
+                        Ok(c) => c,
+                        Err(_) => continue,
+                    };
+
+                    let lines: Vec<&str> = content.lines().collect();
+                    let line_count = lines.len();
+                    let context_content: String = lines
+                        .iter()
+                        .enumerate()
+                        .map(|(i, l)| format!("{:4} | {}", i + 1, l))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+
+                    let ctx_chars = context_content.len() + rel_file.len() + 100;
+                    if total_chars + ctx_chars > char_budget {
+                        break;
+                    }
+                    total_chars += ctx_chars;
+
+                    let error_line: usize = cap[2].parse().unwrap_or(1);
+                    contexts.push(FileContext {
+                        file: rel_file,
+                        start_line: 1,
+                        end_line: line_count,
+                        content: context_content,
+                        relevance: format!(
+                            "ERROR: {} gate at line {} (full file)",
+                            gate.gate, error_line
+                        ),
+                    });
+                }
+            }
+        }
+
+        // 2. Changed files not already included — full content
+        for file in files_touched {
+            if !file.ends_with(".rs") || files_seen.contains(file) {
+                continue;
+            }
+
+            let full_path = self.working_dir.join(file);
+            let content = match std::fs::read_to_string(&full_path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+
+            let lines: Vec<&str> = content.lines().collect();
+            let line_count = lines.len();
+            let context_content: String = lines
+                .iter()
+                .enumerate()
+                .map(|(i, l)| format!("{:4} | {}", i + 1, l))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            let ctx_chars = context_content.len() + file.len() + 100;
+            if total_chars + ctx_chars > char_budget {
+                break;
+            }
+            total_chars += ctx_chars;
+
+            contexts.push(FileContext {
+                file: file.clone(),
+                start_line: 1,
+                end_line: line_count,
+                content: context_content,
+                relevance: "Modified file (full content for retry)".to_string(),
+            });
+        }
+
+        contexts
     }
 
     /// Build file contexts from a list of relative paths (first 30 lines each).
