@@ -1,3 +1,4 @@
+pub mod acceptance;
 pub mod agents;
 pub mod beads_bridge;
 pub mod config;
@@ -5,5 +6,6 @@ pub mod knowledge_sync;
 pub mod notebook_bridge;
 pub mod orchestrator;
 pub mod prompts;
+pub mod telemetry;
 pub mod tools;
 pub mod worktree_bridge;

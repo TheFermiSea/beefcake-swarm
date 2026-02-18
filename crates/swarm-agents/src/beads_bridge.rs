@@ -1,9 +1,9 @@
 use anyhow::{Context, Result};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::process::Command;
 
 /// A beads issue as returned by `bd list --json`.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BeadsIssue {
     pub id: String,
     pub title: String,
@@ -21,6 +21,24 @@ pub trait IssueTracker {
     fn list_ready(&self) -> Result<Vec<BeadsIssue>>;
     fn update_status(&self, id: &str, status: &str) -> Result<()>;
     fn close(&self, id: &str, reason: Option<&str>) -> Result<()>;
+}
+
+/// No-op tracker for beads-free mode.
+///
+/// Used when the user provides `--issue` / `--issue-file` CLI flags or when
+/// the `bd` binary is unavailable. All operations succeed silently.
+pub struct NoOpTracker;
+
+impl IssueTracker for NoOpTracker {
+    fn list_ready(&self) -> Result<Vec<BeadsIssue>> {
+        Ok(vec![])
+    }
+    fn update_status(&self, _id: &str, _status: &str) -> Result<()> {
+        Ok(())
+    }
+    fn close(&self, _id: &str, _reason: Option<&str>) -> Result<()> {
+        Ok(())
+    }
 }
 
 /// Bridge to the beads CLI binary (`bd`).

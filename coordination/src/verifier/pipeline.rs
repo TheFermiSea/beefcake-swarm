@@ -2,8 +2,11 @@
 //!
 //! Runs cargo fmt, clippy, check, and test in order, stopping at the first
 //! failure by default (fail-fast) or running all gates (comprehensive mode).
+//!
+//! All gates are run async with `tokio::process::Command` and enforced
+//! timeout via `tokio::time::timeout(gate_timeout_secs)`.
 
-use crate::feedback::compiler::{CargoMessage, CompileResult, Compiler};
+use crate::feedback::compiler::CargoMessage;
 use crate::feedback::error_parser::RustcErrorParser;
 use crate::verifier::report::{GateOutcome, GateResult, VerifierReport};
 use serde::{Deserialize, Serialize};
@@ -106,7 +109,7 @@ impl Verifier {
 
         // Gate 1: cargo fmt --check
         if self.config.check_fmt {
-            let result = self.run_fmt_gate();
+            let result = self.run_fmt_gate().await;
             let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
             if failed && !self.config.comprehensive {
@@ -118,7 +121,7 @@ impl Verifier {
 
         // Gate 2: cargo clippy -D warnings
         if self.config.check_clippy {
-            let result = self.run_clippy_gate();
+            let result = self.run_clippy_gate().await;
             let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
             if failed && !self.config.comprehensive {
@@ -130,7 +133,7 @@ impl Verifier {
 
         // Gate 3: cargo check --message-format=json
         if self.config.check_compile {
-            let result = self.run_check_gate();
+            let result = self.run_check_gate().await;
             let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
             if failed && !self.config.comprehensive {
@@ -142,7 +145,7 @@ impl Verifier {
 
         // Gate 4: cargo test
         if self.config.check_test {
-            let result = self.run_test_gate();
+            let result = self.run_test_gate().await;
             report.add_gate(result);
         }
 
@@ -150,11 +153,30 @@ impl Verifier {
         report
     }
 
+    /// Run a tokio command with the configured gate timeout.
+    ///
+    /// Returns `Ok(output)` on success, `Err(message)` on timeout or spawn failure.
+    async fn run_with_timeout(
+        &self,
+        cmd: &mut tokio::process::Command,
+    ) -> Result<std::process::Output, String> {
+        cmd.current_dir(&self.working_dir).kill_on_drop(true);
+        let timeout_dur = Duration::from_secs(self.config.gate_timeout_secs);
+        match tokio::time::timeout(timeout_dur, cmd.output()).await {
+            Ok(Ok(output)) => Ok(output),
+            Ok(Err(e)) => Err(format!("Failed to execute: {e}")),
+            Err(_) => Err(format!(
+                "Gate timed out after {}s",
+                self.config.gate_timeout_secs
+            )),
+        }
+    }
+
     /// Run `cargo fmt --check`
-    fn run_fmt_gate(&self) -> GateResult {
+    async fn run_fmt_gate(&self) -> GateResult {
         let start = Instant::now();
 
-        let mut cmd = Command::new("cargo");
+        let mut cmd = tokio::process::Command::new("cargo");
         cmd.arg("fmt");
         if self.config.packages.is_empty() {
             cmd.arg("--all");
@@ -167,9 +189,8 @@ impl Verifier {
         for arg in &self.config.extra_cargo_args {
             cmd.arg(arg);
         }
-        cmd.current_dir(&self.working_dir);
 
-        match cmd.output() {
+        match self.run_with_timeout(&mut cmd).await {
             Ok(output) => {
                 let stderr = self.truncate_stderr(&output.stderr);
                 let exit_code = output.status.code();
@@ -198,40 +219,78 @@ impl Verifier {
                 error_count: 1,
                 warning_count: 0,
                 errors: vec![],
-                stderr_excerpt: Some(format!("Failed to run cargo fmt: {}", e)),
+                stderr_excerpt: Some(e),
             },
         }
     }
 
     /// Run `cargo clippy -D warnings` with JSON output
-    fn run_clippy_gate(&self) -> GateResult {
+    async fn run_clippy_gate(&self) -> GateResult {
         let start = Instant::now();
-        let compiler = Compiler::new(&self.working_dir);
-        let result = if self.config.packages.is_empty() {
-            compiler.clippy()
-        } else {
-            compiler.clippy_packages(&self.config.packages)
-        };
-        self.compile_result_to_gate("clippy", result, start.elapsed())
+
+        let mut cmd = tokio::process::Command::new("cargo");
+        cmd.arg("clippy");
+        for pkg in &self.config.packages {
+            cmd.args(["-p", pkg]);
+        }
+        cmd.args(["--message-format=json", "--", "-D", "warnings"]);
+
+        match self.run_with_timeout(&mut cmd).await {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let messages = Self::parse_json_messages(&stdout);
+                let result = Self::output_to_compile_result(&output, messages);
+                self.compile_result_to_gate("clippy", result, start.elapsed())
+            }
+            Err(e) => GateResult {
+                gate: "clippy".to_string(),
+                outcome: GateOutcome::Failed,
+                duration_ms: start.elapsed().as_millis() as u64,
+                exit_code: None,
+                error_count: 1,
+                warning_count: 0,
+                errors: vec![],
+                stderr_excerpt: Some(e),
+            },
+        }
     }
 
     /// Run `cargo check --message-format=json`
-    fn run_check_gate(&self) -> GateResult {
+    async fn run_check_gate(&self) -> GateResult {
         let start = Instant::now();
-        let compiler = Compiler::new(&self.working_dir);
-        let result = if self.config.packages.is_empty() {
-            compiler.check()
-        } else {
-            compiler.check_packages(&self.config.packages)
-        };
-        self.compile_result_to_gate("check", result, start.elapsed())
+
+        let mut cmd = tokio::process::Command::new("cargo");
+        cmd.arg("check");
+        for pkg in &self.config.packages {
+            cmd.args(["-p", pkg]);
+        }
+        cmd.arg("--message-format=json");
+
+        match self.run_with_timeout(&mut cmd).await {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                let messages = Self::parse_json_messages(&stdout);
+                let result = Self::output_to_compile_result(&output, messages);
+                self.compile_result_to_gate("check", result, start.elapsed())
+            }
+            Err(e) => GateResult {
+                gate: "check".to_string(),
+                outcome: GateOutcome::Failed,
+                duration_ms: start.elapsed().as_millis() as u64,
+                exit_code: None,
+                error_count: 1,
+                warning_count: 0,
+                errors: vec![],
+                stderr_excerpt: Some(e),
+            },
+        }
     }
 
     /// Run `cargo test`
-    fn run_test_gate(&self) -> GateResult {
+    async fn run_test_gate(&self) -> GateResult {
         let start = Instant::now();
 
-        let mut cmd = Command::new("cargo");
+        let mut cmd = tokio::process::Command::new("cargo");
         cmd.arg("test");
         for pkg in &self.config.packages {
             cmd.args(["-p", pkg]);
@@ -239,9 +298,8 @@ impl Verifier {
         for arg in &self.config.extra_cargo_args {
             cmd.arg(arg);
         }
-        cmd.current_dir(&self.working_dir);
 
-        match cmd.output() {
+        match self.run_with_timeout(&mut cmd).await {
             Ok(output) => {
                 let stderr = self.truncate_stderr(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout).to_string();
@@ -281,20 +339,41 @@ impl Verifier {
                 error_count: 1,
                 warning_count: 0,
                 errors: vec![],
-                stderr_excerpt: Some(format!("Failed to run cargo test: {}", e)),
+                stderr_excerpt: Some(e),
             },
         }
     }
 
-    /// Convert a CompileResult to a GateResult with parsed errors
+    /// Parse JSON lines from cargo output (same as Compiler::parse_json_messages)
+    fn parse_json_messages(output: &str) -> Vec<CargoMessage> {
+        output
+            .lines()
+            .filter_map(|line| serde_json::from_str::<CargoMessage>(line).ok())
+            .collect()
+    }
+
+    /// Convert a process output + parsed messages into a lightweight CompileResult-like tuple.
+    fn output_to_compile_result(
+        output: &std::process::Output,
+        messages: Vec<CargoMessage>,
+    ) -> CompileResultLite {
+        CompileResultLite {
+            success: output.status.success(),
+            exit_code: output.status.code(),
+            messages,
+            raw_stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        }
+    }
+
+    /// Convert a CompileResultLite to a GateResult with parsed errors
     fn compile_result_to_gate(
         &self,
         gate_name: &str,
-        result: CompileResult,
+        result: CompileResultLite,
         duration: Duration,
     ) -> GateResult {
         let errors = RustcErrorParser::parse_cargo_messages(&result.messages);
-        let warnings: Vec<&CargoMessage> = result.warnings();
+        let warning_count = result.messages.iter().filter(|m| m.is_warning()).count();
 
         GateResult {
             gate: gate_name.to_string(),
@@ -306,7 +385,7 @@ impl Verifier {
             duration_ms: duration.as_millis() as u64,
             exit_code: result.exit_code,
             error_count: errors.len(),
-            warning_count: warnings.len(),
+            warning_count,
             errors,
             stderr_excerpt: if result.success {
                 None
@@ -415,6 +494,14 @@ impl Verifier {
             format!("{}...\n[truncated at {} bytes]", truncated, s.len())
         }
     }
+}
+
+/// Lightweight compile result for async pipeline (avoids depending on sync Compiler).
+struct CompileResultLite {
+    success: bool,
+    exit_code: Option<i32>,
+    messages: Vec<CargoMessage>,
+    raw_stderr: String,
 }
 
 #[cfg(test)]

@@ -130,7 +130,13 @@ impl AgentFactory {
                 reasoning_worker: Some(reasoning_worker),
                 notebook_bridge: self.notebook_bridge.clone(),
             };
-            manager::build_cloud_manager(cloud_client, &cloud_ep.model, workers, wt_path)
+            manager::build_cloud_manager(
+                cloud_client,
+                &cloud_ep.model,
+                workers,
+                wt_path,
+                &self.config.verifier_packages,
+            )
         } else {
             info!(
                 model = %self.config.reasoning_endpoint.model,
@@ -152,6 +158,7 @@ impl AgentFactory {
                 &self.config.reasoning_endpoint.model,
                 workers,
                 wt_path,
+                &self.config.verifier_packages,
             )
         }
     }

@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "5.1.0";
+pub const PROMPT_VERSION: &str = "5.2.0";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -149,7 +149,8 @@ Only modify files relevant to your task.
 1. Read the file(s) mentioned in the task.
 2. Understand the exact error and its root cause.
 3. Apply the fix using **edit_file** (preferred) or write_file (new files only).
-4. Verify: `cargo check --message-format=json`
+4. The orchestrator will run the verifier (cargo fmt, clippy, check, test) after you return. \
+   Do NOT run cargo check yourself — focus on writing correct code.
 
 ## Editing Files
 - **edit_file**: Use for ALL modifications to existing files. Specify the exact text block \
@@ -190,7 +191,8 @@ Only modify files relevant to your task.
 2. Read the files you need to modify.
 3. Plan your changes before writing anything.
 4. Apply changes using **edit_file** (existing files) or **write_file** (new files only).
-5. Verify: `cargo check --message-format=json`
+5. The orchestrator will run the verifier (cargo fmt, clippy, check, test) after you return. \
+   Do NOT run cargo check yourself — focus on writing correct code.
 
 ## Editing Files
 - **edit_file**: Use for ALL modifications to existing files. Specify the exact text block \
@@ -270,7 +272,8 @@ You can query related issues with `bd show <id>` for context on dependencies.
 1. Read the relevant files to understand the full context.
 2. Analyze the error chain — trace the root cause through the type system, borrow checker, etc.
 3. Produce a specific repair plan OR implement the fix directly.
-4. If implementing: use **edit_file** for targeted changes, then verify with `cargo check --message-format=json`.
+4. If implementing: use **edit_file** for targeted changes. The orchestrator runs \
+   the verifier after you return — do NOT run cargo check yourself.
 
 ## Editing Files
 - **edit_file**: Use for ALL modifications to existing files. Specify the exact text block \

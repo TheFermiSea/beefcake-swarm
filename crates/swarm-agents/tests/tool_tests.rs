@@ -153,6 +153,75 @@ async fn test_write_file_preserves_normal_quoted_content() {
 }
 
 // ---------------------------------------------------------------------------
+// WriteFileTool — blast-radius guard
+// ---------------------------------------------------------------------------
+
+#[tokio::test]
+async fn test_write_file_blast_radius_guard_blocks_destructive_write() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("big_file.rs");
+    // Create a 500-byte file
+    fs::write(&file, "x".repeat(500)).unwrap();
+
+    let tool = WriteFileTool::new(dir.path());
+    let result = tool
+        .call(WriteFileArgs {
+            path: "big_file.rs".into(),
+            content: "tool_response content not available".into(), // ~35 bytes, >93% shrink
+        })
+        .await;
+
+    // Should be rejected by blast-radius guard
+    assert!(result.is_err());
+    let err = format!("{:?}", result.unwrap_err());
+    assert!(err.contains("Blast-radius guard"));
+
+    // File should be unchanged
+    let on_disk = fs::read_to_string(&file).unwrap();
+    assert_eq!(on_disk.len(), 500);
+}
+
+#[tokio::test]
+async fn test_write_file_blast_radius_guard_allows_small_shrink() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("code.rs");
+    // Create a 200-byte file
+    fs::write(&file, "x".repeat(200)).unwrap();
+
+    let tool = WriteFileTool::new(dir.path());
+    // Write 150 bytes (25% shrink — within limit)
+    let result = tool
+        .call(WriteFileArgs {
+            path: "code.rs".into(),
+            content: "y".repeat(150),
+        })
+        .await;
+
+    assert!(result.is_ok());
+    let on_disk = fs::read_to_string(&file).unwrap();
+    assert_eq!(on_disk.len(), 150);
+}
+
+#[tokio::test]
+async fn test_write_file_blast_radius_guard_skips_small_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("tiny.rs");
+    // Create a small file (< 100 bytes threshold)
+    fs::write(&file, "fn main() {}").unwrap();
+
+    let tool = WriteFileTool::new(dir.path());
+    // Even a 100% replacement is fine for tiny files
+    let result = tool
+        .call(WriteFileArgs {
+            path: "tiny.rs".into(),
+            content: "fn main() { println!(\"hello\"); }".into(),
+        })
+        .await;
+
+    assert!(result.is_ok());
+}
+
+// ---------------------------------------------------------------------------
 // ListFilesTool
 // ---------------------------------------------------------------------------
 

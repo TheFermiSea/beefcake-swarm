@@ -35,6 +35,9 @@ pub enum ToolError {
 
     #[error("notebook error: {0}")]
     Notebook(String),
+
+    #[error("policy violation: {0}")]
+    Policy(String),
 }
 
 /// Validate that a resolved path stays within the sandbox root.

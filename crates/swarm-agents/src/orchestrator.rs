@@ -19,12 +19,14 @@ const AGENT_TIMEOUT: Duration = Duration::from_secs(45 * 60); // 45 minutes
 /// Timeout for each cloud validation call (2 minutes per model).
 const VALIDATION_TIMEOUT: Duration = Duration::from_secs(120);
 
+use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::reviewer::{self, ReviewResult};
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::config::SwarmConfig;
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
+use crate::telemetry::{self, MetricsCollector};
 use crate::worktree_bridge::WorktreeBridge;
 use coordination::feedback::ErrorCategory;
 use coordination::save_session_state;
@@ -452,7 +454,12 @@ async fn cloud_validate(
     for model in &models {
         info!(model, "Running cloud validation");
         let validator = reviewer::build_reviewer(cloud_client, model);
-        match tokio::time::timeout(VALIDATION_TIMEOUT, validator.prompt(&review_prompt)).await {
+        match tokio::time::timeout(
+            VALIDATION_TIMEOUT,
+            prompt_with_retry(&validator, &review_prompt, 3),
+        )
+        .await
+        {
             Ok(Ok(response)) => {
                 let review = ReviewResult::parse(&response);
                 let status = if review.passed { "PASS" } else { "FAIL" };
@@ -543,6 +550,12 @@ pub async fn process_issue(
         "Harness session started"
     );
 
+    // --- Telemetry ---
+    let mut metrics = MetricsCollector::new(session.session_id(), &issue.id, &issue.title);
+
+    // --- Acceptance policy ---
+    let acceptance_policy = AcceptancePolicy::default();
+
     // --- Build agents scoped to this worktree ---
     let rust_coder = factory.build_rust_coder(&wt_path);
     let general_coder = factory.build_general_coder(&wt_path);
@@ -573,10 +586,11 @@ pub async fn process_issue(
     let mut success = false;
     let mut last_report: Option<VerifierReport> = None;
 
-    // Scope verifier to swarm-agents only — coordination has pre-existing lint
-    // warnings that would block every iteration if we clippy the whole workspace.
+    // Scope verifier to configured packages.
+    // When empty, targets the entire workspace (useful for external repos).
+    // When set (e.g., ["swarm-agents"]), limits clippy/check/test to those packages.
     let verifier_config = VerifierConfig {
-        packages: vec!["swarm-agents".to_string()],
+        packages: config.verifier_packages.clone(),
         ..VerifierConfig::default()
     };
 
@@ -596,6 +610,7 @@ pub async fn process_issue(
         };
 
         let tier = escalation.current_tier;
+        metrics.start_iteration(iteration, &format!("{tier:?}"));
         info!(
             iteration,
             ?tier,
@@ -676,6 +691,11 @@ pub async fn process_issue(
             }
         }
 
+        // --- Checkpoint before agent invocation ---
+        // Save the current commit so we can rollback if the agent makes things worse.
+        let pre_worker_commit = git_mgr.current_commit_full().ok();
+        let prev_error_count = last_report.as_ref().map(|r| r.failure_signals.len());
+
         // --- Route to agent based on current tier ---
         //
         // Hierarchy (cloud available):
@@ -685,6 +705,7 @@ pub async fn process_issue(
         // Hierarchy (no cloud):
         //   Implementer: local coders
         //   Integrator+Cloud: local manager (OR1-Behemoth) with coders as tools
+        let agent_start = std::time::Instant::now();
         let agent_future = match tier {
             SwarmTier::Implementer | SwarmTier::Adversary => {
                 let recent_cats: Vec<ErrorCategory> = escalation
@@ -696,10 +717,12 @@ pub async fn process_issue(
                 match route_to_coder(&recent_cats) {
                     CoderRoute::RustCoder => {
                         info!(iteration, "Routing to rust_coder (strand-14B)");
+                        metrics.record_coder_route("RustCoder");
                         rust_coder.prompt(&task_prompt).await
                     }
                     CoderRoute::GeneralCoder => {
                         info!(iteration, "Routing to general_coder (Qwen3-Coder-Next)");
+                        metrics.record_coder_route("GeneralCoder");
                         general_coder.prompt(&task_prompt).await
                     }
                 }
@@ -712,7 +735,12 @@ pub async fn process_issue(
                 // Wrap manager call with timeout to enforce turn limits.
                 // Rig doesn't enforce default_max_turns on the outer .prompt() agent,
                 // so managers can run indefinitely. This hard-caps wall-clock time.
-                match tokio::time::timeout(AGENT_TIMEOUT, manager.prompt(&task_prompt)).await {
+                match tokio::time::timeout(
+                    AGENT_TIMEOUT,
+                    prompt_with_retry(&manager, &task_prompt, config.cloud_max_retries),
+                )
+                .await
+                {
                     Ok(result) => result,
                     Err(_elapsed) => {
                         warn!(
@@ -729,6 +757,7 @@ pub async fn process_issue(
         };
 
         // Handle agent failure
+        metrics.record_agent_time(agent_start.elapsed());
         let response = match agent_future {
             Ok(r) => {
                 // Log the actual response text for debugging (truncated to 500 chars)
@@ -748,16 +777,22 @@ pub async fn process_issue(
                     iteration,
                     format!("Agent failed: {e}"),
                 );
-                escalation.record_iteration(vec![], 1, false);
-
+                // engine.decide() records the iteration internally — don't double-count
                 let verifier = Verifier::new(&wt_path, verifier_config.clone());
                 let report = verifier.run_pipeline().await;
                 let decision = engine.decide(&mut escalation, &report);
                 last_report = Some(report);
+                metrics.finish_iteration();
 
                 if decision.stuck {
                     error!(iteration, "Escalation engine: stuck after agent failure");
-                    create_stuck_intervention(&mut session, &progress, iteration, &decision.reason);
+                    create_stuck_intervention(
+                        &mut session,
+                        &progress,
+                        &wt_path,
+                        iteration,
+                        &decision.reason,
+                    );
                     break;
                 }
                 continue;
@@ -768,8 +803,16 @@ pub async fn process_issue(
         // Workers don't always produce perfectly formatted code.
         // Run fmt BEFORE committing so format changes are included in the commit.
         // This prevents uncommitted changes from blocking the merge step.
+        let mut fmt_args = vec!["fmt".to_string()];
+        if verifier_config.packages.is_empty() {
+            fmt_args.push("--all".to_string());
+        } else {
+            for pkg in &verifier_config.packages {
+                fmt_args.extend(["--package".to_string(), pkg.clone()]);
+            }
+        }
         let fmt_output = tokio::process::Command::new("cargo")
-            .args(["fmt", "--package", "swarm-agents"])
+            .args(&fmt_args)
             .current_dir(&wt_path)
             .output()
             .await;
@@ -803,24 +846,32 @@ pub async fn process_issue(
                 response_len = response.len(),
                 "No file changes after agent response — manager may not have called workers"
             );
-            escalation.record_iteration(vec![], 0, false);
-
+            // engine.decide() records the iteration internally — don't double-count
             let verifier = Verifier::new(&wt_path, verifier_config.clone());
             let report = verifier.run_pipeline().await;
             let decision = engine.decide(&mut escalation, &report);
             last_report = Some(report);
+            metrics.finish_iteration();
 
             if decision.stuck {
                 error!(iteration, "Escalation engine: stuck (no changes)");
-                create_stuck_intervention(&mut session, &progress, iteration, &decision.reason);
+                create_stuck_intervention(
+                    &mut session,
+                    &progress,
+                    &wt_path,
+                    iteration,
+                    &decision.reason,
+                );
                 break;
             }
             continue;
         }
 
         // --- Verifier: run deterministic quality gates ---
+        let verifier_start = std::time::Instant::now();
         let verifier = Verifier::new(&wt_path, verifier_config.clone());
         let mut report = verifier.run_pipeline().await;
+        metrics.record_verifier_time(verifier_start.elapsed());
 
         info!(
             iteration,
@@ -833,18 +884,66 @@ pub async fn process_issue(
         if !report.all_green {
             if let Some(fixed_report) = try_auto_fix(&wt_path, &verifier_config, iteration).await {
                 report = fixed_report;
+                metrics.record_auto_fix();
             }
         }
 
         let error_cats = report.unique_error_categories();
         let error_count = report.failure_signals.len();
+        let cat_names: Vec<String> = error_cats.iter().map(|c| format!("{c:?}")).collect();
+        metrics.record_verifier_results(error_count, cat_names);
+
+        // --- Regression detection: rollback if errors increased ---
+        if !report.all_green {
+            if let Some(prev_count) = prev_error_count {
+                if error_count > prev_count {
+                    warn!(
+                        iteration,
+                        prev_errors = prev_count,
+                        curr_errors = error_count,
+                        "Regression detected — errors increased after agent changes"
+                    );
+                    let mut rolled_back = false;
+                    if let Some(ref rollback_hash) = pre_worker_commit {
+                        match git_mgr.hard_rollback(rollback_hash) {
+                            Ok(()) => {
+                                rolled_back = true;
+                                info!(
+                                    iteration,
+                                    rollback_to = %rollback_hash,
+                                    "Rolled back to pre-worker commit"
+                                );
+                                let _ = progress.log_error(
+                                    session.session_id(),
+                                    iteration,
+                                    format!(
+                                        "Regression: {prev_count} → {error_count} errors. Rolled back to {rollback_hash}"
+                                    ),
+                                );
+                            }
+                            Err(e) => {
+                                error!(iteration, "Rollback failed: {e}");
+                            }
+                        }
+                    }
+                    metrics.record_regression(rolled_back);
+                    if rolled_back {
+                        // Worktree is now at the pre-worker state — the current `report`
+                        // reflects the regressed (post-worker) state. Continue to the next
+                        // iteration so the verifier re-runs against the rolled-back code.
+                        metrics.finish_iteration();
+                        continue;
+                    }
+                }
+            }
+        }
 
         if report.all_green {
             // Deterministic gates (fmt + clippy + check + test) are the source of truth.
             // The reviewer is advisory — don't let subjective LLM feedback cause loops.
             info!(
                 iteration,
-                "Verifier passed (all gates green) — accepting result"
+                "Verifier passed (all gates green) — checking acceptance"
             );
             escalation.record_iteration(error_cats, error_count, true);
 
@@ -863,11 +962,14 @@ pub async fn process_issue(
             // After deterministic gates pass, send the diff to high-end cloud models
             // (G3 Pro + Sonnet 4.5) for logic/design review. Results are logged but
             // don't block acceptance — avoids subjective LLM feedback loops.
+            let mut cloud_passes = 0usize;
             if let Some(ref cloud_client) = factory.clients.cloud {
                 if let Some(ref initial_commit) = session.state().initial_commit {
                     let validations = cloud_validate(cloud_client, &wt_path, initial_commit).await;
                     for v in &validations {
+                        metrics.record_cloud_validation(&v.model, v.passed);
                         if v.passed {
+                            cloud_passes += 1;
                             info!(model = %v.model, "Cloud validation: PASS");
                         } else {
                             warn!(
@@ -880,11 +982,29 @@ pub async fn process_issue(
                 }
             }
 
+            // --- Acceptance policy check ---
+            let acceptance_result = acceptance::check_acceptance(
+                &acceptance_policy,
+                &wt_path,
+                session.state().initial_commit.as_deref(),
+                cloud_passes,
+            );
+
+            if !acceptance_result.accepted {
+                for rejection in &acceptance_result.rejections {
+                    warn!(iteration, rejection = %rejection, "Acceptance policy rejected");
+                }
+                info!(iteration, "Acceptance failed — continuing iteration loop");
+                metrics.finish_iteration();
+                last_report = Some(report);
+                continue;
+            }
+
+            metrics.finish_iteration();
             success = true;
             break;
-        } else {
-            escalation.record_iteration(error_cats, error_count, false);
         }
+        // engine.decide() below records the iteration internally — don't double-count
 
         // --- Integration Point 2: Pre-escalation knowledge check ---
         // Before escalating, check if the Debugging KB has a known fix.
@@ -914,6 +1034,7 @@ pub async fn process_issue(
         last_report = Some(report);
 
         if decision.escalated {
+            metrics.record_escalation();
             info!(
                 iteration,
                 from = ?tier,
@@ -923,13 +1044,21 @@ pub async fn process_issue(
             );
         }
 
+        metrics.finish_iteration();
+
         if decision.stuck {
             error!(
                 iteration,
                 reason = %decision.reason,
                 "Escalation engine: stuck — flagging for human intervention"
             );
-            create_stuck_intervention(&mut session, &progress, iteration, &decision.reason);
+            create_stuck_intervention(
+                &mut session,
+                &progress,
+                &wt_path,
+                iteration,
+                &decision.reason,
+            );
             break;
         }
     }
@@ -994,6 +1123,7 @@ pub async fn process_issue(
             return Err(e);
         }
         beads.close(&issue.id, Some("Resolved by swarm orchestrator"))?;
+        clear_resume_file(worktree_bridge.repo_root());
         info!(id = %issue.id, "Issue closed");
     } else {
         session.fail();
@@ -1015,6 +1145,28 @@ pub async fn process_issue(
             info!(path = %state_path.display(), "Session state saved for resume");
         }
 
+        // Write resume file to repo root for startup detection
+        let resume = SwarmResumeFile {
+            issue: issue.clone(),
+            worktree_path: wt_path.display().to_string(),
+            iteration: session.iteration(),
+            escalation_summary: escalation.summary(),
+            current_tier: format!("{:?}", escalation.current_tier),
+            total_iterations: escalation.total_iterations,
+            saved_at: chrono::Utc::now().to_rfc3339(),
+        };
+        let resume_path = worktree_bridge.repo_root().join(".swarm-resume.json");
+        match serde_json::to_string_pretty(&resume) {
+            Ok(json) => {
+                if let Err(e) = std::fs::write(&resume_path, json) {
+                    warn!("Failed to write resume file: {e}");
+                } else {
+                    info!(path = %resume_path.display(), "Resume file saved");
+                }
+            }
+            Err(e) => warn!("Failed to serialize resume file: {e}"),
+        }
+
         error!(
             id = %issue.id,
             session_id = session.short_id(),
@@ -1027,23 +1179,138 @@ pub async fn process_issue(
         );
     }
 
+    // --- Write telemetry ---
+    let final_tier = format!("{:?}", escalation.current_tier);
+    let session_metrics = metrics.finalize(success, &final_tier);
+    telemetry::write_session_metrics(&session_metrics, &wt_path);
+    telemetry::append_telemetry(&session_metrics, worktree_bridge.repo_root());
+
     Ok(success)
+}
+
+/// Saved state for session resume after SLURM preemption or crash.
+///
+/// Written to `.swarm-resume.json` in the repo root on failure.
+/// Checked on startup to restore worktree, iteration count, and escalation state.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct SwarmResumeFile {
+    /// Issue being worked on
+    pub issue: BeadsIssue,
+    /// Worktree path for the in-progress work
+    pub worktree_path: String,
+    /// Current iteration count
+    pub iteration: u32,
+    /// Escalation state summary
+    pub escalation_summary: String,
+    /// Current tier
+    pub current_tier: String,
+    /// Total iterations across all tiers
+    pub total_iterations: u32,
+    /// Timestamp when saved
+    pub saved_at: String,
+}
+
+/// Check for a resume file and return the data if found.
+pub fn check_for_resume(repo_root: &Path) -> Option<SwarmResumeFile> {
+    let resume_path = repo_root.join(".swarm-resume.json");
+    if resume_path.exists() {
+        match std::fs::read_to_string(&resume_path) {
+            Ok(contents) => match serde_json::from_str::<SwarmResumeFile>(&contents) {
+                Ok(resume) => {
+                    info!(
+                        issue = %resume.issue.id,
+                        worktree = %resume.worktree_path,
+                        iteration = resume.iteration,
+                        "Found resume file — previous session can be continued"
+                    );
+                    Some(resume)
+                }
+                Err(e) => {
+                    warn!("Failed to parse resume file: {e}");
+                    None
+                }
+            },
+            Err(e) => {
+                warn!("Failed to read resume file: {e}");
+                None
+            }
+        }
+    } else {
+        None
+    }
+}
+
+/// Clear the resume file after successful completion.
+fn clear_resume_file(repo_root: &Path) {
+    let resume_path = repo_root.join(".swarm-resume.json");
+    if resume_path.exists() {
+        let _ = std::fs::remove_file(&resume_path);
+    }
+}
+
+/// Prompt an agent with exponential backoff retry for transient HTTP errors.
+///
+/// Retries on connection errors, 502, 503, 429 with backoff: 2s, 4s, 8s, ...
+/// Non-transient errors fail immediately.
+async fn prompt_with_retry(
+    agent: &impl Prompt,
+    prompt: &str,
+    max_retries: u32,
+) -> Result<String, rig::completion::PromptError> {
+    let mut last_err = None;
+    for attempt in 0..=max_retries {
+        match agent.prompt(prompt).await {
+            Ok(response) => return Ok(response),
+            Err(e) => {
+                let err_str = format!("{e}");
+                let err_lower = err_str.to_ascii_lowercase();
+                let is_transient = err_str.contains("502")
+                    || err_str.contains("503")
+                    || err_str.contains("429")
+                    || err_lower.contains("connection")
+                    || err_lower.contains("timed out")
+                    || err_lower.contains("timeout");
+
+                if !is_transient || attempt == max_retries {
+                    return Err(e);
+                }
+
+                let backoff = Duration::from_secs(2u64.pow(attempt + 1));
+                warn!(
+                    attempt = attempt + 1,
+                    max_retries,
+                    backoff_secs = backoff.as_secs(),
+                    error = %err_str,
+                    "Transient error — retrying"
+                );
+                last_err = Some(e);
+                tokio::time::sleep(backoff).await;
+            }
+        }
+    }
+    Err(last_err.unwrap())
 }
 
 /// Create a human intervention request when the escalation engine reports stuck.
 ///
-/// Records the intervention in the session state and logs it to the progress file.
+/// Surfaces the intervention through 3 mechanisms:
+/// 1. Records in session state (in-memory)
+/// 2. Writes `.swarm-interventions.json` in the worktree root
+/// 3. POSTs to `SWARM_WEBHOOK_URL` if configured
 fn create_stuck_intervention(
     session: &mut SessionManager,
     progress: &ProgressTracker,
+    wt_path: &Path,
     iteration: u32,
     reason: &str,
 ) {
+    let feature_id = session.current_feature().unwrap_or("unknown").to_string();
+
     let intervention = PendingIntervention::new(
         InterventionType::ReviewRequired,
         format!("Stuck after iteration {iteration}: {reason}. Manual review needed."),
     )
-    .with_feature(session.current_feature().unwrap_or("unknown"));
+    .with_feature(&feature_id);
 
     session.state_mut().add_intervention(intervention);
 
@@ -1052,6 +1319,43 @@ fn create_stuck_intervention(
         iteration,
         format!("Stuck — human intervention requested: {reason}"),
     );
+
+    // --- Mechanism 2: Write intervention JSON to worktree ---
+    let intervention_data = serde_json::json!({
+        "session_id": session.session_id(),
+        "feature_id": feature_id,
+        "iteration": iteration,
+        "reason": reason,
+        "type": "review_required",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+    let intervention_path = wt_path.join(".swarm-interventions.json");
+    match std::fs::write(
+        &intervention_path,
+        serde_json::to_string_pretty(&intervention_data).unwrap_or_default(),
+    ) {
+        Ok(()) => info!(path = %intervention_path.display(), "Wrote intervention file"),
+        Err(e) => warn!("Failed to write intervention file: {e}"),
+    }
+
+    // --- Mechanism 3: Webhook notification ---
+    if let Ok(webhook_url) = std::env::var("SWARM_WEBHOOK_URL") {
+        // Fire-and-forget — don't block the orchestrator on webhook delivery
+        let payload = intervention_data.clone();
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            match client
+                .post(&webhook_url)
+                .json(&payload)
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await
+            {
+                Ok(resp) => info!(status = %resp.status(), "Webhook notification sent"),
+                Err(e) => warn!("Webhook notification failed: {e}"),
+            }
+        });
+    }
 }
 
 #[cfg(test)]
@@ -1206,7 +1510,7 @@ mod tests {
 
         let progress = ProgressTracker::new(dir.path().join("progress.txt"));
 
-        create_stuck_intervention(&mut session, &progress, 3, "repeated errors");
+        create_stuck_intervention(&mut session, &progress, dir.path(), 3, "repeated errors");
 
         // Intervention should be recorded in session state
         let interventions = session.state().unresolved_interventions();

@@ -123,6 +123,7 @@ impl Tool for WriteFileTool {
                 "write_file: path has no directory component, writing to worktree root"
             );
         }
+
         if let Some(parent) = full_path.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -152,6 +153,32 @@ impl Tool for WriteFileTool {
         } else {
             args.content
         };
+
+        // Blast-radius guard: reject writes that shrink an existing file by >50%.
+        // Prevents catastrophic file corruption from truncated model output
+        // (e.g., job 1653: 500-line pipeline.rs replaced with 1 line of garbage).
+        // Runs AFTER unescape so the size comparison uses the final content length.
+        // Uses fs::metadata to avoid reading the entire file and to work with non-UTF8 files.
+        if full_path.exists() {
+            let existing_len = std::fs::metadata(&full_path)?.len() as usize;
+            let new_len = content.len();
+            if existing_len > 100 && new_len < existing_len / 2 {
+                tracing::error!(
+                    path = %args.path,
+                    existing_bytes = existing_len,
+                    new_bytes = new_len,
+                    shrink_pct = (100 - (new_len * 100 / existing_len)),
+                    "write_file: BLAST-RADIUS GUARD triggered — refusing destructive write"
+                );
+                return Err(ToolError::Policy(format!(
+                    "Blast-radius guard: refusing to write {new_len} bytes to {} \
+                     (currently {existing_len} bytes, {:.0}% shrink). \
+                     Use edit_file for targeted changes instead of rewriting the entire file.",
+                    args.path,
+                    100.0 - (new_len as f64 * 100.0 / existing_len as f64)
+                )));
+            }
+        }
 
         let bytes = content.len();
         std::fs::write(&full_path, &content)?;

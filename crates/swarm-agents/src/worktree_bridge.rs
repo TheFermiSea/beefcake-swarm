@@ -59,6 +59,11 @@ impl WorktreeBridge {
         })
     }
 
+    /// Get the repository root path.
+    pub fn repo_root(&self) -> &Path {
+        &self.repo_root
+    }
+
     /// Sanitize an issue ID for safe use in paths and branch names.
     /// Allows only ASCII alphanumerics, `_`, and `-`. Strips leading dots.
     fn sanitize_id(issue_id: &str) -> String {
