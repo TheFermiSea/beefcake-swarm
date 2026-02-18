@@ -159,50 +159,31 @@ pub fn check_acceptance(
     }
 }
 
-/// Count the number of lines in the diff since `initial_commit`.
+/// Count the number of added + removed lines in the diff since `initial_commit`.
+///
+/// Uses `git diff --numstat` for reliable per-file counts.
 fn diff_line_count(wt_path: &Path, initial_commit: &str) -> Result<usize, String> {
     let output = std::process::Command::new("git")
-        .args(["diff", "--stat", initial_commit, "HEAD"])
-        .current_dir(wt_path)
-        .output()
-        .map_err(|e| format!("Failed to run git diff --stat: {e}"))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "git diff --stat failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        ));
-    }
-
-    // Parse the summary line: " N files changed, X insertions(+), Y deletions(-)"
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let last_line = stdout.lines().last().unwrap_or("");
-
-    let mut total = 0usize;
-    for word in last_line.split_whitespace() {
-        // The number before "insertions" or "deletions"
-        if let Ok(n) = word.parse::<usize>() {
-            total = n; // Will be overwritten — we want the last parseable numbers
-        }
-    }
-
-    // More reliable: use --numstat and sum
-    let numstat = std::process::Command::new("git")
         .args(["diff", "--numstat", initial_commit, "HEAD"])
         .current_dir(wt_path)
         .output()
         .map_err(|e| format!("Failed to run git diff --numstat: {e}"))?;
 
-    if numstat.status.success() {
-        let numstat_out = String::from_utf8_lossy(&numstat.stdout);
-        total = 0;
-        for line in numstat_out.lines() {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 2 {
-                let added: usize = parts[0].parse().unwrap_or(0);
-                let removed: usize = parts[1].parse().unwrap_or(0);
-                total += added + removed;
-            }
+    if !output.status.success() {
+        return Err(format!(
+            "git diff --numstat failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let mut total = 0usize;
+    for line in stdout.lines() {
+        let parts: Vec<&str> = line.split('\t').collect();
+        if parts.len() >= 2 {
+            let added: usize = parts[0].parse().unwrap_or(0);
+            let removed: usize = parts[1].parse().unwrap_or(0);
+            total += added + removed;
         }
     }
 

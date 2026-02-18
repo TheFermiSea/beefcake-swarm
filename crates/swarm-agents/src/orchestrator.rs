@@ -927,6 +927,13 @@ pub async fn process_issue(
                         }
                     }
                     metrics.record_regression(rolled_back);
+                    if rolled_back {
+                        // Worktree is now at the pre-worker state — the current `report`
+                        // reflects the regressed (post-worker) state. Continue to the next
+                        // iteration so the verifier re-runs against the rolled-back code.
+                        metrics.finish_iteration();
+                        continue;
+                    }
                 }
             }
         }
@@ -1256,13 +1263,13 @@ async fn prompt_with_retry(
             Ok(response) => return Ok(response),
             Err(e) => {
                 let err_str = format!("{e}");
+                let err_lower = err_str.to_ascii_lowercase();
                 let is_transient = err_str.contains("502")
                     || err_str.contains("503")
                     || err_str.contains("429")
-                    || err_str.contains("connection")
-                    || err_str.contains("Connection")
-                    || err_str.contains("timed out")
-                    || err_str.contains("timeout");
+                    || err_lower.contains("connection")
+                    || err_lower.contains("timed out")
+                    || err_lower.contains("timeout");
 
                 if !is_transient || attempt == max_retries {
                     return Err(e);

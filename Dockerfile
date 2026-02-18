@@ -18,15 +18,15 @@ COPY crates/ crates/
 RUN cargo build --release -p swarm-agents
 
 # --- Runtime stage ---
-FROM debian:bookworm-slim
+# Use rust:1.83-slim as base — includes rustfmt + clippy needed by verifier gates.
+# Avoids curl|sh security risk and reduces image layers.
+FROM rust:1.83-slim
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    git ca-certificates curl \
+    git ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-# Install cargo fmt + clippy for verifier gates
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.83.0 --component rustfmt clippy
-ENV PATH="/root/.cargo/bin:${PATH}"
+RUN rustup component add rustfmt clippy
 
 COPY --from=builder /build/target/release/swarm-agents /usr/local/bin/swarm-agents
 

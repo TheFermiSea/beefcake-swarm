@@ -29,10 +29,6 @@ services:
       - SWARM_VERIFIER_PACKAGES=${SWARM_VERIFIER_PACKAGES:-}
       # Webhook for intervention notifications
       - SWARM_WEBHOOK_URL=${SWARM_WEBHOOK_URL:-}
-    depends_on:
-      llama-server:
-        condition: service_started
-        required: false
 
   # Optional local inference sidecar
   # Activate with: docker compose --profile local-inference up
