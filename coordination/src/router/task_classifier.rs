@@ -55,48 +55,42 @@ pub struct TaskClassification {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelTier {
-    /// Strand-Rust-Coder 14B - fast, good for simple fixes
-    Fast,
-    /// HydraCoder 31B MoE - specialized Rust knowledge
-    Specialized,
-    /// OR1-Behemoth 73B - deep reasoning, complex problems
-    Reasoning,
+    /// HydraCoder 30B-A3B MoE — simple Rust fixes, fast
+    Worker,
+    /// Manager Council — complex tasks, architecture, review
+    Council,
 }
 
 impl ModelTier {
     /// Get the model identifier
     pub fn model_id(&self) -> &'static str {
         match self {
-            Self::Fast => "Strand-Rust-Coder-14B-v1-Q8_0",
-            Self::Specialized => "HydraCoder.Q6_K",
-            Self::Reasoning => "OR1-Behemoth.Q8_0",
+            Self::Worker => "HydraCoder-Q6_K",
+            Self::Council => "manager-council",
         }
     }
 
     /// Get expected tokens per second
     pub fn expected_speed(&self) -> u32 {
         match self {
-            Self::Fast => 53,
-            Self::Specialized => 50,
-            Self::Reasoning => 11,
+            Self::Worker => 40,
+            Self::Council => 10,
         }
     }
 
     /// Escalate to next tier
     pub fn escalate(&self) -> Self {
         match self {
-            Self::Fast => Self::Specialized,
-            Self::Specialized => Self::Reasoning,
-            Self::Reasoning => Self::Reasoning,
+            Self::Worker => Self::Council,
+            Self::Council => Self::Council,
         }
     }
 
     /// Get temperature for this tier
     pub fn default_temperature(&self) -> f32 {
         match self {
-            Self::Fast => 0.3,
-            Self::Specialized => 0.2,
-            Self::Reasoning => 0.7,
+            Self::Worker => 0.3,
+            Self::Council => 0.5,
         }
     }
 }
@@ -104,9 +98,8 @@ impl ModelTier {
 impl std::fmt::Display for ModelTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Fast => write!(f, "fast"),
-            Self::Specialized => write!(f, "specialized"),
-            Self::Reasoning => write!(f, "reasoning"),
+            Self::Worker => write!(f, "worker"),
+            Self::Council => write!(f, "council"),
         }
     }
 }
@@ -134,9 +127,8 @@ impl ModelSelection {
             model_id: tier.model_id().to_string(),
             temperature: tier.default_temperature(),
             max_tokens: match tier {
-                ModelTier::Fast => 1024,
-                ModelTier::Specialized => 2048,
-                ModelTier::Reasoning => 4096,
+                ModelTier::Worker => 2048,
+                ModelTier::Council => 4096,
             },
             reason: reason.into(),
         }
@@ -156,41 +148,25 @@ impl ModelSelection {
 }
 
 /// Model router for selecting the best model for a task
-pub struct ModelRouter {
-    /// Current failure count for escalation tracking
-    failure_count: u32,
-    /// Threshold for escalation
-    escalation_threshold: u32,
-    /// Last used tier (for tracking escalation)
-    last_tier: Option<ModelTier>,
-}
+///
+/// Stateless router — tier selection is purely deterministic based on
+/// task characteristics. Escalation state lives in the correction loop.
+pub struct ModelRouter;
 
 impl ModelRouter {
     /// Create a new router
     pub fn new() -> Self {
-        Self {
-            failure_count: 0,
-            escalation_threshold: 2,
-            last_tier: None,
-        }
-    }
-
-    /// Create with custom escalation threshold
-    pub fn with_escalation_threshold(mut self, threshold: u32) -> Self {
-        self.escalation_threshold = threshold;
-        self
+        Self {}
     }
 
     /// Select model for code generation task
     pub fn select_for_generation(&self, description: &str) -> ModelSelection {
         let complexity = self.estimate_complexity(description);
 
-        let tier = if complexity >= 4 {
-            ModelTier::Reasoning
-        } else if complexity >= 2 {
-            ModelTier::Specialized
+        let tier = if complexity >= 3 {
+            ModelTier::Council
         } else {
-            ModelTier::Fast
+            ModelTier::Worker
         };
 
         ModelSelection::new(
@@ -202,7 +178,7 @@ impl ModelRouter {
     /// Select model for error fixing
     pub fn select_for_errors(&self, errors: &[ParsedError]) -> ModelSelection {
         if errors.is_empty() {
-            return ModelSelection::new(ModelTier::Fast, "No errors to fix");
+            return ModelSelection::new(ModelTier::Worker, "No errors to fix");
         }
 
         let summary = crate::feedback::error_parser::RustcErrorParser::summarize(errors);
@@ -211,52 +187,46 @@ impl ModelRouter {
 
     /// Select model based on error summary
     pub fn select_from_summary(&self, summary: &ErrorSummary) -> ModelSelection {
-        // Check if we should escalate due to failures
-        let base_tier = self.determine_base_tier(summary);
-        let escalated_tier = self.apply_escalation(base_tier);
+        let tier = self.determine_base_tier(summary);
+        let reason = self.build_reason(summary, tier);
 
-        let reason = self.build_reason(summary, base_tier, escalated_tier);
-
-        ModelSelection::new(escalated_tier, reason)
+        ModelSelection::new(tier, reason)
     }
 
     /// Determine base tier from error summary
+    ///
+    /// Council: lifetime, async, trait bounds, >= 5 errors, complexity >= 3
+    /// Worker: type mismatch, import resolution, simple single-file borrow errors, complexity < 3
     fn determine_base_tier(&self, summary: &ErrorSummary) -> ModelTier {
-        // Complex scenarios always use reasoning
+        // Many errors need council coordination
         if summary.total >= 5 {
-            return ModelTier::Reasoning;
+            return ModelTier::Council;
         }
 
-        // Lifetime and async errors need specialized handling
+        // Lifetime and async errors need council
         if summary.has_lifetime_errors || summary.has_async_errors {
-            return ModelTier::Specialized;
+            return ModelTier::Council;
         }
 
-        // Borrow checker errors benefit from specialization
-        if summary.has_borrow_errors {
-            return ModelTier::Specialized;
+        // Trait bound errors need council
+        if summary.by_category.contains_key(&ErrorCategory::TraitBound) {
+            return ModelTier::Council;
         }
 
         // High complexity errors
         if summary.max_complexity >= 3 {
-            return ModelTier::Specialized;
+            return ModelTier::Council;
         }
 
-        // Simple errors
-        ModelTier::Fast
-    }
+        // Simple borrow errors on single files stay with worker
+        // (multi-file borrow issues would show higher complexity)
 
-    /// Apply escalation based on failure history
-    fn apply_escalation(&self, base_tier: ModelTier) -> ModelTier {
-        if self.failure_count >= self.escalation_threshold {
-            base_tier.escalate()
-        } else {
-            base_tier
-        }
+        // Simple errors: type mismatch, imports, low-complexity borrow
+        ModelTier::Worker
     }
 
     /// Build reason string for selection
-    fn build_reason(&self, summary: &ErrorSummary, base: ModelTier, selected: ModelTier) -> String {
+    fn build_reason(&self, summary: &ErrorSummary, tier: ModelTier) -> String {
         let mut parts = vec![];
 
         parts.push(format!("{} errors", summary.total));
@@ -271,30 +241,9 @@ impl ModelRouter {
             parts.push("async patterns".to_string());
         }
 
-        if base != selected {
-            parts.push(format!(
-                "escalated from {} due to {} failures",
-                base, self.failure_count
-            ));
-        }
+        parts.push(format!("routed to {}", tier));
 
         parts.join(", ")
-    }
-
-    /// Record a successful fix
-    pub fn record_success(&mut self) {
-        self.failure_count = 0;
-    }
-
-    /// Record a failed fix attempt
-    pub fn record_failure(&mut self) {
-        self.failure_count += 1;
-    }
-
-    /// Reset failure tracking
-    pub fn reset(&mut self) {
-        self.failure_count = 0;
-        self.last_tier = None;
     }
 
     /// Estimate complexity from description text
@@ -363,11 +312,9 @@ impl ModelRouter {
         let complexity = self.estimate_complexity(description);
 
         let recommended_tier = match task_type {
-            TaskType::Architecture => ModelTier::Reasoning,
-            TaskType::Explain | TaskType::Review => ModelTier::Reasoning,
-            _ if complexity >= 4 => ModelTier::Reasoning,
-            _ if complexity >= 2 => ModelTier::Specialized,
-            _ => ModelTier::Fast,
+            TaskType::Architecture | TaskType::Explain | TaskType::Review => ModelTier::Council,
+            _ if complexity >= 3 => ModelTier::Council,
+            _ => ModelTier::Worker,
         };
 
         TaskClassification {
@@ -406,9 +353,23 @@ mod tests {
 
     #[test]
     fn test_model_tier_escalation() {
-        assert_eq!(ModelTier::Fast.escalate(), ModelTier::Specialized);
-        assert_eq!(ModelTier::Specialized.escalate(), ModelTier::Reasoning);
-        assert_eq!(ModelTier::Reasoning.escalate(), ModelTier::Reasoning);
+        assert_eq!(ModelTier::Worker.escalate(), ModelTier::Council);
+        assert_eq!(ModelTier::Council.escalate(), ModelTier::Council);
+    }
+
+    #[test]
+    fn test_model_tier_properties() {
+        assert_eq!(ModelTier::Worker.model_id(), "HydraCoder-Q6_K");
+        assert_eq!(ModelTier::Council.model_id(), "manager-council");
+
+        assert_eq!(ModelTier::Worker.expected_speed(), 40);
+        assert_eq!(ModelTier::Council.expected_speed(), 10);
+
+        assert!((ModelTier::Worker.default_temperature() - 0.3).abs() < f32::EPSILON);
+        assert!((ModelTier::Council.default_temperature() - 0.5).abs() < f32::EPSILON);
+
+        assert_eq!(format!("{}", ModelTier::Worker), "worker");
+        assert_eq!(format!("{}", ModelTier::Council), "council");
     }
 
     #[test]
@@ -431,33 +392,66 @@ mod tests {
 
         let arch_task = router.classify_task("design the system architecture");
         assert_eq!(arch_task.task_type, TaskType::Architecture);
-        assert_eq!(arch_task.recommended_tier, ModelTier::Reasoning);
+        assert_eq!(arch_task.recommended_tier, ModelTier::Council);
     }
 
     #[test]
-    fn test_failure_escalation() {
-        let mut router = ModelRouter::new();
+    fn test_simple_task_routes_to_worker() {
+        let router = ModelRouter::new();
 
-        // Initial selection should be based on complexity alone
         let selection = router.select_for_generation("simple function");
-        assert_eq!(selection.tier, ModelTier::Fast);
+        assert_eq!(selection.tier, ModelTier::Worker);
+    }
 
-        // Record failures
-        router.record_failure();
-        router.record_failure();
+    #[test]
+    fn test_complex_task_routes_to_council() {
+        let router = ModelRouter::new();
 
-        // Should escalate after threshold
-        // (Note: escalation applies to error-based selection)
+        let selection = router.select_for_generation("implement async trait with lifetime bounds");
+        assert_eq!(selection.tier, ModelTier::Council);
+    }
+
+    #[test]
+    fn test_review_explain_route_to_council() {
+        let router = ModelRouter::new();
+
+        let explain = router.classify_task("explain the borrow checker behavior");
+        assert_eq!(explain.recommended_tier, ModelTier::Council);
+
+        let review = router.classify_task("review this module for issues");
+        assert_eq!(review.recommended_tier, ModelTier::Council);
     }
 
     #[test]
     fn test_model_selection() {
-        let selection = ModelSelection::new(ModelTier::Specialized, "test reason")
+        let selection = ModelSelection::new(ModelTier::Worker, "test reason")
             .with_temperature(0.5)
             .with_max_tokens(3000);
 
-        assert_eq!(selection.tier, ModelTier::Specialized);
+        assert_eq!(selection.tier, ModelTier::Worker);
         assert_eq!(selection.temperature, 0.5);
         assert_eq!(selection.max_tokens, 3000);
+    }
+
+    #[test]
+    fn test_model_selection_defaults() {
+        let worker = ModelSelection::new(ModelTier::Worker, "worker task");
+        assert_eq!(worker.max_tokens, 2048);
+        assert_eq!(worker.model_id, "HydraCoder-Q6_K");
+
+        let council = ModelSelection::new(ModelTier::Council, "council task");
+        assert_eq!(council.max_tokens, 4096);
+        assert_eq!(council.model_id, "manager-council");
+    }
+
+    #[test]
+    fn test_stateless_router() {
+        // Router is stateless — two identical calls produce identical results
+        let router = ModelRouter::new();
+
+        let first = router.select_for_generation("simple function");
+        let second = router.select_for_generation("simple function");
+        assert_eq!(first.tier, second.tier);
+        assert_eq!(first.model_id, second.model_id);
     }
 }

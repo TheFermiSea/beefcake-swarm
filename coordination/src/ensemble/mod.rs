@@ -1,7 +1,7 @@
 //! Multi-agent ensemble coordination module
 //!
 //! This module provides the orchestration layer for coordinating multiple
-//! Rust-specialized LLMs (OR1-Behemoth, Strand-Rust-Coder, HydraCoder) with
+//! LLMs (Opus 4.5, Gemini 3 Pro, Qwen3.5, HydraCoder) with
 //! Claude as the overseer.
 //!
 //! # Architecture

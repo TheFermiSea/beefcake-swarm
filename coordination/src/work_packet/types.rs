@@ -52,6 +52,9 @@ pub struct WorkPacket {
     pub generated_at: DateTime<Utc>,
     /// Maximum LOC change allowed in the response
     pub max_patch_loc: u32,
+    /// Chain of delegation steps (manager-to-manager handoffs)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub delegation_chain: Vec<DelegationStep>,
 }
 
 impl WorkPacket {
@@ -180,6 +183,15 @@ pub enum ConstraintKind {
     Custom,
 }
 
+/// Record of a delegation between managers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationStep {
+    pub from_model: crate::state::types::ModelId,
+    pub to_model: crate::state::types::ModelId,
+    pub reason: String,
+    pub timestamp: chrono::DateTime<chrono::Utc>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,7 +210,7 @@ mod tests {
             failure_signals: vec![],
             constraints: vec![],
             iteration: 3,
-            target_tier: SwarmTier::Implementer,
+            target_tier: SwarmTier::Worker,
             escalation_reason: None,
             error_history: vec![],
             previous_attempts: vec![],
@@ -207,6 +219,7 @@ mod tests {
             decisions: vec![],
             generated_at: Utc::now(),
             max_patch_loc: 150,
+            delegation_chain: vec![],
         };
 
         let summary = packet.summary();
@@ -237,7 +250,7 @@ mod tests {
                 description: "No new dependencies".to_string(),
             }],
             iteration: 1,
-            target_tier: SwarmTier::Implementer,
+            target_tier: SwarmTier::Worker,
             escalation_reason: None,
             error_history: vec![],
             previous_attempts: vec![],
@@ -246,6 +259,7 @@ mod tests {
             decisions: vec![],
             generated_at: Utc::now(),
             max_patch_loc: 150,
+            delegation_chain: vec![],
         };
 
         let json = serde_json::to_string_pretty(&packet).unwrap();
@@ -271,7 +285,7 @@ mod tests {
             failure_signals: vec![],
             constraints: vec![],
             iteration: 1,
-            target_tier: SwarmTier::Implementer,
+            target_tier: SwarmTier::Worker,
             escalation_reason: None,
             error_history: vec![],
             previous_attempts: vec![],
@@ -280,6 +294,7 @@ mod tests {
             decisions: vec![],
             generated_at: Utc::now(),
             max_patch_loc: 150,
+            delegation_chain: vec![],
         };
 
         // Should be a reasonable estimate

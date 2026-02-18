@@ -331,7 +331,7 @@ mod tests {
                 timestamp: Utc::now(),
             },
             EnsembleEvent::ModelLoaded {
-                model_id: ModelId::Behemoth,
+                model_id: ModelId::Opus45,
                 load_time_ms: 1000,
                 timestamp: Utc::now(),
             },

@@ -97,8 +97,9 @@ pub use slurm::{
 
 // Re-export key Council types
 pub use council::{
-    CloudCouncil, CouncilConfig, CouncilDecision, CouncilError, CouncilMember, CouncilResponse,
-    CouncilRole, ErrorAttempt, EscalationContext, EscalationReason,
+    CouncilConfig, CouncilDecision, CouncilError, CouncilMember, CouncilResponse, CouncilRole,
+    DelegationReason, DelegationRequest, ErrorAttempt, EscalationContext, EscalationReason,
+    ManagerCouncil,
 };
 
 // Re-export tiered correction types

@@ -374,7 +374,7 @@ struct McpEnsembleArbitrateRequest {
 struct McpEnsembleApplyDecisionRequest {
     #[schemars(description = "Task ID to apply decision to")]
     task_id: String,
-    #[schemars(description = "Winning model: 'behemoth', 'strand_coder', or 'hydra_coder'")]
+    #[schemars(description = "Winning model: 'opus45', 'gemini3pro', 'qwen35', or 'hydra_coder'")]
     winner: String,
     #[schemars(description = "Rationale for the decision")]
     rationale: String,
@@ -1052,7 +1052,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     }
 
     #[tool(
-        description = "Submit a task for multi-model ensemble processing. When require_consensus is true, all 3 models (Behemoth, HydraCoder, StrandCoder) will process the task and voting determines the winner."
+        description = "Submit a task for multi-model ensemble processing. When require_consensus is true, all 3 manager models (Opus45, Gemini3Pro, Qwen35) will process the task and voting determines the winner."
     )]
     async fn ensemble_submit(
         &self,
@@ -1270,8 +1270,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         let coordinator = self.get_ensemble()?;
 
         let winner = match req.winner.to_lowercase().as_str() {
-            "behemoth" => state::ModelId::Behemoth,
-            "strand_coder" | "strandcoder" => state::ModelId::StrandCoder,
+            "opus45" | "opus_45" | "behemoth" => state::ModelId::Opus45,
+            "gemini3pro" | "gemini_3_pro" | "strand_coder" | "strandcoder" => {
+                state::ModelId::Gemini3Pro
+            }
+            "qwen35" | "qwen_35" => state::ModelId::Qwen35,
             "hydra_coder" | "hydracoder" => state::ModelId::HydraCoder,
             _ => return Err(format!("Unknown model: {}", req.winner)),
         };

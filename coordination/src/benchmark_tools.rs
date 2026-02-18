@@ -34,7 +34,7 @@ impl BenchmarkState {
     pub fn with_config(config: BenchmarkConfig) -> Self {
         Self {
             session: None,
-            router: ModelRouter::new().with_escalation_threshold(config.escalation_threshold),
+            router: ModelRouter::new(),
             config,
         }
     }
@@ -119,7 +119,7 @@ pub struct DifficultyBreakdown {
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct BenchmarkSolveNextRequest {
     /// Optional: Override the model tier to use
-    #[schemars(description = "Model tier: 'fast', 'specialized', or 'reasoning'")]
+    #[schemars(description = "Model tier: 'worker' or 'council'")]
     pub model_tier: Option<String>,
 }
 
@@ -392,9 +392,9 @@ edition = "2021"
             state.router.select_for_generation(task)
         } else if let Some(_error) = &req.error {
             // Would need to parse the error, using default for now
-            ModelSelection::new(ModelTier::Fast, "Default selection")
+            ModelSelection::new(ModelTier::Worker, "Default selection")
         } else {
-            ModelSelection::new(ModelTier::Fast, "No context provided")
+            ModelSelection::new(ModelTier::Worker, "No context provided")
         };
 
         Ok(SelectModelResponse {
@@ -442,7 +442,7 @@ mod tests {
         };
 
         let response = tools.select_model(req).unwrap();
-        // Complex task should get specialized or reasoning tier
-        assert!(response.tier == "specialized" || response.tier == "reasoning");
+        // Complex task should get council tier
+        assert!(response.tier == "council");
     }
 }

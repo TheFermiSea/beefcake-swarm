@@ -13,50 +13,96 @@ pub type SessionId = String;
 /// Unique identifier for tasks within an ensemble
 pub type TaskId = String;
 
+/// Whether a model serves as a manager or worker
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModelKind {
+    /// Manager: participates in council decisions, can delegate
+    Manager,
+    /// Worker: executes tasks assigned by managers
+    Worker,
+}
+
 /// Model identifier for participating LLMs
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelId {
-    /// OR1-Behemoth 73B - Deep reasoning and architecture
-    Behemoth,
-    /// Strand-Rust-Coder 14B - Fast idiomatic code
-    StrandCoder,
-    /// HydraCoder 31B MoE - Specialized Rust generation
+    // --- Manager tier (peers) ---
+    /// Claude Opus 4.5 — Architect role (cloud, Anthropic API)
+    #[serde(alias = "behemoth")]
+    Opus45,
+    /// Gemini 3 Pro — Librarian role (cloud, Google API)
+    #[serde(alias = "strand_coder")]
+    Gemini3Pro,
+    /// Qwen3.5-397B-A17B — Strategist role (local, vasp-01+03)
+    Qwen35,
+
+    // --- Worker tier ---
+    /// HydraCoder 30B-A3B MoE — Rust specialist (local, vasp-02)
     HydraCoder,
 }
 
 impl ModelId {
+    /// Get the kind (manager or worker) for this model
+    pub fn kind(&self) -> ModelKind {
+        match self {
+            ModelId::Opus45 | ModelId::Gemini3Pro | ModelId::Qwen35 => ModelKind::Manager,
+            ModelId::HydraCoder => ModelKind::Worker,
+        }
+    }
+
+    /// Whether this model runs locally (vs cloud API)
+    pub fn is_local(&self) -> bool {
+        matches!(self, ModelId::Qwen35 | ModelId::HydraCoder)
+    }
+
     /// Get the voting weight for this model
     ///
-    /// Higher weights indicate more trusted/capable models for the task domain.
+    /// All managers have equal weight (1.0). Workers have lower weight.
     pub fn weight(&self) -> f32 {
         match self {
-            ModelId::Behemoth => 1.0,    // Highest (reasoning)
-            ModelId::HydraCoder => 0.85, // Specialized Rust
-            ModelId::StrandCoder => 0.7, // Fast generalist
+            ModelId::Opus45 | ModelId::Gemini3Pro | ModelId::Qwen35 => 1.0,
+            ModelId::HydraCoder => 0.85,
         }
     }
 
     /// Get the model name as used in API requests
     pub fn api_name(&self) -> &'static str {
         match self {
-            ModelId::Behemoth => "OR1-Behemoth.Q8_0",
-            ModelId::StrandCoder => "Strand-Rust-Coder-14B-v1-Q8_0",
-            ModelId::HydraCoder => "HydraCoder.Q6_K",
+            ModelId::Opus45 => "claude-opus-4-5-20250514",
+            ModelId::Gemini3Pro => "gemini-3-pro",
+            ModelId::Qwen35 => "Qwen3.5-397B-A17B-UD-Q4_K_XL.gguf",
+            ModelId::HydraCoder => "HydraCoder-Q6_K.gguf",
         }
     }
 
-    /// Get all model IDs for ensemble execution
+    /// Get all model IDs
     pub fn all() -> &'static [ModelId] {
-        &[ModelId::StrandCoder, ModelId::HydraCoder, ModelId::Behemoth]
+        &[
+            ModelId::Opus45,
+            ModelId::Gemini3Pro,
+            ModelId::Qwen35,
+            ModelId::HydraCoder,
+        ]
+    }
+
+    /// Get all manager model IDs
+    pub fn all_managers() -> &'static [ModelId] {
+        &[ModelId::Opus45, ModelId::Gemini3Pro, ModelId::Qwen35]
+    }
+
+    /// Get all worker model IDs
+    pub fn all_workers() -> &'static [ModelId] {
+        &[ModelId::HydraCoder]
     }
 }
 
 impl std::fmt::Display for ModelId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ModelId::Behemoth => write!(f, "behemoth"),
-            ModelId::StrandCoder => write!(f, "strand_coder"),
+            ModelId::Opus45 => write!(f, "opus_45"),
+            ModelId::Gemini3Pro => write!(f, "gemini_3_pro"),
+            ModelId::Qwen35 => write!(f, "qwen35"),
             ModelId::HydraCoder => write!(f, "hydra_coder"),
         }
     }
@@ -217,9 +263,9 @@ impl EnsembleTask {
             code_context: None,
             status: TaskStatus::Pending,
             assigned_models: if require_consensus {
-                ModelId::all().to_vec()
+                ModelId::all_managers().to_vec()
             } else {
-                vec![ModelId::Behemoth] // Default to most capable
+                vec![ModelId::Opus45] // Default to most capable manager
             },
             completed_models: Vec::new(),
             require_consensus,
@@ -476,8 +522,27 @@ mod tests {
 
     #[test]
     fn test_model_weights() {
-        assert!(ModelId::Behemoth.weight() > ModelId::HydraCoder.weight());
-        assert!(ModelId::HydraCoder.weight() > ModelId::StrandCoder.weight());
+        // All managers have equal weight
+        assert_eq!(ModelId::Opus45.weight(), ModelId::Gemini3Pro.weight());
+        assert_eq!(ModelId::Opus45.weight(), ModelId::Qwen35.weight());
+        // Workers have lower weight
+        assert!(ModelId::Opus45.weight() > ModelId::HydraCoder.weight());
+    }
+
+    #[test]
+    fn test_model_kind() {
+        assert_eq!(ModelId::Opus45.kind(), ModelKind::Manager);
+        assert_eq!(ModelId::Gemini3Pro.kind(), ModelKind::Manager);
+        assert_eq!(ModelId::Qwen35.kind(), ModelKind::Manager);
+        assert_eq!(ModelId::HydraCoder.kind(), ModelKind::Worker);
+    }
+
+    #[test]
+    fn test_model_locality() {
+        assert!(!ModelId::Opus45.is_local());
+        assert!(!ModelId::Gemini3Pro.is_local());
+        assert!(ModelId::Qwen35.is_local());
+        assert!(ModelId::HydraCoder.is_local());
     }
 
     #[test]
@@ -505,13 +570,13 @@ mod tests {
         assert_eq!(task.assigned_models.len(), 3);
         assert_eq!(task.status, TaskStatus::Pending);
 
-        task.mark_model_complete(ModelId::StrandCoder);
+        task.mark_model_complete(ModelId::Opus45);
         assert_eq!(task.status, TaskStatus::Pending);
 
-        task.mark_model_complete(ModelId::HydraCoder);
+        task.mark_model_complete(ModelId::Gemini3Pro);
         assert_eq!(task.status, TaskStatus::Pending);
 
-        task.mark_model_complete(ModelId::Behemoth);
+        task.mark_model_complete(ModelId::Qwen35);
         assert_eq!(task.status, TaskStatus::AwaitingVote);
     }
 

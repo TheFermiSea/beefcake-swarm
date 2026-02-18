@@ -533,34 +533,49 @@ impl EnsembleCoordinator {
     /// Get system prompt for a model
     fn get_system_prompt(&self, model_id: ModelId) -> String {
         match model_id {
-            ModelId::Behemoth => {
-                r#"You are an expert Rust architect with deep knowledge of:
+            ModelId::Opus45 => {
+                r#"You are Claude Opus 4.5, serving as the Architect in a multi-model coding council.
+Your expertise includes:
 - Ownership, borrowing, and lifetime patterns
 - Async/await and Tokio ecosystem
 - Error handling with thiserror/anyhow
 - Type-state patterns and compile-time guarantees
 - Zero-cost abstractions and performance optimization
 - Memory safety without garbage collection
+- Complex system architecture and design decisions
 
 Provide detailed, well-reasoned analysis. Show your reasoning process.
 At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."#
                     .to_string()
             }
-            ModelId::StrandCoder => {
-                r#"You are an expert Rust coder specialized in writing idiomatic, safe, and efficient Rust code.
-Focus on:
+            ModelId::Gemini3Pro => {
+                r#"You are Gemini 3 Pro, serving as the Librarian in a multi-model coding council.
+Your expertise includes:
+- Broad knowledge of Rust ecosystem and best practices
 - Idiomatic Rust patterns and conventions
 - Proper error handling (Result, Option, ?)
 - Ownership and borrowing correctness
 - Clippy-clean code
 - Clear, readable implementations
 
-Provide clean, compilable code with minimal explanation unless asked.
+Provide clean, compilable code with thorough analysis of trade-offs.
+At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."#
+                    .to_string()
+            }
+            ModelId::Qwen35 => {
+                r#"You are Qwen3.5, serving as the Strategist in a multi-model coding council.
+Your expertise includes:
+- Large-scale code understanding and refactoring
+- Multi-file architectural changes
+- Complex reasoning about system design
+- Trade-off analysis and decision making
+
+Provide strategic analysis with concrete implementation recommendations.
 At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."#
                     .to_string()
             }
             ModelId::HydraCoder => {
-                r#"You are HydraCoder, a specialized Rust code generation model.
+                r#"You are HydraCoder, a specialized Rust code generation worker model.
 Your expertise includes:
 - Complex lifetime and borrowing patterns
 - Async/await with Tokio, futures, and streams
@@ -610,9 +625,10 @@ At the end of your response, indicate your confidence level (0.0-1.0) in bracket
 
         // Default confidence based on model
         match model_id {
-            ModelId::Behemoth => 0.7,
+            ModelId::Opus45 => 0.7,
+            ModelId::Gemini3Pro => 0.6,
+            ModelId::Qwen35 => 0.6,
             ModelId::HydraCoder => 0.6,
-            ModelId::StrandCoder => 0.5,
         }
     }
 
@@ -756,12 +772,12 @@ mod tests {
         let (coordinator, _dir) = test_setup();
 
         let response_with_conf = "Here is the code...\n[confidence: 0.85]";
-        let conf = coordinator.extract_confidence(response_with_conf, ModelId::Behemoth);
+        let conf = coordinator.extract_confidence(response_with_conf, ModelId::Opus45);
         assert!((conf - 0.85).abs() < 0.01);
 
         let response_without_conf = "Here is the code...";
-        let conf = coordinator.extract_confidence(response_without_conf, ModelId::Behemoth);
-        assert!((conf - 0.7).abs() < 0.01); // Default for Behemoth
+        let conf = coordinator.extract_confidence(response_without_conf, ModelId::Opus45);
+        assert!((conf - 0.7).abs() < 0.01); // Default for Opus45
     }
 
     #[test]

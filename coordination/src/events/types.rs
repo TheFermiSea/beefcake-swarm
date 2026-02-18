@@ -116,6 +116,28 @@ pub enum EnsembleEvent {
         error: String,
         timestamp: DateTime<Utc>,
     },
+
+    /// A manager delegated work to another model
+    ManagerDelegated {
+        from: ModelId,
+        to: ModelId,
+        reason: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// A council of managers was convened for a decision
+    CouncilConvened {
+        members: Vec<ModelId>,
+        task_id: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// The council reached a decision
+    CouncilDecided {
+        winner: ModelId,
+        confidence: f32,
+        timestamp: DateTime<Utc>,
+    },
 }
 
 impl EnsembleEvent {
@@ -135,6 +157,9 @@ impl EnsembleEvent {
             EnsembleEvent::SessionCreated { timestamp, .. } => *timestamp,
             EnsembleEvent::SessionEnded { timestamp, .. } => *timestamp,
             EnsembleEvent::TaskFailed { timestamp, .. } => *timestamp,
+            EnsembleEvent::ManagerDelegated { timestamp, .. } => *timestamp,
+            EnsembleEvent::CouncilConvened { timestamp, .. } => *timestamp,
+            EnsembleEvent::CouncilDecided { timestamp, .. } => *timestamp,
         }
     }
 
@@ -154,6 +179,9 @@ impl EnsembleEvent {
             EnsembleEvent::SessionCreated { .. } => "session_created",
             EnsembleEvent::SessionEnded { .. } => "session_ended",
             EnsembleEvent::TaskFailed { .. } => "task_failed",
+            EnsembleEvent::ManagerDelegated { .. } => "manager_delegated",
+            EnsembleEvent::CouncilConvened { .. } => "council_convened",
+            EnsembleEvent::CouncilDecided { .. } => "council_decided",
         }
     }
 
@@ -179,6 +207,7 @@ impl EnsembleEvent {
             EnsembleEvent::ArbitrationRequested { task_id, .. } => Some(task_id),
             EnsembleEvent::ArbitrationCompleted { task_id, .. } => Some(task_id),
             EnsembleEvent::TaskFailed { task_id, .. } => Some(task_id),
+            EnsembleEvent::CouncilConvened { task_id, .. } => Some(task_id),
             _ => None,
         }
     }
@@ -372,7 +401,7 @@ mod tests {
     fn test_event_accessors() {
         let event = EnsembleEvent::ResultSubmitted {
             task_id: "task-1".to_string(),
-            model_id: ModelId::Behemoth,
+            model_id: ModelId::Opus45,
             confidence: 0.9,
             tokens_used: 100,
             latency_ms: 500,
@@ -386,7 +415,7 @@ mod tests {
 
     #[test]
     fn test_vote_summary() {
-        let summary = VoteSummary::new(vec![(ModelId::Behemoth, 2), (ModelId::HydraCoder, 1)]);
+        let summary = VoteSummary::new(vec![(ModelId::Opus45, 2), (ModelId::HydraCoder, 1)]);
 
         assert_eq!(summary.total_votes, 3);
         assert_eq!(summary.margin, 1);

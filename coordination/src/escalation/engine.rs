@@ -46,11 +46,11 @@ pub enum SuggestedAction {
 /// Configuration for the Escalation Engine
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EscalationConfig {
-    /// Error category repeat threshold to trigger Implementer → Integrator
+    /// Error category repeat threshold to trigger Worker → Council
     pub repeat_threshold: u32,
-    /// Total failure threshold to trigger Implementer → Integrator
+    /// Total failure threshold to trigger Worker → Council
     pub failure_threshold: u32,
-    /// File count threshold for Cloud escalation
+    /// File count threshold for Council escalation
     pub multi_file_threshold: usize,
     /// Whether to require adversary review before close
     pub require_adversary_review: bool,
@@ -109,19 +109,14 @@ impl EscalationEngine {
             return self.success_decision(state);
         }
 
-        // Check: Are we at the Implementer tier?
-        if state.current_tier == SwarmTier::Implementer {
-            return self.decide_at_implementer(state, report);
+        // Check: Are we at the Worker tier?
+        if state.current_tier == SwarmTier::Worker {
+            return self.decide_at_worker(state, report);
         }
 
-        // Check: Are we at the Integrator tier?
-        if state.current_tier == SwarmTier::Integrator {
-            return self.decide_at_integrator(state, report);
-        }
-
-        // Check: Are we at the Cloud tier?
-        if state.current_tier == SwarmTier::Cloud {
-            return self.decide_at_cloud(state, report);
+        // Check: Are we at the Council tier?
+        if state.current_tier == SwarmTier::Council {
+            return self.decide_at_council(state, report);
         }
 
         // Shouldn't reach here, but handle gracefully
@@ -141,12 +136,12 @@ impl EscalationEngine {
     /// Decision when verification passes (all green)
     fn success_decision(&self, state: &EscalationState) -> EscalationDecision {
         if self.config.require_adversary_review
-            && state.remaining_consultations(SwarmTier::Adversary) > 0
+            && state.remaining_consultations(SwarmTier::Council) > 0
         {
             EscalationDecision {
-                target_tier: SwarmTier::Adversary,
-                escalated: state.current_tier != SwarmTier::Adversary,
-                reason: "All gates passed — sending for adversary review".to_string(),
+                target_tier: SwarmTier::Council,
+                escalated: state.current_tier != SwarmTier::Council,
+                reason: "All gates passed — sending for council review".to_string(),
                 resolved: true,
                 stuck: false,
                 needs_review: true,
@@ -165,8 +160,8 @@ impl EscalationEngine {
         }
     }
 
-    /// Decision-making at the Implementer tier
-    fn decide_at_implementer(
+    /// Decision-making at the Worker tier
+    fn decide_at_worker(
         &self,
         state: &mut EscalationState,
         report: &VerifierReport,
@@ -175,9 +170,9 @@ impl EscalationEngine {
         if let Some((category, count)) = state.most_repeated_category() {
             if count >= self.config.repeat_threshold {
                 let reason = EscalationReason::RepeatedErrorCategory { category, count };
-                state.record_escalation(SwarmTier::Integrator, reason.clone());
+                state.record_escalation(SwarmTier::Council, reason.clone());
                 return EscalationDecision {
-                    target_tier: SwarmTier::Integrator,
+                    target_tier: SwarmTier::Council,
                     escalated: true,
                     reason: format!("Escalating: {}", reason),
                     resolved: false,
@@ -194,9 +189,9 @@ impl EscalationEngine {
                 count: state.total_failures(),
                 threshold: self.config.failure_threshold,
             };
-            state.record_escalation(SwarmTier::Integrator, reason.clone());
+            state.record_escalation(SwarmTier::Council, reason.clone());
             return EscalationDecision {
-                target_tier: SwarmTier::Integrator,
+                target_tier: SwarmTier::Council,
                 escalated: true,
                 reason: format!("Escalating: {}", reason),
                 resolved: false,
@@ -218,9 +213,9 @@ impl EscalationEngine {
             let reason = EscalationReason::MultiFileComplexity {
                 file_count: files_touched,
             };
-            state.record_escalation(SwarmTier::Cloud, reason.clone());
+            state.record_escalation(SwarmTier::Council, reason.clone());
             return EscalationDecision {
-                target_tier: SwarmTier::Cloud,
+                target_tier: SwarmTier::Council,
                 escalated: true,
                 reason: format!("Escalating: {}", reason),
                 resolved: false,
@@ -230,14 +225,14 @@ impl EscalationEngine {
             };
         }
 
-        // Budget check: Implementer exhausted
-        if state.remaining_budget(SwarmTier::Implementer) == 0 {
+        // Budget check: Worker exhausted
+        if state.remaining_budget(SwarmTier::Worker) == 0 {
             let reason = EscalationReason::BudgetExhausted {
-                tier: SwarmTier::Implementer,
+                tier: SwarmTier::Worker,
             };
-            state.record_escalation(SwarmTier::Integrator, reason.clone());
+            state.record_escalation(SwarmTier::Council, reason.clone());
             return EscalationDecision {
-                target_tier: SwarmTier::Integrator,
+                target_tier: SwarmTier::Council,
                 escalated: true,
                 reason: format!("Escalating: {}", reason),
                 resolved: false,
@@ -247,13 +242,13 @@ impl EscalationEngine {
             };
         }
 
-        // No escalation — continue at Implementer
+        // No escalation — continue at Worker
         EscalationDecision {
-            target_tier: SwarmTier::Implementer,
+            target_tier: SwarmTier::Worker,
             escalated: false,
             reason: format!(
-                "Continuing at Implementer ({} iterations remaining)",
-                state.remaining_budget(SwarmTier::Implementer)
+                "Continuing at Worker ({} iterations remaining)",
+                state.remaining_budget(SwarmTier::Worker)
             ),
             resolved: false,
             stuck: false,
@@ -262,100 +257,38 @@ impl EscalationEngine {
         }
     }
 
-    /// Decision-making at the Integrator tier
-    fn decide_at_integrator(
+    /// Decision-making at the Council tier
+    fn decide_at_council(
         &self,
         state: &mut EscalationState,
         _report: &VerifierReport,
     ) -> EscalationDecision {
-        // Budget check: Integrator exhausted
-        if state.remaining_budget(SwarmTier::Integrator) == 0 {
-            // Escalate to Cloud
-            if state.remaining_budget(SwarmTier::Cloud) > 0 {
-                let reason = EscalationReason::IntegratorStuck {
-                    consultations: state
-                        .tier_consultations
-                        .get(&SwarmTier::Integrator)
-                        .copied()
-                        .unwrap_or(0),
-                };
-                state.record_escalation(SwarmTier::Cloud, reason.clone());
-                return EscalationDecision {
-                    target_tier: SwarmTier::Cloud,
-                    escalated: true,
-                    reason: format!("Escalating: {}", reason),
-                    resolved: false,
-                    stuck: false,
-                    needs_review: false,
-                    action: SuggestedAction::ArchitecturalGuidance,
-                };
-            }
-
-            // Both Integrator and Cloud exhausted → stuck
+        // Budget check: Council exhausted → stuck, flag for human
+        if state.remaining_budget(SwarmTier::Council) == 0 {
             state.stuck = true;
             return EscalationDecision {
-                target_tier: SwarmTier::Cloud,
-                escalated: false,
-                reason: "All local and cloud budgets exhausted".to_string(),
+                target_tier: SwarmTier::Human,
+                escalated: true,
+                reason: "Council budget exhausted".to_string(),
                 resolved: false,
                 stuck: true,
                 needs_review: false,
                 action: SuggestedAction::FlagForHuman {
                     reason: format!(
-                        "Issue {} stuck after {} iterations across all tiers",
+                        "Issue {} stuck: council budget exhausted after {} total iterations",
                         state.bead_id, state.total_iterations
                     ),
                 },
             };
         }
 
-        // Continue at Integrator (still has budget)
+        // Continue at Council (still has budget)
         EscalationDecision {
-            target_tier: SwarmTier::Integrator,
+            target_tier: SwarmTier::Council,
             escalated: false,
             reason: format!(
-                "Continuing at Integrator ({} consultations remaining)",
-                state.remaining_budget(SwarmTier::Integrator)
-            ),
-            resolved: false,
-            stuck: false,
-            needs_review: false,
-            action: SuggestedAction::RepairPlan,
-        }
-    }
-
-    /// Decision-making at the Cloud tier
-    fn decide_at_cloud(
-        &self,
-        state: &mut EscalationState,
-        _report: &VerifierReport,
-    ) -> EscalationDecision {
-        // Budget check: Cloud exhausted
-        if state.remaining_budget(SwarmTier::Cloud) == 0 {
-            state.stuck = true;
-            return EscalationDecision {
-                target_tier: SwarmTier::Cloud,
-                escalated: false,
-                reason: "Cloud budget exhausted".to_string(),
-                resolved: false,
-                stuck: true,
-                needs_review: false,
-                action: SuggestedAction::FlagForHuman {
-                    reason: format!(
-                        "Issue {} stuck: cloud budget exhausted after {} total iterations",
-                        state.bead_id, state.total_iterations
-                    ),
-                },
-            };
-        }
-
-        // Cloud strategy flows back down — Implementer executes the cloud's plan
-        EscalationDecision {
-            target_tier: SwarmTier::Cloud,
-            escalated: false,
-            reason: format!(
-                "Cloud consultation ({} remaining)",
-                state.remaining_budget(SwarmTier::Cloud)
+                "Continuing at Council ({} iterations remaining)",
+                state.remaining_budget(SwarmTier::Council)
             ),
             resolved: false,
             stuck: false,
@@ -449,13 +382,13 @@ mod tests {
         // First iteration with lifetime error
         let report1 = make_failing_report(vec![ErrorCategory::Lifetime]);
         let d1 = engine.decide(&mut state, &report1);
-        assert_eq!(d1.target_tier, SwarmTier::Implementer);
+        assert_eq!(d1.target_tier, SwarmTier::Worker);
         assert!(!d1.escalated);
 
         // Second iteration with same error — should escalate
         let report2 = make_failing_report(vec![ErrorCategory::Lifetime]);
         let d2 = engine.decide(&mut state, &report2);
-        assert_eq!(d2.target_tier, SwarmTier::Integrator);
+        assert_eq!(d2.target_tier, SwarmTier::Council);
         assert!(d2.escalated);
     }
 
@@ -480,7 +413,7 @@ mod tests {
             let report = make_failing_report(vec![*cat]);
             let d = engine.decide(&mut state, &report);
             if d.escalated {
-                assert_eq!(d.target_tier, SwarmTier::Integrator);
+                assert_eq!(d.target_tier, SwarmTier::Council);
                 return;
             }
         }
@@ -526,26 +459,19 @@ mod tests {
         let engine = EscalationEngine::with_config(config);
         let mut state = EscalationState::new("beads-5");
 
-        // Manually exhaust all budgets
-        for _ in 0..6 {
+        // Manually exhaust Worker budget (4 iterations)
+        for _ in 0..4 {
             state.record_iteration(vec![ErrorCategory::Other], 1, false);
         }
         state.record_escalation(
-            SwarmTier::Integrator,
+            SwarmTier::Council,
             EscalationReason::BudgetExhausted {
-                tier: SwarmTier::Implementer,
+                tier: SwarmTier::Worker,
             },
         );
 
-        for _ in 0..2 {
-            state.record_iteration(vec![ErrorCategory::Other], 1, false);
-        }
-        state.record_escalation(
-            SwarmTier::Cloud,
-            EscalationReason::IntegratorStuck { consultations: 2 },
-        );
-
-        for _ in 0..2 {
+        // Exhaust Council budget (6 iterations)
+        for _ in 0..6 {
             state.record_iteration(vec![ErrorCategory::Other], 1, false);
         }
 

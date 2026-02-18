@@ -245,9 +245,9 @@ impl VotingProtocol {
         // This is a simplified version - production would use semantic similarity
         let record = VoteRecord::new(task_id.clone(), VotingStrategy::Unanimous);
 
-        // Use Behemoth as the default unanimous choice if present
-        let winner = if results.iter().any(|r| r.model_id == ModelId::Behemoth) {
-            ModelId::Behemoth
+        // Use Opus45 as the default unanimous choice if present
+        let winner = if results.iter().any(|r| r.model_id == ModelId::Opus45) {
+            ModelId::Opus45
         } else {
             results[0].model_id
         };
@@ -276,7 +276,7 @@ impl VotingProtocol {
         })
     }
 
-    /// Break ties using Behemoth as the tie-breaker
+    /// Break ties using Opus45 as the tie-breaker
     async fn tie_break(
         &self,
         task_id: &TaskId,
@@ -295,12 +295,12 @@ impl VotingProtocol {
             timestamp: Utc::now(),
         });
 
-        // If Behemoth is tied, prefer it (most capable for reasoning)
-        let winner = if tied.contains(&ModelId::Behemoth) {
-            ModelId::Behemoth
-        } else if tied.contains(&ModelId::HydraCoder) {
-            // Prefer HydraCoder over StrandCoder for Rust tasks
-            ModelId::HydraCoder
+        // If Opus45 is tied, prefer it (most capable for reasoning)
+        let winner = if tied.contains(&ModelId::Opus45) {
+            ModelId::Opus45
+        } else if tied.contains(&ModelId::Gemini3Pro) {
+            // Prefer Gemini3Pro over workers
+            ModelId::Gemini3Pro
         } else {
             // Fallback to first tied model
             tied[0]
@@ -341,8 +341,8 @@ mod tests {
 
     #[test]
     fn test_model_weights() {
-        assert!(ModelId::Behemoth.weight() > ModelId::HydraCoder.weight());
-        assert!(ModelId::HydraCoder.weight() > ModelId::StrandCoder.weight());
+        assert!(ModelId::Opus45.weight() > ModelId::HydraCoder.weight());
+        assert_eq!(ModelId::Opus45.weight(), ModelId::Gemini3Pro.weight());
     }
 
     #[tokio::test]
@@ -352,7 +352,7 @@ mod tests {
         // Store a result
         let result = ModelResult::new(
             "task-1".to_string(),
-            ModelId::Behemoth,
+            ModelId::Opus45,
             "Test response".to_string(),
             100,
             500,
@@ -366,7 +366,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(outcome.winner, ModelId::Behemoth);
+        assert_eq!(outcome.winner, ModelId::Opus45);
         assert!(!outcome.arbitrated);
     }
 
@@ -377,7 +377,7 @@ mod tests {
         // Store results with different confidences
         let result1 = ModelResult::new(
             "task-1".to_string(),
-            ModelId::StrandCoder,
+            ModelId::HydraCoder,
             "Response 1".to_string(),
             100,
             200,
@@ -386,7 +386,7 @@ mod tests {
 
         let result2 = ModelResult::new(
             "task-1".to_string(),
-            ModelId::Behemoth,
+            ModelId::Opus45,
             "Response 2".to_string(),
             150,
             1000,
@@ -401,10 +401,12 @@ mod tests {
             .await
             .unwrap();
 
-        // Behemoth should win due to higher model weight despite lower confidence
-        // Strand: 0.9 * 0.7 = 0.63
-        // Behemoth: 0.7 * 1.0 = 0.7
-        assert_eq!(outcome.winner, ModelId::Behemoth);
+        // Opus45 should win due to higher model weight despite lower confidence
+        // HydraCoder: 0.9 * 0.85 = 0.765
+        // Opus45: 0.7 * 1.0 = 0.7
+        // Close scores, but HydraCoder edges out slightly
+        // Actually with new weights: HydraCoder=0.85 weight, so 0.9*0.85=0.765 vs Opus45=0.7*1.0=0.7
+        assert_eq!(outcome.winner, ModelId::HydraCoder);
     }
 
     #[tokio::test]

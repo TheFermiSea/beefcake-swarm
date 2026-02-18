@@ -123,40 +123,35 @@ impl From<&CompileResult> for CompileResultSummary {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelTier {
-    /// Fast model (Strand-Rust-Coder 14B)
-    Fast,
-    /// Specialized model (HydraCoder 31B)
-    Specialized,
-    /// Reasoning model (OR1-Behemoth 73B)
-    Reasoning,
+    /// Worker model (HydraCoder 30B-A3B MoE)
+    Worker,
+    /// Manager Council (Opus 4.5, Gemini 3 Pro, Qwen3.5)
+    Council,
 }
 
 impl ModelTier {
     /// Get the model name for this tier
     pub fn model_name(&self) -> &'static str {
         match self {
-            Self::Fast => "Strand-Rust-Coder-14B-v1-Q8_0",
-            Self::Specialized => "HydraCoder.Q6_K",
-            Self::Reasoning => "OR1-Behemoth.Q8_0",
+            Self::Worker => "HydraCoder-Q6_K",
+            Self::Council => "manager-council",
         }
     }
 
     /// Escalate to next tier
     pub fn escalate(&self) -> Self {
         match self {
-            Self::Fast => Self::Specialized,
-            Self::Specialized => Self::Reasoning,
-            Self::Reasoning => Self::Reasoning, // Already at max
+            Self::Worker => Self::Council,
+            Self::Council => Self::Council, // Already at max
         }
     }
 
     /// Parse tier from string
     pub fn parse_tier(s: &str) -> Self {
         match s {
-            "fast" => Self::Fast,
-            "specialized" => Self::Specialized,
-            "reasoning" => Self::Reasoning,
-            _ => Self::Fast,
+            "worker" => Self::Worker,
+            "council" => Self::Council,
+            _ => Self::Worker,
         }
     }
 }
@@ -164,55 +159,49 @@ impl ModelTier {
 impl std::fmt::Display for ModelTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Fast => write!(f, "fast"),
-            Self::Specialized => write!(f, "specialized"),
-            Self::Reasoning => write!(f, "reasoning"),
+            Self::Worker => write!(f, "worker"),
+            Self::Council => write!(f, "council"),
         }
     }
 }
 
-/// Escalation tier for the full correction pipeline (local + cloud)
+/// Escalation tier for the full correction pipeline
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EscalationTier {
-    /// Local 14B model (Strand-Rust-Coder) - 2 attempts max
-    Local14B,
-    /// Local 72B model (OR1-Behemoth distributed) - 2 attempts max
-    Local72B,
-    /// Cloud Council (Gemini + Claude + GPT) - final escalation
-    CloudCouncil,
+    /// Worker tier (HydraCoder) — 2 attempts max
+    Worker,
+    /// Manager Council (Opus 4.5, Gemini 3 Pro, Qwen3.5) — final escalation
+    ManagerCouncil,
 }
 
 impl EscalationTier {
     /// Maximum attempts allowed at this tier
     pub fn max_attempts(&self) -> u32 {
         match self {
-            Self::Local14B => 2,
-            Self::Local72B => 2,
-            Self::CloudCouncil => 1,
+            Self::Worker => 2,
+            Self::ManagerCouncil => 1,
         }
     }
 
     /// Escalate to next tier
     pub fn escalate(&self) -> Self {
         match self {
-            Self::Local14B => Self::Local72B,
-            Self::Local72B => Self::CloudCouncil,
-            Self::CloudCouncil => Self::CloudCouncil, // Already at max
+            Self::Worker => Self::ManagerCouncil,
+            Self::ManagerCouncil => Self::ManagerCouncil, // Already at max
         }
     }
 
     /// Check if this is the final tier
     pub fn is_final(&self) -> bool {
-        matches!(self, Self::CloudCouncil)
+        matches!(self, Self::ManagerCouncil)
     }
 
-    /// Get the corresponding local ModelTier (None for CloudCouncil)
+    /// Get the corresponding local ModelTier (None for ManagerCouncil)
     pub fn local_tier(&self) -> Option<ModelTier> {
         match self {
-            Self::Local14B => Some(ModelTier::Fast),
-            Self::Local72B => Some(ModelTier::Reasoning),
-            Self::CloudCouncil => None,
+            Self::Worker => Some(ModelTier::Worker),
+            Self::ManagerCouncil => None,
         }
     }
 }
@@ -220,9 +209,8 @@ impl EscalationTier {
 impl std::fmt::Display for EscalationTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Local14B => write!(f, "local_14b"),
-            Self::Local72B => write!(f, "local_72b"),
-            Self::CloudCouncil => write!(f, "cloud_council"),
+            Self::Worker => write!(f, "worker"),
+            Self::ManagerCouncil => write!(f, "manager_council"),
         }
     }
 }
@@ -294,7 +282,7 @@ impl TieredCorrectionLoop {
     /// Create a new tiered correction loop
     pub fn new() -> Self {
         Self {
-            current_tier: EscalationTier::Local14B,
+            current_tier: EscalationTier::Worker,
             attempts_at_tier: 0,
             total_attempts: 0,
             context: TieredCorrectionContext::default(),
@@ -435,7 +423,7 @@ impl CorrectionLoop {
         Self {
             compiler: Compiler::new(crate_dir),
             config,
-            current_tier: ModelTier::Fast,
+            current_tier: ModelTier::Worker,
             failures_at_tier: 0,
         }
     }
@@ -462,8 +450,7 @@ impl CorrectionLoop {
 
         // Use base recommendation if it's higher than current
         match (base_tier, self.current_tier) {
-            (ModelTier::Reasoning, _) => ModelTier::Reasoning,
-            (ModelTier::Specialized, ModelTier::Fast) => ModelTier::Specialized,
+            (ModelTier::Council, _) => ModelTier::Council,
             _ => self.current_tier,
         }
     }
@@ -638,9 +625,8 @@ mod tests {
 
     #[test]
     fn test_model_tier_escalation() {
-        assert_eq!(ModelTier::Fast.escalate(), ModelTier::Specialized);
-        assert_eq!(ModelTier::Specialized.escalate(), ModelTier::Reasoning);
-        assert_eq!(ModelTier::Reasoning.escalate(), ModelTier::Reasoning);
+        assert_eq!(ModelTier::Worker.escalate(), ModelTier::Council);
+        assert_eq!(ModelTier::Council.escalate(), ModelTier::Council);
     }
 
     #[test]

@@ -1,7 +1,7 @@
-//! Cloud Council Adapter for AI Escalation
+//! Manager Council for AI Escalation
 //!
-//! Provides abstraction for escalating complex problems to cloud-based AI models
-//! (Gemini 3 Pro, Claude Opus 4.5, GPT-5.2) when local models can't solve them.
+//! Provides abstraction for escalating complex problems to peer manager models
+//! (Gemini 3 Pro, Claude Opus 4.5, Qwen3.5) using concurrent queries and delegation.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 use thiserror::Error;
 
-/// Errors from Cloud Council operations
+/// Errors from Manager Council operations
 #[derive(Debug, Error)]
 pub enum CouncilError {
     #[error("API request failed: {0}")]
@@ -39,8 +39,8 @@ pub enum CouncilRole {
     Librarian,
     /// Architect: Design decisions and safety contracts (Claude Opus 4.5)
     Architect,
-    /// Manager: Task decomposition and project management (GPT-5.2)
-    Manager,
+    /// Strategist: Reasoning, planning, task decomposition (Qwen3.5)
+    Strategist,
 }
 
 impl CouncilRole {
@@ -48,7 +48,7 @@ impl CouncilRole {
         match self {
             Self::Librarian => "gemini-3-pro",
             Self::Architect => "claude-opus-4-5",
-            Self::Manager => "gpt-5.2",
+            Self::Strategist => "qwen3.5-397b",
         }
     }
 
@@ -56,7 +56,7 @@ impl CouncilRole {
         match self {
             Self::Librarian => "Repository context, code understanding, documentation",
             Self::Architect => "Design decisions, safety contracts, architecture review",
-            Self::Manager => "Task decomposition, project management, coordination",
+            Self::Strategist => "Reasoning, planning, task decomposition, strategy",
         }
     }
 }
@@ -66,7 +66,7 @@ impl std::fmt::Display for CouncilRole {
         match self {
             Self::Librarian => write!(f, "librarian"),
             Self::Architect => write!(f, "architect"),
-            Self::Manager => write!(f, "manager"),
+            Self::Strategist => write!(f, "strategist"),
         }
     }
 }
@@ -115,7 +115,7 @@ pub enum EscalationReason {
     ArchitecturalDecision { description: String },
 }
 
-/// Decision from the Cloud Council
+/// Decision from the Manager Council
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CouncilDecision {
     /// The recommended action or fix
@@ -160,17 +160,21 @@ pub struct CouncilResponse {
     pub response_time_ms: u64,
 }
 
-/// Configuration for the Cloud Council
+/// Configuration for the Manager Council
 #[derive(Debug, Clone)]
 pub struct CouncilConfig {
     /// API keys for each provider
     pub api_keys: HashMap<String, String>,
+    /// Qwen3.5 local endpoint (OpenAI-compatible)
+    pub qwen35_endpoint: String,
     /// Request timeout
     pub timeout: Duration,
     /// Maximum retries per member
     pub max_retries: u32,
     /// Whether to require consensus
     pub require_consensus: bool,
+    /// Minimum number of members that must respond for a valid decision
+    pub min_quorum: usize,
 }
 
 impl Default for CouncilConfig {
@@ -184,17 +188,38 @@ impl Default for CouncilConfig {
         if let Ok(key) = std::env::var("ANTHROPIC_API_KEY") {
             api_keys.insert("anthropic".to_string(), key);
         }
-        if let Ok(key) = std::env::var("OPENAI_API_KEY") {
-            api_keys.insert("openai".to_string(), key);
-        }
+
+        let qwen35_endpoint = std::env::var("QWEN35_ENDPOINT")
+            .unwrap_or_else(|_| "http://vasp-01:8081/v1/chat/completions".to_string());
 
         Self {
             api_keys,
-            timeout: Duration::from_secs(120),
+            qwen35_endpoint,
+            timeout: Duration::from_secs(300),
             max_retries: 2,
             require_consensus: false,
+            min_quorum: 2,
         }
     }
+}
+
+/// Request to delegate work to another manager
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DelegationRequest {
+    pub from: crate::state::types::ModelId,
+    pub to: Option<Vec<crate::state::types::ModelId>>,
+    pub context: EscalationContext,
+    pub reason: DelegationReason,
+}
+
+/// Reason for delegation between managers
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DelegationReason {
+    LowConfidence { confidence: f32, threshold: f32 },
+    SecondOpinion,
+    Specialization { area: String },
+    LoadBalance,
 }
 
 /// Gemini-based Librarian council member
@@ -261,7 +286,7 @@ Given an escalated coding problem, provide context and insights about:
         });
 
         let url = format!(
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key={}",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro:generateContent?key={}",
             self.api_key
         );
 
@@ -357,7 +382,7 @@ Given an escalated coding problem, provide:
         );
 
         let request_body = serde_json::json!({
-            "model": "claude-sonnet-4-20250514",
+            "model": "claude-opus-4-5-20250514",
             "max_tokens": 4096,
             "system": system_prompt,
             "messages": [{
@@ -399,7 +424,7 @@ Given an escalated coding problem, provide:
         Ok(CouncilResponse {
             content,
             confidence: 0.9,
-            model: "claude-sonnet-4".to_string(), // Actual model used in API call
+            model: "claude-opus-4-5".to_string(), // Actual model used in API call
             tokens_used: 0,
             response_time_ms: start.elapsed().as_millis() as u64,
         })
@@ -410,18 +435,18 @@ Given an escalated coding problem, provide:
     }
 }
 
-/// GPT-based Manager council member
-pub struct GptManager {
-    api_key: String,
+/// Qwen3.5-based Strategist council member (local model via OpenAI-compatible API)
+pub struct Qwen35Strategist {
+    endpoint: String,
     client: reqwest::Client,
 }
 
-impl GptManager {
-    pub fn new(api_key: String) -> Self {
+impl Qwen35Strategist {
+    pub fn new(endpoint: String) -> Self {
         Self {
-            api_key,
+            endpoint,
             client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(120))
+                .timeout(Duration::from_secs(300))
                 .build()
                 .expect("Failed to create HTTP client"),
         }
@@ -429,24 +454,24 @@ impl GptManager {
 }
 
 #[async_trait]
-impl CouncilMember for GptManager {
+impl CouncilMember for Qwen35Strategist {
     fn role(&self) -> CouncilRole {
-        CouncilRole::Manager
+        CouncilRole::Strategist
     }
 
     async fn query(&self, context: &EscalationContext) -> Result<CouncilResponse, CouncilError> {
         let start = std::time::Instant::now();
 
-        let system_prompt = r#"You are the Manager of a development council, specializing in:
-- Task decomposition and planning
-- Project coordination
-- Resource allocation
-- Process optimization
+        let system_prompt = r#"You are the Strategist of a development council, specializing in:
+- Deep reasoning about complex coding problems
+- Strategic planning and task decomposition
+- Breaking down large problems into actionable steps
+- Identifying root causes and systemic issues
 
 Given an escalated coding problem, provide:
-1. Step-by-step action plan
-2. Task decomposition if the problem is too large
-3. Priority ordering of fixes
+1. Root cause analysis with reasoning chain
+2. Strategic task decomposition if the problem is too large
+3. Priority ordering of fixes with rationale
 4. Coordination advice for multi-file changes"#;
 
         let user_prompt = format!(
@@ -461,7 +486,7 @@ Given an escalated coding problem, provide:
         );
 
         let request_body = serde_json::json!({
-            "model": "gpt-4o",
+            "model": "Qwen3.5-397B-A17B-UD-Q4_K_XL.gguf",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
@@ -472,8 +497,7 @@ Given an escalated coding problem, provide:
 
         let response = self
             .client
-            .post("https://api.openai.com/v1/chat/completions")
-            .header("Authorization", format!("Bearer {}", self.api_key))
+            .post(&self.endpoint)
             .header("Content-Type", "application/json")
             .json(&request_body)
             .send()
@@ -484,7 +508,7 @@ Given an escalated coding problem, provide:
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
             return Err(CouncilError::RequestFailed(format!(
-                "OpenAI API error ({}): {}",
+                "Qwen3.5 API error ({}): {}",
                 status, body
             )));
         }
@@ -502,27 +526,39 @@ Given an escalated coding problem, provide:
         Ok(CouncilResponse {
             content,
             confidence: 0.85,
-            model: "gpt-4o".to_string(), // Actual model used in API call
+            model: "qwen3.5-397b".to_string(),
             tokens_used: 0,
             response_time_ms: start.elapsed().as_millis() as u64,
         })
     }
 
     async fn is_available(&self) -> bool {
-        !self.api_key.is_empty()
+        // Try HTTP GET to base URL health endpoint
+        let base_url = self
+            .endpoint
+            .trim_end_matches("/chat/completions")
+            .trim_end_matches("/v1");
+        let health_url = format!("{}/health", base_url);
+        if let Ok(resp) = self.client.get(&health_url).send().await {
+            if resp.status().is_success() {
+                return true;
+            }
+        }
+        // Fall back to checking endpoint is configured
+        !self.endpoint.is_empty()
     }
 }
 
-/// The Cloud Council - coordinates multiple AI models for complex decisions
-pub struct CloudCouncil {
+/// The Manager Council - coordinates peer manager models for complex decisions
+pub struct ManagerCouncil {
     librarian: Option<Box<dyn CouncilMember>>,
     architect: Option<Box<dyn CouncilMember>>,
-    manager: Option<Box<dyn CouncilMember>>,
+    strategist: Option<Box<dyn CouncilMember>>,
     config: CouncilConfig,
 }
 
-impl CloudCouncil {
-    /// Create a new Cloud Council from configuration
+impl ManagerCouncil {
+    /// Create a new Manager Council from configuration
     pub fn from_config(config: CouncilConfig) -> Self {
         let librarian = config
             .api_keys
@@ -534,15 +570,16 @@ impl CloudCouncil {
             .get("anthropic")
             .map(|key| Box::new(ClaudeArchitect::new(key.clone())) as Box<dyn CouncilMember>);
 
-        let manager = config
-            .api_keys
-            .get("openai")
-            .map(|key| Box::new(GptManager::new(key.clone())) as Box<dyn CouncilMember>);
+        // Qwen3.5 is a local model — no API key needed
+        let strategist = Some(
+            Box::new(Qwen35Strategist::new(config.qwen35_endpoint.clone()))
+                as Box<dyn CouncilMember>,
+        );
 
         Self {
             librarian,
             architect,
-            manager,
+            strategist,
             config,
         }
     }
@@ -566,59 +603,59 @@ impl CloudCouncil {
                 available.push(CouncilRole::Architect);
             }
         }
-        if let Some(ref member) = self.manager {
+        if let Some(ref member) = self.strategist {
             if member.is_available().await {
-                available.push(CouncilRole::Manager);
+                available.push(CouncilRole::Strategist);
             }
         }
 
         available
     }
 
-    /// Escalate a problem to the council
+    /// Escalate a problem to the council — queries all members concurrently
     pub async fn escalate(
         &self,
         context: &EscalationContext,
     ) -> Result<CouncilDecision, CouncilError> {
+        use futures::future::join_all;
+
+        // Collect available members for concurrent querying
+        let members: Vec<(&dyn CouncilMember, CouncilRole)> = [
+            self.architect
+                .as_ref()
+                .map(|m| (m.as_ref(), CouncilRole::Architect)),
+            self.librarian
+                .as_ref()
+                .map(|m| (m.as_ref(), CouncilRole::Librarian)),
+            self.strategist
+                .as_ref()
+                .map(|m| (m.as_ref(), CouncilRole::Strategist)),
+        ]
+        .into_iter()
+        .flatten()
+        .collect();
+
+        // Query all members concurrently
+        let futures: Vec<_> = members
+            .iter()
+            .map(|(member, role)| {
+                let role = *role;
+                async move { (role, member.query(context).await) }
+            })
+            .collect();
+
+        let results = join_all(futures).await;
+
         let mut responses = Vec::new();
         let mut contributors = Vec::new();
 
-        // Query architect first (most relevant for code fixes)
-        if let Some(ref architect) = self.architect {
-            if architect.is_available().await {
-                match architect.query(context).await {
-                    Ok(resp) => {
-                        responses.push(resp);
-                        contributors.push(CouncilRole::Architect);
-                    }
-                    Err(e) => tracing::warn!("Architect query failed: {}", e),
+        for (role, result) in results {
+            match result {
+                Ok(resp) => {
+                    responses.push(resp);
+                    contributors.push(role);
                 }
-            }
-        }
-
-        // Query librarian for context
-        if let Some(ref librarian) = self.librarian {
-            if librarian.is_available().await {
-                match librarian.query(context).await {
-                    Ok(resp) => {
-                        responses.push(resp);
-                        contributors.push(CouncilRole::Librarian);
-                    }
-                    Err(e) => tracing::warn!("Librarian query failed: {}", e),
-                }
-            }
-        }
-
-        // Query manager for coordination
-        if let Some(ref manager) = self.manager {
-            if manager.is_available().await {
-                match manager.query(context).await {
-                    Ok(resp) => {
-                        responses.push(resp);
-                        contributors.push(CouncilRole::Manager);
-                    }
-                    Err(e) => tracing::warn!("Manager query failed: {}", e),
-                }
+                Err(e) => tracing::warn!("{} query failed: {}", role, e),
             }
         }
 
@@ -649,10 +686,13 @@ impl CloudCouncil {
                     CouncilError::Unavailable("Architect not configured".to_string())
                 })?
             }
-            CouncilRole::Manager => {
-                self.manager.as_ref().map(|m| m.as_ref()).ok_or_else(|| {
-                    CouncilError::Unavailable("Manager not configured".to_string())
-                })?
+            CouncilRole::Strategist => {
+                self.strategist
+                    .as_ref()
+                    .map(|m| m.as_ref())
+                    .ok_or_else(|| {
+                        CouncilError::Unavailable("Strategist not configured".to_string())
+                    })?
             }
         };
 
@@ -665,13 +705,8 @@ impl CloudCouncil {
         responses: Vec<CouncilResponse>,
         contributors: Vec<CouncilRole>,
     ) -> Result<CouncilDecision, CouncilError> {
-        // Weight architect highest for code fixes
-        let primary = responses
-            .iter()
-            .zip(contributors.iter())
-            .find(|(_, role)| **role == CouncilRole::Architect)
-            .map(|(r, _)| r)
-            .unwrap_or(&responses[0]);
+        // All managers are equal weight (1.0) — use first response as primary
+        let primary = &responses[0];
 
         let avg_confidence =
             responses.iter().map(|r| r.confidence).sum::<f32>() / responses.len() as f32;
@@ -693,7 +728,7 @@ impl CloudCouncil {
     }
 }
 
-impl Default for CloudCouncil {
+impl Default for ManagerCouncil {
     fn default() -> Self {
         Self::new()
     }
@@ -707,14 +742,16 @@ mod tests {
     fn test_council_role_display() {
         assert_eq!(CouncilRole::Librarian.to_string(), "librarian");
         assert_eq!(CouncilRole::Architect.to_string(), "architect");
-        assert_eq!(CouncilRole::Manager.to_string(), "manager");
+        assert_eq!(CouncilRole::Strategist.to_string(), "strategist");
     }
 
     #[test]
     fn test_council_config_default() {
         let config = CouncilConfig::default();
-        assert_eq!(config.timeout, Duration::from_secs(120));
+        assert_eq!(config.timeout, Duration::from_secs(300));
         assert_eq!(config.max_retries, 2);
+        assert_eq!(config.min_quorum, 2);
+        assert!(!config.qwen35_endpoint.is_empty());
     }
 
     #[test]

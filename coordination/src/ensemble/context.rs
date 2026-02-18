@@ -415,7 +415,7 @@ mod tests {
                        We should use async/await for the implementation.";
 
         let ctx = manager
-            .merge_from_response(&session_id, ModelId::Behemoth, response)
+            .merge_from_response(&session_id, ModelId::Opus45, response)
             .unwrap();
 
         assert!(ctx.file_references.contains(&"src/lib.rs".to_string()));
