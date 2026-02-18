@@ -50,6 +50,18 @@ pub struct SwarmConfig {
     pub worktree_base: Option<PathBuf>,
     /// Path to the notebook registry TOML file.
     pub notebook_registry_path: Option<PathBuf>,
+    /// Scope verifier to specific cargo packages.
+    /// When empty, targets the entire workspace.
+    /// Populated from `--package` CLI flag or `SWARM_VERIFIER_PACKAGES` env var (comma-separated).
+    pub verifier_packages: Vec<String>,
+    /// Maximum retries for cloud (CLIAPIProxy) HTTP calls.
+    /// Exponential backoff: 2s, 4s, 8s, ...
+    /// Populated from `SWARM_CLOUD_MAX_RETRIES` env var (default: 3).
+    pub cloud_max_retries: u32,
+    /// Cloud-only mode: skip local endpoint health checks, route all work through cloud.
+    /// Requires `cloud_endpoint` to be configured.
+    /// Populated from `--cloud-only` CLI flag or `SWARM_CLOUD_ONLY=1` env var.
+    pub cloud_only: bool,
 }
 
 impl Default for SwarmConfig {
@@ -86,6 +98,18 @@ impl Default for SwarmConfig {
             max_retries: 10,
             worktree_base: None,
             notebook_registry_path: Some(PathBuf::from("./notebook_registry.toml")),
+            verifier_packages: std::env::var("SWARM_VERIFIER_PACKAGES")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.split(',').map(|p| p.trim().to_string()).collect())
+                .unwrap_or_default(),
+            cloud_max_retries: std::env::var("SWARM_CLOUD_MAX_RETRIES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3),
+            cloud_only: std::env::var("SWARM_CLOUD_ONLY")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
         }
     }
 }
@@ -137,6 +161,9 @@ impl SwarmConfig {
             max_retries: 3,
             worktree_base: None,
             notebook_registry_path: None,
+            verifier_packages: Vec::new(),
+            cloud_max_retries: 3,
+            cloud_only: false,
         }
     }
 }
@@ -158,6 +185,35 @@ pub struct ClientSet {
 
 impl ClientSet {
     pub fn from_config(config: &SwarmConfig) -> Result<Self> {
+        // In cloud-only mode, reuse the cloud client for all tiers
+        if config.cloud_only {
+            let cloud_ep = config
+                .cloud_endpoint
+                .as_ref()
+                .context("cloud_only requires cloud_endpoint to be configured")?;
+            let cloud = openai::CompletionsClient::builder()
+                .api_key(&cloud_ep.api_key)
+                .base_url(&cloud_ep.url)
+                .build()
+                .context("Failed to build cloud client")?;
+            // Clone the client for local and reasoning slots
+            let local = openai::CompletionsClient::builder()
+                .api_key(&cloud_ep.api_key)
+                .base_url(&cloud_ep.url)
+                .build()
+                .context("Failed to build cloud-as-local client")?;
+            let reasoning = openai::CompletionsClient::builder()
+                .api_key(&cloud_ep.api_key)
+                .base_url(&cloud_ep.url)
+                .build()
+                .context("Failed to build cloud-as-reasoning client")?;
+            return Ok(Self {
+                local,
+                reasoning,
+                cloud: Some(cloud),
+            });
+        }
+
         let local = openai::CompletionsClient::builder()
             .api_key(&config.fast_endpoint.api_key)
             .base_url(&config.fast_endpoint.url)
@@ -190,10 +246,23 @@ impl ClientSet {
     }
 }
 
-/// Check if an inference endpoint is reachable (GET /v1/models).
+/// Check if an inference endpoint is reachable and has a model loaded.
+///
+/// Queries `GET /v1/models` and optionally verifies that `expected_model` is in
+/// the response. Returns `true` only if the endpoint responds and the model check
+/// passes.
 ///
 /// If `api_key` is provided (and not `"not-needed"`), sends a Bearer auth header.
 pub async fn check_endpoint(url: &str, api_key: Option<&str>) -> bool {
+    check_endpoint_with_model(url, api_key, None).await
+}
+
+/// Like [`check_endpoint`] but also verifies a specific model is loaded.
+pub async fn check_endpoint_with_model(
+    url: &str,
+    api_key: Option<&str>,
+    expected_model: Option<&str>,
+) -> bool {
     let models_url = format!("{url}/models");
     let client = reqwest::Client::new();
     let mut req = client
@@ -207,8 +276,55 @@ pub async fn check_endpoint(url: &str, api_key: Option<&str>) -> bool {
     }
 
     match req.send().await {
-        Ok(resp) => resp.status().is_success(),
-        Err(_) => false,
+        Ok(resp) if resp.status().is_success() => {
+            // If no model check requested, just return reachable
+            let Some(expected) = expected_model else {
+                return true;
+            };
+
+            // Parse the models list to verify expected model is loaded
+            if let Ok(body) = resp.json::<serde_json::Value>().await {
+                let has_model = body["data"]
+                    .as_array()
+                    .map(|models| {
+                        models.iter().any(|m| {
+                            m["id"]
+                                .as_str()
+                                .map(|id| id.contains(expected))
+                                .unwrap_or(false)
+                        })
+                    })
+                    .unwrap_or(false);
+
+                if !has_model {
+                    tracing::warn!(
+                        endpoint = url,
+                        expected_model = expected,
+                        "Endpoint reachable but expected model not loaded"
+                    );
+                }
+                has_model
+            } else {
+                // Couldn't parse body but endpoint is reachable
+                true
+            }
+        }
+        Ok(resp) => {
+            tracing::warn!(
+                endpoint = url,
+                status = %resp.status(),
+                "Endpoint returned non-success status"
+            );
+            false
+        }
+        Err(e) => {
+            tracing::warn!(
+                endpoint = url,
+                error = %e,
+                "Endpoint unreachable"
+            );
+            false
+        }
     }
 }
 

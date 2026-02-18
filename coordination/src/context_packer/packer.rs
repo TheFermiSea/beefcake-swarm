@@ -158,7 +158,8 @@ impl ContextPacker {
                 };
 
                 // Pre-estimate: ~8 chars overhead per line (line num + " | " + newline)
-                let estimated_chars = content.len() + content.lines().count() * 8 + file.len() + 100;
+                let estimated_chars =
+                    content.len() + content.lines().count() * 8 + file.len() + 100;
                 if total_chars + estimated_chars > char_budget {
                     continue; // skip oversized, try smaller files
                 }
@@ -472,7 +473,8 @@ mod tests {
         fs::write(src.join("main.rs"), file_content).unwrap();
 
         let packer = ContextPacker::new(dir.path(), SwarmTier::Integrator);
-        let report = make_report_with_failures(&[("src/main.rs", 2)], &dir.path().display().to_string());
+        let report =
+            make_report_with_failures(&[("src/main.rs", 2)], &dir.path().display().to_string());
 
         let contexts = packer.build_retry_file_contexts(&report, &[]);
 
@@ -527,9 +529,16 @@ mod tests {
 
         // Budget is 32K chars — each file ~20K + formatting overhead.
         // Should include 1 file, skip the rest.
-        assert!(contexts.len() < 3, "Should have trimmed to fit budget, got {}", contexts.len());
+        assert!(
+            contexts.len() < 3,
+            "Should have trimmed to fit budget, got {}",
+            contexts.len()
+        );
         let total_chars: usize = contexts.iter().map(|c| c.content.len()).sum();
-        assert!(total_chars <= 32_000 + 1000, "Total chars {total_chars} exceeds budget");
+        assert!(
+            total_chars <= 32_000 + 1000,
+            "Total chars {total_chars} exceeds budget"
+        );
     }
 
     #[test]
@@ -566,10 +575,8 @@ mod tests {
         fs::write(src.join("main.rs"), "fn main() {}\n").unwrap();
 
         let packer = ContextPacker::new(dir.path(), SwarmTier::Integrator);
-        let report = make_report_with_failures(
-            &[("src/main.rs", 1)],
-            &dir.path().display().to_string(),
-        );
+        let report =
+            make_report_with_failures(&[("src/main.rs", 1)], &dir.path().display().to_string());
         // Same file in both failure_signals and files_touched
         let touched = vec!["src/main.rs".to_string()];
 

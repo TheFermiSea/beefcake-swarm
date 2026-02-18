@@ -48,6 +48,7 @@ pub fn build_cloud_manager(
     model: &str,
     workers: ManagerWorkers,
     wt_path: &Path,
+    verifier_packages: &[String],
 ) -> OaiAgent {
     let mut builder = client
         .agent(model)
@@ -68,7 +69,9 @@ pub fn build_cloud_manager(
     // Deterministic tools — proxy-prefixed for CLIAPIProxy compatibility.
     // The proxy prepends `proxy_` to tool names; pre-prefixing prevents mismatch.
     builder = builder
-        .tool(ProxyRunVerifier(RunVerifierTool::new(wt_path)))
+        .tool(ProxyRunVerifier(
+            RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()),
+        ))
         .tool(ProxyReadFile(ReadFileTool::new(wt_path)))
         .tool(ProxyListFiles(ListFilesTool::new(wt_path)));
 
@@ -88,6 +91,7 @@ pub fn build_local_manager(
     model: &str,
     workers: ManagerWorkers,
     wt_path: &Path,
+    verifier_packages: &[String],
 ) -> OaiAgent {
     let mut builder = client
         .agent(model)
@@ -100,7 +104,7 @@ pub fn build_local_manager(
         .tool(workers.general_coder)
         .tool(workers.reviewer)
         // Deterministic tools
-        .tool(RunVerifierTool::new(wt_path))
+        .tool(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()))
         .tool(ReadFileTool::new(wt_path))
         .tool(ListFilesTool::new(wt_path));
 

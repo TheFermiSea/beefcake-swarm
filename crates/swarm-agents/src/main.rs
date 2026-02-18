@@ -1,15 +1,54 @@
+use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
+use clap::Parser;
 use tracing::{error, info, warn};
 
 use swarm_agents::agents::AgentFactory;
-use swarm_agents::beads_bridge::{BeadsBridge, IssueTracker};
-use swarm_agents::config::{check_endpoint, SwarmConfig};
+use swarm_agents::beads_bridge::{BeadsBridge, BeadsIssue, IssueTracker, NoOpTracker};
+use swarm_agents::config::{check_endpoint_with_model, SwarmConfig};
 use swarm_agents::notebook_bridge::{KnowledgeBase, NotebookBridge};
 use swarm_agents::orchestrator;
 use swarm_agents::prompts;
 use swarm_agents::worktree_bridge::WorktreeBridge;
+
+/// Autonomous coding swarm orchestrator.
+///
+/// Picks the highest-priority issue from beads (or uses --issue for beads-free mode),
+/// creates an isolated worktree, and runs the implement → verify → review → escalate loop.
+#[derive(Parser, Debug)]
+#[command(name = "swarm-agents", version, about)]
+struct CliArgs {
+    /// Path to the target repository root.
+    /// Defaults to the current working directory.
+    #[arg(long)]
+    repo_root: Option<PathBuf>,
+
+    /// Scope verifier to specific cargo packages (repeatable).
+    /// When omitted, targets the entire workspace.
+    #[arg(long = "package", short = 'p')]
+    packages: Vec<String>,
+
+    /// Issue ID for beads-free mode. Use with --objective.
+    /// Bypasses beads entirely — useful for external repos.
+    #[arg(long)]
+    issue: Option<String>,
+
+    /// Issue description/objective (used with --issue).
+    #[arg(long)]
+    objective: Option<String>,
+
+    /// Path to a JSON file defining the issue.
+    /// Expected shape: {"id": "...", "title": "...", "status": "open", "priority": 2}
+    #[arg(long)]
+    issue_file: Option<PathBuf>,
+
+    /// Cloud-only mode: skip local endpoint health checks, route all work through cloud.
+    /// Requires SWARM_CLOUD_URL to be configured.
+    #[arg(long)]
+    cloud_only: bool,
+}
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -19,7 +58,17 @@ async fn main() -> Result<()> {
         )
         .init();
 
-    let config = SwarmConfig::default();
+    let args = CliArgs::parse();
+
+    let mut config = SwarmConfig::default();
+
+    // Apply CLI overrides
+    if !args.packages.is_empty() {
+        config.verifier_packages = args.packages;
+    }
+    if args.cloud_only {
+        config.cloud_only = true;
+    }
     info!(
         fast = %config.fast_endpoint.url,
         coder = %config.coder_endpoint.url,
@@ -30,25 +79,49 @@ async fn main() -> Result<()> {
         "Swarm orchestrator starting"
     );
 
-    // --- Health check endpoints ---
-    let local_ok = check_endpoint(
-        &config.fast_endpoint.url,
-        Some(&config.fast_endpoint.api_key),
-    )
-    .await;
-    let reasoning_ok = check_endpoint(
-        &config.reasoning_endpoint.url,
-        Some(&config.reasoning_endpoint.api_key),
-    )
-    .await;
-    info!(local_ok, reasoning_ok, "Endpoint health check");
+    // --- Health check endpoints with model verification ---
+    if config.cloud_only {
+        info!("Cloud-only mode — skipping local endpoint health checks");
+        if config.cloud_endpoint.is_none() {
+            error!("--cloud-only requires SWARM_CLOUD_URL to be configured");
+            anyhow::bail!("Cloud-only mode requires cloud_endpoint");
+        }
+    } else {
+        let local_ok = check_endpoint_with_model(
+            &config.fast_endpoint.url,
+            Some(&config.fast_endpoint.api_key),
+            Some(&config.fast_endpoint.model),
+        )
+        .await;
+        let reasoning_ok = check_endpoint_with_model(
+            &config.reasoning_endpoint.url,
+            Some(&config.reasoning_endpoint.api_key),
+            Some(&config.reasoning_endpoint.model),
+        )
+        .await;
+        info!(local_ok, reasoning_ok, "Endpoint health check");
+        if !local_ok {
+            warn!(
+                url = %config.fast_endpoint.url,
+                model = %config.fast_endpoint.model,
+                "Fast endpoint not ready. Start inference: sbatch run-14b.slurm"
+            );
+        }
+        if !reasoning_ok {
+            warn!(
+                url = %config.reasoning_endpoint.url,
+                model = %config.reasoning_endpoint.model,
+                "Reasoning endpoint not ready. Start inference: sbatch run-72b-distributed.slurm"
+            );
+        }
 
-    if !local_ok && !reasoning_ok {
-        if config.cloud_endpoint.is_some() {
-            warn!("Local endpoints down — will attempt cloud-only mode");
-        } else {
-            error!("All endpoints unreachable and no cloud configured — exiting");
-            anyhow::bail!("No inference endpoints available");
+        if !local_ok && !reasoning_ok {
+            if config.cloud_endpoint.is_some() {
+                warn!("Local endpoints down — will attempt cloud-only mode");
+            } else {
+                error!("All endpoints unreachable and no cloud configured — exiting");
+                anyhow::bail!("No inference endpoints available");
+            }
         }
     }
 
@@ -80,45 +153,95 @@ async fn main() -> Result<()> {
         factory = factory.with_notebook_bridge(kb.clone());
     }
 
-    // --- Initialize beads bridge ---
-    let beads = BeadsBridge::new();
-
     // Detect repo root
-    let repo_root = std::env::current_dir()?;
+    let repo_root = match &args.repo_root {
+        Some(path) => path
+            .canonicalize()
+            .context("--repo-root path does not exist")?,
+        None => std::env::current_dir()?,
+    };
     let worktree_bridge = WorktreeBridge::new(config.worktree_base.clone(), &repo_root)?;
 
-    // --- Pick highest-priority ready (unblocked) issue ---
-    let issues = match beads.list_ready() {
-        Ok(issues) => issues,
-        Err(e) => {
-            warn!("Beads not available: {e}");
-            info!("No issues to process. Orchestrator exiting.");
-            return Ok(());
-        }
-    };
-
-    if issues.is_empty() {
-        info!("No ready issues. Orchestrator exiting.");
-        return Ok(());
-    }
-
-    // Sort by priority (lowest number = highest priority), pick first
-    let mut sorted = issues;
-    sorted.sort_by_key(|i| i.priority.unwrap_or(4));
-    let issue = &sorted[0];
-
-    info!(
-        id = %issue.id,
-        title = %issue.title,
-        priority = ?issue.priority,
-        "Picked issue to work on"
-    );
-
-    // --- Process the issue ---
+    // --- Issue selection: 3 branches ---
     let kb_ref: Option<&dyn KnowledgeBase> = knowledge_base
         .as_ref()
         .map(|kb| kb.as_ref() as &dyn KnowledgeBase);
-    orchestrator::process_issue(&config, &factory, &worktree_bridge, issue, &beads, kb_ref).await?;
+
+    if let Some(ref issue_id) = args.issue {
+        // Branch 1: --issue provided → beads-free synthetic issue
+        let title = args
+            .objective
+            .clone()
+            .unwrap_or_else(|| format!("CLI issue: {issue_id}"));
+        let issue = BeadsIssue {
+            id: issue_id.clone(),
+            title,
+            status: "open".to_string(),
+            priority: Some(1),
+            issue_type: Some("task".to_string()),
+        };
+        let tracker = NoOpTracker;
+        info!(id = %issue.id, title = %issue.title, "Beads-free mode: processing CLI issue");
+        orchestrator::process_issue(
+            &config,
+            &factory,
+            &worktree_bridge,
+            &issue,
+            &tracker,
+            kb_ref,
+        )
+        .await?;
+    } else if let Some(ref issue_path) = args.issue_file {
+        // Branch 2: --issue-file provided → deserialize from JSON
+        let contents = std::fs::read_to_string(issue_path).context(format!(
+            "Failed to read issue file: {}",
+            issue_path.display()
+        ))?;
+        let issue: BeadsIssue =
+            serde_json::from_str(&contents).context("Failed to parse issue JSON")?;
+        let tracker = NoOpTracker;
+        info!(id = %issue.id, title = %issue.title, "Beads-free mode: processing issue from file");
+        orchestrator::process_issue(
+            &config,
+            &factory,
+            &worktree_bridge,
+            &issue,
+            &tracker,
+            kb_ref,
+        )
+        .await?;
+    } else {
+        // Branch 3: Default — pick from beads
+        let beads = BeadsBridge::new();
+        let issues = match beads.list_ready() {
+            Ok(issues) => issues,
+            Err(e) => {
+                warn!("Beads not available: {e}");
+                info!("No issues to process. Orchestrator exiting.");
+                return Ok(());
+            }
+        };
+
+        if issues.is_empty() {
+            info!("No ready issues. Orchestrator exiting.");
+            return Ok(());
+        }
+
+        // Sort by priority (lowest number = highest priority), pick first
+        let mut sorted = issues;
+        sorted.sort_by_key(|i| i.priority.unwrap_or(4));
+        let issue = &sorted[0];
+
+        info!(
+            id = %issue.id,
+            title = %issue.title,
+            priority = ?issue.priority,
+            "Picked issue to work on"
+        );
+
+        orchestrator::process_issue(&config, &factory, &worktree_bridge, issue, &beads, kb_ref)
+            .await?;
+    }
 
     Ok(())
 }

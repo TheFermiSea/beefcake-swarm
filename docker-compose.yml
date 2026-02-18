@@ -1,0 +1,61 @@
+# Docker Compose for beefcake-swarm without SLURM/Apptainer
+#
+# Usage:
+#   docker compose up swarm-agents                          # cloud-only mode
+#   docker compose --profile local-inference up             # with local llama-server
+#
+# Mount your target repo at /workspace and set SWARM_* env vars.
+
+services:
+  swarm-agents:
+    build: .
+    volumes:
+      # Mount target repository
+      - ${SWARM_REPO_PATH:-.}:/workspace
+      # Worktree scratch space
+      - swarm-worktrees:/tmp/swarm-worktrees
+    environment:
+      # Inference endpoints (override for local or remote)
+      - SWARM_FAST_URL=${SWARM_FAST_URL:-http://llama-server:8080/v1}
+      - SWARM_CODER_URL=${SWARM_CODER_URL:-http://llama-server:8080/v1}
+      - SWARM_REASONING_URL=${SWARM_REASONING_URL:-http://llama-server:8080/v1}
+      # Cloud proxy (CLIAPIProxy or direct API)
+      - SWARM_CLOUD_URL=${SWARM_CLOUD_URL:-}
+      - SWARM_CLOUD_API_KEY=${SWARM_CLOUD_API_KEY:-}
+      - SWARM_CLOUD_MODEL=${SWARM_CLOUD_MODEL:-}
+      # Optional cloud-only mode (skip local endpoint checks)
+      - SWARM_CLOUD_ONLY=${SWARM_CLOUD_ONLY:-0}
+      # Verifier
+      - SWARM_VERIFIER_PACKAGES=${SWARM_VERIFIER_PACKAGES:-}
+      # Webhook for intervention notifications
+      - SWARM_WEBHOOK_URL=${SWARM_WEBHOOK_URL:-}
+    depends_on:
+      llama-server:
+        condition: service_started
+        required: false
+
+  # Optional local inference sidecar
+  # Activate with: docker compose --profile local-inference up
+  llama-server:
+    image: ghcr.io/ggerganov/llama.cpp:server
+    profiles: ["local-inference"]
+    volumes:
+      - ${SWARM_MODEL_PATH:-./models}:/models
+    command: >
+      --model /models/${SWARM_MODEL_FILE:-model.gguf}
+      --host 0.0.0.0
+      --port 8080
+      --ctx-size 8192
+      --n-gpu-layers 99
+    ports:
+      - "8080:8080"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  swarm-worktrees:

@@ -21,13 +21,21 @@ pub struct RunVerifierArgs {
 /// and return a structured report.
 pub struct RunVerifierTool {
     pub working_dir: PathBuf,
+    /// Scope cargo commands to specific packages (empty = whole workspace).
+    pub packages: Vec<String>,
 }
 
 impl RunVerifierTool {
     pub fn new(working_dir: &Path) -> Self {
         Self {
             working_dir: working_dir.to_path_buf(),
+            packages: Vec::new(),
         }
+    }
+
+    pub fn with_packages(mut self, packages: Vec<String>) -> Self {
+        self.packages = packages;
+        self
     }
 }
 
@@ -59,11 +67,12 @@ impl Tool for RunVerifierTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         use coordination::verifier::{Verifier, VerifierConfig};
 
-        let config = match args.mode.as_deref() {
+        let mut config = match args.mode.as_deref() {
             Some("quick") => VerifierConfig::quick(),
             Some("compile") => VerifierConfig::compile_only(),
             _ => VerifierConfig::default(),
         };
+        config.packages = self.packages.clone();
 
         let verifier = Verifier::new(&self.working_dir, config);
         let report = verifier.run_pipeline().await;
