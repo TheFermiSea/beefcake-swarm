@@ -28,13 +28,12 @@ fi
 # Required because a previous `git pull` as root may have locked these.
 chown -R brian:hpc "${REPO_DIR}/.git" 2>/dev/null || true
 
-# Patch beads metadata to use sqlite/JSONL instead of dolt.
-# The container doesn't have dolt installed; bd will auto-create
-# a sqlite DB from the JSONL export on first access.
-BEADS_META="${REPO_DIR}/.beads/metadata.json"
-if [ -f "$BEADS_META" ] && grep -q '"dolt"' "$BEADS_META"; then
-    echo '{"database":"beads.db","jsonl_export":"issues.jsonl","backend":"sqlite"}' > "$BEADS_META"
-    echo "Patched beads metadata to sqlite backend"
+# bd v0.52.0 (non-CGO) requires dolt which isn't in the container.
+# Use a lightweight Python shim that reads/writes .beads/issues.jsonl directly.
+BD_SHIM="${REPO_DIR}/scripts/bd-jsonl-shim.py"
+if [ -f "$BD_SHIM" ]; then
+    chmod +x "$BD_SHIM"
+    echo "Using bd-jsonl-shim for beads operations"
 fi
 
 # --cleanenv: clean environment (only explicit --env vars)
@@ -63,7 +62,7 @@ apptainer exec \
     --env "SWARM_CLOUD_MODEL=claude-opus-4-5-20251101" \
     --env "SWARM_VALIDATOR_MODEL_1=gemini-3-pro-preview" \
     --env "SWARM_VALIDATOR_MODEL_2=claude-sonnet-4-5-20250929" \
-    --env "SWARM_BEADS_BIN=bd" \
+    --env "SWARM_BEADS_BIN=${REPO_DIR}/scripts/bd-jsonl-shim.py" \
     --env "SWARM_NLM_BIN=/cluster/shared/tools/nlm/bin/nlm" \
     --env "NOTEBOOKLM_MCP_CLI_PATH=/cluster/shared/tools/nlm/config" \
     --env "GIT_AUTHOR_NAME=Swarm Agent" \
