@@ -93,6 +93,7 @@ impl WorktreeBridge {
     /// Create a new worktree for the given issue, branching from HEAD.
     ///
     /// Creates branch `swarm/<issue_id>` and places the worktree at `<base_dir>/<issue_id>`.
+    #[tracing::instrument(skip(self), fields(issue_id = %issue_id))]
     pub fn create(&self, issue_id: &str) -> Result<PathBuf> {
         let safe_id = Self::sanitize_id(issue_id);
         let wt_path = self.base_dir.join(&safe_id);
@@ -207,6 +208,7 @@ impl WorktreeBridge {
     /// 2. Merges `swarm/<issue_id>` with --no-ff
     /// 3. Removes the worktree
     /// 4. Deletes the branch
+    #[tracing::instrument(skip(self), fields(issue_id = %issue_id))]
     pub fn merge_and_remove(&self, issue_id: &str) -> Result<()> {
         let safe_id = Self::sanitize_id(issue_id);
         let wt_path = self.base_dir.join(&safe_id);
@@ -298,6 +300,7 @@ impl WorktreeBridge {
     /// 4. Force-deletes the branch
     ///
     /// Always returns `Ok(())` regardless of individual step failures.
+    #[tracing::instrument(skip(self), fields(issue_id = %issue_id))]
     pub fn cleanup(&self, issue_id: &str) -> Result<()> {
         let safe_id = Self::sanitize_id(issue_id);
         let wt_path = self.base_dir.join(&safe_id);

@@ -49,6 +49,7 @@ impl ContextPacker {
     }
 
     /// Initial pack: walks worktree, gathers file headers within token budget (no prior failures).
+    #[tracing::instrument(skip(self, objective), fields(bead_id = %bead_id))]
     pub fn pack_initial(&self, bead_id: &str, objective: &str) -> WorkPacket {
         let rust_files = self.file_walker.rust_files();
 
@@ -85,6 +86,7 @@ impl ContextPacker {
     /// full file content to fix cascading errors and understand the broader context.
     /// Without this, iteration 2+ gets ~300-700 tokens vs ~24K on iteration 1
     /// (the "retry context collapse" bug from job 1653).
+    #[tracing::instrument(skip(self, objective, verifier_report, escalation_state), fields(bead_id = %bead_id, iteration = %escalation_state.total_iterations))]
     pub fn pack_retry(
         &self,
         bead_id: &str,
