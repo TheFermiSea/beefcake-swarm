@@ -171,6 +171,7 @@ impl WorkPacketGenerator {
             decisions: vec![],           // Populated from Decision Journal
             generated_at: Utc::now(),
             max_patch_loc: self.default_max_loc,
+            delegation_chain: vec![], // Populated during manager-to-manager handoffs
         }
     }
 

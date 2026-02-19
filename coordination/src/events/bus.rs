@@ -278,7 +278,7 @@ mod tests {
         assert_eq!(bus.subscriber_count(), 2);
 
         let event = EnsembleEvent::ModelLoaded {
-            model_id: ModelId::Behemoth,
+            model_id: ModelId::Opus45,
             load_time_ms: 1000,
             timestamp: Utc::now(),
         };
@@ -314,7 +314,7 @@ mod tests {
         };
 
         let non_matching_type = EnsembleEvent::ModelLoaded {
-            model_id: ModelId::Behemoth,
+            model_id: ModelId::Opus45,
             load_time_ms: 1000,
             timestamp: Utc::now(),
         };
@@ -348,7 +348,7 @@ mod tests {
             bus_clone
                 .publish(EnsembleEvent::ResultSubmitted {
                     task_id: "target-task".to_string(),
-                    model_id: ModelId::Behemoth,
+                    model_id: ModelId::Opus45,
                     confidence: 0.9,
                     tokens_used: 100,
                     latency_ms: 500,

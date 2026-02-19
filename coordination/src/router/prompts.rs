@@ -341,15 +341,8 @@ impl GenerationPromptBuilder {
 pub struct SystemPrompts;
 
 impl SystemPrompts {
-    /// System prompt for fast model (Strand)
-    pub fn fast() -> &'static str {
-        r#"You are an expert Rust coder. Write clean, idiomatic Rust code that compiles.
-Focus on correctness first, then clarity. Use proper error handling with Result and Option.
-Return ONLY the code, no explanations or markdown formatting."#
-    }
-
-    /// System prompt for specialized model (Hydra)
-    pub fn specialized() -> &'static str {
+    /// System prompt for worker model (HydraCoder)
+    pub fn worker() -> &'static str {
         r#"You are HydraCoder, a specialized Rust code generator trained on 180k+ Rust samples.
 Your expertise includes:
 - Complex lifetime and borrowing patterns
@@ -362,8 +355,8 @@ Prioritize compile-time safety and performance.
 Return ONLY the code, no explanations or markdown formatting."#
     }
 
-    /// System prompt for reasoning model (OR1)
-    pub fn reasoning() -> &'static str {
+    /// System prompt for manager council
+    pub fn council() -> &'static str {
         r#"You are an expert Rust architect with deep knowledge of:
 - Ownership, borrowing, and lifetime patterns
 - Async/await and the Tokio ecosystem
@@ -385,9 +378,8 @@ Return the code without markdown formatting."#
     /// Get system prompt for a tier
     pub fn for_tier(tier: &super::task_classifier::ModelTier) -> &'static str {
         match tier {
-            super::task_classifier::ModelTier::Fast => Self::fast(),
-            super::task_classifier::ModelTier::Specialized => Self::specialized(),
-            super::task_classifier::ModelTier::Reasoning => Self::reasoning(),
+            super::task_classifier::ModelTier::Worker => Self::worker(),
+            super::task_classifier::ModelTier::Council => Self::council(),
         }
     }
 }
@@ -421,8 +413,7 @@ mod tests {
 
     #[test]
     fn test_system_prompts() {
-        assert!(SystemPrompts::fast().contains("idiomatic"));
-        assert!(SystemPrompts::specialized().contains("HydraCoder"));
-        assert!(SystemPrompts::reasoning().contains("architect"));
+        assert!(SystemPrompts::worker().contains("HydraCoder"));
+        assert!(SystemPrompts::council().contains("architect"));
     }
 }

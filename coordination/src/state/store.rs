@@ -456,7 +456,7 @@ mod tests {
 
         let result = ModelResult::new(
             "task-1".to_string(),
-            ModelId::Behemoth,
+            ModelId::Opus45,
             "Test response".to_string(),
             100,
             500,
@@ -464,7 +464,7 @@ mod tests {
 
         store.put_result(&result).unwrap();
         let retrieved = store
-            .get_result("task-1", &ModelId::Behemoth)
+            .get_result("task-1", &ModelId::Opus45)
             .unwrap()
             .unwrap();
 

@@ -71,4 +71,5 @@ apptainer exec \
     --env "GIT_COMMITTER_EMAIL=swarm@beefcake.local" \
     --env "PATH=/cluster/shared/tools/nlm/bin:/usr/local/cargo/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
     "$SIF" \
-    stdbuf -oL -eL cargo run -p swarm-agents --release
+    stdbuf -oL -eL cargo run -p swarm-agents --release \
+    ${SWARM_ISSUE_ID:+--issue "$SWARM_ISSUE_ID" --objective "See beads issue $SWARM_ISSUE_ID for full spec"}

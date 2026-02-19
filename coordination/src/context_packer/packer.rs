@@ -21,9 +21,9 @@ static STDERR_FILE_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// Token budgets per tier (4 chars ≈ 1 token, matching `estimated_tokens()`)
 fn max_context_tokens(tier: SwarmTier) -> usize {
     match tier {
-        SwarmTier::Implementer => 8_000,
-        SwarmTier::Integrator | SwarmTier::Adversary => 24_000,
-        SwarmTier::Cloud => 32_000,
+        SwarmTier::Worker => 8_000,
+        SwarmTier::Council => 32_000,
+        SwarmTier::Human => 32_000,
     }
 }
 
@@ -404,7 +404,7 @@ mod tests {
             .output()
             .unwrap();
 
-        let packer = ContextPacker::new(dir.path(), SwarmTier::Implementer);
+        let packer = ContextPacker::new(dir.path(), SwarmTier::Worker);
         let packet = packer.pack_initial("beads-test", "Test objective");
 
         assert_eq!(packet.bead_id, "beads-test");
@@ -416,21 +416,21 @@ mod tests {
 
     #[test]
     fn test_token_budgets() {
-        assert_eq!(max_context_tokens(SwarmTier::Implementer), 8_000);
-        assert_eq!(max_context_tokens(SwarmTier::Integrator), 24_000);
-        assert_eq!(max_context_tokens(SwarmTier::Cloud), 32_000);
+        assert_eq!(max_context_tokens(SwarmTier::Worker), 8_000);
+        assert_eq!(max_context_tokens(SwarmTier::Council), 32_000);
+        assert_eq!(max_context_tokens(SwarmTier::Human), 32_000);
     }
 
     #[test]
     fn test_trim_to_budget() {
         let dir = tempfile::tempdir().unwrap();
-        let packer = ContextPacker::new(dir.path(), SwarmTier::Implementer);
+        let packer = ContextPacker::new(dir.path(), SwarmTier::Worker);
 
         let state = EscalationState::new("test");
         let mut packet =
             packer
                 .generator
-                .generate("test", "test obj", SwarmTier::Implementer, &state, None);
+                .generate("test", "test obj", SwarmTier::Worker, &state, None);
 
         // Add a bunch of large file contexts to blow the budget
         for i in 0..100 {
@@ -472,7 +472,7 @@ mod tests {
         let file_content = "fn main() {\n    let x: i32 = \"hello\";\n    println!(\"{x}\");\n}\n";
         fs::write(src.join("main.rs"), file_content).unwrap();
 
-        let packer = ContextPacker::new(dir.path(), SwarmTier::Integrator);
+        let packer = ContextPacker::new(dir.path(), SwarmTier::Council);
         let report =
             make_report_with_failures(&[("src/main.rs", 2)], &dir.path().display().to_string());
 
@@ -495,7 +495,7 @@ mod tests {
         fs::write(src.join("lib.rs"), "pub mod foo;\n").unwrap();
         fs::write(src.join("foo.rs"), "pub fn foo() {}\n").unwrap();
 
-        let packer = ContextPacker::new(dir.path(), SwarmTier::Integrator);
+        let packer = ContextPacker::new(dir.path(), SwarmTier::Council);
         let report = VerifierReport::new(dir.path().display().to_string());
         let touched = vec!["src/lib.rs".to_string(), "src/foo.rs".to_string()];
 
@@ -519,7 +519,7 @@ mod tests {
         fs::write(src.join("b.rs"), &big_content).unwrap();
         fs::write(src.join("c.rs"), &big_content).unwrap();
 
-        let packer = ContextPacker::new(dir.path(), SwarmTier::Implementer);
+        let packer = ContextPacker::new(dir.path(), SwarmTier::Worker);
         let report = make_report_with_failures(
             &[("src/a.rs", 1), ("src/b.rs", 1), ("src/c.rs", 1)],
             &dir.path().display().to_string(),
@@ -553,7 +553,7 @@ mod tests {
         fs::write(src.join("huge.rs"), &huge_content).unwrap();
         fs::write(src.join("small.rs"), small_content).unwrap();
 
-        let packer = ContextPacker::new(dir.path(), SwarmTier::Implementer);
+        let packer = ContextPacker::new(dir.path(), SwarmTier::Worker);
         let report = make_report_with_failures(
             &[("src/huge.rs", 1), ("src/small.rs", 1)],
             &dir.path().display().to_string(),
@@ -574,7 +574,7 @@ mod tests {
 
         fs::write(src.join("main.rs"), "fn main() {}\n").unwrap();
 
-        let packer = ContextPacker::new(dir.path(), SwarmTier::Integrator);
+        let packer = ContextPacker::new(dir.path(), SwarmTier::Council);
         let report =
             make_report_with_failures(&[("src/main.rs", 1)], &dir.path().display().to_string());
         // Same file in both failure_signals and files_touched
@@ -594,7 +594,7 @@ mod tests {
 
         fs::write(src.join("lib.rs"), "pub fn broken() -> i32 { \"oops\" }\n").unwrap();
 
-        let packer = ContextPacker::new(dir.path(), SwarmTier::Integrator);
+        let packer = ContextPacker::new(dir.path(), SwarmTier::Council);
         let mut report = VerifierReport::new(dir.path().display().to_string());
         report.gates.push(GateResult {
             gate: "check".to_string(),

@@ -16,31 +16,31 @@ use thiserror::Error;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InferenceTier {
-    /// Fast 14B model for latency-critical tasks
-    Fast,
-    /// Reasoning 72B model for complex architecture decisions
-    Reasoning,
+    /// HydraCoder worker on vasp-02
+    Worker,
+    /// Qwen3.5 distributed manager on vasp-01+vasp-03
+    ManagerLocal,
 }
 
 impl InferenceTier {
     pub fn job_script(&self) -> &'static str {
         match self {
-            Self::Fast => "run-14b.slurm",
-            Self::Reasoning => "run-72b-distributed.slurm",
+            Self::Worker => "run-worker.slurm",
+            Self::ManagerLocal => "run-qwen35-distributed.slurm",
         }
     }
 
     pub fn model_name(&self) -> &'static str {
         match self {
-            Self::Fast => "strand-rust-coder-14b",
-            Self::Reasoning => "OR1-Behemoth",
+            Self::Worker => "HydraCoder",
+            Self::ManagerLocal => "Qwen3.5",
         }
     }
 
     pub fn expected_tok_per_sec(&self) -> (u32, u32) {
         match self {
-            Self::Fast => (25, 45),
-            Self::Reasoning => (12, 20),
+            Self::Worker => (30, 50),
+            Self::ManagerLocal => (5, 12),
         }
     }
 }
@@ -48,8 +48,8 @@ impl InferenceTier {
 impl std::fmt::Display for InferenceTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Fast => write!(f, "fast"),
-            Self::Reasoning => write!(f, "reasoning"),
+            Self::Worker => write!(f, "worker"),
+            Self::ManagerLocal => write!(f, "manager-local"),
         }
     }
 }
@@ -417,10 +417,10 @@ impl SlurmInferenceManager {
         let jobs = self.list_active_jobs()?;
 
         for job in jobs {
-            let tier = if job.name.contains("14b") {
-                InferenceTier::Fast
-            } else if job.name.contains("72b") {
-                InferenceTier::Reasoning
+            let tier = if job.name.contains("worker") || job.name.contains("hydra") {
+                InferenceTier::Worker
+            } else if job.name.contains("qwen35") || job.name.contains("manager") {
+                InferenceTier::ManagerLocal
             } else {
                 continue; // Unknown job type
             };
@@ -607,8 +607,8 @@ impl SlurmInferenceManager {
         tier: InferenceTier,
     ) -> Result<Option<EndpointInfo>, SlurmError> {
         let pattern = match tier {
-            InferenceTier::Fast => "*-14b.json",
-            InferenceTier::Reasoning => "*-72b.json",
+            InferenceTier::Worker => "*-worker.json",
+            InferenceTier::ManagerLocal => "*-qwen35.json",
         };
 
         // List endpoint files
@@ -835,7 +835,7 @@ impl SlurmInferenceManager {
 
         // For Reasoning tier (distributed 72B), tensors are split across ALL GPUs.
         // If ANY worker is unhealthy, the model cannot function - it's Unhealthy, not Degraded.
-        let is_distributed = endpoint.tier == "reasoning" || endpoint.rpc_workers.is_some();
+        let is_distributed = endpoint.tier == "manager-local" || endpoint.rpc_workers.is_some();
         let state = if healthy_count == 0 {
             EndpointHealth::Unhealthy
         } else if is_distributed && !unhealthy_workers.is_empty() {
@@ -1209,7 +1209,7 @@ impl SlurmInferenceManager {
             "squeue",
             &[
                 "-n",
-                "llama-14b,llama-72b",
+                "llama-worker,llama-qwen35",
                 "-o",
                 "%i|%j|%T|%N|%P|%M|%l",
                 "--noheader",
@@ -1260,8 +1260,8 @@ mod tests {
 
     #[test]
     fn test_inference_tier_display() {
-        assert_eq!(InferenceTier::Fast.to_string(), "fast");
-        assert_eq!(InferenceTier::Reasoning.to_string(), "reasoning");
+        assert_eq!(InferenceTier::Worker.to_string(), "worker");
+        assert_eq!(InferenceTier::ManagerLocal.to_string(), "manager-local");
     }
 
     #[test]
@@ -1274,10 +1274,10 @@ mod tests {
 
     #[test]
     fn test_tier_job_script() {
-        assert_eq!(InferenceTier::Fast.job_script(), "run-14b.slurm");
+        assert_eq!(InferenceTier::Worker.job_script(), "run-worker.slurm");
         assert_eq!(
-            InferenceTier::Reasoning.job_script(),
-            "run-72b-distributed.slurm"
+            InferenceTier::ManagerLocal.job_script(),
+            "run-qwen35-distributed.slurm"
         );
     }
 

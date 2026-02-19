@@ -305,6 +305,7 @@ dependencies = [
  "bincode",
  "chrono",
  "clap",
+ "futures",
  "ignore",
  "regex",
  "reqwest",

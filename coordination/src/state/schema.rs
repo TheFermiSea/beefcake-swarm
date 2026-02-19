@@ -21,6 +21,9 @@ pub const CF_CONTEXT: &str = "context";
 /// Column family for event history
 pub const CF_EVENTS: &str = "events";
 
+/// Column family for inter-manager delegation tracking
+pub const CF_DELEGATIONS: &str = "delegations";
+
 /// All column family names
 pub const ALL_CFS: &[&str] = &[
     CF_SESSIONS,
@@ -29,6 +32,7 @@ pub const ALL_CFS: &[&str] = &[
     CF_VOTING,
     CF_CONTEXT,
     CF_EVENTS,
+    CF_DELEGATIONS,
 ];
 
 /// Key prefixes for compound keys
@@ -61,6 +65,11 @@ pub mod keys {
     /// Create an event key (timestamp-based for ordering)
     pub fn event(timestamp_nanos: i64, event_id: &str) -> String {
         format!("evt:{:020}:{}", timestamp_nanos, event_id)
+    }
+
+    /// Create a delegation key
+    pub fn delegation(session_id: &str, delegation_id: &str) -> String {
+        format!("deleg:{}:{}", session_id, delegation_id)
     }
 
     /// Parse event timestamp from key

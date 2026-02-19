@@ -364,7 +364,7 @@ mod tests {
         // Add results
         let result1 = ModelResult::new(
             task.id.clone(),
-            ModelId::StrandCoder,
+            ModelId::Gemini3Pro,
             "Response 1".to_string(),
             100,
             200,
@@ -373,7 +373,7 @@ mod tests {
 
         let result2 = ModelResult::new(
             task.id.clone(),
-            ModelId::Behemoth,
+            ModelId::Opus45,
             "Response 2".to_string(),
             150,
             500,
@@ -388,7 +388,7 @@ mod tests {
             .request_arbitration(
                 &task.id,
                 ArbitrationReason::TieVote {
-                    tied_models: vec![ModelId::StrandCoder, ModelId::Behemoth],
+                    tied_models: vec![ModelId::Gemini3Pro, ModelId::Opus45],
                 },
             )
             .unwrap();
@@ -412,7 +412,7 @@ mod tests {
         // Add result
         let result = ModelResult::new(
             task.id.clone(),
-            ModelId::Behemoth,
+            ModelId::Opus45,
             "Final response".to_string(),
             100,
             500,
@@ -421,7 +421,7 @@ mod tests {
 
         // Apply decision
         let decision = ArbitrationDecision {
-            winner: ModelId::Behemoth,
+            winner: ModelId::Opus45,
             rationale: "Best technical approach".to_string(),
             modified_response: None,
             notes: None,
@@ -432,7 +432,7 @@ mod tests {
         // Verify
         let updated_task = store.get_task(&task.id).unwrap().unwrap();
         assert_eq!(updated_task.status, TaskStatus::Completed);
-        assert_eq!(updated_task.winning_model, Some(ModelId::Behemoth));
+        assert_eq!(updated_task.winning_model, Some(ModelId::Opus45));
     }
 
     #[test]
@@ -442,11 +442,11 @@ mod tests {
         let request = ArbitrationRequest {
             task_id: "task-1".to_string(),
             reason: ArbitrationReason::TieVote {
-                tied_models: vec![ModelId::StrandCoder, ModelId::HydraCoder],
+                tied_models: vec![ModelId::Gemini3Pro, ModelId::HydraCoder],
             },
             responses: vec![
                 ModelResponseSummary {
-                    model_id: ModelId::StrandCoder,
+                    model_id: ModelId::Gemini3Pro,
                     response: "Response A".to_string(),
                     reasoning: Some("Reasoning A".to_string()),
                     confidence: 0.75,

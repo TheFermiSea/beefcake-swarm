@@ -563,24 +563,17 @@ pub async fn process_issue(
 
     // --- Escalation state ---
     //
-    // Start at Integrator tier (cloud-backed manager) from the beginning.
+    // Start at Council tier (cloud-backed manager) from the beginning.
     // Cloud models (Opus 4.6) are the managers; local models are workers.
-    // Integrator gets 6 iterations, Cloud overflow gets 4 more (same manager).
+    // Council gets 6 iterations before escalating to Human.
     let engine = EscalationEngine::new();
     let mut escalation = EscalationState::new(&issue.id)
-        .with_initial_tier(SwarmTier::Integrator)
+        .with_initial_tier(SwarmTier::Council)
         .with_budget(
-            SwarmTier::Integrator,
+            SwarmTier::Council,
             TierBudget {
                 max_iterations: 6,
                 max_consultations: 6,
-            },
-        )
-        .with_budget(
-            SwarmTier::Cloud,
-            TierBudget {
-                max_iterations: 4,
-                max_consultations: 4,
             },
         );
     let mut success = false;
@@ -699,15 +692,15 @@ pub async fn process_issue(
         // --- Route to agent based on current tier ---
         //
         // Hierarchy (cloud available):
-        //   Implementer: local coders (strand-14B, Qwen3-Coder-Next)
-        //   Integrator+Cloud: cloud-backed manager (Opus 4.6) with all local workers as tools
+        //   Worker: local coders (strand-14B, Qwen3-Coder-Next)
+        //   Council+Human: cloud-backed manager (Opus 4.6) with all local workers as tools
         //
         // Hierarchy (no cloud):
-        //   Implementer: local coders
-        //   Integrator+Cloud: local manager (OR1-Behemoth) with coders as tools
+        //   Worker: local coders
+        //   Council+Human: local manager (OR1-Behemoth) with coders as tools
         let agent_start = std::time::Instant::now();
         let agent_future = match tier {
-            SwarmTier::Implementer | SwarmTier::Adversary => {
+            SwarmTier::Worker => {
                 let recent_cats: Vec<ErrorCategory> = escalation
                     .recent_error_categories
                     .last()
@@ -727,7 +720,7 @@ pub async fn process_issue(
                     }
                 }
             }
-            SwarmTier::Integrator | SwarmTier::Cloud => {
+            SwarmTier::Council | SwarmTier::Human => {
                 info!(
                     iteration,
                     "Routing to manager (cloud-backed or OR1 fallback)"
@@ -1378,7 +1371,7 @@ mod tests {
             failure_signals: vec![],
             constraints: vec![],
             iteration,
-            target_tier: SwarmTier::Implementer,
+            target_tier: SwarmTier::Worker,
             escalation_reason: None,
             error_history: vec![],
             previous_attempts: vec![],
@@ -1387,6 +1380,7 @@ mod tests {
             decisions: vec![],
             generated_at: Utc::now(),
             max_patch_loc: 200,
+            delegation_chain: vec![],
         }
     }
 
