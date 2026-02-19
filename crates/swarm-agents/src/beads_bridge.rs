@@ -11,6 +11,28 @@ pub struct BeadsIssue {
     pub priority: Option<u8>,
     #[serde(rename = "type")]
     pub issue_type: Option<String>,
+    #[serde(default)]
+    pub labels: Vec<String>,
+}
+
+impl BeadsIssue {
+    /// Returns a complexity sort key based on the `swarm_complexity` label.
+    /// Lower = simpler = preferred by the orchestrator.
+    /// - "additive"     → 0
+    /// - "modify_small" → 1
+    /// - "modify_large" → 2
+    /// - unlabelled     → 1  (treat as modify_small when unknown)
+    pub fn swarm_complexity_rank(&self) -> u8 {
+        for label in &self.labels {
+            match label.as_str() {
+                "additive" => return 0,
+                "modify_small" => return 1,
+                "modify_large" => return 2,
+                _ => {}
+            }
+        }
+        1 // default: treat as modify_small
+    }
 }
 
 /// Abstraction over issue tracking backends.

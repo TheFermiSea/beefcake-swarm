@@ -179,6 +179,7 @@ async fn main() -> Result<()> {
             status: "open".to_string(),
             priority: Some(1),
             issue_type: Some("task".to_string()),
+            labels: vec![],
         };
         let tracker = NoOpTracker;
         info!(id = %issue.id, title = %issue.title, "Beads-free mode: processing CLI issue");
@@ -227,9 +228,10 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        // Sort by priority (lowest number = highest priority), pick first
+        // Sort by priority (lowest = highest priority), then swarm_complexity (simpler first).
+        // Dogfooding showed additive tasks succeed; modification tasks fail more often.
         let mut sorted = issues;
-        sorted.sort_by_key(|i| i.priority.unwrap_or(4));
+        sorted.sort_by_key(|i| (i.priority.unwrap_or(4), i.swarm_complexity_rank()));
         let issue = &sorted[0];
 
         info!(

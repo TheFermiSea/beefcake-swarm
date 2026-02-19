@@ -47,6 +47,7 @@ impl IssueTracker for MockBeads {
             status: "open".into(),
             priority: Some(1),
             issue_type: Some("bug".into()),
+            labels: vec![],
         }])
     }
 
@@ -141,6 +142,7 @@ fn main() {
         status: "open".into(),
         priority: Some(1),
         issue_type: Some("bug".into()),
+        labels: vec![],
     };
 
     // Run the orchestration loop
