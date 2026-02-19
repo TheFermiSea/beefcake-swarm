@@ -486,6 +486,90 @@ async fn cloud_validate(
     results
 }
 
+/// Detect which Cargo packages have been modified in the worktree.
+///
+/// Combines committed changes (git diff main..HEAD) and working-tree
+/// changes (git status --porcelain) to produce a deduplicated list of
+/// package names. Falls back to an empty Vec (= full workspace) on any error.
+fn detect_changed_packages(wt_path: &Path) -> Vec<String> {
+    let mut changed_files: std::collections::HashSet<std::path::PathBuf> = Default::default();
+
+    // Committed changes since branching from main
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["diff", "--name-only", "main"])
+        .current_dir(wt_path)
+        .output()
+    {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if !line.trim().is_empty() {
+                changed_files.insert(wt_path.join(line.trim()));
+            }
+        }
+    }
+
+    // Uncommitted working-tree changes (staged + unstaged)
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(wt_path)
+        .output()
+    {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            // porcelain format: "XY filename" — filename starts at column 3
+            if line.len() > 3 {
+                let path = line[3..].trim();
+                if !path.is_empty() {
+                    changed_files.insert(wt_path.join(path));
+                }
+            }
+        }
+    }
+
+    let mut packages: std::collections::HashSet<String> = Default::default();
+    for file_path in &changed_files {
+        if let Some(pkg) = find_package_name(file_path) {
+            packages.insert(pkg);
+        }
+    }
+
+    let result: Vec<String> = packages.into_iter().collect();
+    if result.is_empty() {
+        tracing::debug!("detect_changed_packages: no changes detected, targeting full workspace");
+    } else {
+        tracing::debug!(packages = ?result, "detect_changed_packages: scoping verifier to changed packages");
+    }
+    result
+}
+
+/// Walk up from `file_path` to find the nearest `Cargo.toml` and return the package `name`.
+fn find_package_name(file_path: &Path) -> Option<String> {
+    let mut dir = file_path.parent()?;
+    loop {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists() {
+            if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
+                let mut in_package = false;
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed == "[package]" {
+                        in_package = true;
+                    } else if trimmed.starts_with('[') {
+                        in_package = false;
+                    } else if in_package && trimmed.starts_with("name") {
+                        if let Some(name) = trimmed.split('"').nth(1) {
+                            return Some(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        match dir.parent() {
+            Some(parent) if parent != dir => dir = parent,
+            _ => break,
+        }
+    }
+    None
+}
+
 /// Process a single issue through the implement → verify → review → escalate loop.
 ///
 /// Integrates coordination's harness for:
@@ -579,11 +663,16 @@ pub async fn process_issue(
     let mut success = false;
     let mut last_report: Option<VerifierReport> = None;
 
-    // Scope verifier to configured packages.
-    // When empty, targets the entire workspace (useful for external repos).
-    // When set (e.g., ["swarm-agents"]), limits clippy/check/test to those packages.
+    // Scope verifier to changed packages.
+    // If explicit packages are configured (CLI --package or SWARM_VERIFIER_PACKAGES), use those.
+    // Otherwise, detect from git-changed files to avoid missing breakage in other crates.
+    let initial_packages = if config.verifier_packages.is_empty() {
+        detect_changed_packages(&wt_path)
+    } else {
+        config.verifier_packages.clone()
+    };
     let verifier_config = VerifierConfig {
-        packages: config.verifier_packages.clone(),
+        packages: initial_packages,
         ..VerifierConfig::default()
     };
 
@@ -771,7 +860,15 @@ pub async fn process_issue(
                     format!("Agent failed: {e}"),
                 );
                 // engine.decide() records the iteration internally — don't double-count
-                let verifier = Verifier::new(&wt_path, verifier_config.clone());
+                let current_verifier_config = if config.verifier_packages.is_empty() {
+                    VerifierConfig {
+                        packages: detect_changed_packages(&wt_path),
+                        ..verifier_config.clone()
+                    }
+                } else {
+                    verifier_config.clone()
+                };
+                let verifier = Verifier::new(&wt_path, current_verifier_config);
                 let report = verifier.run_pipeline().await;
                 let decision = engine.decide(&mut escalation, &report);
                 last_report = Some(report);
@@ -840,7 +937,15 @@ pub async fn process_issue(
                 "No file changes after agent response — manager may not have called workers"
             );
             // engine.decide() records the iteration internally — don't double-count
-            let verifier = Verifier::new(&wt_path, verifier_config.clone());
+            let current_verifier_config = if config.verifier_packages.is_empty() {
+                VerifierConfig {
+                    packages: detect_changed_packages(&wt_path),
+                    ..verifier_config.clone()
+                }
+            } else {
+                verifier_config.clone()
+            };
+            let verifier = Verifier::new(&wt_path, current_verifier_config);
             let report = verifier.run_pipeline().await;
             let decision = engine.decide(&mut escalation, &report);
             last_report = Some(report);
@@ -862,7 +967,15 @@ pub async fn process_issue(
 
         // --- Verifier: run deterministic quality gates ---
         let verifier_start = std::time::Instant::now();
-        let verifier = Verifier::new(&wt_path, verifier_config.clone());
+        let current_verifier_config = if config.verifier_packages.is_empty() {
+            VerifierConfig {
+                packages: detect_changed_packages(&wt_path),
+                ..verifier_config.clone()
+            }
+        } else {
+            verifier_config.clone()
+        };
+        let verifier = Verifier::new(&wt_path, current_verifier_config);
         let mut report = verifier.run_pipeline().await;
         metrics.record_verifier_time(verifier_start.elapsed());
 
