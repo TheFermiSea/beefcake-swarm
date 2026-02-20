@@ -457,6 +457,7 @@ fn test_status_shows_pending_interventions() {
             HarnessStatusRequest {
                 include_features: Some(false),
                 include_progress: Some(false),
+                include_structured_summary: None,
                 max_features: None,
                 max_progress_entries: None,
             },

@@ -1915,6 +1915,7 @@ mod tests {
             HarnessStatusRequest {
                 include_features: Some(true),
                 include_progress: Some(true),
+                include_structured_summary: None,
                 max_features: None,
                 max_progress_entries: None,
             },

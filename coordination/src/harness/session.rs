@@ -150,7 +150,10 @@ impl SessionManager {
     }
 
     /// Generate a structured session summary (anchored iterative)
-    pub fn structured_summary(&self, progress_entries: &[crate::harness::types::ProgressEntry]) -> crate::harness::types::StructuredSessionSummary {
+    pub fn structured_summary(
+        &self,
+        progress_entries: &[crate::harness::types::ProgressEntry],
+    ) -> crate::harness::types::StructuredSessionSummary {
         use crate::harness::types::{
             CheckpointSummary, FeatureProgressSummary, FeatureWorkStatus, ProgressMarker,
             StructuredSessionSummary,
@@ -369,25 +372,40 @@ mod tests {
 
     #[test]
     fn test_structured_summary() {
-        use crate::harness::types::{ProgressEntry, ProgressMarker, FeatureWorkStatus};
+        use crate::harness::types::{FeatureWorkStatus, ProgressEntry, ProgressMarker};
         let mut manager = SessionManager::new(PathBuf::from("/tmp"), 10);
         manager.start().unwrap();
-        
+
         let session_id = manager.session_id().to_string();
-        
+
         let entries = vec![
-            ProgressEntry::new(&session_id, 1, ProgressMarker::FeatureStart, "Started feature")
-                .with_feature("feature-1"),
+            ProgressEntry::new(
+                &session_id,
+                1,
+                ProgressMarker::FeatureStart,
+                "Started feature",
+            )
+            .with_feature("feature-1"),
             ProgressEntry::new(&session_id, 2, ProgressMarker::Progress, "Did some work")
                 .with_feature("feature-1"),
-            ProgressEntry::new(&session_id, 3, ProgressMarker::FeatureComplete, "Finished feature")
-                .with_feature("feature-1"),
-            ProgressEntry::new(&session_id, 4, ProgressMarker::Checkpoint, "Created checkpoint at abc1234")
-                .with_metadata("commit", serde_json::Value::String("abc1234".to_string())),
+            ProgressEntry::new(
+                &session_id,
+                3,
+                ProgressMarker::FeatureComplete,
+                "Finished feature",
+            )
+            .with_feature("feature-1"),
+            ProgressEntry::new(
+                &session_id,
+                4,
+                ProgressMarker::Checkpoint,
+                "Created checkpoint at abc1234",
+            )
+            .with_metadata("commit", serde_json::Value::String("abc1234".to_string())),
         ];
-        
+
         let summary = manager.structured_summary(&entries);
-        
+
         assert_eq!(summary.session_id, session_id);
         assert_eq!(summary.features.len(), 1);
         assert_eq!(summary.features[0].feature_id, "feature-1");
@@ -399,21 +417,26 @@ mod tests {
 
     #[test]
     fn test_structured_summary_short_ids() {
-        use crate::harness::types::{ProgressEntry, ProgressMarker, FeatureWorkStatus};
+        use crate::harness::types::{ProgressEntry, ProgressMarker};
         let mut manager = SessionManager::new(PathBuf::from("/tmp"), 10);
         manager.start().unwrap();
-        
+
         let full_id = manager.session_id().to_string();
         let short_id = &full_id[..8];
-        
+
         let entries = vec![
             ProgressEntry::new(short_id, 1, ProgressMarker::FeatureStart, "Started feature")
                 .with_feature("feature-1"),
-            ProgressEntry::new(short_id, 2, ProgressMarker::Checkpoint, "Created checkpoint at abc1234"),
+            ProgressEntry::new(
+                short_id,
+                2,
+                ProgressMarker::Checkpoint,
+                "Created checkpoint at abc1234",
+            ),
         ];
-        
+
         let summary = manager.structured_summary(&entries);
-        
+
         assert_eq!(summary.session_id, full_id);
         assert_eq!(summary.features.len(), 1);
         assert_eq!(summary.features[0].feature_id, "feature-1");

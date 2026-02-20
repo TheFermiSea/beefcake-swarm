@@ -139,6 +139,7 @@ fn test_full_workflow_start_to_complete() {
         HarnessStatusRequest {
             include_features: Some(true),
             include_progress: Some(true),
+            include_structured_summary: None,
             max_features: None,
             max_progress_entries: None,
         },
@@ -428,6 +429,7 @@ fn test_max_iteration_abort() {
         HarnessStatusRequest {
             include_features: None,
             include_progress: None,
+            include_structured_summary: None,
             max_features: None,
             max_progress_entries: None,
         },
@@ -618,6 +620,7 @@ fn test_feature_dependency_ordering() {
         HarnessStatusRequest {
             include_features: Some(true),
             include_progress: Some(false),
+            include_structured_summary: None,
             max_features: None,
             max_progress_entries: None,
         },
@@ -644,6 +647,7 @@ fn test_feature_dependency_ordering() {
         HarnessStatusRequest {
             include_features: Some(true),
             include_progress: Some(false),
+            include_structured_summary: None,
             max_features: None,
             max_progress_entries: None,
         },
@@ -670,6 +674,7 @@ fn test_feature_dependency_ordering() {
         HarnessStatusRequest {
             include_features: Some(true),
             include_progress: Some(false),
+            include_structured_summary: None,
             max_features: None,
             max_progress_entries: None,
         },
@@ -863,6 +868,7 @@ fn test_shared_state_is_thread_safe() {
                         HarnessStatusRequest {
                             include_features: Some(true),
                             include_progress: Some(false),
+                            include_structured_summary: None,
                             max_features: None,
                             max_progress_entries: None,
                         },
@@ -883,6 +889,7 @@ fn test_shared_state_is_thread_safe() {
         HarnessStatusRequest {
             include_features: Some(true),
             include_progress: Some(false),
+            include_structured_summary: None,
             max_features: None,
             max_progress_entries: None,
         },
