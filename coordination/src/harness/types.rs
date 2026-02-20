@@ -44,6 +44,77 @@ pub struct SessionState {
     pub sub_sessions: Vec<SubSession>,
 }
 
+// ============================================================================
+// Structured Session Summary (Anchored Iterative)
+// ============================================================================
+
+/// Structured session summary using the anchored iterative pattern
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StructuredSessionSummary {
+    /// Session identifier
+    pub session_id: String,
+    
+    /// Current session status
+    pub status: SessionStatus,
+    
+    /// Total iterations used
+    pub total_iterations: u32,
+    
+    /// Features worked on during this session (the anchors)
+    pub features: Vec<FeatureProgressSummary>,
+    
+    /// Checkpoints created during this session
+    pub checkpoints: Vec<CheckpointSummary>,
+    
+    /// Any errors encountered
+    pub errors: Vec<String>,
+}
+
+/// Summary of progress on a specific feature
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureProgressSummary {
+    /// Feature ID
+    pub feature_id: String,
+    
+    /// Iteration when work started
+    pub start_iteration: u32,
+    
+    /// Iteration when work completed/failed (if applicable)
+    pub end_iteration: Option<u32>,
+    
+    /// Current status of the feature work
+    pub status: FeatureWorkStatus,
+    
+    /// Key iterative steps taken (summaries from progress entries)
+    pub iterative_steps: Vec<String>,
+}
+
+/// Status of feature work
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FeatureWorkStatus {
+    /// Feature is currently being worked on
+    InProgress,
+    /// Feature was successfully completed
+    Completed,
+    /// Feature failed verification
+    Failed,
+}
+
+/// Summary of a checkpoint
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CheckpointSummary {
+    /// Iteration when checkpoint was created
+    pub iteration: u32,
+    
+    /// Commit hash
+    pub commit_hash: String,
+    
+    /// Associated feature (if any)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub feature_id: Option<String>,
+}
+
 impl SessionState {
     /// Create a new session with default settings
     pub fn new(working_directory: PathBuf, max_iterations: u32) -> Self {

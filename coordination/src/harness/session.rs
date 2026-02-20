@@ -148,6 +148,112 @@ impl SessionManager {
             current_feature: self.state.current_feature.clone(),
         }
     }
+
+    /// Generate a structured session summary (anchored iterative)
+    pub fn structured_summary(&self, progress_entries: &[crate::harness::types::ProgressEntry]) -> crate::harness::types::StructuredSessionSummary {
+        use crate::harness::types::{
+            CheckpointSummary, FeatureProgressSummary, FeatureWorkStatus, ProgressMarker,
+            StructuredSessionSummary,
+        };
+        use std::collections::HashMap;
+
+        let mut features_map: HashMap<String, FeatureProgressSummary> = HashMap::new();
+        let mut checkpoints = Vec::new();
+        let mut errors = Vec::new();
+
+        for entry in progress_entries {
+            // Match session ID (handle short IDs from log)
+            let session_matches = if entry.session_id.len() == 8 {
+                self.state.id.starts_with(&entry.session_id)
+            } else {
+                entry.session_id == self.state.id
+            };
+
+            if !session_matches {
+                continue;
+            }
+
+            match entry.marker {
+                ProgressMarker::FeatureStart => {
+                    if let Some(ref feature_id) = entry.feature_id {
+                        features_map.insert(
+                            feature_id.clone(),
+                            FeatureProgressSummary {
+                                feature_id: feature_id.clone(),
+                                start_iteration: entry.iteration,
+                                end_iteration: None,
+                                status: FeatureWorkStatus::InProgress,
+                                iterative_steps: vec![entry.summary.clone()],
+                            },
+                        );
+                    }
+                }
+                ProgressMarker::FeatureComplete => {
+                    if let Some(ref feature_id) = entry.feature_id {
+                        if let Some(feature) = features_map.get_mut(feature_id) {
+                            feature.end_iteration = Some(entry.iteration);
+                            feature.status = FeatureWorkStatus::Completed;
+                            feature.iterative_steps.push(entry.summary.clone());
+                        }
+                    }
+                }
+                ProgressMarker::FeatureFailed => {
+                    if let Some(ref feature_id) = entry.feature_id {
+                        if let Some(feature) = features_map.get_mut(feature_id) {
+                            feature.end_iteration = Some(entry.iteration);
+                            feature.status = FeatureWorkStatus::Failed;
+                            feature.iterative_steps.push(entry.summary.clone());
+                        }
+                    }
+                }
+                ProgressMarker::Progress => {
+                    if let Some(ref feature_id) = entry.feature_id {
+                        if let Some(feature) = features_map.get_mut(feature_id) {
+                            feature.iterative_steps.push(entry.summary.clone());
+                        }
+                    }
+                }
+                ProgressMarker::Checkpoint => {
+                    let commit = entry
+                        .metadata
+                        .get("commit")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| {
+                            // Fallback: extract from summary "Created checkpoint at <hash>"
+                            entry
+                                .summary
+                                .strip_prefix("Created checkpoint at ")
+                                .map(|s| s.to_string())
+                        });
+
+                    if let Some(commit_hash) = commit {
+                        checkpoints.push(CheckpointSummary {
+                            iteration: entry.iteration,
+                            commit_hash,
+                            feature_id: entry.feature_id.clone(),
+                        });
+                    }
+                }
+                ProgressMarker::Error => {
+                    errors.push(entry.summary.clone());
+                }
+                _ => {}
+            }
+        }
+
+        let mut features: Vec<FeatureProgressSummary> = features_map.into_values().collect();
+        features.sort_by_key(|f| f.start_iteration);
+
+        StructuredSessionSummary {
+            session_id: self.state.id.clone(),
+            status: self.state.status,
+            total_iterations: self.state.iteration,
+            features,
+            checkpoints,
+            errors,
+        }
+    }
 }
 
 /// Session summary for reporting
@@ -259,6 +365,60 @@ mod tests {
         assert_eq!(summary.iterations, 1);
         assert_eq!(summary.max_iterations, 10);
         assert_eq!(summary.current_feature, Some("test-feature".to_string()));
+    }
+
+    #[test]
+    fn test_structured_summary() {
+        use crate::harness::types::{ProgressEntry, ProgressMarker, FeatureWorkStatus};
+        let mut manager = SessionManager::new(PathBuf::from("/tmp"), 10);
+        manager.start().unwrap();
+        
+        let session_id = manager.session_id().to_string();
+        
+        let entries = vec![
+            ProgressEntry::new(&session_id, 1, ProgressMarker::FeatureStart, "Started feature")
+                .with_feature("feature-1"),
+            ProgressEntry::new(&session_id, 2, ProgressMarker::Progress, "Did some work")
+                .with_feature("feature-1"),
+            ProgressEntry::new(&session_id, 3, ProgressMarker::FeatureComplete, "Finished feature")
+                .with_feature("feature-1"),
+            ProgressEntry::new(&session_id, 4, ProgressMarker::Checkpoint, "Created checkpoint at abc1234")
+                .with_metadata("commit", serde_json::Value::String("abc1234".to_string())),
+        ];
+        
+        let summary = manager.structured_summary(&entries);
+        
+        assert_eq!(summary.session_id, session_id);
+        assert_eq!(summary.features.len(), 1);
+        assert_eq!(summary.features[0].feature_id, "feature-1");
+        assert_eq!(summary.features[0].status, FeatureWorkStatus::Completed);
+        assert_eq!(summary.features[0].iterative_steps.len(), 3);
+        assert_eq!(summary.checkpoints.len(), 1);
+        assert_eq!(summary.checkpoints[0].commit_hash, "abc1234");
+    }
+
+    #[test]
+    fn test_structured_summary_short_ids() {
+        use crate::harness::types::{ProgressEntry, ProgressMarker, FeatureWorkStatus};
+        let mut manager = SessionManager::new(PathBuf::from("/tmp"), 10);
+        manager.start().unwrap();
+        
+        let full_id = manager.session_id().to_string();
+        let short_id = &full_id[..8];
+        
+        let entries = vec![
+            ProgressEntry::new(short_id, 1, ProgressMarker::FeatureStart, "Started feature")
+                .with_feature("feature-1"),
+            ProgressEntry::new(short_id, 2, ProgressMarker::Checkpoint, "Created checkpoint at abc1234"),
+        ];
+        
+        let summary = manager.structured_summary(&entries);
+        
+        assert_eq!(summary.session_id, full_id);
+        assert_eq!(summary.features.len(), 1);
+        assert_eq!(summary.features[0].feature_id, "feature-1");
+        assert_eq!(summary.checkpoints.len(), 1);
+        assert_eq!(summary.checkpoints[0].commit_hash, "abc1234");
     }
 
     #[test]

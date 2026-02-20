@@ -159,6 +159,8 @@ struct McpHarnessStatusRequest {
     include_features: Option<bool>,
     #[schemars(description = "Include recent progress log entries")]
     include_progress: Option<bool>,
+    #[schemars(description = "Include structured session summary")]
+    include_structured_summary: Option<bool>,
     #[schemars(description = "Maximum features to include in response (default: 20)")]
     max_features: Option<u32>,
     #[schemars(description = "Maximum progress entries to include (default: 10)")]
@@ -724,6 +726,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         let harness_req = harness::tools::HarnessStatusRequest {
             include_features: req.include_features,
             include_progress: req.include_progress,
+            include_structured_summary: req.include_structured_summary,
             max_features: req.max_features,
             max_progress_entries: req.max_progress_entries,
         };

@@ -115,6 +115,10 @@ pub struct HarnessStatusRequest {
     #[schemars(description = "Include recent progress log entries")]
     pub include_progress: Option<bool>,
 
+    /// Include structured session summary (anchored iterative) (default: false)
+    #[schemars(description = "Include structured session summary")]
+    pub include_structured_summary: Option<bool>,
+
     /// Maximum features to return (default: 20, to manage token budget)
     #[schemars(description = "Maximum features to include in response")]
     pub max_features: Option<u32>,
@@ -132,6 +136,10 @@ pub struct HarnessStatusResponse {
     pub next_feature: Option<String>,
     pub git_status: GitStatus,
     pub recent_progress: Option<Vec<String>>,
+
+    /// Structured session summary (anchored iterative)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub structured_summary: Option<crate::harness::types::StructuredSessionSummary>,
 
     /// Truncation notice for features (if applicable)
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -661,6 +669,18 @@ pub fn harness_status(
         (None, None)
     };
 
+    // Handle structured summary
+    let structured_summary = if req.include_structured_summary.unwrap_or(false) {
+        if let Some(ref session) = state.session {
+            let all_entries = state.progress.read_all().unwrap_or_default();
+            Some(session.structured_summary(&all_entries))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     // Features truncation notice (summary already limits data, but note if large)
     let features_truncation = if features.total > req.max_features.unwrap_or(20) as usize {
         Some(TruncationNotice::truncated(
@@ -691,6 +711,7 @@ pub fn harness_status(
         next_feature,
         git_status,
         recent_progress,
+        structured_summary,
         features_truncation,
         progress_truncation,
         pending_interventions,
