@@ -38,6 +38,11 @@ fi
 
 # Recover from stale worktree artifacts for this issue (if any).
 if [ -n "${SWARM_ISSUE_ID:-}" ]; then
+    # Validate issue ID to prevent path traversal (allow alphanumeric, dash, dot, underscore only)
+    if [[ "$SWARM_ISSUE_ID" =~ [/\\] ]] || [[ "$SWARM_ISSUE_ID" == *..* ]]; then
+        echo "ERROR: SWARM_ISSUE_ID contains invalid characters: ${SWARM_ISSUE_ID}" >&2
+        exit 1
+    fi
     ISSUE_SANITIZED="${SWARM_ISSUE_ID//./_}"
     ISSUE_WT_RAW="${WT_DIR}/${SWARM_ISSUE_ID}"
     ISSUE_WT_SANITIZED="${WT_DIR}/${ISSUE_SANITIZED}"
@@ -176,6 +181,9 @@ apptainer exec \
       elif [ -n "${SWARM_ISSUE_OBJECTIVE:-}" ]; then
           OBJ="${SWARM_ISSUE_OBJECTIVE}"
       fi
-      stdbuf -oL -eL cargo run -p swarm-agents --release -- \
-      ${SWARM_ISSUE_ID:+--issue "$SWARM_ISSUE_ID" --objective "$OBJ"}
+      ISSUE_ARGS=()
+      if [ -n "${SWARM_ISSUE_ID:-}" ]; then
+          ISSUE_ARGS+=(--issue "$SWARM_ISSUE_ID" --objective "$OBJ")
+      fi
+      stdbuf -oL -eL cargo run -p swarm-agents --release -- "${ISSUE_ARGS[@]}"
     '

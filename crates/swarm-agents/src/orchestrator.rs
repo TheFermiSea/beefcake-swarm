@@ -1007,9 +1007,11 @@ pub async fn process_issue(
         );
 
         // --- Auto-fix: try to resolve trivial failures without LLM delegation ---
+        let mut auto_fix_applied = false;
         if !report.all_green {
             if let Some(fixed_report) = try_auto_fix(&wt_path, &verifier_config, iteration).await {
                 report = fixed_report;
+                auto_fix_applied = true;
                 metrics.record_auto_fix();
             }
         }
@@ -1066,9 +1068,10 @@ pub async fn process_issue(
 
         if report.all_green {
             // --- Guard against auto-fix false positives ---
-            // If the verifier only passed because of auto-fix (clippy --fix + fmt),
-            // verify the agent produced meaningful changes beyond auto-fix.
-            if acceptance_policy.min_diff_lines > 0 {
+            // Only check when auto-fix actually ran this iteration. This avoids
+            // rejecting legitimate small fixes (< min_diff_lines) that pass the
+            // verifier on their own merit.
+            if auto_fix_applied && acceptance_policy.min_diff_lines > 0 {
                 if let (Some(initial), Some(agent_commit)) = (
                     session.state().initial_commit.as_ref(),
                     post_agent_commit.as_ref(),
