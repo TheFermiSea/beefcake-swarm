@@ -35,8 +35,11 @@ pub struct AcceptancePolicy {
     /// Default: empty (no scope restriction).
     pub scope_to_crates: Vec<String>,
 
-    /// Minimum diff size in lines. Diffs smaller than this are rejected
-    /// as likely auto-fix false positives. Default: 5. Set to 0 to disable.
+    /// Minimum diff size in lines produced by the agent (excluding auto-fix).
+    /// Only enforced when `try_auto_fix` actually ran and made the verifier
+    /// pass — prevents accepting iterations where the agent wrote nothing
+    /// meaningful but auto-fix resolved pre-existing warnings.
+    /// Default: 5. Set to 0 to disable.
     pub min_diff_lines: usize,
 }
 
