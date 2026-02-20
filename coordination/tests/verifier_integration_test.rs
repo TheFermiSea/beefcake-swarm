@@ -3,8 +3,8 @@
 //! These tests run the Verifier against the actual rust-cluster-mcp crate,
 //! validating that it correctly processes real compiler output.
 
-use rust_cluster_mcp::verifier::report::GateOutcome;
-use rust_cluster_mcp::verifier::{Verifier, VerifierConfig};
+use coordination::verifier::report::GateOutcome;
+use coordination::verifier::{Verifier, VerifierConfig};
 
 /// Get the path to this crate's root directory
 fn crate_root() -> String {
@@ -97,7 +97,7 @@ async fn test_verifier_report_serializes() {
     assert!(json.len() > 100, "JSON should be non-trivial");
 
     // Round-trip: deserialize back
-    let deserialized: rust_cluster_mcp::verifier::report::VerifierReport =
+    let deserialized: coordination::verifier::report::VerifierReport =
         serde_json::from_str(&json).expect("Report should deserialize from JSON");
     assert_eq!(deserialized.gates_passed, report.gates_passed);
     assert_eq!(deserialized.all_green, report.all_green);
@@ -199,7 +199,7 @@ pub fn add(a: i32, b: i32) -> String {
 
     // The error should be classified as TypeMismatch (E0308)
     let has_type_error = report.failure_signals.iter().any(|s| {
-        s.category == rust_cluster_mcp::feedback::error_parser::ErrorCategory::TypeMismatch
+        s.category == coordination::feedback::error_parser::ErrorCategory::TypeMismatch
             || s.code.as_deref() == Some("E0308")
     });
     assert!(
@@ -266,7 +266,7 @@ pub fn broken() -> &str {
 
     // Should have lifetime error (E0106: missing lifetime specifier)
     let has_lifetime = report.failure_signals.iter().any(|s| {
-        s.category == rust_cluster_mcp::feedback::error_parser::ErrorCategory::Lifetime
+        s.category == coordination::feedback::error_parser::ErrorCategory::Lifetime
             || s.code.as_deref() == Some("E0106")
     });
     assert!(

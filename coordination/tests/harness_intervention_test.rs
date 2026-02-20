@@ -5,7 +5,7 @@
 //! 2. Blocking logic prevents work when interventions are pending
 //! 3. Resolving interventions unblocks work
 
-use rust_cluster_mcp::harness::{
+use coordination::harness::{
     error::HarnessError,
     tools::{
         create_shared_state, harness_complete_feature, harness_iterate,

@@ -402,8 +402,37 @@ fn u32_from_env(var: &str, default: u32) -> u32 {
 fn bool_from_env(var: &str, default: bool) -> bool {
     std::env::var(var)
         .ok()
-        .map(|v| matches!(v.trim().to_ascii_lowercase().as_str(), "1" | "true" | "yes" | "on"))
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
         .unwrap_or(default)
+}
+
+/// Count lines changed between two commits in the worktree.
+fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--numstat", from, to])
+        .current_dir(wt_path)
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            stdout.lines().fold(0, |acc, line| {
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() >= 2 {
+                    let added: usize = parts[0].parse().unwrap_or(0);
+                    let removed: usize = parts[1].parse().unwrap_or(0);
+                    acc + added + removed
+                } else {
+                    acc
+                }
+            })
+        }
+        _ => 0,
+    }
 }
 
 fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
@@ -922,6 +951,9 @@ pub async fn process_issue(
             }
         };
 
+        // Capture the post-agent commit hash (before auto-fix) for diff sizing.
+        let post_agent_commit = git_mgr.current_commit_full().ok();
+
         if !has_changes {
             warn!(
                 iteration,
@@ -1033,6 +1065,41 @@ pub async fn process_issue(
         }
 
         if report.all_green {
+            // --- Guard against auto-fix false positives ---
+            // If the verifier only passed because of auto-fix (clippy --fix + fmt),
+            // verify the agent produced meaningful changes beyond auto-fix.
+            if acceptance_policy.min_diff_lines > 0 {
+                if let (Some(initial), Some(agent_commit)) = (
+                    session.state().initial_commit.as_ref(),
+                    post_agent_commit.as_ref(),
+                ) {
+                    let agent_diff_lines = count_diff_lines(&wt_path, initial, agent_commit);
+                    if agent_diff_lines < acceptance_policy.min_diff_lines {
+                        warn!(
+                            iteration,
+                            agent_diff_lines,
+                            min_required = acceptance_policy.min_diff_lines,
+                            "Auto-fix false positive: agent produced {} lines but minimum is {}",
+                            agent_diff_lines,
+                            acceptance_policy.min_diff_lines,
+                        );
+                        let _ = progress.log_error(
+                            session.session_id(),
+                            iteration,
+                            format!(
+                                "Auto-fix false positive: agent diff only {agent_diff_lines} lines (min: {})",
+                                acceptance_policy.min_diff_lines
+                            ),
+                        );
+                        // Record this as a failed iteration and continue
+                        escalation.record_iteration(error_cats.clone(), 0, false);
+                        last_report = Some(report);
+                        metrics.finish_iteration();
+                        continue;
+                    }
+                }
+            }
+
             // Deterministic gates (fmt + clippy + check + test) are the source of truth.
             // The reviewer is advisory — don't let subjective LLM feedback cause loops.
             info!(

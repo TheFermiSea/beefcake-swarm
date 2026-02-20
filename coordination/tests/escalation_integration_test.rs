@@ -3,10 +3,10 @@
 //! Tests the Escalation Engine with real VerifierReports from actual
 //! broken crates, validating the full classify → decide → escalate flow.
 
-use rust_cluster_mcp::escalation::engine::{EscalationEngine, SuggestedAction};
-use rust_cluster_mcp::escalation::state::{EscalationState, SwarmTier};
-use rust_cluster_mcp::feedback::error_parser::ErrorCategory;
-use rust_cluster_mcp::verifier::{Verifier, VerifierConfig};
+use coordination::escalation::engine::{EscalationEngine, SuggestedAction};
+use coordination::escalation::state::{EscalationState, SwarmTier};
+use coordination::feedback::error_parser::ErrorCategory;
+use coordination::verifier::{Verifier, VerifierConfig};
 
 /// Create a temp crate with the given lib.rs content
 fn create_temp_crate(lib_content: &str) -> tempfile::TempDir {
@@ -26,7 +26,7 @@ edition = "2021"
 }
 
 /// Run the verifier on a temp crate
-async fn verify_crate(temp: &tempfile::TempDir) -> rust_cluster_mcp::verifier::VerifierReport {
+async fn verify_crate(temp: &tempfile::TempDir) -> coordination::verifier::VerifierReport {
     let config = VerifierConfig {
         check_fmt: false,
         check_clippy: false,
@@ -70,7 +70,7 @@ async fn test_type_error_stays_at_implementer() {
 
     assert!(!decision.resolved);
     assert!(!decision.escalated, "First type error should not escalate");
-    assert_eq!(decision.target_tier, SwarmTier::Implementer);
+    assert_eq!(decision.target_tier, SwarmTier::Worker);
     assert!(matches!(decision.action, SuggestedAction::Continue));
 }
 
@@ -93,7 +93,7 @@ async fn test_repeated_error_escalates_to_integrator() {
         d2.escalated,
         "Repeated error category should trigger escalation"
     );
-    assert_eq!(d2.target_tier, SwarmTier::Integrator);
+    assert_eq!(d2.target_tier, SwarmTier::Council);
     assert!(matches!(d2.action, SuggestedAction::RepairPlan));
 }
 
@@ -165,16 +165,18 @@ async fn test_full_escalation_ladder() {
         "Should have escalation records"
     );
 
-    // Should have passed through Integrator and Cloud
+    // Should have passed through Council (Human is terminal — stuck, not a formal escalation)
     let tiers_visited: Vec<SwarmTier> =
         state.escalation_history.iter().map(|e| e.to_tier).collect();
     assert!(
-        tiers_visited.contains(&SwarmTier::Integrator),
-        "Should have escalated to Integrator"
+        tiers_visited.contains(&SwarmTier::Council),
+        "Should have escalated to Council"
     );
-    assert!(
-        tiers_visited.contains(&SwarmTier::Cloud),
-        "Should have escalated to Cloud"
+    // Human tier is reached as a stuck state, not recorded in escalation_history
+    assert_eq!(
+        state.current_tier,
+        SwarmTier::Council,
+        "Should remain at Council (Human is a terminal decision, not a tier transition)"
     );
 
     println!("Full ladder completed in {} iterations", iterations);
@@ -204,7 +206,7 @@ pub fn broken() -> &str {
     assert!(!decision.resolved);
 
     // Generate a work packet
-    let generator = rust_cluster_mcp::work_packet::WorkPacketGenerator::new(temp.path());
+    let generator = coordination::work_packet::WorkPacketGenerator::new(temp.path());
     let packet = generator.generate(
         "test-wp",
         "Fix the lifetime error in parser",
