@@ -823,6 +823,7 @@ pub async fn process_issue(
                     CoderRoute::RustCoder => {
                         info!(iteration, "Routing to rust_coder (strand-14B)");
                         metrics.record_coder_route("RustCoder");
+                        metrics.record_agent_metrics("strand-14B", 0, 0);
                         match tokio::time::timeout(worker_timeout, rust_coder.prompt(&task_prompt))
                             .await
                         {
@@ -841,6 +842,7 @@ pub async fn process_issue(
                     CoderRoute::GeneralCoder => {
                         info!(iteration, "Routing to general_coder (Qwen3-Coder-Next)");
                         metrics.record_coder_route("GeneralCoder");
+                        metrics.record_agent_metrics("Qwen3-Coder-Next", 0, 0);
                         match tokio::time::timeout(
                             worker_timeout,
                             general_coder.prompt(&task_prompt),
@@ -866,6 +868,7 @@ pub async fn process_issue(
                     iteration,
                     "Routing to manager (cloud-backed or OR1 fallback)"
                 );
+                metrics.record_agent_metrics("manager", 0, 0);
                 // Wrap manager call with timeout to enforce turn limits.
                 // Rig doesn't enforce default_max_turns on the outer .prompt() agent,
                 // so managers can run indefinitely. This hard-caps wall-clock time.

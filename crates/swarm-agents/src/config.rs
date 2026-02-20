@@ -358,6 +358,8 @@ mod tests {
 
     #[test]
     fn test_default_config() {
+        // Unset the environment variable so we test the default value
+        std::env::remove_var("SWARM_MAX_RETRIES");
         let config = SwarmConfig::default();
         assert_eq!(config.max_retries, 10);
         assert!(config.fast_endpoint.url.contains("vasp-02"));

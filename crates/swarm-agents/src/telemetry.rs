@@ -16,6 +16,9 @@ use tracing::{info, warn};
 pub struct IterationMetrics {
     pub iteration: u32,
     pub tier: String,
+    pub agent_model: String,
+    pub agent_prompt_tokens: u32,
+    pub agent_completion_tokens: u32,
     pub agent_response_ms: u64,
     pub verifier_ms: u64,
     pub error_count: usize,
@@ -70,6 +73,9 @@ pub struct MetricsCollector {
 struct IterationBuilder {
     iteration: u32,
     tier: String,
+    agent_model: String,
+    agent_prompt_tokens: u32,
+    agent_completion_tokens: u32,
     agent_response_ms: u64,
     verifier_ms: u64,
     error_count: usize,
@@ -100,6 +106,9 @@ impl MetricsCollector {
         self.current_iteration = Some(IterationBuilder {
             iteration,
             tier: tier.to_string(),
+            agent_model: String::new(),
+            agent_prompt_tokens: 0,
+            agent_completion_tokens: 0,
             agent_response_ms: 0,
             verifier_ms: 0,
             error_count: 0,
@@ -117,6 +126,20 @@ impl MetricsCollector {
     pub fn record_agent_time(&mut self, duration: Duration) {
         if let Some(ref mut iter) = self.current_iteration {
             iter.agent_response_ms = duration.as_millis() as u64;
+        }
+    }
+
+    /// Record agent model and token usage.
+    pub fn record_agent_metrics(
+        &mut self,
+        model: &str,
+        prompt_tokens: u32,
+        completion_tokens: u32,
+    ) {
+        if let Some(ref mut iter) = self.current_iteration {
+            iter.agent_model = model.to_string();
+            iter.agent_prompt_tokens = prompt_tokens;
+            iter.agent_completion_tokens = completion_tokens;
         }
     }
 
@@ -177,6 +200,9 @@ impl MetricsCollector {
             self.iterations.push(IterationMetrics {
                 iteration: iter.iteration,
                 tier: iter.tier,
+                agent_model: iter.agent_model,
+                agent_prompt_tokens: iter.agent_prompt_tokens,
+                agent_completion_tokens: iter.agent_completion_tokens,
                 agent_response_ms: iter.agent_response_ms,
                 verifier_ms: iter.verifier_ms,
                 error_count: iter.error_count,
@@ -279,6 +305,7 @@ mod tests {
 
         collector.start_iteration(1, "Integrator");
         collector.record_agent_time(Duration::from_secs(30));
+        collector.record_agent_metrics("test-model-1", 100, 50);
         collector.record_verifier_time(Duration::from_secs(45));
         collector.record_verifier_results(3, vec!["BorrowChecker".into(), "Lifetime".into()]);
         collector.record_coder_route("RustCoder");
@@ -286,6 +313,7 @@ mod tests {
 
         collector.start_iteration(2, "Integrator");
         collector.record_agent_time(Duration::from_secs(25));
+        collector.record_agent_metrics("test-model-2", 80, 40);
         collector.record_verifier_time(Duration::from_secs(40));
         collector.record_verifier_results(0, vec![]);
         collector.record_auto_fix();
@@ -303,7 +331,13 @@ mod tests {
         assert_eq!(metrics.iterations.len(), 2);
         assert_eq!(metrics.iterations[0].error_count, 3);
         assert_eq!(metrics.iterations[0].agent_response_ms, 30_000);
+        assert_eq!(metrics.iterations[0].agent_model, "test-model-1");
+        assert_eq!(metrics.iterations[0].agent_prompt_tokens, 100);
+        assert_eq!(metrics.iterations[0].agent_completion_tokens, 50);
         assert_eq!(metrics.iterations[1].error_count, 0);
+        assert_eq!(metrics.iterations[1].agent_model, "test-model-2");
+        assert_eq!(metrics.iterations[1].agent_prompt_tokens, 80);
+        assert_eq!(metrics.iterations[1].agent_completion_tokens, 40);
         assert!(metrics.iterations[1].auto_fix_applied);
         assert_eq!(metrics.cloud_validations.len(), 2);
     }
