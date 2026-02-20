@@ -115,6 +115,8 @@ pub enum EscalationReason {
     CouncilStuck { consultations: u32 },
     /// Explicit escalation by higher tier
     Explicit { reason: String },
+    /// Consecutive no-change iterations exceeded threshold
+    ConsecutiveNoChange { count: u32, threshold: u32 },
 }
 
 impl std::fmt::Display for EscalationReason {
@@ -136,6 +138,13 @@ impl std::fmt::Display for EscalationReason {
                 write!(f, "council stuck after {} consultations", consultations)
             }
             Self::Explicit { reason } => write!(f, "explicit: {}", reason),
+            Self::ConsecutiveNoChange { count, threshold } => {
+                write!(
+                    f,
+                    "{} consecutive no-change iterations (threshold: {})",
+                    count, threshold
+                )
+            }
         }
     }
 }
@@ -165,6 +174,9 @@ pub struct EscalationState {
     pub resolved: bool,
     /// Whether the issue is stuck (all budgets exhausted, needs human)
     pub stuck: bool,
+    /// Consecutive iterations where no file changes were produced.
+    /// Persists across SLURM preemptions for accurate no-change detection.
+    pub consecutive_no_change: u32,
     /// Timestamp of last activity
     pub last_activity: DateTime<Utc>,
 }
@@ -189,6 +201,7 @@ impl EscalationState {
             recent_error_categories: Vec::new(),
             resolved: false,
             stuck: false,
+            consecutive_no_change: 0,
             last_activity: Utc::now(),
         }
     }
@@ -207,6 +220,16 @@ impl EscalationState {
     pub fn with_budget(mut self, tier: SwarmTier, budget: TierBudget) -> Self {
         self.tier_budgets.insert(tier, budget);
         self
+    }
+
+    /// Record a no-change iteration (agent produced no file edits).
+    pub fn record_no_change(&mut self) {
+        self.consecutive_no_change += 1;
+    }
+
+    /// Reset the no-change counter (agent produced file edits).
+    pub fn reset_no_change(&mut self) {
+        self.consecutive_no_change = 0;
     }
 
     /// Record an iteration result

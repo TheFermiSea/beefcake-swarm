@@ -62,6 +62,15 @@ pub struct SwarmConfig {
     /// Requires `cloud_endpoint` to be configured.
     /// Populated from `--cloud-only` CLI flag or `SWARM_CLOUD_ONLY=1` env var.
     pub cloud_only: bool,
+    /// Maximum consecutive no-change iterations before circuit breaker fires.
+    /// When an agent responds without producing any file changes for this many
+    /// iterations in a row, the loop breaks and creates a stuck intervention.
+    /// Populated from `SWARM_MAX_NO_CHANGE` env var (default: 3).
+    pub max_consecutive_no_change: u32,
+    /// Minimum objective length (characters) to accept for processing.
+    /// Issues with titles shorter than this are rejected before worktree creation.
+    /// Populated from `SWARM_MIN_OBJECTIVE_LEN` env var (default: 10).
+    pub min_objective_len: usize,
 }
 
 impl Default for SwarmConfig {
@@ -114,6 +123,15 @@ impl Default for SwarmConfig {
             cloud_only: std::env::var("SWARM_CLOUD_ONLY")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            max_consecutive_no_change: std::env::var("SWARM_MAX_NO_CHANGE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(3),
+            min_objective_len: std::env::var("SWARM_MIN_OBJECTIVE_LEN")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(10),
         }
     }
 }
@@ -168,6 +186,8 @@ impl SwarmConfig {
             verifier_packages: Vec::new(),
             cloud_max_retries: 3,
             cloud_only: false,
+            max_consecutive_no_change: 3,
+            min_objective_len: 10,
         }
     }
 }

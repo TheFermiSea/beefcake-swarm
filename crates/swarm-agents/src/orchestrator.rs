@@ -435,6 +435,15 @@ fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
     }
 }
 
+/// Returns `true` when the auto-fix false-positive guard should apply.
+///
+/// The guard fires only when auto-fix actually ran this iteration AND a minimum
+/// agent diff size is configured. This prevents rejecting legitimate small fixes
+/// that pass the verifier on their own merit (i.e. without auto-fix).
+fn should_reject_auto_fix(auto_fix_applied: bool, policy: &AcceptancePolicy) -> bool {
+    auto_fix_applied && policy.min_diff_lines > 0
+}
+
 fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
     match std::env::var(var)
         .ok()
@@ -586,6 +595,20 @@ pub async fn process_issue(
     let worker_timeout = timeout_from_env("SWARM_WORKER_TIMEOUT_SECS", DEFAULT_WORKER_TIMEOUT_SECS);
     let manager_timeout =
         timeout_from_env("SWARM_MANAGER_TIMEOUT_SECS", DEFAULT_MANAGER_TIMEOUT_SECS);
+
+    // --- Validate objective ---
+    let title_trimmed = issue.title.trim();
+    if title_trimmed.is_empty() || title_trimmed.len() < config.min_objective_len {
+        warn!(
+            id = %issue.id,
+            title_len = title_trimmed.len(),
+            min_len = config.min_objective_len,
+            "Rejecting issue: title too short (\"{}\")",
+            title_trimmed,
+        );
+        // Don't claim the issue — leave it open for a human to improve the title
+        return Ok(false);
+    }
 
     // --- Claim issue ---
     beads.update_status(&issue.id, "in_progress")?;
@@ -955,11 +978,55 @@ pub async fn process_issue(
         let post_agent_commit = git_mgr.current_commit_full().ok();
 
         if !has_changes {
+            escalation.record_no_change();
+            metrics.record_no_change();
             warn!(
                 iteration,
                 response_len = response.len(),
+                consecutive_no_change = escalation.consecutive_no_change,
+                threshold = config.max_consecutive_no_change,
                 "No file changes after agent response — manager may not have called workers"
             );
+
+            // --- No-change circuit breaker ---
+            if escalation.consecutive_no_change >= config.max_consecutive_no_change {
+                error!(
+                    iteration,
+                    consecutive_no_change = escalation.consecutive_no_change,
+                    "No-change circuit breaker triggered — {} consecutive iterations with no file changes",
+                    escalation.consecutive_no_change,
+                );
+                metrics.finish_iteration();
+
+                // Try scaffold fallback for doc-oriented tasks before giving up
+                let scaffolded = try_scaffold_fallback(
+                    &wt_path,
+                    &issue.id,
+                    &issue.title,
+                    "", // BeadsIssue doesn't carry description at this level
+                    iteration,
+                );
+                if scaffolded {
+                    info!(
+                        iteration,
+                        "Scaffold fallback produced a template — still marking stuck"
+                    );
+                }
+
+                create_stuck_intervention(
+                    &mut session,
+                    &progress,
+                    &wt_path,
+                    iteration,
+                    &format!(
+                        "No-change circuit breaker: {} consecutive iterations produced no file changes{}",
+                        escalation.consecutive_no_change,
+                        if scaffolded { " (scaffold committed)" } else { "" },
+                    ),
+                );
+                break;
+            }
+
             // engine.decide() records the iteration internally — don't double-count
             let verifier = Verifier::new(&wt_path, verifier_config.clone());
             let report = verifier.run_pipeline().await;
@@ -993,6 +1060,9 @@ pub async fn process_issue(
             continue;
         }
 
+        // Reset no-change counter on any iteration that produces changes
+        escalation.reset_no_change();
+
         // --- Verifier: run deterministic quality gates ---
         let verifier_start = std::time::Instant::now();
         let verifier = Verifier::new(&wt_path, verifier_config.clone());
@@ -1007,9 +1077,11 @@ pub async fn process_issue(
         );
 
         // --- Auto-fix: try to resolve trivial failures without LLM delegation ---
+        let mut auto_fix_applied = false;
         if !report.all_green {
             if let Some(fixed_report) = try_auto_fix(&wt_path, &verifier_config, iteration).await {
                 report = fixed_report;
+                auto_fix_applied = true;
                 metrics.record_auto_fix();
             }
         }
@@ -1066,9 +1138,10 @@ pub async fn process_issue(
 
         if report.all_green {
             // --- Guard against auto-fix false positives ---
-            // If the verifier only passed because of auto-fix (clippy --fix + fmt),
-            // verify the agent produced meaningful changes beyond auto-fix.
-            if acceptance_policy.min_diff_lines > 0 {
+            // Only check when auto-fix actually ran this iteration. This avoids
+            // rejecting legitimate small fixes (< min_diff_lines) that pass the
+            // verifier on their own merit.
+            if should_reject_auto_fix(auto_fix_applied, &acceptance_policy) {
                 if let (Some(initial), Some(agent_commit)) = (
                     session.state().initial_commit.as_ref(),
                     post_agent_commit.as_ref(),
@@ -1457,6 +1530,106 @@ async fn prompt_with_retry(
     Err(last_err.unwrap())
 }
 
+/// Detect whether an issue is doc-oriented based on title/description keywords.
+fn is_doc_task(title: &str, description: &str) -> bool {
+    let combined = format!("{} {}", title, description).to_ascii_lowercase();
+    let doc_keywords = [
+        ".md",
+        "rfc",
+        "doc",
+        "architecture",
+        "planning",
+        "readme",
+        "design doc",
+    ];
+    doc_keywords.iter().any(|kw| combined.contains(kw))
+}
+
+/// Generate a minimal markdown scaffold for a doc-oriented task.
+///
+/// When doc tasks hit the no-change circuit breaker, this creates a template
+/// file so at least a skeleton exists for human completion. Returns `true`
+/// if a scaffold was committed.
+pub fn try_scaffold_fallback(
+    wt_path: &Path,
+    issue_id: &str,
+    issue_title: &str,
+    issue_description: &str,
+    iteration: u32,
+) -> bool {
+    if !is_doc_task(issue_title, issue_description) {
+        return false;
+    }
+
+    // Generate a safe filename from the issue title
+    let safe_name: String = issue_title
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let filename = format!("docs/{}.md", safe_name.trim_matches('-'));
+
+    let scaffold = format!(
+        "# {title}\n\n\
+         > Auto-generated scaffold by swarm orchestrator.\n\
+         > Issue: `{id}` | Generated at iteration {iter}\n\n\
+         ## Overview\n\n\
+         <!-- TODO: Describe the purpose and scope -->\n\n\
+         ## Details\n\n\
+         <!-- TODO: Fill in the content -->\n\n\
+         ## Open Questions\n\n\
+         <!-- TODO: List any unresolved questions -->\n",
+        title = issue_title,
+        id = issue_id,
+        iter = iteration,
+    );
+
+    // Ensure docs/ directory exists
+    let docs_dir = wt_path.join("docs");
+    if let Err(e) = std::fs::create_dir_all(&docs_dir) {
+        warn!("Failed to create docs dir for scaffold: {e}");
+        return false;
+    }
+
+    let file_path = wt_path.join(&filename);
+    if let Err(e) = std::fs::write(&file_path, &scaffold) {
+        warn!("Failed to write scaffold file: {e}");
+        return false;
+    }
+
+    // Stage and commit the scaffold
+    let add = std::process::Command::new("git")
+        .args(["add", &filename])
+        .current_dir(wt_path)
+        .output();
+    if !matches!(add, Ok(ref out) if out.status.success()) {
+        warn!("Failed to git add scaffold");
+        return false;
+    }
+
+    let msg = format!("swarm: scaffold fallback for {issue_id} (iteration {iteration})");
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", &msg])
+        .current_dir(wt_path)
+        .output();
+    if !matches!(commit, Ok(ref out) if out.status.success()) {
+        warn!("Failed to commit scaffold");
+        return false;
+    }
+
+    info!(
+        issue_id,
+        filename, "Scaffold fallback committed for doc task"
+    );
+    true
+}
+
 /// Create a human intervention request when the escalation engine reports stuck.
 ///
 /// Surfaces the intervention through 3 mechanisms:
@@ -1555,6 +1728,49 @@ mod tests {
             max_patch_loc: 200,
             delegation_chain: vec![],
         }
+    }
+
+    /// Initialize a temporary git repo with one commit and return the initial
+    /// commit hash. Deduplicates test boilerplate across git-dependent tests.
+    fn init_test_git_repo(dir: &std::path::Path) -> String {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("README.md"), "# test\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+
+        String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string()
     }
 
     #[test]
@@ -1775,38 +1991,113 @@ mod tests {
         assert!(matches!(entries[5].marker, ProgressMarker::SessionEnd));
     }
 
+    /// The auto-fix false positive guard should only reject iterations where
+    /// `auto_fix_applied == true` AND the agent diff is below `min_diff_lines`.
+    /// When auto-fix did NOT run, `min_diff_lines` must not block acceptance.
     #[test]
-    fn test_git_manager_checkpoint_prefix() {
-        // Verify GitManager uses the expected commit prefix
+    fn test_auto_fix_guard_only_fires_when_auto_fix_applied() {
         let dir = tempfile::tempdir().unwrap();
+        let initial = init_test_git_repo(dir.path());
 
-        // Initialize git repo
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::fs::write(dir.path().join("README.md"), "# test").unwrap();
+        // Add a tiny 2-line change (below default min_diff_lines of 5)
+        std::fs::write(dir.path().join("fix.rs"), "fn a() {}\nfn b() {}\n").unwrap();
         std::process::Command::new("git")
             .args(["add", "."])
             .current_dir(dir.path())
             .output()
             .unwrap();
         std::process::Command::new("git")
-            .args(["commit", "-m", "init"])
+            .args(["commit", "-m", "small fix"])
             .current_dir(dir.path())
             .output()
             .unwrap();
+
+        let agent_commit = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        let policy = AcceptancePolicy::default();
+        assert_eq!(policy.min_diff_lines, 5);
+
+        let agent_diff = count_diff_lines(dir.path(), &initial, &agent_commit);
+        assert_eq!(agent_diff, 2, "Agent produced 2 lines");
+
+        // Case 1: auto_fix_applied=true, small diff → guard should fire (reject)
+        assert!(
+            should_reject_auto_fix(true, &policy),
+            "Should reject when auto-fix ran and diff is tiny"
+        );
+
+        // Case 2: auto_fix_applied=false, same small diff → guard must NOT fire
+        assert!(
+            !should_reject_auto_fix(false, &policy),
+            "Must not reject when auto-fix did not run"
+        );
+
+        // Case 3: auto_fix_applied=true but min_diff_lines=0 → guard disabled
+        let permissive = AcceptancePolicy {
+            min_diff_lines: 0,
+            ..AcceptancePolicy::default()
+        };
+        assert!(
+            !should_reject_auto_fix(true, &permissive),
+            "Must not reject when min_diff_lines is disabled"
+        );
+    }
+
+    #[test]
+    fn test_count_diff_lines_in_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+        let from = init_test_git_repo(dir.path());
+
+        // Add 10 lines
+        let content = (1..=10)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(dir.path().join("code.rs"), format!("{content}\n")).unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "add code"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let to = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        assert_eq!(count_diff_lines(dir.path(), &from, &to), 10);
+
+        // count_diff_lines with same commit should be 0
+        assert_eq!(count_diff_lines(dir.path(), &to, &to), 0);
+    }
+
+    #[test]
+    fn test_git_manager_checkpoint_prefix() {
+        // Verify GitManager uses the expected commit prefix
+        let dir = tempfile::tempdir().unwrap();
+        let _initial = init_test_git_repo(dir.path());
 
         let git_mgr = GitManager::new(dir.path(), "[swarm]");
 

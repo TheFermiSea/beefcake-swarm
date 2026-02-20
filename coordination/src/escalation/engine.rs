@@ -54,6 +54,8 @@ pub struct EscalationConfig {
     pub multi_file_threshold: usize,
     /// Whether to require adversary review before close
     pub require_adversary_review: bool,
+    /// Consecutive no-change iterations before marking stuck
+    pub no_change_threshold: u32,
 }
 
 impl Default for EscalationConfig {
@@ -63,6 +65,7 @@ impl Default for EscalationConfig {
             failure_threshold: 3,
             multi_file_threshold: 8,
             require_adversary_review: true,
+            no_change_threshold: 3,
         }
     }
 }
@@ -166,6 +169,26 @@ impl EscalationEngine {
         state: &mut EscalationState,
         report: &VerifierReport,
     ) -> EscalationDecision {
+        // Trigger T0: Consecutive no-change iterations
+        if state.consecutive_no_change >= self.config.no_change_threshold {
+            state.stuck = true;
+            let reason = EscalationReason::ConsecutiveNoChange {
+                count: state.consecutive_no_change,
+                threshold: self.config.no_change_threshold,
+            };
+            return EscalationDecision {
+                target_tier: SwarmTier::Human,
+                escalated: true,
+                reason: format!("Stuck: {}", reason),
+                resolved: false,
+                stuck: true,
+                needs_review: false,
+                action: SuggestedAction::FlagForHuman {
+                    reason: format!("Issue {} stuck: {}", state.bead_id, reason),
+                },
+            };
+        }
+
         // Trigger T1: Same error category repeated >= threshold
         if let Some((category, count)) = state.most_repeated_category() {
             if count >= self.config.repeat_threshold {
@@ -263,6 +286,26 @@ impl EscalationEngine {
         state: &mut EscalationState,
         _report: &VerifierReport,
     ) -> EscalationDecision {
+        // Trigger T0: Consecutive no-change iterations
+        if state.consecutive_no_change >= self.config.no_change_threshold {
+            state.stuck = true;
+            let reason = EscalationReason::ConsecutiveNoChange {
+                count: state.consecutive_no_change,
+                threshold: self.config.no_change_threshold,
+            };
+            return EscalationDecision {
+                target_tier: SwarmTier::Human,
+                escalated: true,
+                reason: format!("Stuck: {}", reason),
+                resolved: false,
+                stuck: true,
+                needs_review: false,
+                action: SuggestedAction::FlagForHuman {
+                    reason: format!("Issue {} stuck: {}", state.bead_id, reason),
+                },
+            };
+        }
+
         // Budget check: Council exhausted → stuck, flag for human
         if state.remaining_budget(SwarmTier::Council) == 0 {
             state.stuck = true;
@@ -396,7 +439,8 @@ mod tests {
     fn test_total_failures_escalates() {
         let config = EscalationConfig {
             failure_threshold: 2,
-            repeat_threshold: 10, // High threshold to avoid repeat trigger
+            repeat_threshold: 10,     // High threshold to avoid repeat trigger
+            no_change_threshold: 100, // High threshold to avoid no-change trigger
             ..Default::default()
         };
         let engine = EscalationEngine::with_config(config);
@@ -452,8 +496,9 @@ mod tests {
     #[test]
     fn test_stuck_when_all_exhausted() {
         let config = EscalationConfig {
-            repeat_threshold: 100,  // Disable repeat trigger
-            failure_threshold: 100, // Disable failure trigger
+            repeat_threshold: 100,    // Disable repeat trigger
+            failure_threshold: 100,   // Disable failure trigger
+            no_change_threshold: 100, // Disable no-change trigger
             ..Default::default()
         };
         let engine = EscalationEngine::with_config(config);
@@ -480,5 +525,97 @@ mod tests {
         let d = engine.decide(&mut state, &report);
         assert!(d.stuck);
         assert!(matches!(d.action, SuggestedAction::FlagForHuman { .. }));
+    }
+
+    // ========================================================================
+    // No-change circuit breaker tests (Issue 7)
+    // ========================================================================
+
+    #[test]
+    fn test_no_change_circuit_breaker() {
+        let config = EscalationConfig {
+            no_change_threshold: 3,
+            repeat_threshold: 100, // Disable other triggers
+            failure_threshold: 100,
+            ..Default::default()
+        };
+        let engine = EscalationEngine::with_config(config);
+        let mut state = EscalationState::new("beads-no-change-1");
+
+        // Simulate 3 consecutive no-change iterations
+        state.record_no_change();
+        state.record_no_change();
+        state.record_no_change();
+        assert_eq!(state.consecutive_no_change, 3);
+
+        // Engine should report stuck
+        let report = make_failing_report(vec![ErrorCategory::Other]);
+        let d = engine.decide(&mut state, &report);
+        assert!(d.stuck, "Should be stuck after 3 consecutive no-changes");
+        assert_eq!(d.target_tier, SwarmTier::Human);
+        assert!(d.reason.contains("no-change"), "Reason: {}", d.reason);
+    }
+
+    #[test]
+    fn test_no_change_counter_resets_on_change() {
+        let config = EscalationConfig {
+            no_change_threshold: 3,
+            repeat_threshold: 100,
+            failure_threshold: 100,
+            ..Default::default()
+        };
+        let engine = EscalationEngine::with_config(config);
+        let mut state = EscalationState::new("beads-no-change-2");
+
+        // 2 no-changes, then a reset, then 2 more — should NOT trigger
+        state.record_no_change();
+        state.record_no_change();
+        assert_eq!(state.consecutive_no_change, 2);
+
+        state.reset_no_change(); // Agent produced changes
+        assert_eq!(state.consecutive_no_change, 0);
+
+        state.record_no_change();
+        state.record_no_change();
+        assert_eq!(state.consecutive_no_change, 2);
+
+        // Engine should NOT report stuck (only 2 consecutive, not 3)
+        let report = make_failing_report(vec![ErrorCategory::Other]);
+        let d = engine.decide(&mut state, &report);
+        assert!(
+            !d.stuck,
+            "Should NOT be stuck — counter was reset mid-sequence"
+        );
+    }
+
+    #[test]
+    fn test_no_change_reason_serialization() {
+        let reason = EscalationReason::ConsecutiveNoChange {
+            count: 3,
+            threshold: 3,
+        };
+
+        // Serialize
+        let json = serde_json::to_string(&reason).unwrap();
+        assert!(json.contains("consecutive_no_change"), "JSON: {json}");
+        assert!(json.contains("\"count\":3"), "JSON: {json}");
+        assert!(json.contains("\"threshold\":3"), "JSON: {json}");
+
+        // Deserialize
+        let roundtrip: EscalationReason = serde_json::from_str(&json).unwrap();
+        match roundtrip {
+            EscalationReason::ConsecutiveNoChange { count, threshold } => {
+                assert_eq!(count, 3);
+                assert_eq!(threshold, 3);
+            }
+            other => panic!("Expected ConsecutiveNoChange, got: {other:?}"),
+        }
+
+        // Display
+        let display = format!("{reason}");
+        assert!(
+            display.contains("3 consecutive no-change"),
+            "Display: {display}"
+        );
     }
 }
