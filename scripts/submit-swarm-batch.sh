@@ -46,15 +46,16 @@ SUBMITTED=()
 for issue_id in "${ISSUES[@]}"; do
     full_id="beefcake-swarm-${issue_id}"
 
-    # Fetch title for logging
+    # Fetch title for logging and objective context
     title=$(bd show "$full_id" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)[0].get('title','?'))" 2>/dev/null || echo "?")
+    objective_b64=$(printf "%s" "$title" | base64 | tr -d '\n')
 
     echo "[$full_id] $title"
 
     # Build sbatch command with --issue override
     SBATCH_ARGS=(
         --job-name="swarm-${issue_id}"
-        --export="ALL,SWARM_ISSUE_ID=${full_id}"
+        --export="ALL,SWARM_ISSUE_ID=${full_id},SWARM_ISSUE_OBJECTIVE_B64=${objective_b64}"
     )
 
     # Sequential mode: chain jobs

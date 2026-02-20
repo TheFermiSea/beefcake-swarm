@@ -14,6 +14,25 @@ use crate::tools::patch_tool::EditFileTool;
 /// Type alias for agents built from OpenAI-compatible endpoints.
 pub type OaiAgent = Agent<openai::completion::CompletionModel>;
 
+const DEFAULT_WORKER_MAX_TURNS: usize = 15;
+const DEFAULT_REASONING_MAX_TURNS: usize = 20;
+
+fn worker_max_turns() -> usize {
+    std::env::var("SWARM_WORKER_MAX_TURNS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_WORKER_MAX_TURNS)
+}
+
+fn reasoning_max_turns() -> usize {
+    std::env::var("SWARM_REASONING_MAX_TURNS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_REASONING_MAX_TURNS)
+}
+
 /// Build the Rust specialist coder (strand-rust-coder-14B).
 ///
 /// Tools: read_file, write_file, run_command.
@@ -46,7 +65,7 @@ pub fn build_rust_coder_named(
         .tool(WriteFileTool::new(wt_path))
         .tool(EditFileTool::new(wt_path))
         .tool(RunCommandTool::new(wt_path))
-        .default_max_turns(50)
+        .default_max_turns(worker_max_turns())
         .build()
 }
 
@@ -80,7 +99,7 @@ pub fn build_reasoning_worker_named(
         .tool(EditFileTool::new(wt_path))
         .tool(ListFilesTool::new(wt_path))
         .tool(RunCommandTool::new(wt_path))
-        .default_max_turns(50)
+        .default_max_turns(reasoning_max_turns())
         .build()
 }
 
@@ -114,6 +133,6 @@ pub fn build_general_coder_named(
         .tool(EditFileTool::new(wt_path))
         .tool(ListFilesTool::new(wt_path))
         .tool(RunCommandTool::new(wt_path))
-        .default_max_turns(50)
+        .default_max_turns(worker_max_turns())
         .build()
 }

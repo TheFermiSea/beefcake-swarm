@@ -11,13 +11,14 @@ use rig::completion::Prompt;
 use rig::providers::openai;
 use tracing::{error, info, warn};
 
-/// Maximum wall-clock time for a single agent prompt call.
+/// Default wall-clock timeout for worker prompt calls.
+const DEFAULT_WORKER_TIMEOUT_SECS: u64 = 30 * 60; // 30 minutes
+/// Default wall-clock timeout for manager prompt calls.
 /// Prevents runaway managers that exceed their turn limits (rig doesn't enforce
 /// `default_max_turns` on the outer agent in `.prompt()` calls).
-const AGENT_TIMEOUT: Duration = Duration::from_secs(45 * 60); // 45 minutes
-
-/// Timeout for each cloud validation call (2 minutes per model).
-const VALIDATION_TIMEOUT: Duration = Duration::from_secs(120);
+const DEFAULT_MANAGER_TIMEOUT_SECS: u64 = 45 * 60; // 45 minutes
+/// Default timeout for each cloud validation call.
+const DEFAULT_VALIDATION_TIMEOUT_SECS: u64 = 120; // 2 minutes
 
 use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::reviewer::{self, ReviewResult};
@@ -381,6 +382,72 @@ struct CloudValidationResult {
     feedback: String,
 }
 
+fn timeout_from_env(var: &str, default_secs: u64) -> Duration {
+    let secs = std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default_secs);
+    Duration::from_secs(secs)
+}
+
+fn u32_from_env(var: &str, default: u32) -> u32 {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
+fn bool_from_env(var: &str, default: bool) -> bool {
+    std::env::var(var)
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
+/// Count lines changed between two commits in the worktree.
+fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--numstat", from, to])
+        .current_dir(wt_path)
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            stdout.lines().fold(0, |acc, line| {
+                let parts: Vec<&str> = line.split('\t').collect();
+                if parts.len() >= 2 {
+                    let added: usize = parts[0].parse().unwrap_or(0);
+                    let removed: usize = parts[1].parse().unwrap_or(0);
+                    acc + added + removed
+                } else {
+                    acc
+                }
+            })
+        }
+        _ => 0,
+    }
+}
+
+fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
+    match std::env::var(var)
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("worker") => SwarmTier::Worker,
+        Some("human") => SwarmTier::Human,
+        Some("council") => SwarmTier::Council,
+        _ => default,
+    }
+}
+
 /// Run cloud validation on the worktree diff using external high-end models.
 ///
 /// Sends the git diff (since initial commit) to each configured cloud validator
@@ -446,8 +513,15 @@ async fn cloud_validate(
          The change has already passed all deterministic gates (cargo fmt, clippy, \
          cargo check, cargo test). Your job is to catch logic errors, edge cases, \
          and design issues that the compiler cannot detect.\n\n\
-         Respond with PASS or FAIL on the first line, then structured feedback.\n\n\
+         Respond with STRICT JSON ONLY using schema: \
+         {{\"verdict\":\"pass|fail|needs_escalation\",\"confidence\":0.0-1.0,\
+         \"blocking_issues\":[...],\"suggested_next_action\":\"...\",\
+         \"touched_files\":[...]}}.\n\n\
          ```diff\n{diff_for_review}\n```"
+    );
+    let validation_timeout = timeout_from_env(
+        "SWARM_VALIDATION_TIMEOUT_SECS",
+        DEFAULT_VALIDATION_TIMEOUT_SECS,
     );
 
     let mut results = Vec::new();
@@ -455,13 +529,19 @@ async fn cloud_validate(
         info!(model, "Running cloud validation");
         let validator = reviewer::build_reviewer(cloud_client, model);
         match tokio::time::timeout(
-            VALIDATION_TIMEOUT,
+            validation_timeout,
             prompt_with_retry(&validator, &review_prompt, 3),
         )
         .await
         {
             Ok(Ok(response)) => {
                 let review = ReviewResult::parse(&response);
+                if !review.schema_valid {
+                    warn!(
+                        model,
+                        "Cloud validation response was invalid schema; treating as FAIL"
+                    );
+                }
                 let status = if review.passed { "PASS" } else { "FAIL" };
                 info!(model, status, "Cloud validation complete");
                 results.push(CloudValidationResult {
@@ -477,7 +557,7 @@ async fn cloud_validate(
                 warn!(
                     model,
                     "Cloud validation timed out ({}s)",
-                    VALIDATION_TIMEOUT.as_secs()
+                    validation_timeout.as_secs()
                 );
             }
         }
@@ -503,6 +583,10 @@ pub async fn process_issue(
     beads: &dyn IssueTracker,
     knowledge_base: Option<&dyn KnowledgeBase>,
 ) -> Result<bool> {
+    let worker_timeout = timeout_from_env("SWARM_WORKER_TIMEOUT_SECS", DEFAULT_WORKER_TIMEOUT_SECS);
+    let manager_timeout =
+        timeout_from_env("SWARM_MANAGER_TIMEOUT_SECS", DEFAULT_MANAGER_TIMEOUT_SECS);
+
     // --- Claim issue ---
     beads.update_status(&issue.id, "in_progress")?;
     info!(id = %issue.id, "Claimed issue");
@@ -566,14 +650,17 @@ pub async fn process_issue(
     // Start at Council tier (cloud-backed manager) from the beginning.
     // Cloud models (Opus 4.6) are the managers; local models are workers.
     // Council gets 6 iterations before escalating to Human.
+    let council_budget_iterations = u32_from_env("SWARM_COUNCIL_MAX_ITERATIONS", 6);
+    let council_budget_consultations = u32_from_env("SWARM_COUNCIL_MAX_CONSULTATIONS", 6);
+    let initial_tier = tier_from_env("SWARM_INITIAL_TIER", SwarmTier::Council);
     let engine = EscalationEngine::new();
     let mut escalation = EscalationState::new(&issue.id)
-        .with_initial_tier(SwarmTier::Council)
+        .with_initial_tier(initial_tier)
         .with_budget(
             SwarmTier::Council,
             TierBudget {
-                max_iterations: 6,
-                max_consultations: 6,
+                max_iterations: council_budget_iterations,
+                max_consultations: council_budget_consultations,
             },
         );
     let mut success = false;
@@ -584,6 +671,8 @@ pub async fn process_issue(
     // When set (e.g., ["swarm-agents"]), limits clippy/check/test to those packages.
     let verifier_config = VerifierConfig {
         packages: config.verifier_packages.clone(),
+        check_clippy: !bool_from_env("SWARM_SKIP_CLIPPY", false),
+        check_test: !bool_from_env("SWARM_SKIP_TESTS", false),
         ..VerifierConfig::default()
     };
 
@@ -711,12 +800,41 @@ pub async fn process_issue(
                     CoderRoute::RustCoder => {
                         info!(iteration, "Routing to rust_coder (strand-14B)");
                         metrics.record_coder_route("RustCoder");
-                        rust_coder.prompt(&task_prompt).await
+                        match tokio::time::timeout(worker_timeout, rust_coder.prompt(&task_prompt))
+                            .await
+                        {
+                            Ok(result) => result,
+                            Err(_elapsed) => {
+                                warn!(
+                                    iteration,
+                                    timeout_secs = worker_timeout.as_secs(),
+                                    "rust_coder exceeded timeout — proceeding with changes on disk"
+                                );
+                                Ok("rust_coder timed out. Changes are on disk for verifier."
+                                    .to_string())
+                            }
+                        }
                     }
                     CoderRoute::GeneralCoder => {
                         info!(iteration, "Routing to general_coder (Qwen3-Coder-Next)");
                         metrics.record_coder_route("GeneralCoder");
-                        general_coder.prompt(&task_prompt).await
+                        match tokio::time::timeout(
+                            worker_timeout,
+                            general_coder.prompt(&task_prompt),
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(_elapsed) => {
+                                warn!(
+                                    iteration,
+                                    timeout_secs = worker_timeout.as_secs(),
+                                    "general_coder exceeded timeout — proceeding with changes on disk"
+                                );
+                                Ok("general_coder timed out. Changes are on disk for verifier."
+                                    .to_string())
+                            }
+                        }
                     }
                 }
             }
@@ -729,7 +847,7 @@ pub async fn process_issue(
                 // Rig doesn't enforce default_max_turns on the outer .prompt() agent,
                 // so managers can run indefinitely. This hard-caps wall-clock time.
                 match tokio::time::timeout(
-                    AGENT_TIMEOUT,
+                    manager_timeout,
                     prompt_with_retry(&manager, &task_prompt, config.cloud_max_retries),
                 )
                 .await
@@ -738,7 +856,7 @@ pub async fn process_issue(
                     Err(_elapsed) => {
                         warn!(
                             iteration,
-                            timeout_secs = AGENT_TIMEOUT.as_secs(),
+                            timeout_secs = manager_timeout.as_secs(),
                             "Manager exceeded timeout — proceeding with changes on disk"
                         );
                         // Return a synthetic "timed out" response so the verifier still runs.
@@ -833,6 +951,9 @@ pub async fn process_issue(
             }
         };
 
+        // Capture the post-agent commit hash (before auto-fix) for diff sizing.
+        let post_agent_commit = git_mgr.current_commit_full().ok();
+
         if !has_changes {
             warn!(
                 iteration,
@@ -857,6 +978,18 @@ pub async fn process_issue(
                 );
                 break;
             }
+            if matches!(tier, SwarmTier::Council | SwarmTier::Human) {
+                warn!(
+                    iteration,
+                    "No-change council response; forcing next iteration through Worker tier"
+                );
+            } else {
+                warn!(
+                    iteration,
+                    "No-change worker response; keeping next iteration on Worker tier"
+                );
+            }
+            escalation.current_tier = SwarmTier::Worker;
             continue;
         }
 
@@ -932,6 +1065,41 @@ pub async fn process_issue(
         }
 
         if report.all_green {
+            // --- Guard against auto-fix false positives ---
+            // If the verifier only passed because of auto-fix (clippy --fix + fmt),
+            // verify the agent produced meaningful changes beyond auto-fix.
+            if acceptance_policy.min_diff_lines > 0 {
+                if let (Some(initial), Some(agent_commit)) = (
+                    session.state().initial_commit.as_ref(),
+                    post_agent_commit.as_ref(),
+                ) {
+                    let agent_diff_lines = count_diff_lines(&wt_path, initial, agent_commit);
+                    if agent_diff_lines < acceptance_policy.min_diff_lines {
+                        warn!(
+                            iteration,
+                            agent_diff_lines,
+                            min_required = acceptance_policy.min_diff_lines,
+                            "Auto-fix false positive: agent produced {} lines but minimum is {}",
+                            agent_diff_lines,
+                            acceptance_policy.min_diff_lines,
+                        );
+                        let _ = progress.log_error(
+                            session.session_id(),
+                            iteration,
+                            format!(
+                                "Auto-fix false positive: agent diff only {agent_diff_lines} lines (min: {})",
+                                acceptance_policy.min_diff_lines
+                            ),
+                        );
+                        // Record this as a failed iteration and continue
+                        escalation.record_iteration(error_cats.clone(), 0, false);
+                        last_report = Some(report);
+                        metrics.finish_iteration();
+                        continue;
+                    }
+                }
+            }
+
             // Deterministic gates (fmt + clippy + check + test) are the source of truth.
             // The reviewer is advisory — don't let subjective LLM feedback cause loops.
             info!(
@@ -1262,7 +1430,12 @@ async fn prompt_with_retry(
                     || err_str.contains("429")
                     || err_lower.contains("connection")
                     || err_lower.contains("timed out")
-                    || err_lower.contains("timeout");
+                    || err_lower.contains("timeout")
+                    // Proxy occasionally returns empty-but-200 payloads; retry recovers.
+                    || err_lower.contains("no message or tool call (empty)")
+                    || err_lower.contains("response contained no message or tool call")
+                    // Proxy/model schema mismatches can be intermittent during model churn.
+                    || err_lower.contains("jsonerror");
 
                 if !is_transient || attempt == max_retries {
                     return Err(e);

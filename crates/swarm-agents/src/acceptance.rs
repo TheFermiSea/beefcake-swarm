@@ -34,6 +34,10 @@ pub struct AcceptancePolicy {
     /// only touch files within these crate directories.
     /// Default: empty (no scope restriction).
     pub scope_to_crates: Vec<String>,
+
+    /// Minimum diff size in lines. Diffs smaller than this are rejected
+    /// as likely auto-fix false positives. Default: 5. Set to 0 to disable.
+    pub min_diff_lines: usize,
 }
 
 impl Default for AcceptancePolicy {
@@ -43,6 +47,7 @@ impl Default for AcceptancePolicy {
             min_cloud_passes: 0,
             require_test_changes: false,
             scope_to_crates: Vec::new(),
+            min_diff_lines: 5,
         }
     }
 }
@@ -268,6 +273,7 @@ mod tests {
         assert_eq!(policy.min_cloud_passes, 0);
         assert!(!policy.require_test_changes);
         assert!(policy.scope_to_crates.is_empty());
+        assert_eq!(policy.min_diff_lines, 5);
     }
 
     #[test]
@@ -277,6 +283,7 @@ mod tests {
             min_cloud_passes: 0,
             require_test_changes: false,
             scope_to_crates: Vec::new(),
+            min_diff_lines: 0,
         };
 
         // With all gates disabled, should always pass

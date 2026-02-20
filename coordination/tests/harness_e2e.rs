@@ -7,7 +7,7 @@
 //! - Session resume from progress file
 //! - Feature registry interactions
 
-use rust_cluster_mcp::harness::{
+use coordination::harness::{
     create_shared_state,
     tools::{
         harness_checkpoint, harness_complete_feature, harness_end, harness_iterate,

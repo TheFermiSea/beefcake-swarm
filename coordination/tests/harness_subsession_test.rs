@@ -7,7 +7,7 @@
 //! 4. Sub-session persistence across restarts
 //! 5. Blocking behavior respects interventions
 
-use rust_cluster_mcp::harness::{
+use coordination::harness::{
     error::HarnessError,
     tools::{
         create_shared_state, harness_claim_sub_session_result, harness_complete_sub_session,
@@ -551,7 +551,7 @@ fn test_can_claim_failed_subsession() {
     // Fail the sub-session
     {
         let mut state = state.lock().unwrap();
-        rust_cluster_mcp::harness::tools::harness_fail_sub_session(
+        coordination::harness::tools::harness_fail_sub_session(
             &mut state,
             &sub_session_id,
             "Task failed due to missing dependency",

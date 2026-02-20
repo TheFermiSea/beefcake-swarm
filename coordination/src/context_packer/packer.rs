@@ -20,10 +20,18 @@ static STDERR_FILE_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Token budgets per tier (4 chars ≈ 1 token, matching `estimated_tokens()`)
 fn max_context_tokens(tier: SwarmTier) -> usize {
+    fn from_env(var: &str, default: usize) -> usize {
+        std::env::var(var)
+            .ok()
+            .and_then(|v| v.parse::<usize>().ok())
+            .filter(|v| *v > 0)
+            .unwrap_or(default)
+    }
+
     match tier {
-        SwarmTier::Worker => 8_000,
-        SwarmTier::Council => 32_000,
-        SwarmTier::Human => 32_000,
+        SwarmTier::Worker => from_env("SWARM_CONTEXT_TOKENS_WORKER", 8_000),
+        SwarmTier::Council => from_env("SWARM_CONTEXT_TOKENS_COUNCIL", 32_000),
+        SwarmTier::Human => from_env("SWARM_CONTEXT_TOKENS_HUMAN", 32_000),
     }
 }
 
