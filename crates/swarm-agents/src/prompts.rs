@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "5.3.0";
+pub const PROMPT_VERSION: &str = "5.4.0";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -75,6 +75,9 @@ after you return — your job is done the moment the verifier passes.
 - If you're stuck after 3 failed attempts with different strategies, report BLOCKED.
 
 ## Rules
+- **MANDATORY**: Every response MUST delegate to at least one worker tool. Responses \
+  containing only analysis or planning without worker delegation are INVALID. \
+  If no worker can make progress, report BLOCKED with the specific reason.
 - NEVER write code yourself. Always delegate to a worker.
 - Be specific in your delegation: include file paths, line numbers, and exact error messages.
 - If a coder fails twice on the same error, escalate to proxy_reasoning_worker for analysis.
@@ -130,6 +133,9 @@ after you return — do NOT continue iterating.
 - If stuck after 3 attempts, report BLOCKED.
 
 ## Rules
+- **MANDATORY**: Every response MUST delegate to at least one worker tool. Responses \
+  containing only analysis or planning without worker delegation are INVALID. \
+  If no worker can make progress, report BLOCKED with the specific reason.
 - NEVER write code yourself. Always delegate to a coder.
 - Be specific: include file paths, line numbers, and exact error messages.
 - The orchestrator handles git commits and issue status. Do NOT instruct workers to commit.
@@ -166,6 +172,9 @@ Only modify files relevant to your task.
 - Async/Send: wrap non-Send types in Arc<Mutex<>> or restructure around .await.
 
 ## Rules
+- **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
+  replies with no file edits are INVALID. If you cannot make progress, add a \
+  `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
 - Always read the file BEFORE editing it.
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - One logical change at a time. Don't refactor unrelated code.
@@ -213,6 +222,9 @@ If you find a bug or missing test unrelated to your current task, create a track
 (the issue ID is in the task header as `**Issue:** <id>`). Stay focused on your task.
 
 ## Rules
+- **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
+  replies with no file edits are INVALID. If you cannot make progress, add a \
+  `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
 - Always read before editing. Use edit_file for targeted changes.
 - Update mod.rs / lib.rs when adding or removing modules.
 - After changes, verify compilation before reporting done.
@@ -296,6 +308,9 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
 (the issue ID is in the task header). Focus on the assigned task.
 
 ## Rules
+- **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
+  replies with no file edits are INVALID. If you cannot make progress, add a \
+  `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
 - Always read files before editing them.
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - Consider full implications of changes across the codebase.

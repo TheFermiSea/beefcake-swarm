@@ -20,6 +20,7 @@ pub struct IterationMetrics {
     pub verifier_ms: u64,
     pub error_count: usize,
     pub error_categories: Vec<String>,
+    pub no_change: bool,
     pub auto_fix_applied: bool,
     pub regression_detected: bool,
     pub rollback_performed: bool,
@@ -37,6 +38,8 @@ pub struct SessionMetrics {
     pub total_iterations: u32,
     pub final_tier: String,
     pub elapsed_ms: u64,
+    pub total_no_change_iterations: u32,
+    pub no_change_rate: f64,
     pub cloud_validations: Vec<ValidationMetric>,
     pub iterations: Vec<IterationMetrics>,
     pub timestamp: String,
@@ -71,6 +74,7 @@ struct IterationBuilder {
     verifier_ms: u64,
     error_count: usize,
     error_categories: Vec<String>,
+    no_change: bool,
     auto_fix_applied: bool,
     regression_detected: bool,
     rollback_performed: bool,
@@ -100,6 +104,7 @@ impl MetricsCollector {
             verifier_ms: 0,
             error_count: 0,
             error_categories: Vec::new(),
+            no_change: false,
             auto_fix_applied: false,
             regression_detected: false,
             rollback_performed: false,
@@ -127,6 +132,13 @@ impl MetricsCollector {
         if let Some(ref mut iter) = self.current_iteration {
             iter.error_count = error_count;
             iter.error_categories = categories;
+        }
+    }
+
+    /// Record that this iteration produced no file changes.
+    pub fn record_no_change(&mut self) {
+        if let Some(ref mut iter) = self.current_iteration {
+            iter.no_change = true;
         }
     }
 
@@ -169,6 +181,7 @@ impl MetricsCollector {
                 verifier_ms: iter.verifier_ms,
                 error_count: iter.error_count,
                 error_categories: iter.error_categories,
+                no_change: iter.no_change,
                 auto_fix_applied: iter.auto_fix_applied,
                 regression_detected: iter.regression_detected,
                 rollback_performed: iter.rollback_performed,
@@ -191,14 +204,24 @@ impl MetricsCollector {
         // Flush any in-progress iteration
         self.finish_iteration();
 
+        let total = self.iterations.len() as u32;
+        let no_change_count = self.iterations.iter().filter(|i| i.no_change).count() as u32;
+        let no_change_rate = if total > 0 {
+            no_change_count as f64 / total as f64
+        } else {
+            0.0
+        };
+
         SessionMetrics {
             session_id: self.session_id,
             issue_id: self.issue_id,
             issue_title: self.issue_title,
             success,
-            total_iterations: self.iterations.len() as u32,
+            total_iterations: total,
             final_tier: final_tier.to_string(),
             elapsed_ms: self.session_start.elapsed().as_millis() as u64,
+            total_no_change_iterations: no_change_count,
+            no_change_rate,
             cloud_validations: self.cloud_validations,
             iterations: self.iterations,
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -326,6 +349,8 @@ mod tests {
             total_iterations: 1,
             final_tier: "Integrator".into(),
             elapsed_ms: 5000,
+            total_no_change_iterations: 0,
+            no_change_rate: 0.0,
             cloud_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T00:00:00Z".into(),
@@ -354,6 +379,8 @@ mod tests {
             total_iterations: 1,
             final_tier: "Integrator".into(),
             elapsed_ms: 3000,
+            total_no_change_iterations: 0,
+            no_change_rate: 0.0,
             cloud_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T00:00:00Z".into(),
@@ -366,6 +393,8 @@ mod tests {
             total_iterations: 3,
             final_tier: "Cloud".into(),
             elapsed_ms: 15000,
+            total_no_change_iterations: 1,
+            no_change_rate: 1.0 / 3.0,
             cloud_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T01:00:00Z".into(),

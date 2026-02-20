@@ -77,6 +77,33 @@ impl VerifierConfig {
             ..Default::default()
         }
     }
+
+    /// Documentation-oriented profile (fmt + compile only, no clippy or tests).
+    ///
+    /// Suitable for doc/RFC tasks that only need basic formatting and syntax checking.
+    pub fn docs() -> Self {
+        Self {
+            check_fmt: true,
+            check_clippy: false,
+            check_compile: true,
+            check_test: false,
+            ..Default::default()
+        }
+    }
+
+    /// All gates disabled — no verification at all.
+    ///
+    /// Useful for tasks where deterministic quality gates don't apply
+    /// (e.g., pure documentation, planning, or external scaffolding).
+    pub fn none() -> Self {
+        Self {
+            check_fmt: false,
+            check_clippy: false,
+            check_compile: false,
+            check_test: false,
+            ..Default::default()
+        }
+    }
 }
 
 /// The Verifier — runs the deterministic quality gate pipeline
@@ -533,6 +560,24 @@ mod tests {
         assert!(!config.check_fmt);
         assert!(config.check_clippy);
         assert!(config.check_compile);
+        assert!(!config.check_test);
+    }
+
+    #[test]
+    fn test_verifier_config_docs() {
+        let config = VerifierConfig::docs();
+        assert!(config.check_fmt);
+        assert!(!config.check_clippy);
+        assert!(config.check_compile);
+        assert!(!config.check_test);
+    }
+
+    #[test]
+    fn test_verifier_config_none() {
+        let config = VerifierConfig::none();
+        assert!(!config.check_fmt);
+        assert!(!config.check_clippy);
+        assert!(!config.check_compile);
         assert!(!config.check_test);
     }
 

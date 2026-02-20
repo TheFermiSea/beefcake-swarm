@@ -587,6 +587,20 @@ pub async fn process_issue(
     let manager_timeout =
         timeout_from_env("SWARM_MANAGER_TIMEOUT_SECS", DEFAULT_MANAGER_TIMEOUT_SECS);
 
+    // --- Validate objective ---
+    let title_trimmed = issue.title.trim();
+    if title_trimmed.is_empty() || title_trimmed.len() < config.min_objective_len {
+        warn!(
+            id = %issue.id,
+            title_len = title_trimmed.len(),
+            min_len = config.min_objective_len,
+            "Rejecting issue: title too short (\"{}\")",
+            title_trimmed,
+        );
+        // Don't claim the issue — leave it open for a human to improve the title
+        return Ok(false);
+    }
+
     // --- Claim issue ---
     beads.update_status(&issue.id, "in_progress")?;
     info!(id = %issue.id, "Claimed issue");
@@ -955,11 +969,55 @@ pub async fn process_issue(
         let post_agent_commit = git_mgr.current_commit_full().ok();
 
         if !has_changes {
+            escalation.record_no_change();
+            metrics.record_no_change();
             warn!(
                 iteration,
                 response_len = response.len(),
+                consecutive_no_change = escalation.consecutive_no_change,
+                threshold = config.max_consecutive_no_change,
                 "No file changes after agent response — manager may not have called workers"
             );
+
+            // --- No-change circuit breaker ---
+            if escalation.consecutive_no_change >= config.max_consecutive_no_change {
+                error!(
+                    iteration,
+                    consecutive_no_change = escalation.consecutive_no_change,
+                    "No-change circuit breaker triggered — {} consecutive iterations with no file changes",
+                    escalation.consecutive_no_change,
+                );
+                metrics.finish_iteration();
+
+                // Try scaffold fallback for doc-oriented tasks before giving up
+                let scaffolded = try_scaffold_fallback(
+                    &wt_path,
+                    &issue.id,
+                    &issue.title,
+                    "", // BeadsIssue doesn't carry description at this level
+                    iteration,
+                );
+                if scaffolded {
+                    info!(
+                        iteration,
+                        "Scaffold fallback produced a template — still marking stuck"
+                    );
+                }
+
+                create_stuck_intervention(
+                    &mut session,
+                    &progress,
+                    &wt_path,
+                    iteration,
+                    &format!(
+                        "No-change circuit breaker: {} consecutive iterations produced no file changes{}",
+                        escalation.consecutive_no_change,
+                        if scaffolded { " (scaffold committed)" } else { "" },
+                    ),
+                );
+                break;
+            }
+
             // engine.decide() records the iteration internally — don't double-count
             let verifier = Verifier::new(&wt_path, verifier_config.clone());
             let report = verifier.run_pipeline().await;
@@ -992,6 +1050,9 @@ pub async fn process_issue(
             escalation.current_tier = SwarmTier::Worker;
             continue;
         }
+
+        // Reset no-change counter on any iteration that produces changes
+        escalation.reset_no_change();
 
         // --- Verifier: run deterministic quality gates ---
         let verifier_start = std::time::Instant::now();
@@ -1458,6 +1519,106 @@ async fn prompt_with_retry(
         }
     }
     Err(last_err.unwrap())
+}
+
+/// Detect whether an issue is doc-oriented based on title/description keywords.
+fn is_doc_task(title: &str, description: &str) -> bool {
+    let combined = format!("{} {}", title, description).to_ascii_lowercase();
+    let doc_keywords = [
+        ".md",
+        "rfc",
+        "doc",
+        "architecture",
+        "planning",
+        "readme",
+        "design doc",
+    ];
+    doc_keywords.iter().any(|kw| combined.contains(kw))
+}
+
+/// Generate a minimal markdown scaffold for a doc-oriented task.
+///
+/// When doc tasks hit the no-change circuit breaker, this creates a template
+/// file so at least a skeleton exists for human completion. Returns `true`
+/// if a scaffold was committed.
+pub fn try_scaffold_fallback(
+    wt_path: &Path,
+    issue_id: &str,
+    issue_title: &str,
+    issue_description: &str,
+    iteration: u32,
+) -> bool {
+    if !is_doc_task(issue_title, issue_description) {
+        return false;
+    }
+
+    // Generate a safe filename from the issue title
+    let safe_name: String = issue_title
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let filename = format!("docs/{}.md", safe_name.trim_matches('-'));
+
+    let scaffold = format!(
+        "# {title}\n\n\
+         > Auto-generated scaffold by swarm orchestrator.\n\
+         > Issue: `{id}` | Generated at iteration {iter}\n\n\
+         ## Overview\n\n\
+         <!-- TODO: Describe the purpose and scope -->\n\n\
+         ## Details\n\n\
+         <!-- TODO: Fill in the content -->\n\n\
+         ## Open Questions\n\n\
+         <!-- TODO: List any unresolved questions -->\n",
+        title = issue_title,
+        id = issue_id,
+        iter = iteration,
+    );
+
+    // Ensure docs/ directory exists
+    let docs_dir = wt_path.join("docs");
+    if let Err(e) = std::fs::create_dir_all(&docs_dir) {
+        warn!("Failed to create docs dir for scaffold: {e}");
+        return false;
+    }
+
+    let file_path = wt_path.join(&filename);
+    if let Err(e) = std::fs::write(&file_path, &scaffold) {
+        warn!("Failed to write scaffold file: {e}");
+        return false;
+    }
+
+    // Stage and commit the scaffold
+    let add = std::process::Command::new("git")
+        .args(["add", &filename])
+        .current_dir(wt_path)
+        .output();
+    if !matches!(add, Ok(ref out) if out.status.success()) {
+        warn!("Failed to git add scaffold");
+        return false;
+    }
+
+    let msg = format!("swarm: scaffold fallback for {issue_id} (iteration {iteration})");
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", &msg])
+        .current_dir(wt_path)
+        .output();
+    if !matches!(commit, Ok(ref out) if out.status.success()) {
+        warn!("Failed to commit scaffold");
+        return false;
+    }
+
+    info!(
+        issue_id,
+        filename, "Scaffold fallback committed for doc task"
+    );
+    true
 }
 
 /// Create a human intervention request when the escalation engine reports stuck.
