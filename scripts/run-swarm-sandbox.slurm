@@ -38,8 +38,8 @@ fi
 
 # Recover from stale worktree artifacts for this issue (if any).
 if [ -n "${SWARM_ISSUE_ID:-}" ]; then
-    # Validate issue ID to prevent path traversal (allow alphanumeric, dash, dot, underscore only)
-    if [[ "$SWARM_ISSUE_ID" =~ [/\\] ]] || [[ "$SWARM_ISSUE_ID" == *..* ]]; then
+    # Validate issue ID: strict allowlist to prevent path traversal and injection
+    if [[ ! "$SWARM_ISSUE_ID" =~ ^[A-Za-z0-9._-]+$ ]] || [[ "$SWARM_ISSUE_ID" == "." ]] || [[ "$SWARM_ISSUE_ID" == ".." ]]; then
         echo "ERROR: SWARM_ISSUE_ID contains invalid characters: ${SWARM_ISSUE_ID}" >&2
         exit 1
     fi

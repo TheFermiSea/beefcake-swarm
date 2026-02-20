@@ -1778,6 +1778,178 @@ mod tests {
         assert!(matches!(entries[5].marker, ProgressMarker::SessionEnd));
     }
 
+    /// The auto-fix false positive guard should only reject iterations where
+    /// `auto_fix_applied == true` AND the agent diff is below `min_diff_lines`.
+    /// When auto-fix did NOT run, `min_diff_lines` must not block acceptance.
+    #[test]
+    fn test_auto_fix_guard_only_fires_when_auto_fix_applied() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Initialize git repo with an initial commit
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(dir.path().join("README.md"), "# test\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let initial = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        // Add a tiny 2-line change (below default min_diff_lines of 5)
+        std::fs::write(dir.path().join("fix.rs"), "fn a() {}\nfn b() {}\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "small fix"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let agent_commit = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        let policy = AcceptancePolicy::default();
+        assert_eq!(policy.min_diff_lines, 5);
+
+        let agent_diff = count_diff_lines(dir.path(), &initial, &agent_commit);
+        assert_eq!(agent_diff, 2, "Agent produced 2 lines");
+
+        // Case 1: auto_fix_applied=true, small diff → guard should fire (reject)
+        let auto_fix_applied = true;
+        let should_reject =
+            auto_fix_applied && policy.min_diff_lines > 0 && agent_diff < policy.min_diff_lines;
+        assert!(
+            should_reject,
+            "Should reject when auto-fix ran and diff is tiny"
+        );
+
+        // Case 2: auto_fix_applied=false, same small diff → guard must NOT fire
+        let auto_fix_applied = false;
+        let should_reject =
+            auto_fix_applied && policy.min_diff_lines > 0 && agent_diff < policy.min_diff_lines;
+        assert!(!should_reject, "Must not reject when auto-fix did not run");
+    }
+
+    #[test]
+    fn test_count_diff_lines_in_git_repo() {
+        let dir = tempfile::tempdir().unwrap();
+
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(dir.path().join("README.md"), "# test\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let from = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        // Add 10 lines
+        let content = (1..=10)
+            .map(|i| format!("line {i}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(dir.path().join("code.rs"), format!("{content}\n")).unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "add code"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let to = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        assert_eq!(count_diff_lines(dir.path(), &from, &to), 10);
+
+        // count_diff_lines with same commit should be 0
+        assert_eq!(count_diff_lines(dir.path(), &to, &to), 0);
+    }
+
     #[test]
     fn test_git_manager_checkpoint_prefix() {
         // Verify GitManager uses the expected commit prefix
