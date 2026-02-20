@@ -23,6 +23,16 @@ use crate::tools::verifier_tool::RunVerifierTool;
 
 use super::coder::OaiAgent;
 
+const DEFAULT_MANAGER_MAX_TURNS: usize = 20;
+
+fn manager_max_turns() -> usize {
+    std::env::var("SWARM_MANAGER_MAX_TURNS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_MANAGER_MAX_TURNS)
+}
+
 /// Bundled workers and tools for building a Manager agent.
 ///
 /// Avoids passing 8+ individual arguments to the builder functions.
@@ -80,7 +90,7 @@ pub fn build_cloud_manager(
         builder = builder.tool(ProxyQueryNotebook(QueryNotebookTool::new(kb)));
     }
 
-    builder.default_max_turns(20).build()
+    builder.default_max_turns(manager_max_turns()).build()
 }
 
 /// Build the local-only Manager (OR1-Behemoth fallback when cloud unavailable).
@@ -113,5 +123,5 @@ pub fn build_local_manager(
         builder = builder.tool(QueryNotebookTool::new(kb));
     }
 
-    builder.default_max_turns(20).build()
+    builder.default_max_turns(manager_max_turns()).build()
 }

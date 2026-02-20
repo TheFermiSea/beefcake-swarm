@@ -2,6 +2,7 @@
 
 use rig::client::CompletionClient;
 use rig::providers::openai;
+use serde::Deserialize;
 
 use crate::prompts;
 
@@ -24,28 +25,65 @@ pub fn build_reviewer_named(
     client
         .agent(model)
         .name(name)
-        .description("Blind code reviewer. Returns PASS/FAIL with structured feedback.")
+        .description("Blind code reviewer. Returns strict JSON validation output.")
         .preamble(prompts::REVIEWER_PREAMBLE)
         .temperature(0.1)
         .build()
 }
 
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ReviewVerdict {
+    Pass,
+    Fail,
+    NeedsEscalation,
+}
+
+#[derive(Debug, Deserialize)]
+struct StructuredReview {
+    verdict: ReviewVerdict,
+    confidence: f32,
+    blocking_issues: Vec<String>,
+    suggested_next_action: String,
+    touched_files: Vec<String>,
+}
+
 /// Parse a reviewer response into pass/fail + feedback.
 pub struct ReviewResult {
     pub passed: bool,
+    pub schema_valid: bool,
+    pub confidence: f32,
+    pub blocking_issues: Vec<String>,
+    pub suggested_next_action: String,
+    pub touched_files: Vec<String>,
     pub feedback: String,
 }
 
 impl ReviewResult {
     pub fn parse(response: &str) -> Self {
-        let passed = response
-            .lines()
-            .next()
-            .map(|line| line.trim().to_uppercase().starts_with("PASS"))
-            .unwrap_or(false);
-        Self {
-            passed,
-            feedback: response.to_string(),
+        match serde_json::from_str::<StructuredReview>(response) {
+            Ok(parsed) => {
+                let passed = matches!(parsed.verdict, ReviewVerdict::Pass);
+                Self {
+                    passed,
+                    schema_valid: true,
+                    confidence: parsed.confidence,
+                    blocking_issues: parsed.blocking_issues,
+                    suggested_next_action: parsed.suggested_next_action,
+                    touched_files: parsed.touched_files,
+                    feedback: response.to_string(),
+                }
+            }
+            Err(err) => Self {
+                passed: false,
+                schema_valid: false,
+                confidence: 0.0,
+                blocking_issues: vec![format!("Invalid reviewer schema: {err}")],
+                suggested_next_action:
+                    "Return strict JSON with verdict/confidence/blocking_issues/suggested_next_action/touched_files.".to_string(),
+                touched_files: Vec::new(),
+                feedback: response.to_string(),
+            },
         }
     }
 }
@@ -56,39 +94,44 @@ mod tests {
 
     #[test]
     fn test_parse_pass() {
-        let result = ReviewResult::parse("PASS\n- Looks good\n- Minor style nit");
+        let result = ReviewResult::parse(
+            r#"{
+                "verdict": "pass",
+                "confidence": 0.93,
+                "blocking_issues": [],
+                "suggested_next_action": "merge",
+                "touched_files": ["src/main.rs"]
+            }"#,
+        );
         assert!(result.passed);
-        assert!(result.feedback.contains("Looks good"));
+        assert!(result.schema_valid);
+        assert_eq!(result.touched_files, vec!["src/main.rs".to_string()]);
     }
 
     #[test]
     fn test_parse_fail() {
-        let result = ReviewResult::parse("FAIL\n- Missing error handling\n- Unsafe unwrap");
+        let result = ReviewResult::parse(
+            r#"{
+                "verdict": "fail",
+                "confidence": 0.7,
+                "blocking_issues": ["missing error handling"],
+                "suggested_next_action": "fix and re-run",
+                "touched_files": ["src/lib.rs"]
+            }"#,
+        );
         assert!(!result.passed);
-        assert!(result.feedback.contains("Missing error handling"));
+        assert!(result.schema_valid);
+        assert_eq!(result.blocking_issues.len(), 1);
     }
 
     #[test]
-    fn test_parse_empty() {
-        let result = ReviewResult::parse("");
+    fn test_parse_invalid_schema_fails_closed() {
+        let result = ReviewResult::parse("PASS\nlooks okay");
         assert!(!result.passed);
-    }
-
-    #[test]
-    fn test_parse_lowercase_pass() {
-        let result = ReviewResult::parse("pass\n- All good");
-        assert!(result.passed);
-    }
-
-    #[test]
-    fn test_parse_mixed_case() {
-        let result = ReviewResult::parse("  Pass  \n- Approved");
-        assert!(result.passed);
-    }
-
-    #[test]
-    fn test_parse_fail_without_prefix() {
-        let result = ReviewResult::parse("This code has issues\n- Bug on line 5");
-        assert!(!result.passed);
+        assert!(!result.schema_valid);
+        assert!(result
+            .blocking_issues
+            .first()
+            .is_some_and(|s| s.contains("Invalid reviewer schema")));
     }
 }

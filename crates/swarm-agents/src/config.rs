@@ -95,7 +95,11 @@ impl Default for SwarmConfig {
                     .unwrap_or_else(|_| "not-needed".into()),
             },
             cloud_endpoint: Self::cloud_from_env(),
-            max_retries: 10,
+            max_retries: std::env::var("SWARM_MAX_RETRIES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(10),
             worktree_base: None,
             notebook_registry_path: Some(PathBuf::from("./notebook_registry.toml")),
             verifier_packages: std::env::var("SWARM_VERIFIER_PACKAGES")

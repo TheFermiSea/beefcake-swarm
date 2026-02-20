@@ -162,7 +162,10 @@ nlm source add "<ID>" --file "doc.md"
 - vasp-01: `ssh root@10.0.0.20` (72B head, V100S)
 - vasp-02: `ssh root@10.0.0.21` (14B fast, V100S)
 - vasp-03: `ssh root@10.0.0.22` (72B RPC worker, V100S)
-- ai-proxy: `ssh root@100.105.113.58` (external gateway LXC)
+- ai-proxy: `ssh brian@100.105.113.58` or `ssh root@100.105.113.58` (external gateway LXC)
+  - Codebases live under `/home/brian/code/` (beefcake-swarm, rust-daq)
+  - Use `brian` user for code work; `root` for system admin only
+  - GitHub auth: SSH key (`ai-proxy-lxc`) + `gh` CLI as TheFermiSea
 
 ## SLURM Rules
 
