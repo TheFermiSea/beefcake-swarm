@@ -294,6 +294,102 @@ pub fn append_telemetry(metrics: &SessionMetrics, repo_root: &Path) {
     }
 }
 
+/// Aggregate analytics computed from multiple sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregateAnalytics {
+    pub total_sessions: usize,
+    pub success_rate: f64,
+    pub average_iterations: f64,
+    pub average_elapsed_ms: f64,
+    pub total_prompt_tokens: u64,
+    pub total_completion_tokens: u64,
+    pub error_category_frequencies: std::collections::HashMap<String, usize>,
+}
+
+/// Reads and analyzes telemetry data from `.swarm-telemetry.jsonl` files.
+pub struct TelemetryReader {
+    sessions: Vec<SessionMetrics>,
+}
+
+impl TelemetryReader {
+    /// Read telemetry sessions from a JSONL file.
+    pub fn read_from_file(path: &Path) -> std::io::Result<Self> {
+        use std::fs::File;
+        use std::io::{BufRead, BufReader};
+
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+        let mut sessions = Vec::new();
+
+        for line in reader.lines() {
+            let line = line?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let session: SessionMetrics = serde_json::from_str(&line)
+                .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+            sessions.push(session);
+        }
+
+        Ok(Self { sessions })
+    }
+
+    /// Get the parsed sessions.
+    pub fn sessions(&self) -> &[SessionMetrics] {
+        &self.sessions
+    }
+
+    /// Compute aggregate analytics across all loaded sessions.
+    pub fn aggregate_analytics(&self) -> AggregateAnalytics {
+        let total_sessions = self.sessions.len();
+        if total_sessions == 0 {
+            return AggregateAnalytics {
+                total_sessions: 0,
+                success_rate: 0.0,
+                average_iterations: 0.0,
+                average_elapsed_ms: 0.0,
+                total_prompt_tokens: 0,
+                total_completion_tokens: 0,
+                error_category_frequencies: std::collections::HashMap::new(),
+            };
+        }
+
+        let mut successful_sessions = 0;
+        let mut total_iterations = 0;
+        let mut total_elapsed_ms = 0;
+        let mut total_prompt_tokens = 0;
+        let mut total_completion_tokens = 0;
+        let mut error_category_frequencies = std::collections::HashMap::new();
+
+        for session in &self.sessions {
+            if session.success {
+                successful_sessions += 1;
+            }
+            total_iterations += session.total_iterations;
+            total_elapsed_ms += session.elapsed_ms;
+
+            for iter in &session.iterations {
+                total_prompt_tokens += iter.agent_prompt_tokens as u64;
+                total_completion_tokens += iter.agent_completion_tokens as u64;
+
+                for cat in &iter.error_categories {
+                    *error_category_frequencies.entry(cat.clone()).or_insert(0) += 1;
+                }
+            }
+        }
+
+        AggregateAnalytics {
+            total_sessions,
+            success_rate: successful_sessions as f64 / total_sessions as f64,
+            average_iterations: total_iterations as f64 / total_sessions as f64,
+            average_elapsed_ms: total_elapsed_ms as f64 / total_sessions as f64,
+            total_prompt_tokens,
+            total_completion_tokens,
+            error_category_frequencies,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -448,5 +544,111 @@ mod tests {
         assert_eq!(loaded2.session_id, "sess-2");
         assert!(loaded1.success);
         assert!(!loaded2.success);
+    }
+
+    #[test]
+    fn test_telemetry_reader_and_analytics() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".swarm-telemetry.jsonl");
+
+        let mut metrics1 = SessionMetrics {
+            session_id: "sess-1".into(),
+            issue_id: "issue-1".into(),
+            issue_title: "First".into(),
+            success: true,
+            total_iterations: 2,
+            final_tier: "Integrator".into(),
+            elapsed_ms: 3000,
+            total_no_change_iterations: 0,
+            no_change_rate: 0.0,
+            cloud_validations: vec![],
+            iterations: vec![],
+            timestamp: "2024-01-01T00:00:00Z".into(),
+        };
+        metrics1.iterations.push(IterationMetrics {
+            iteration: 1,
+            tier: "Integrator".into(),
+            agent_model: "model-1".into(),
+            agent_prompt_tokens: 100,
+            agent_completion_tokens: 50,
+            agent_response_ms: 1000,
+            verifier_ms: 500,
+            error_count: 1,
+            error_categories: vec!["Syntax".into()],
+            no_change: false,
+            auto_fix_applied: false,
+            regression_detected: false,
+            rollback_performed: false,
+            escalated: false,
+            coder_route: None,
+        });
+        metrics1.iterations.push(IterationMetrics {
+            iteration: 2,
+            tier: "Integrator".into(),
+            agent_model: "model-1".into(),
+            agent_prompt_tokens: 120,
+            agent_completion_tokens: 60,
+            agent_response_ms: 1200,
+            verifier_ms: 600,
+            error_count: 0,
+            error_categories: vec![],
+            no_change: false,
+            auto_fix_applied: false,
+            regression_detected: false,
+            rollback_performed: false,
+            escalated: false,
+            coder_route: None,
+        });
+
+        let mut metrics2 = SessionMetrics {
+            session_id: "sess-2".into(),
+            issue_id: "issue-2".into(),
+            issue_title: "Second".into(),
+            success: false,
+            total_iterations: 1,
+            final_tier: "Cloud".into(),
+            elapsed_ms: 15000,
+            total_no_change_iterations: 0,
+            no_change_rate: 0.0,
+            cloud_validations: vec![],
+            iterations: vec![],
+            timestamp: "2024-01-01T01:00:00Z".into(),
+        };
+        metrics2.iterations.push(IterationMetrics {
+            iteration: 1,
+            tier: "Cloud".into(),
+            agent_model: "model-2".into(),
+            agent_prompt_tokens: 200,
+            agent_completion_tokens: 100,
+            agent_response_ms: 2000,
+            verifier_ms: 1000,
+            error_count: 2,
+            error_categories: vec!["Syntax".into(), "Type".into()],
+            no_change: false,
+            auto_fix_applied: false,
+            regression_detected: false,
+            rollback_performed: false,
+            escalated: false,
+            coder_route: None,
+        });
+
+        append_telemetry(&metrics1, dir.path());
+        append_telemetry(&metrics2, dir.path());
+
+        let reader = TelemetryReader::read_from_file(&path).unwrap();
+        assert_eq!(reader.sessions().len(), 2);
+
+        let analytics = reader.aggregate_analytics();
+        assert_eq!(analytics.total_sessions, 2);
+        assert_eq!(analytics.success_rate, 0.5); // 1 success out of 2
+        assert_eq!(analytics.average_iterations, 1.5); // (2 + 1) / 2
+        assert_eq!(analytics.average_elapsed_ms, 9000.0); // (3000 + 15000) / 2
+        assert_eq!(analytics.total_prompt_tokens, 420); // 100 + 120 + 200
+        assert_eq!(analytics.total_completion_tokens, 210); // 50 + 60 + 100
+
+        let mut expected_errors = std::collections::HashMap::new();
+        expected_errors.insert("Syntax".to_string(), 2);
+        expected_errors.insert("Type".to_string(), 1);
+        assert_eq!(analytics.error_category_frequencies, expected_errors);
     }
 }
