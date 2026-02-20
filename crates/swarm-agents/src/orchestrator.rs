@@ -435,6 +435,15 @@ fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
     }
 }
 
+/// Returns `true` when the auto-fix false-positive guard should apply.
+///
+/// The guard fires only when auto-fix actually ran this iteration AND a minimum
+/// agent diff size is configured. This prevents rejecting legitimate small fixes
+/// that pass the verifier on their own merit (i.e. without auto-fix).
+fn should_reject_auto_fix(auto_fix_applied: bool, policy: &AcceptancePolicy) -> bool {
+    auto_fix_applied && policy.min_diff_lines > 0
+}
+
 fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
     match std::env::var(var)
         .ok()
@@ -1132,7 +1141,7 @@ pub async fn process_issue(
             // Only check when auto-fix actually ran this iteration. This avoids
             // rejecting legitimate small fixes (< min_diff_lines) that pass the
             // verifier on their own merit.
-            if auto_fix_applied && acceptance_policy.min_diff_lines > 0 {
+            if should_reject_auto_fix(auto_fix_applied, &acceptance_policy) {
                 if let (Some(initial), Some(agent_commit)) = (
                     session.state().initial_commit.as_ref(),
                     post_agent_commit.as_ref(),
@@ -1721,6 +1730,49 @@ mod tests {
         }
     }
 
+    /// Initialize a temporary git repo with one commit and return the initial
+    /// commit hash. Deduplicates test boilerplate across git-dependent tests.
+    fn init_test_git_repo(dir: &std::path::Path) -> String {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::fs::write(dir.join("README.md"), "# test\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+
+        String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir)
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string()
+    }
+
     #[test]
     fn test_route_empty_errors_to_general() {
         assert_eq!(route_to_coder(&[]), CoderRoute::GeneralCoder);
@@ -1945,46 +1997,7 @@ mod tests {
     #[test]
     fn test_auto_fix_guard_only_fires_when_auto_fix_applied() {
         let dir = tempfile::tempdir().unwrap();
-
-        // Initialize git repo with an initial commit
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::fs::write(dir.path().join("README.md"), "# test\n").unwrap();
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "-m", "init"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
-        let initial = String::from_utf8(
-            std::process::Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(dir.path())
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
+        let initial = init_test_git_repo(dir.path());
 
         // Add a tiny 2-line change (below default min_diff_lines of 5)
         std::fs::write(dir.path().join("fix.rs"), "fn a() {}\nfn b() {}\n").unwrap();
@@ -2018,63 +2031,32 @@ mod tests {
         assert_eq!(agent_diff, 2, "Agent produced 2 lines");
 
         // Case 1: auto_fix_applied=true, small diff → guard should fire (reject)
-        let auto_fix_applied = true;
-        let should_reject =
-            auto_fix_applied && policy.min_diff_lines > 0 && agent_diff < policy.min_diff_lines;
         assert!(
-            should_reject,
+            should_reject_auto_fix(true, &policy),
             "Should reject when auto-fix ran and diff is tiny"
         );
 
         // Case 2: auto_fix_applied=false, same small diff → guard must NOT fire
-        let auto_fix_applied = false;
-        let should_reject =
-            auto_fix_applied && policy.min_diff_lines > 0 && agent_diff < policy.min_diff_lines;
-        assert!(!should_reject, "Must not reject when auto-fix did not run");
+        assert!(
+            !should_reject_auto_fix(false, &policy),
+            "Must not reject when auto-fix did not run"
+        );
+
+        // Case 3: auto_fix_applied=true but min_diff_lines=0 → guard disabled
+        let permissive = AcceptancePolicy {
+            min_diff_lines: 0,
+            ..AcceptancePolicy::default()
+        };
+        assert!(
+            !should_reject_auto_fix(true, &permissive),
+            "Must not reject when min_diff_lines is disabled"
+        );
     }
 
     #[test]
     fn test_count_diff_lines_in_git_repo() {
         let dir = tempfile::tempdir().unwrap();
-
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::fs::write(dir.path().join("README.md"), "# test\n").unwrap();
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "-m", "init"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
-        let from = String::from_utf8(
-            std::process::Command::new("git")
-                .args(["rev-parse", "HEAD"])
-                .current_dir(dir.path())
-                .output()
-                .unwrap()
-                .stdout,
-        )
-        .unwrap()
-        .trim()
-        .to_string();
+        let from = init_test_git_repo(dir.path());
 
         // Add 10 lines
         let content = (1..=10)
@@ -2115,34 +2097,7 @@ mod tests {
     fn test_git_manager_checkpoint_prefix() {
         // Verify GitManager uses the expected commit prefix
         let dir = tempfile::tempdir().unwrap();
-
-        // Initialize git repo
-        std::process::Command::new("git")
-            .args(["init"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::fs::write(dir.path().join("README.md"), "# test").unwrap();
-        std::process::Command::new("git")
-            .args(["add", "."])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::process::Command::new("git")
-            .args(["commit", "-m", "init"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        let _initial = init_test_git_repo(dir.path());
 
         let git_mgr = GitManager::new(dir.path(), "[swarm]");
 
