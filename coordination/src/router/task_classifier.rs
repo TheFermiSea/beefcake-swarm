@@ -352,12 +352,27 @@ impl Default for ModelRouter {
 use std::collections::HashMap;
 
 /// Tracks success/failure counts for a single routing slot
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct PerformanceRecord {
     /// Number of successful completions
     pub successes: u32,
     /// Number of failures
     pub failures: u32,
+    /// Cumulative latency of successful requests in milliseconds
+    pub total_latency_ms: u64,
+    /// Cumulative cost of successful requests
+    pub total_cost: f64,
+}
+
+impl Default for PerformanceRecord {
+    fn default() -> Self {
+        Self {
+            successes: 0,
+            failures: 0,
+            total_latency_ms: 0,
+            total_cost: 0.0,
+        }
+    }
 }
 
 impl PerformanceRecord {
@@ -384,6 +399,31 @@ impl PerformanceRecord {
     /// Total number of recorded outcomes
     pub fn total(&self) -> u32 {
         self.successes + self.failures
+    }
+
+    /// Record a success with latency and cost metrics.
+    pub fn record_success_with_metrics(&mut self, latency_ms: u64, cost: f64) {
+        self.successes += 1;
+        self.total_latency_ms += latency_ms;
+        self.total_cost += cost;
+    }
+
+    /// Average latency in milliseconds (0.0 if no successes).
+    pub fn avg_latency_ms(&self) -> f64 {
+        if self.successes == 0 {
+            0.0
+        } else {
+            self.total_latency_ms as f64 / self.successes as f64
+        }
+    }
+
+    /// Average cost per success (0.0 if no successes).
+    pub fn avg_cost(&self) -> f64 {
+        if self.successes == 0 {
+            0.0
+        } else {
+            self.total_cost / self.successes as f64
+        }
     }
 }
 
@@ -537,6 +577,181 @@ impl DynamicRouter {
 impl Default for DynamicRouter {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ── Multi-dimensional smart scoring ──────────────────────────────────────────
+
+/// Multi-dimensional routing score combining quality, latency, and budget.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct SmartScore {
+    /// Success rate in [0.0, 1.0]
+    pub quality: f32,
+    /// Normalized latency score in [0.0, 1.0] where 1.0 = fast
+    pub latency: f32,
+    /// Normalized budget score in [0.0, 1.0] where 1.0 = cheap
+    pub budget: f32,
+    /// Weighted composite score
+    pub composite: f32,
+}
+
+/// Weights for multi-dimensional smart scoring.
+#[derive(Debug, Clone, Copy)]
+pub struct ScoringWeights {
+    pub quality: f32,
+    pub latency: f32,
+    pub budget: f32,
+}
+
+impl Default for ScoringWeights {
+    fn default() -> Self {
+        Self {
+            quality: 0.6,
+            latency: 0.25,
+            budget: 0.15,
+        }
+    }
+}
+
+impl ScoringWeights {
+    /// Compute a [`SmartScore`] from raw dimension values.
+    pub fn score(&self, quality: f32, latency: f32, budget: f32) -> SmartScore {
+        let composite = self.quality * quality + self.latency * latency + self.budget * budget;
+        SmartScore {
+            quality,
+            latency,
+            budget,
+            composite,
+        }
+    }
+}
+
+impl PerformanceHistory {
+    /// Compute a [`SmartScore`] for a tier using recorded metrics.
+    ///
+    /// Latency is normalized against `latency_ceiling_ms` (higher → lower score).
+    /// Cost is normalized against `cost_ceiling` (higher → lower score).
+    pub fn score_tier(
+        &self,
+        tier: ModelTier,
+        weights: &ScoringWeights,
+        latency_ceiling_ms: f64,
+        cost_ceiling: f64,
+    ) -> SmartScore {
+        let record = self.tier_performance.get(&tier);
+        let quality = record.map(|r| r.success_rate()).unwrap_or(0.5);
+
+        let latency_raw = record.map(|r| r.avg_latency_ms()).unwrap_or(0.0);
+        let latency_score = if latency_ceiling_ms > 0.0 {
+            (1.0 - (latency_raw / latency_ceiling_ms).min(1.0)) as f32
+        } else {
+            0.5
+        };
+
+        let cost_raw = record.map(|r| r.avg_cost()).unwrap_or(0.0);
+        let budget_score = if cost_ceiling > 0.0 {
+            (1.0 - (cost_raw / cost_ceiling).min(1.0)) as f32
+        } else {
+            0.5
+        };
+
+        weights.score(quality, latency_score, budget_score)
+    }
+}
+
+impl DynamicRouter {
+    /// Record an outcome with latency and cost metrics.
+    pub fn record_outcome_with_metrics(
+        &mut self,
+        selection: &ModelSelection,
+        category: Option<&str>,
+        success: bool,
+        latency_ms: u64,
+        cost: f64,
+    ) {
+        let tier_rec = self
+            .history
+            .tier_performance
+            .entry(selection.tier)
+            .or_default();
+        if success {
+            tier_rec.record_success_with_metrics(latency_ms, cost);
+        } else {
+            tier_rec.record_failure();
+        }
+
+        if let Some(cat) = category {
+            let cat_rec = self
+                .history
+                .category_performance
+                .entry((selection.tier, cat.to_string()))
+                .or_default();
+            if success {
+                cat_rec.record_success_with_metrics(latency_ms, cost);
+            } else {
+                cat_rec.record_failure();
+            }
+        }
+    }
+
+    /// Select a model using multi-dimensional scoring.
+    ///
+    /// Compares [`SmartScore`]s for Worker and Council tiers and picks the
+    /// higher composite. Falls back to base router logic when insufficient
+    /// data exists.
+    pub fn select_with_scoring(
+        &self,
+        errors: &[ParsedError],
+        weights: &ScoringWeights,
+    ) -> (ModelSelection, SmartScore) {
+        let base = self.base_router.select_for_errors(errors);
+
+        let latency_ceil = 30_000.0;
+        let cost_ceil = 1.0;
+
+        let worker_score =
+            self.history
+                .score_tier(ModelTier::Worker, weights, latency_ceil, cost_ceil);
+        let council_score =
+            self.history
+                .score_tier(ModelTier::Council, weights, latency_ceil, cost_ceil);
+
+        let other_tier = match base.tier {
+            ModelTier::Worker => ModelTier::Council,
+            ModelTier::Council => ModelTier::Worker,
+        };
+        let other_data = self
+            .history
+            .tier_performance
+            .get(&other_tier)
+            .map(|r| r.total())
+            .unwrap_or(0);
+
+        if other_data >= 3 {
+            let (best_score, best_tier) = if worker_score.composite >= council_score.composite {
+                (worker_score, ModelTier::Worker)
+            } else {
+                (council_score, ModelTier::Council)
+            };
+
+            if best_tier != base.tier {
+                let reason = format!(
+                    "smart score: {:.2} (q={:.2} l={:.2} b={:.2})",
+                    best_score.composite,
+                    best_score.quality,
+                    best_score.latency,
+                    best_score.budget
+                );
+                return (ModelSelection::new(best_tier, reason), best_score);
+            }
+        }
+
+        let base_score = if base.tier == ModelTier::Worker {
+            worker_score
+        } else {
+            council_score
+        };
+        (base, base_score)
     }
 }
 
@@ -811,5 +1026,51 @@ mod tests {
         );
         let history = router.history();
         assert_eq!(history.success_rate_for_tier(ModelTier::Worker), 1.0);
+    }
+
+    // ── SmartScore / ScoringWeights tests ────────────────────────────────────
+
+    #[test]
+    fn test_scoring_weights_default() {
+        let w = ScoringWeights::default();
+        assert!((w.quality - 0.6).abs() < f32::EPSILON);
+        assert!((w.latency - 0.25).abs() < f32::EPSILON);
+        assert!((w.budget - 0.15).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_smart_score_composite() {
+        let w = ScoringWeights::default();
+        let s = w.score(1.0, 1.0, 1.0);
+        assert!((s.composite - 1.0).abs() < 1e-5);
+
+        let s2 = w.score(0.0, 0.0, 0.0);
+        assert!((s2.composite - 0.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_performance_record_with_metrics() {
+        let mut r = PerformanceRecord::default();
+        r.record_success_with_metrics(100, 0.5);
+        r.record_success_with_metrics(200, 1.0);
+        assert_eq!(r.successes, 2);
+        assert!((r.avg_latency_ms() - 150.0).abs() < 1e-5);
+        assert!((r.avg_cost() - 0.75).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_score_tier_no_data() {
+        let history = PerformanceHistory::new();
+        let w = ScoringWeights::default();
+        let s = history.score_tier(ModelTier::Worker, &w, 30000.0, 1.0);
+        assert!((s.quality - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_select_with_scoring_no_data() {
+        let router = DynamicRouter::new();
+        let w = ScoringWeights::default();
+        let (sel, _score) = router.select_with_scoring(&[], &w);
+        assert_eq!(sel.tier, ModelTier::Worker);
     }
 }
