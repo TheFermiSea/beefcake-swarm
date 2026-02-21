@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "5.5.0";
+pub const PROMPT_VERSION: &str = "5.6.0";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -79,7 +79,9 @@ after you return — your job is done the moment the verifier passes.
 
 ## Recovery
 - If a worker corrupts a file, restore it: have them run `git checkout -- <file>`
-- If the worktree is in a bad state, reset: `git reset --hard HEAD`
+- If multiple files are corrupted, restore them individually: `git checkout -- <file1> <file2> ...`
+- If the worktree is in an unrecoverable state, report BLOCKED — the orchestrator handles worktree cleanup.
+- Do NOT use `git reset --hard` — it destroys all uncommitted work across the worktree.
 - If you're stuck after 3 failed attempts with different strategies, report BLOCKED.
 
 ## Rules
@@ -144,7 +146,9 @@ after you return — do NOT continue iterating.
 
 ## Recovery
 - Restore corrupted files: `git checkout -- <file>`
-- Reset worktree: `git reset --hard HEAD`
+- Restore multiple files: `git checkout -- <file1> <file2> ...`
+- If the worktree is unrecoverable, report BLOCKED — the orchestrator handles cleanup.
+- Do NOT use `git reset --hard` — it destroys all uncommitted work.
 - If stuck after 3 attempts, report BLOCKED.
 
 ## Rules
