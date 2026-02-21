@@ -1863,6 +1863,7 @@ mod tests {
             iteration_deltas: vec![],
             delegation_chain: vec![],
             skill_hints: vec![],
+            replay_hints: vec![],
         }
     }
 

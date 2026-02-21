@@ -425,6 +425,7 @@ mod tests {
             max_patch_loc: 150,
             delegation_chain: vec![],
             skill_hints: vec![],
+            replay_hints: vec![],
         }
     }
 

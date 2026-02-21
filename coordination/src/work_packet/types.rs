@@ -1,5 +1,6 @@
 //! Work Packet types — structured context for model tier handoffs
 
+use crate::analytics::replay::ReplayHint;
 use crate::analytics::skills::SkillHint;
 use crate::escalation::state::SwarmTier;
 use crate::feedback::error_parser::ErrorCategory;
@@ -63,6 +64,9 @@ pub struct WorkPacket {
     /// Skill hints from the skill library — approaches that worked for similar tasks
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub skill_hints: Vec<SkillHint>,
+    /// Replay hints from the experience trace index — past successful session traces
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replay_hints: Vec<ReplayHint>,
 }
 
 impl WorkPacket {
@@ -297,6 +301,7 @@ mod tests {
             iteration_deltas: vec![],
             delegation_chain: vec![],
             skill_hints: vec![],
+            replay_hints: vec![],
         };
 
         let summary = packet.summary();
@@ -339,6 +344,7 @@ mod tests {
             iteration_deltas: vec![],
             delegation_chain: vec![],
             skill_hints: vec![],
+            replay_hints: vec![],
         };
 
         let json = serde_json::to_string_pretty(&packet).unwrap();
@@ -376,6 +382,7 @@ mod tests {
             iteration_deltas: vec![],
             delegation_chain: vec![],
             skill_hints: vec![],
+            replay_hints: vec![],
         };
 
         // Should be a reasonable estimate
