@@ -116,6 +116,9 @@ pub use escalation::{
     EscalationDecision, EscalationEngine, EscalationState, SwarmTier, TierBudget,
 };
 
+// Re-export telemetry heuristic types
+pub use escalation::{compute_heuristics, SessionSample, TelemetryHeuristics};
+
 // Re-export friction detection types
 pub use escalation::{FrictionDetector, FrictionKind, FrictionSeverity, FrictionSignal};
 
