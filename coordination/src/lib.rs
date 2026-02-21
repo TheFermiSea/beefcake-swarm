@@ -57,6 +57,7 @@ pub mod events;
 pub mod feedback;
 pub mod harness;
 pub mod registry;
+pub mod rollout;
 pub mod router;
 pub mod slurm;
 pub mod state;
@@ -138,3 +139,8 @@ pub use router::{
 
 // Re-export provider registry types
 pub use registry::{ProviderCapabilities, ProviderEntry, ProviderHealth, ProviderRegistry};
+
+// Re-export rollout types
+pub use rollout::{
+    Cohort, FeatureFlag, RolloutError, RolloutManager, RolloutStage, RolloutSummary, SafetyGate,
+};
