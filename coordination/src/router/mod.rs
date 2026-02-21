@@ -23,4 +23,7 @@ pub mod prompts;
 pub mod task_classifier;
 
 pub use prompts::{FixPromptBuilder, PromptTemplate};
-pub use task_classifier::{ModelRouter, ModelSelection, TaskClassification, TaskType};
+pub use task_classifier::{
+    DynamicRouter, ModelRouter, ModelSelection, ModelTier, PerformanceHistory, PerformanceRecord,
+    TaskClassification, TaskType,
+};
