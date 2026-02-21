@@ -36,6 +36,8 @@ pub struct VerifierConfig {
     /// Scope cargo commands to specific packages (e.g., ["swarm-agents"])
     /// When empty, commands target the entire workspace.
     pub packages: Vec<String>,
+    /// Include `sg scan` (ast-grep) warning gate
+    pub check_sg: bool,
 }
 
 impl Default for VerifierConfig {
@@ -50,6 +52,7 @@ impl Default for VerifierConfig {
             stderr_max_bytes: 4096,
             extra_cargo_args: Vec::new(),
             packages: Vec::new(),
+            check_sg: false,
         }
     }
 }
@@ -140,7 +143,7 @@ impl Verifier {
             let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
             if failed && !self.config.comprehensive {
-                self.skip_remaining(&mut report, &["clippy", "check", "test"]);
+                self.skip_remaining(&mut report, &["clippy", "sg", "check", "test"]);
                 report.finalize(start.elapsed());
                 return report;
             }
@@ -152,10 +155,17 @@ impl Verifier {
             let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
             if failed && !self.config.comprehensive {
-                self.skip_remaining(&mut report, &["check", "test"]);
+                self.skip_remaining(&mut report, &["sg", "check", "test"]);
                 report.finalize(start.elapsed());
                 return report;
             }
+        }
+
+        // Gate 2.5: sg scan (ast-grep) — warning-only, never blocks pipeline
+        if self.config.check_sg {
+            let result = self.run_sg_gate().await;
+            report.add_gate(result);
+            // Never fail-fast on warnings — always continue to check gate
         }
 
         // Gate 3: cargo check --message-format=json
@@ -279,6 +289,86 @@ impl Verifier {
                 errors: vec![],
                 stderr_excerpt: Some(e),
             },
+        }
+    }
+
+    /// Run `sg scan` (ast-grep) as a warning-only gate.
+    ///
+    /// Scans the working directory against project rules in `rules/`.
+    /// Produces `GateOutcome::Warning` when diagnostics are found — never blocks the pipeline.
+    async fn run_sg_gate(&self) -> GateResult {
+        let start = Instant::now();
+
+        // Locate rules directory: try working_dir/rules/ first, then repo root
+        let rules_dir = if self.working_dir.join("rules").is_dir() {
+            self.working_dir.join("rules")
+        } else {
+            // Walk up to find rules/ (worktrees may be nested)
+            let mut candidate = self.working_dir.as_path();
+            loop {
+                let rules_path = candidate.join("rules");
+                if rules_path.is_dir() {
+                    break rules_path;
+                }
+                match candidate.parent() {
+                    Some(parent) => candidate = parent,
+                    None => break self.working_dir.join("rules"),
+                }
+            }
+        };
+
+        let mut cmd = tokio::process::Command::new("sg");
+        cmd.args(["scan", "--rule"]);
+        cmd.arg(&rules_dir);
+        cmd.arg(&self.working_dir);
+
+        match self.run_with_timeout(&mut cmd).await {
+            Ok(output) => {
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let stderr = self.truncate_stderr(&output.stderr);
+
+                // Count diagnostic lines (non-empty lines from stdout that contain file paths)
+                let diagnostic_count = stdout.lines().filter(|l| !l.trim().is_empty()).count();
+
+                let has_diagnostics = !output.status.success() || diagnostic_count > 0;
+
+                GateResult {
+                    gate: "sg".to_string(),
+                    outcome: if has_diagnostics {
+                        GateOutcome::Warning
+                    } else {
+                        GateOutcome::Passed
+                    },
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code: output.status.code(),
+                    error_count: 0,
+                    warning_count: diagnostic_count,
+                    errors: vec![],
+                    stderr_excerpt: if has_diagnostics {
+                        let details = if stdout.is_empty() {
+                            stderr
+                        } else {
+                            self.truncate_str(&stdout)
+                        };
+                        Some(details)
+                    } else {
+                        None
+                    },
+                }
+            }
+            Err(e) => {
+                // sg not installed or timed out — degrade gracefully to Warning
+                GateResult {
+                    gate: "sg".to_string(),
+                    outcome: GateOutcome::Warning,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code: None,
+                    error_count: 0,
+                    warning_count: 0,
+                    errors: vec![],
+                    stderr_excerpt: Some(format!("sg scan unavailable: {e}")),
+                }
+            }
         }
     }
 
@@ -429,6 +519,7 @@ impl Verifier {
             let should_skip = match *gate {
                 "fmt" => self.config.check_fmt,
                 "clippy" => self.config.check_clippy,
+                "sg" => self.config.check_sg,
                 "check" => self.config.check_compile,
                 "test" => self.config.check_test,
                 _ => false,
@@ -542,6 +633,7 @@ mod tests {
         assert!(config.check_clippy);
         assert!(config.check_compile);
         assert!(config.check_test);
+        assert!(!config.check_sg);
         assert!(!config.comprehensive);
     }
 
@@ -605,6 +697,60 @@ test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
         let (total, failures) = verifier.parse_test_summary(stdout);
         assert_eq!(total, 17);
         assert_eq!(failures, 0);
+    }
+
+    #[tokio::test]
+    async fn test_sg_gate_returns_warning_on_missing_sg() {
+        // sg is unlikely to be installed in CI — verify graceful degradation
+        let config = VerifierConfig {
+            check_sg: true,
+            check_fmt: false,
+            check_clippy: false,
+            check_compile: false,
+            check_test: false,
+            ..Default::default()
+        };
+        let verifier = Verifier::new("/tmp", config);
+        let result = verifier.run_sg_gate().await;
+        // Should produce Warning (not Failed) whether sg is installed or not
+        assert!(
+            result.outcome == GateOutcome::Warning || result.outcome == GateOutcome::Passed,
+            "sg gate should never produce Failed, got: {:?}",
+            result.outcome
+        );
+        assert_eq!(result.gate, "sg");
+    }
+
+    #[tokio::test]
+    async fn test_sg_gate_does_not_block_pipeline() {
+        // Run pipeline with only sg enabled — all_green should still be true
+        // (Warning counts as passed for all_green)
+        let config = VerifierConfig {
+            check_sg: true,
+            check_fmt: false,
+            check_clippy: false,
+            check_compile: false,
+            check_test: false,
+            ..Default::default()
+        };
+        let verifier = Verifier::new("/tmp", config);
+        let report = verifier.run_pipeline().await;
+        // sg gate is Warning or Passed — either way all_green should be true
+        assert!(
+            report.all_green,
+            "Pipeline with only sg gate should be all_green"
+        );
+        assert_eq!(report.gates.len(), 1);
+        assert_eq!(report.gates[0].gate, "sg");
+    }
+
+    #[test]
+    fn test_sg_config_off_by_default_in_named_constructors() {
+        assert!(!VerifierConfig::quick().check_sg);
+        assert!(!VerifierConfig::full().check_sg);
+        assert!(!VerifierConfig::compile_only().check_sg);
+        assert!(!VerifierConfig::docs().check_sg);
+        assert!(!VerifierConfig::none().check_sg);
     }
 
     #[test]

@@ -19,11 +19,13 @@ pub enum GateOutcome {
     Failed,
     /// Gate was skipped (previous gate failed and pipeline is sequential)
     Skipped,
+    /// Gate produced warnings but did not block the pipeline
+    Warning,
 }
 
 impl GateOutcome {
     pub fn is_passed(&self) -> bool {
-        matches!(self, Self::Passed)
+        matches!(self, Self::Passed | Self::Warning)
     }
 }
 
@@ -33,6 +35,7 @@ impl std::fmt::Display for GateOutcome {
             Self::Passed => write!(f, "PASS"),
             Self::Failed => write!(f, "FAIL"),
             Self::Skipped => write!(f, "SKIP"),
+            Self::Warning => write!(f, "WARN"),
         }
     }
 }
@@ -235,6 +238,43 @@ mod tests {
         assert_eq!(format!("{}", GateOutcome::Passed), "PASS");
         assert_eq!(format!("{}", GateOutcome::Failed), "FAIL");
         assert_eq!(format!("{}", GateOutcome::Skipped), "SKIP");
+        assert_eq!(format!("{}", GateOutcome::Warning), "WARN");
+    }
+
+    #[test]
+    fn test_gate_outcome_warning_counts_as_passed() {
+        assert!(GateOutcome::Passed.is_passed());
+        assert!(GateOutcome::Warning.is_passed());
+        assert!(!GateOutcome::Failed.is_passed());
+        assert!(!GateOutcome::Skipped.is_passed());
+    }
+
+    #[test]
+    fn test_report_warning_gate_does_not_block_all_green() {
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        report.add_gate(GateResult {
+            gate: "fmt".to_string(),
+            outcome: GateOutcome::Passed,
+            duration_ms: 100,
+            exit_code: Some(0),
+            error_count: 0,
+            warning_count: 0,
+            errors: vec![],
+            stderr_excerpt: None,
+        });
+        report.add_gate(GateResult {
+            gate: "sg".to_string(),
+            outcome: GateOutcome::Warning,
+            duration_ms: 50,
+            exit_code: Some(1),
+            error_count: 0,
+            warning_count: 3,
+            errors: vec![],
+            stderr_excerpt: Some("3 diagnostics".to_string()),
+        });
+        report.finalize(Duration::from_millis(150));
+        assert!(report.all_green, "Warning gate should not block all_green");
+        assert_eq!(report.gates_passed, 2);
     }
 
     #[test]

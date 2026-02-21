@@ -4,7 +4,7 @@
 //! Approximately 500–2000 bytes serialized vs 5–50 KB for full [`VerifierReport`].
 
 use crate::feedback::error_parser::ErrorCategory;
-use crate::verifier::report::{GateOutcome, VerifierReport};
+use crate::verifier::report::VerifierReport;
 use serde::{Deserialize, Serialize};
 
 /// Compact summary of a single gate result.
@@ -60,7 +60,7 @@ impl NormalizedOutput {
             .iter()
             .map(|g| GateSummary {
                 gate: g.gate.clone(),
-                passed: g.outcome == GateOutcome::Passed,
+                passed: g.outcome.is_passed(),
                 error_count: g.error_count,
                 warning_count: g.warning_count,
                 duration_ms: g.duration_ms,
@@ -162,7 +162,7 @@ impl NormalizedOutput {
 mod tests {
     use super::*;
     use crate::feedback::error_parser::ParsedError;
-    use crate::verifier::report::GateResult;
+    use crate::verifier::report::{GateOutcome, GateResult};
     use std::time::Duration;
 
     fn green_gate(name: &str) -> GateResult {
