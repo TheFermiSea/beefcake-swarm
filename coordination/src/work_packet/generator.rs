@@ -176,6 +176,7 @@ impl WorkPacketGenerator {
             skill_hints: vec![],        // Populated by orchestrator from skill library
             replay_hints: vec![],       // Populated by orchestrator from trace index
             validator_feedback: vec![], // Populated by orchestrator from reviewer feedback
+            change_contract: None,      // Populated by planner agent
         }
     }
 

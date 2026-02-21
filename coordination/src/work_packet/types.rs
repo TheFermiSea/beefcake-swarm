@@ -70,6 +70,9 @@ pub struct WorkPacket {
     /// Structured validator feedback from prior iteration (TextGrad pattern)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub validator_feedback: Vec<ValidatorFeedback>,
+    /// Structured change contract from the planner agent
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub change_contract: Option<ChangeContract>,
 }
 
 impl WorkPacket {
@@ -274,6 +277,68 @@ pub struct DelegationStep {
     pub timestamp: chrono::DateTime<chrono::Utc>,
 }
 
+/// Structured change contract produced by the planner agent.
+///
+/// Binds the implementer to a concrete scope: which files to touch,
+/// what invariants to preserve, and how to verify success. The verifier
+/// can check acceptance criteria after implementation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChangeContract {
+    /// Concrete, testable acceptance criteria the implementation must satisfy.
+    pub acceptance_criteria: Vec<String>,
+    /// Invariants that must be preserved across the change.
+    pub invariants: Vec<Invariant>,
+    /// Test plan entries describing how to verify the change.
+    pub test_plan: Vec<TestPlanEntry>,
+    /// Files the implementer is allowed to modify.
+    pub target_files: Vec<String>,
+    /// Risk classification for the change (low/medium/high).
+    #[serde(default)]
+    pub risk_level: ContractRiskLevel,
+}
+
+/// An invariant that must be preserved across a change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Invariant {
+    /// What must remain true (e.g., "all existing tests pass").
+    pub description: String,
+    /// How to verify this invariant holds.
+    pub verification: String,
+}
+
+/// A test plan entry describing how to verify part of the change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TestPlanEntry {
+    /// What is being tested.
+    pub description: String,
+    /// How to run the test (e.g., "cargo test -p coordination test_name").
+    pub command: Option<String>,
+    /// Whether this is a new test to write or an existing test to run.
+    #[serde(default)]
+    pub kind: TestPlanKind,
+}
+
+/// Whether a test plan entry refers to an existing or new test.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TestPlanKind {
+    /// An existing test that should continue to pass.
+    #[default]
+    Existing,
+    /// A new test that must be written as part of the change.
+    New,
+}
+
+/// Risk level for a change contract.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContractRiskLevel {
+    #[default]
+    Low,
+    Medium,
+    High,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +371,7 @@ mod tests {
             skill_hints: vec![],
             replay_hints: vec![],
             validator_feedback: vec![],
+            change_contract: None,
         };
 
         let summary = packet.summary();
@@ -350,6 +416,7 @@ mod tests {
             skill_hints: vec![],
             replay_hints: vec![],
             validator_feedback: vec![],
+            change_contract: None,
         };
 
         let json = serde_json::to_string_pretty(&packet).unwrap();
@@ -389,11 +456,134 @@ mod tests {
             skill_hints: vec![],
             replay_hints: vec![],
             validator_feedback: vec![],
+            change_contract: None,
         };
 
         // Should be a reasonable estimate
         let tokens = packet.estimated_tokens();
         assert!(tokens > 0);
         assert!(tokens < 10000);
+    }
+
+    #[test]
+    fn test_change_contract_serialization() {
+        let contract = ChangeContract {
+            acceptance_criteria: vec![
+                "AgentPerformanceRecord struct exists".to_string(),
+                "PerformanceTracker accumulates records".to_string(),
+            ],
+            invariants: vec![Invariant {
+                description: "Existing tests continue to pass".to_string(),
+                verification: "cargo test -p swarm-agents".to_string(),
+            }],
+            test_plan: vec![
+                TestPlanEntry {
+                    description: "Record creation and field access".to_string(),
+                    command: Some("cargo test test_record_creation".to_string()),
+                    kind: TestPlanKind::New,
+                },
+                TestPlanEntry {
+                    description: "Serialization round-trip".to_string(),
+                    command: None,
+                    kind: TestPlanKind::New,
+                },
+            ],
+            target_files: vec!["src/telemetry.rs".to_string()],
+            risk_level: ContractRiskLevel::Low,
+        };
+
+        let json = serde_json::to_string_pretty(&contract).unwrap();
+        assert!(json.contains("AgentPerformanceRecord"));
+        assert!(json.contains("target_files"));
+        assert!(json.contains("new")); // TestPlanKind::New
+
+        let deserialized: ChangeContract = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.acceptance_criteria.len(), 2);
+        assert_eq!(deserialized.invariants.len(), 1);
+        assert_eq!(deserialized.test_plan.len(), 2);
+        assert_eq!(deserialized.test_plan[0].kind, TestPlanKind::New);
+        assert_eq!(deserialized.risk_level, ContractRiskLevel::Low);
+    }
+
+    #[test]
+    fn test_work_packet_with_change_contract() {
+        let contract = ChangeContract {
+            acceptance_criteria: vec!["Feature X works".to_string()],
+            invariants: vec![],
+            test_plan: vec![],
+            target_files: vec!["src/lib.rs".to_string()],
+            risk_level: ContractRiskLevel::Medium,
+        };
+
+        let packet = WorkPacket {
+            bead_id: "beads-contract".to_string(),
+            branch: "feat/contract".to_string(),
+            checkpoint: "abc".to_string(),
+            objective: "Test with contract".to_string(),
+            files_touched: vec![],
+            key_symbols: vec![],
+            file_contexts: vec![],
+            verification_gates: vec![],
+            failure_signals: vec![],
+            constraints: vec![],
+            iteration: 1,
+            target_tier: SwarmTier::Worker,
+            escalation_reason: None,
+            error_history: vec![],
+            previous_attempts: vec![],
+            relevant_heuristics: vec![],
+            relevant_playbooks: vec![],
+            decisions: vec![],
+            generated_at: Utc::now(),
+            max_patch_loc: 150,
+            iteration_deltas: vec![],
+            delegation_chain: vec![],
+            skill_hints: vec![],
+            replay_hints: vec![],
+            validator_feedback: vec![],
+            change_contract: Some(contract),
+        };
+
+        // Round-trip with contract
+        let json = serde_json::to_string(&packet).unwrap();
+        assert!(json.contains("change_contract"));
+        assert!(json.contains("Feature X works"));
+
+        let deserialized: WorkPacket = serde_json::from_str(&json).unwrap();
+        assert!(deserialized.change_contract.is_some());
+        let c = deserialized.change_contract.unwrap();
+        assert_eq!(c.acceptance_criteria[0], "Feature X works");
+        assert_eq!(c.risk_level, ContractRiskLevel::Medium);
+
+        // None case — should not appear in JSON (skip_serializing_if)
+        let no_contract_packet = WorkPacket {
+            change_contract: None,
+            ..packet.clone()
+        };
+        let json2 = serde_json::to_string(&no_contract_packet).unwrap();
+        assert!(!json2.contains("change_contract"));
+
+        // Backwards compat — deserialize JSON without change_contract field
+        let legacy = r#"{
+            "bead_id": "old",
+            "branch": "main",
+            "checkpoint": "abc",
+            "objective": "legacy",
+            "files_touched": [],
+            "key_symbols": [],
+            "file_contexts": [],
+            "verification_gates": [],
+            "failure_signals": [],
+            "constraints": [],
+            "iteration": 1,
+            "target_tier": "worker",
+            "escalation_reason": null,
+            "error_history": [],
+            "previous_attempts": [],
+            "generated_at": "2025-01-01T00:00:00Z",
+            "max_patch_loc": 100
+        }"#;
+        let legacy_packet: WorkPacket = serde_json::from_str(legacy).unwrap();
+        assert!(legacy_packet.change_contract.is_none());
     }
 }

@@ -151,7 +151,9 @@ pub use escalation::{FrictionDetector, FrictionKind, FrictionSeverity, FrictionS
 pub use escalation::{DelightDetector, DelightIntensity, DelightKind, DelightSignal};
 
 // Re-export work packet types
-pub use work_packet::{Constraint, FileContext, KeySymbol, WorkPacket, WorkPacketGenerator};
+pub use work_packet::{
+    ChangeContract, Constraint, FileContext, KeySymbol, WorkPacket, WorkPacketGenerator,
+};
 
 // Re-export context packer types
 pub use context_packer::{ContextPacker, FileWalker, SourceFileProvider};
