@@ -94,6 +94,65 @@ impl FailureSignal {
     }
 }
 
+/// Classification of a validator-reported issue (TextGrad pattern).
+///
+/// Used to structure reviewer/validator feedback into actionable deltas
+/// rather than unstructured prose, enabling tighter feedback loops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidatorIssueType {
+    /// Logic error in the implementation
+    LogicError,
+    /// Missing safety or error handling check
+    MissingSafetyCheck,
+    /// Unhandled edge case or boundary condition
+    UnhandledEdgeCase,
+    /// Style or idiom violation
+    StyleViolation,
+    /// Incorrect behavior vs specification
+    IncorrectBehavior,
+    /// Uncategorized issue
+    Other,
+}
+
+impl std::fmt::Display for ValidatorIssueType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LogicError => write!(f, "logic_error"),
+            Self::MissingSafetyCheck => write!(f, "missing_safety_check"),
+            Self::UnhandledEdgeCase => write!(f, "unhandled_edge_case"),
+            Self::StyleViolation => write!(f, "style_violation"),
+            Self::IncorrectBehavior => write!(f, "incorrect_behavior"),
+            Self::Other => write!(f, "other"),
+        }
+    }
+}
+
+/// Structured validator feedback entry (TextGrad pattern).
+///
+/// Converts subjective reviewer prose into actionable code locations + fixes.
+/// Fed back into the next iteration's WorkPacket so the implementer gets
+/// specific, targeted guidance instead of unstructured critique.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ValidatorFeedback {
+    /// File where the issue was found (from diff or reviewer annotation)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file: Option<String>,
+    /// Line range (start, end) if identifiable
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub line_range: Option<(usize, usize)>,
+    /// Classification of the issue
+    pub issue_type: ValidatorIssueType,
+    /// Description of the problem
+    pub description: String,
+    /// Suggested fix if available
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suggested_fix: Option<String>,
+    /// Which model produced this feedback
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_model: Option<String>,
+}
+
 /// Complete verification report
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifierReport {

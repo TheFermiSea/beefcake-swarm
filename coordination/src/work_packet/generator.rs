@@ -171,10 +171,11 @@ impl WorkPacketGenerator {
             decisions: vec![],           // Populated from Decision Journal
             generated_at: Utc::now(),
             max_patch_loc: self.default_max_loc,
-            iteration_deltas: vec![], // Populated by delta computation
-            delegation_chain: vec![], // Populated during manager-to-manager handoffs
-            skill_hints: vec![],      // Populated by orchestrator from skill library
-            replay_hints: vec![],     // Populated by orchestrator from trace index
+            iteration_deltas: vec![],   // Populated by delta computation
+            delegation_chain: vec![],   // Populated during manager-to-manager handoffs
+            skill_hints: vec![],        // Populated by orchestrator from skill library
+            replay_hints: vec![],       // Populated by orchestrator from trace index
+            validator_feedback: vec![], // Populated by orchestrator from reviewer feedback
         }
     }
 

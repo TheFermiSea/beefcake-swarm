@@ -37,4 +37,4 @@ pub mod report;
 
 pub use normalized::{ErrorBucket, GateSummary, NormalizedOutput};
 pub use pipeline::{Verifier, VerifierConfig};
-pub use report::{GateOutcome, GateResult, VerifierReport};
+pub use report::{GateOutcome, GateResult, ValidatorFeedback, ValidatorIssueType, VerifierReport};

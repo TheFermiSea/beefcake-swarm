@@ -28,7 +28,7 @@ use coordination::save_session_state;
 use coordination::{
     ContextPacker, EscalationEngine, EscalationState, GitManager, InterventionType,
     PendingIntervention, ProgressTracker, SessionManager, SwarmTier, TierBudget, TurnPolicy,
-    Verifier, VerifierConfig, VerifierReport, WorkPacket,
+    ValidatorFeedback, ValidatorIssueType, Verifier, VerifierConfig, VerifierReport, WorkPacket,
 };
 
 /// Coder routing decision with confidence level.
@@ -201,6 +201,31 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
         prompt.push_str("\"improve\" code outside the listed files. If you believe additional ");
         prompt
             .push_str("files need changes, note them in your response but do not modify them.\n\n");
+    }
+
+    // Validator feedback from prior iteration (TextGrad pattern)
+    if !packet.validator_feedback.is_empty() {
+        prompt.push_str("## Reviewer Feedback (from prior iteration)\n");
+        prompt.push_str("A code reviewer identified these issues. **Address each one:**\n\n");
+        for (i, fb) in packet.validator_feedback.iter().enumerate() {
+            prompt.push_str(&format!(
+                "{}. **[{}]** {}\n",
+                i + 1,
+                fb.issue_type,
+                fb.description
+            ));
+            if let Some(file) = &fb.file {
+                if let Some((start, end)) = fb.line_range {
+                    prompt.push_str(&format!("   Location: `{file}` lines {start}-{end}\n"));
+                } else {
+                    prompt.push_str(&format!("   Location: `{file}`\n"));
+                }
+            }
+            if let Some(fix) = &fb.suggested_fix {
+                prompt.push_str(&format!("   Suggested fix: {fix}\n"));
+            }
+        }
+        prompt.push('\n');
     }
 
     prompt.push_str(&format!(
@@ -441,6 +466,89 @@ struct CloudValidationResult {
     model: String,
     passed: bool,
     feedback: String,
+}
+
+/// Convert a cloud validation result into structured validator feedback entries.
+///
+/// Parses the reviewer's JSON response to extract blocking_issues and
+/// touched_files, converting prose feedback into actionable deltas (TextGrad pattern).
+fn extract_validator_feedback(result: &CloudValidationResult) -> Vec<ValidatorFeedback> {
+    if result.passed {
+        return vec![];
+    }
+
+    let review = ReviewResult::parse(&result.feedback);
+
+    if review.blocking_issues.is_empty() {
+        // Unstructured feedback — wrap as a single entry
+        return vec![ValidatorFeedback {
+            file: None,
+            line_range: None,
+            issue_type: ValidatorIssueType::Other,
+            description: result
+                .feedback
+                .lines()
+                .take(5)
+                .collect::<Vec<_>>()
+                .join(" "),
+            suggested_fix: None,
+            source_model: Some(result.model.clone()),
+        }];
+    }
+
+    review
+        .blocking_issues
+        .iter()
+        .map(|issue| {
+            // Try to classify the issue type from keywords
+            let issue_type = classify_issue(issue);
+
+            // Try to extract file reference from touched_files
+            let file = review.touched_files.first().cloned();
+
+            ValidatorFeedback {
+                file,
+                line_range: None,
+                issue_type,
+                description: issue.clone(),
+                suggested_fix: if review.suggested_next_action.is_empty() {
+                    None
+                } else {
+                    Some(review.suggested_next_action.clone())
+                },
+                source_model: Some(result.model.clone()),
+            }
+        })
+        .collect()
+}
+
+/// Classify a blocking issue description into a `ValidatorIssueType`.
+fn classify_issue(description: &str) -> ValidatorIssueType {
+    let lower = description.to_lowercase();
+    if lower.contains("logic") || lower.contains("incorrect") || lower.contains("wrong") {
+        ValidatorIssueType::LogicError
+    } else if lower.contains("safety")
+        || lower.contains("error handling")
+        || lower.contains("unwrap")
+        || lower.contains("panic")
+    {
+        ValidatorIssueType::MissingSafetyCheck
+    } else if lower.contains("edge case")
+        || lower.contains("boundary")
+        || lower.contains("overflow")
+        || lower.contains("empty")
+    {
+        ValidatorIssueType::UnhandledEdgeCase
+    } else if lower.contains("style") || lower.contains("naming") || lower.contains("format") {
+        ValidatorIssueType::StyleViolation
+    } else if lower.contains("behavior")
+        || lower.contains("specification")
+        || lower.contains("spec")
+    {
+        ValidatorIssueType::IncorrectBehavior
+    } else {
+        ValidatorIssueType::Other
+    }
 }
 
 fn timeout_from_env(var: &str, default_secs: u64) -> Duration {
@@ -816,6 +924,7 @@ pub async fn process_issue(
         );
     let mut success = false;
     let mut last_report: Option<VerifierReport> = None;
+    let mut last_validator_feedback: Vec<ValidatorFeedback> = Vec::new();
 
     // Scope verifier to configured packages.
     // When empty, targets the entire workspace (useful for external repos).
@@ -877,6 +986,16 @@ pub async fn process_issue(
         } else {
             packer.pack_initial(&issue.id, &issue.title)
         };
+
+        // Inject structured validator feedback from prior iteration (TextGrad pattern)
+        if !last_validator_feedback.is_empty() {
+            packet.validator_feedback = std::mem::take(&mut last_validator_feedback);
+            info!(
+                iteration,
+                feedback_count = packet.validator_feedback.len(),
+                "Injected validator feedback into work packet"
+            );
+        }
 
         // --- Integration Point 1: Pre-task knowledge enrichment ---
         if let Some(kb) = knowledge_base {
@@ -1361,6 +1480,8 @@ pub async fn process_issue(
             if let Some(ref cloud_client) = factory.clients.cloud {
                 if let Some(ref initial_commit) = session.state().initial_commit {
                     let validations = cloud_validate(cloud_client, &wt_path, initial_commit).await;
+                    // Collect structured feedback for next iteration (TextGrad pattern)
+                    last_validator_feedback.clear();
                     for v in &validations {
                         metrics.record_cloud_validation(&v.model, v.passed);
                         if v.passed {
@@ -1372,7 +1493,15 @@ pub async fn process_issue(
                                 "Cloud validation: FAIL (advisory) — {}",
                                 v.feedback.lines().take(5).collect::<Vec<_>>().join(" | ")
                             );
+                            let feedback = extract_validator_feedback(v);
+                            last_validator_feedback.extend(feedback);
                         }
+                    }
+                    if !last_validator_feedback.is_empty() {
+                        info!(
+                            feedback_count = last_validator_feedback.len(),
+                            "Collected structured validator feedback for next iteration"
+                        );
                     }
                 }
             }
@@ -1915,6 +2044,7 @@ mod tests {
             delegation_chain: vec![],
             skill_hints: vec![],
             replay_hints: vec![],
+            validator_feedback: vec![],
         }
     }
 
@@ -2360,5 +2490,105 @@ mod tests {
         let kb = SucceedingKb;
         let result = query_kb_with_failsafe(&kb, "project_brain", "What is the architecture?");
         assert_eq!(result, "The architecture uses a 4-tier escalation ladder.");
+    }
+
+    #[test]
+    fn test_extract_validator_feedback_pass_returns_empty() {
+        let result = CloudValidationResult {
+            model: "test-model".into(),
+            passed: true,
+            feedback: r#"{"verdict":"pass","confidence":0.95,"blocking_issues":[],"suggested_next_action":"merge","touched_files":["src/lib.rs"]}"#.into(),
+        };
+        assert!(extract_validator_feedback(&result).is_empty());
+    }
+
+    #[test]
+    fn test_extract_validator_feedback_fail_with_blocking_issues() {
+        let result = CloudValidationResult {
+            model: "gemini-3-pro".into(),
+            passed: false,
+            feedback: r#"{"verdict":"fail","confidence":0.7,"blocking_issues":["missing error handling for edge case","logic error in loop termination"],"suggested_next_action":"add bounds checking","touched_files":["src/main.rs"]}"#.into(),
+        };
+        let feedback = extract_validator_feedback(&result);
+        assert_eq!(feedback.len(), 2);
+        // "missing error handling" matches safety check before "edge case"
+        assert_eq!(
+            feedback[0].issue_type,
+            ValidatorIssueType::MissingSafetyCheck
+        );
+        assert_eq!(feedback[1].issue_type, ValidatorIssueType::LogicError);
+        assert_eq!(feedback[0].source_model.as_deref(), Some("gemini-3-pro"));
+        assert!(feedback[0].suggested_fix.is_some());
+    }
+
+    #[test]
+    fn test_extract_validator_feedback_malformed_falls_back() {
+        let result = CloudValidationResult {
+            model: "test-model".into(),
+            passed: false,
+            feedback: "FAIL\nThis code has issues".into(),
+        };
+        let feedback = extract_validator_feedback(&result);
+        assert_eq!(feedback.len(), 1);
+        assert_eq!(feedback[0].issue_type, ValidatorIssueType::Other);
+    }
+
+    #[test]
+    fn test_classify_issue_keywords() {
+        assert_eq!(
+            classify_issue("missing error handling for None case"),
+            ValidatorIssueType::MissingSafetyCheck
+        );
+        assert_eq!(
+            classify_issue("logic error in loop"),
+            ValidatorIssueType::LogicError
+        );
+        assert_eq!(
+            classify_issue("edge case when input is empty"),
+            ValidatorIssueType::UnhandledEdgeCase
+        );
+        assert_eq!(
+            classify_issue("naming convention violated"),
+            ValidatorIssueType::StyleViolation
+        );
+        assert_eq!(
+            classify_issue("behavior differs from specification"),
+            ValidatorIssueType::IncorrectBehavior
+        );
+        assert_eq!(
+            classify_issue("something else entirely"),
+            ValidatorIssueType::Other
+        );
+    }
+
+    #[test]
+    fn test_format_task_prompt_with_validator_feedback() {
+        use coordination::verifier::report::{ValidatorFeedback, ValidatorIssueType};
+        let mut packet = test_packet("Fix the bug", "swarm/test", 2);
+        packet.validator_feedback = vec![
+            ValidatorFeedback {
+                file: Some("src/main.rs".into()),
+                line_range: Some((10, 20)),
+                issue_type: ValidatorIssueType::LogicError,
+                description: "Loop never terminates for empty input".into(),
+                suggested_fix: Some("Add early return for empty vec".into()),
+                source_model: Some("gemini-3-pro".into()),
+            },
+            ValidatorFeedback {
+                file: None,
+                line_range: None,
+                issue_type: ValidatorIssueType::MissingSafetyCheck,
+                description: "No bounds checking on index access".into(),
+                suggested_fix: None,
+                source_model: None,
+            },
+        ];
+        let prompt = format_task_prompt(&packet);
+        assert!(prompt.contains("Reviewer Feedback"));
+        assert!(prompt.contains("Loop never terminates"));
+        assert!(prompt.contains("src/main.rs"));
+        assert!(prompt.contains("lines 10-20"));
+        assert!(prompt.contains("Add early return"));
+        assert!(prompt.contains("No bounds checking"));
     }
 }

@@ -130,7 +130,10 @@ pub use feedback::correction_loop::{
 };
 
 // Re-export verifier types
-pub use verifier::{GateOutcome, GateResult, Verifier, VerifierConfig, VerifierReport};
+pub use verifier::{
+    GateOutcome, GateResult, ValidatorFeedback, ValidatorIssueType, Verifier, VerifierConfig,
+    VerifierReport,
+};
 
 // Re-export escalation types
 pub use escalation::{
