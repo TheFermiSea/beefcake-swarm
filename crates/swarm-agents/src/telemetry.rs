@@ -496,6 +496,225 @@ impl TelemetryReader {
     }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// SLO (Service Level Objective) definitions and computation
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// SLO status: whether the metric is within target.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SloStatus {
+    /// Metric meets or exceeds target.
+    Met,
+    /// Metric is within warning threshold but not meeting target.
+    Warning,
+    /// Metric is below acceptable threshold.
+    Breached,
+}
+
+/// A single SLO measurement.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SloMeasurement {
+    /// SLO name.
+    pub name: String,
+    /// Measured value.
+    pub value: f64,
+    /// Target value (must meet or exceed).
+    pub target: f64,
+    /// Warning threshold (below target but acceptable).
+    pub warning: f64,
+    /// Current status.
+    pub status: SloStatus,
+}
+
+/// SLO targets for swarm operation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SloTargets {
+    /// Target success rate (fraction, 0.0–1.0). Default: 0.80.
+    pub success_rate: f64,
+    /// Target average iterations-to-green. Default: 2.5.
+    pub avg_iterations_to_green: f64,
+    /// Target stuck rate (fraction, lower is better). Default: 0.10.
+    pub stuck_rate: f64,
+    /// Target no-change rate (fraction, lower is better). Default: 0.15.
+    pub no_change_rate: f64,
+}
+
+impl Default for SloTargets {
+    fn default() -> Self {
+        Self {
+            success_rate: 0.80,
+            avg_iterations_to_green: 2.5,
+            stuck_rate: 0.10,
+            no_change_rate: 0.15,
+        }
+    }
+}
+
+/// Complete SLO report across a cohort of sessions.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SloReport {
+    /// Number of sessions analyzed.
+    pub session_count: usize,
+    /// Individual SLO measurements.
+    pub measurements: Vec<SloMeasurement>,
+    /// Overall status (worst of all measurements).
+    pub overall_status: SloStatus,
+}
+
+impl SloReport {
+    /// Whether all SLOs are met.
+    pub fn all_met(&self) -> bool {
+        self.overall_status == SloStatus::Met
+    }
+
+    /// Compact summary for logging.
+    pub fn summary(&self) -> String {
+        let items: Vec<String> = self
+            .measurements
+            .iter()
+            .map(|m| format!("{}={:.2}/{:.2}({:?})", m.name, m.value, m.target, m.status))
+            .collect();
+        format!(
+            "[{:?}] {} sessions | {}",
+            self.overall_status,
+            self.session_count,
+            items.join(" | ")
+        )
+    }
+}
+
+impl TelemetryReader {
+    /// Compute SLO measurements against the given targets.
+    pub fn compute_slos(&self, targets: &SloTargets) -> SloReport {
+        let sessions = &self.sessions;
+        let count = sessions.len();
+        if count == 0 {
+            return SloReport {
+                session_count: 0,
+                measurements: vec![],
+                overall_status: SloStatus::Met,
+            };
+        }
+
+        let success_count = sessions.iter().filter(|s| s.success).count();
+        let success_rate = success_count as f64 / count as f64;
+
+        // Average iterations-to-green (only for successful sessions)
+        let successful: Vec<&SessionMetrics> = sessions.iter().filter(|s| s.success).collect();
+        let avg_iters = if successful.is_empty() {
+            f64::MAX
+        } else {
+            successful
+                .iter()
+                .map(|s| s.total_iterations as f64)
+                .sum::<f64>()
+                / successful.len() as f64
+        };
+
+        // Stuck rate: sessions that failed AND had max iterations used
+        let stuck_count = sessions
+            .iter()
+            .filter(|s| !s.success && s.total_iterations >= 6)
+            .count();
+        let stuck_rate = stuck_count as f64 / count as f64;
+
+        // No-change rate: average across all sessions
+        let no_change_rate = sessions.iter().map(|s| s.no_change_rate).sum::<f64>() / count as f64;
+
+        let mut measurements = vec![
+            measure(
+                "success_rate",
+                success_rate,
+                targets.success_rate,
+                targets.success_rate * 0.9,
+                true,
+            ),
+            measure(
+                "avg_iterations_to_green",
+                avg_iters,
+                targets.avg_iterations_to_green,
+                targets.avg_iterations_to_green * 1.5,
+                false,
+            ),
+            measure(
+                "stuck_rate",
+                stuck_rate,
+                targets.stuck_rate,
+                targets.stuck_rate * 1.5,
+                false,
+            ),
+            measure(
+                "no_change_rate",
+                no_change_rate,
+                targets.no_change_rate,
+                targets.no_change_rate * 1.5,
+                false,
+            ),
+        ];
+
+        let overall_status = measurements
+            .iter()
+            .map(|m| m.status)
+            .max_by_key(|s| match s {
+                SloStatus::Met => 0,
+                SloStatus::Warning => 1,
+                SloStatus::Breached => 2,
+            })
+            .unwrap_or(SloStatus::Met);
+
+        // Sort to put breached first for quick triage.
+        measurements.sort_by_key(|m| match m.status {
+            SloStatus::Breached => 0,
+            SloStatus::Warning => 1,
+            SloStatus::Met => 2,
+        });
+
+        SloReport {
+            session_count: count,
+            measurements,
+            overall_status,
+        }
+    }
+}
+
+/// Build a single SLO measurement.
+///
+/// `higher_is_better`: if true, value >= target is Met; if false, value <= target is Met.
+fn measure(
+    name: &str,
+    value: f64,
+    target: f64,
+    warning: f64,
+    higher_is_better: bool,
+) -> SloMeasurement {
+    let status = if higher_is_better {
+        if value >= target {
+            SloStatus::Met
+        } else if value >= warning {
+            SloStatus::Warning
+        } else {
+            SloStatus::Breached
+        }
+    } else {
+        // Lower is better (stuck_rate, no_change_rate, iterations)
+        if value <= target {
+            SloStatus::Met
+        } else if value <= warning {
+            SloStatus::Warning
+        } else {
+            SloStatus::Breached
+        }
+    };
+    SloMeasurement {
+        name: name.to_string(),
+        value,
+        target,
+        warning,
+        status,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -869,5 +1088,134 @@ mod tests {
             metrics.iterations[0].artifacts[1].action,
             ArtifactAction::Created
         );
+    }
+
+    fn test_session(success: bool, iterations: u32, no_change_rate: f64) -> SessionMetrics {
+        SessionMetrics {
+            session_id: format!("sess-{}", iterations),
+            issue_id: "issue-1".into(),
+            issue_title: "Test".into(),
+            success,
+            total_iterations: iterations,
+            final_tier: "Integrator".into(),
+            elapsed_ms: iterations as u64 * 5000,
+            total_no_change_iterations: 0,
+            no_change_rate,
+            cloud_validations: vec![],
+            iterations: vec![],
+            timestamp: "2026-01-01T00:00:00Z".into(),
+        }
+    }
+
+    fn reader_from_sessions(sessions: Vec<SessionMetrics>) -> TelemetryReader {
+        TelemetryReader { sessions }
+    }
+
+    #[test]
+    fn test_slo_all_met() {
+        let reader = reader_from_sessions(vec![
+            test_session(true, 1, 0.0),
+            test_session(true, 2, 0.0),
+            test_session(true, 1, 0.05),
+        ]);
+        let report = reader.compute_slos(&SloTargets::default());
+        assert!(report.all_met());
+        assert_eq!(report.overall_status, SloStatus::Met);
+        assert_eq!(report.session_count, 3);
+    }
+
+    #[test]
+    fn test_slo_success_rate_breached() {
+        let reader = reader_from_sessions(vec![
+            test_session(true, 1, 0.0),
+            test_session(false, 6, 0.5),
+            test_session(false, 6, 0.3),
+            test_session(false, 6, 0.2),
+        ]);
+        let report = reader.compute_slos(&SloTargets::default());
+        assert_eq!(report.overall_status, SloStatus::Breached);
+        let sr = report
+            .measurements
+            .iter()
+            .find(|m| m.name == "success_rate")
+            .unwrap();
+        assert_eq!(sr.status, SloStatus::Breached);
+        assert!((sr.value - 0.25).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_slo_stuck_rate_warning() {
+        // 1 stuck out of 5 = 0.20 > target 0.10 but <= warning 0.15
+        // Actually 0.20 > 0.15 so this is Breached
+        let reader = reader_from_sessions(vec![
+            test_session(true, 1, 0.0),
+            test_session(true, 2, 0.0),
+            test_session(true, 1, 0.0),
+            test_session(true, 1, 0.0),
+            test_session(false, 6, 0.5),
+        ]);
+        let report = reader.compute_slos(&SloTargets::default());
+        let stuck = report
+            .measurements
+            .iter()
+            .find(|m| m.name == "stuck_rate")
+            .unwrap();
+        // 1/5 = 0.20 > warning threshold of 0.15
+        assert_eq!(stuck.status, SloStatus::Breached);
+    }
+
+    #[test]
+    fn test_slo_empty_sessions() {
+        let reader = reader_from_sessions(vec![]);
+        let report = reader.compute_slos(&SloTargets::default());
+        assert_eq!(report.session_count, 0);
+        assert!(report.all_met());
+        assert!(report.measurements.is_empty());
+    }
+
+    #[test]
+    fn test_slo_iterations_to_green() {
+        let reader =
+            reader_from_sessions(vec![test_session(true, 4, 0.0), test_session(true, 5, 0.0)]);
+        let report = reader.compute_slos(&SloTargets::default());
+        let iters = report
+            .measurements
+            .iter()
+            .find(|m| m.name == "avg_iterations_to_green")
+            .unwrap();
+        // avg = 4.5 > target 2.5 → Breached (lower is better)
+        assert!((iters.value - 4.5).abs() < 0.01);
+        assert_eq!(iters.status, SloStatus::Breached);
+    }
+
+    #[test]
+    fn test_slo_report_summary() {
+        let reader = reader_from_sessions(vec![test_session(true, 1, 0.0)]);
+        let report = reader.compute_slos(&SloTargets::default());
+        let summary = report.summary();
+        assert!(summary.contains("Met"));
+        assert!(summary.contains("1 sessions"));
+        assert!(summary.contains("success_rate"));
+    }
+
+    #[test]
+    fn test_slo_custom_targets() {
+        let targets = SloTargets {
+            success_rate: 0.50,
+            avg_iterations_to_green: 5.0,
+            stuck_rate: 0.30,
+            no_change_rate: 0.40,
+        };
+        let reader = reader_from_sessions(vec![
+            test_session(true, 3, 0.1),
+            test_session(false, 6, 0.2),
+        ]);
+        let report = reader.compute_slos(&targets);
+        let sr = report
+            .measurements
+            .iter()
+            .find(|m| m.name == "success_rate")
+            .unwrap();
+        assert_eq!(sr.status, SloStatus::Met); // 0.50 >= 0.50
     }
 }
