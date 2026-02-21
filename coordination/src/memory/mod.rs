@@ -8,13 +8,21 @@
 //! - [`store`] — SwarmMemory trait, MemoryEntry, in-memory implementation
 //! - [`errors`] — Typed error taxonomy for compaction and summarization
 //! - [`budget`] — Token budgeting with pluggable estimators and compaction triggers
+//! - [`summarizer`] — Bounded summarizer contract and mock implementation
+//! - [`compactor`] — Compaction orchestrator with event-driven triggers
 
 pub mod budget;
+pub mod compactor;
 pub mod errors;
 pub mod store;
+pub mod summarizer;
 
 pub use budget::{
     BudgetDecision, CompactionTrigger, TokenBudget, TokenEstimator, WordCountEstimator,
 };
+pub use compactor::{
+    CompactionEvent, CompactionPolicy, CompactionResult, CompactionTriggerKind, MemoryCompactor,
+};
 pub use errors::{CompactionError, CompactionErrorKind, SummarizationError};
 pub use store::{MemoryEntry, MemoryEntryKind, MemorySnapshot, SwarmMemory, SwarmMemoryStore};
+pub use summarizer::{MockSummarizer, Summarizer, SummaryRequest, SummaryResponse};
