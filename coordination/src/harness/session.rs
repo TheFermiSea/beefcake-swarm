@@ -356,9 +356,8 @@ impl SessionManager {
         // Generate recommendations
         let mut recommendations = Vec::new();
         if rollbacks > 1 {
-            recommendations.push(
-                "Increase checkpoint frequency to reduce rollback scope".to_string(),
-            );
+            recommendations
+                .push("Increase checkpoint frequency to reduce rollback scope".to_string());
         }
         if features_failed_count > 0 {
             recommendations.push(format!(
