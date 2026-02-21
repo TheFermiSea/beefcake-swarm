@@ -347,6 +347,200 @@ impl Default for ModelRouter {
     }
 }
 
+// ── Dynamic routing with historical performance ──────────────────────────────
+
+use std::collections::HashMap;
+
+/// Tracks success/failure counts for a single routing slot
+#[derive(Debug, Clone, Default)]
+pub struct PerformanceRecord {
+    /// Number of successful completions
+    pub successes: u32,
+    /// Number of failures
+    pub failures: u32,
+}
+
+impl PerformanceRecord {
+    /// Record a successful outcome
+    pub fn record_success(&mut self) {
+        self.successes += 1;
+    }
+
+    /// Record a failed outcome
+    pub fn record_failure(&mut self) {
+        self.failures += 1;
+    }
+
+    /// Success rate in [0.0, 1.0]. Returns 0.5 when no data is available.
+    pub fn success_rate(&self) -> f32 {
+        let total = self.total();
+        if total == 0 {
+            0.5
+        } else {
+            self.successes as f32 / total as f32
+        }
+    }
+
+    /// Total number of recorded outcomes
+    pub fn total(&self) -> u32 {
+        self.successes + self.failures
+    }
+}
+
+/// Historical performance data used by `DynamicRouter`
+#[derive(Debug, Clone, Default)]
+pub struct PerformanceHistory {
+    /// Per-tier success rates
+    pub tier_performance: HashMap<ModelTier, PerformanceRecord>,
+    /// Per-(tier, category) success rates
+    pub category_performance: HashMap<(ModelTier, String), PerformanceRecord>,
+}
+
+impl PerformanceHistory {
+    /// Create a new, empty history
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a routing outcome
+    pub fn record_outcome(&mut self, tier: ModelTier, category: Option<&str>, success: bool) {
+        let tier_record = self.tier_performance.entry(tier).or_default();
+        if success {
+            tier_record.record_success();
+        } else {
+            tier_record.record_failure();
+        }
+
+        if let Some(cat) = category {
+            let cat_record = self
+                .category_performance
+                .entry((tier, cat.to_string()))
+                .or_default();
+            if success {
+                cat_record.record_success();
+            } else {
+                cat_record.record_failure();
+            }
+        }
+    }
+
+    /// Success rate for a tier (0.5 if no data)
+    pub fn success_rate_for_tier(&self, tier: ModelTier) -> f32 {
+        self.tier_performance
+            .get(&tier)
+            .map(|r| r.success_rate())
+            .unwrap_or(0.5)
+    }
+
+    /// Success rate for a (tier, category) pair, falling back to tier rate
+    pub fn success_rate_for_category(&self, tier: ModelTier, category: &str) -> f32 {
+        self.category_performance
+            .get(&(tier, category.to_string()))
+            .map(|r| r.success_rate())
+            .unwrap_or_else(|| self.success_rate_for_tier(tier))
+    }
+
+    /// Return the tier with better historical performance for this category.
+    ///
+    /// The non-base tier is preferred only when it has **≥ 10 % better** success
+    /// rate **and** at least 3 total attempts for that (tier, category) slot.
+    /// Otherwise the base tier is returned unchanged.
+    pub fn preferred_tier_for_category(&self, category: &str, base_tier: ModelTier) -> ModelTier {
+        let other_tier = match base_tier {
+            ModelTier::Worker => ModelTier::Council,
+            ModelTier::Council => ModelTier::Worker,
+        };
+
+        let other_record = self.category_performance.get(&(other_tier, category.to_string()));
+
+        // If there is no data for the other tier, stay with base
+        let other_record = match other_record {
+            Some(r) => r,
+            None => return base_tier,
+        };
+
+        // Require at least 3 attempts before trusting the data
+        if other_record.total() < 3 {
+            return base_tier;
+        }
+
+        let base_rate = self.success_rate_for_category(base_tier, category);
+        let other_rate = other_record.success_rate();
+
+        // Prefer the other tier only if it is meaningfully better (≥ 10 %)
+        if other_rate >= base_rate + 0.10 {
+            other_tier
+        } else {
+            base_tier
+        }
+    }
+}
+
+/// Wraps `ModelRouter` and adjusts routing decisions based on `PerformanceHistory`
+pub struct DynamicRouter {
+    base_router: ModelRouter,
+    history: PerformanceHistory,
+}
+
+impl DynamicRouter {
+    /// Create a new dynamic router with empty history
+    pub fn new() -> Self {
+        Self {
+            base_router: ModelRouter::new(),
+            history: PerformanceHistory::new(),
+        }
+    }
+
+    /// Like `ModelRouter::select_for_errors` but may override the tier based on history
+    pub fn select_for_errors_dynamic(&self, errors: &[ParsedError]) -> ModelSelection {
+        let base = self.base_router.select_for_errors(errors);
+
+        // Nothing to adjust when there are no errors
+        if errors.is_empty() {
+            return base;
+        }
+
+        // Use the category of the first (primary) error as the routing key
+        let category = errors[0].category.to_string();
+        let preferred = self
+            .history
+            .preferred_tier_for_category(&category, base.tier);
+
+        if preferred != base.tier {
+            let rate = self.history.success_rate_for_category(preferred, &category);
+            let reason = format!(
+                "historical performance: {:.0}% success rate",
+                rate * 100.0
+            );
+            ModelSelection::new(preferred, reason)
+        } else {
+            base
+        }
+    }
+
+    /// Record the outcome of a routing decision
+    pub fn record_outcome(
+        &mut self,
+        selection: &ModelSelection,
+        category: Option<&str>,
+        success: bool,
+    ) {
+        self.history
+            .record_outcome(selection.tier, category, success);
+    }
+
+    /// Access the underlying performance history
+    pub fn history(&self) -> &PerformanceHistory {
+        &self.history
+    }
+}
+
+impl Default for DynamicRouter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -453,5 +647,170 @@ mod tests {
         let second = router.select_for_generation("simple function");
         assert_eq!(first.tier, second.tier);
         assert_eq!(first.model_id, second.model_id);
+    }
+
+    // ── PerformanceRecord tests ──────────────────────────────────────────────
+
+    #[test]
+    fn test_performance_record_no_data() {
+        let record = PerformanceRecord::default();
+        assert_eq!(record.total(), 0);
+        // No data → neutral 0.5
+        assert!((record.success_rate() - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_performance_record_success_rate() {
+        let mut record = PerformanceRecord::default();
+        record.record_success();
+        record.record_success();
+        record.record_success();
+        record.record_failure();
+        // 3 successes out of 4 → 0.75
+        assert_eq!(record.total(), 4);
+        assert!((record.success_rate() - 0.75).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_performance_record_all_failures() {
+        let mut record = PerformanceRecord::default();
+        record.record_failure();
+        record.record_failure();
+        assert!((record.success_rate() - 0.0).abs() < f32::EPSILON);
+    }
+
+    // ── PerformanceHistory tests ─────────────────────────────────────────────
+
+    #[test]
+    fn test_performance_history_no_data() {
+        let history = PerformanceHistory::new();
+        // Both tiers return neutral rate when empty
+        assert!((history.success_rate_for_tier(ModelTier::Worker) - 0.5).abs() < f32::EPSILON);
+        assert!((history.success_rate_for_tier(ModelTier::Council) - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_performance_history_record_and_retrieve() {
+        let mut history = PerformanceHistory::new();
+        history.record_outcome(ModelTier::Worker, Some("borrow_checker"), true);
+        history.record_outcome(ModelTier::Worker, Some("borrow_checker"), true);
+        history.record_outcome(ModelTier::Worker, Some("borrow_checker"), false);
+
+        // Tier rate: 2/3 ≈ 0.667
+        let tier_rate = history.success_rate_for_tier(ModelTier::Worker);
+        assert!((tier_rate - 2.0 / 3.0).abs() < 1e-5);
+
+        // Category rate: same data → 2/3
+        let cat_rate = history.success_rate_for_category(ModelTier::Worker, "borrow_checker");
+        assert!((cat_rate - 2.0 / 3.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn test_performance_history_category_fallback() {
+        let mut history = PerformanceHistory::new();
+        // Record tier-level data only (no category)
+        history.record_outcome(ModelTier::Council, None, true);
+        history.record_outcome(ModelTier::Council, None, false);
+
+        // Category with no specific data falls back to tier rate (0.5)
+        let rate = history.success_rate_for_category(ModelTier::Council, "lifetime");
+        assert!((rate - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn test_preferred_tier_no_data_returns_base() {
+        let history = PerformanceHistory::new();
+        // No data → always return base tier
+        assert_eq!(
+            history.preferred_tier_for_category("type_mismatch", ModelTier::Worker),
+            ModelTier::Worker
+        );
+        assert_eq!(
+            history.preferred_tier_for_category("lifetime", ModelTier::Council),
+            ModelTier::Council
+        );
+    }
+
+    #[test]
+    fn test_preferred_tier_insufficient_data_returns_base() {
+        let mut history = PerformanceHistory::new();
+        // Only 2 attempts for Council on "lifetime" — below the 3-attempt threshold
+        history.record_outcome(ModelTier::Council, Some("lifetime"), true);
+        history.record_outcome(ModelTier::Council, Some("lifetime"), true);
+
+        assert_eq!(
+            history.preferred_tier_for_category("lifetime", ModelTier::Worker),
+            ModelTier::Worker
+        );
+    }
+
+    #[test]
+    fn test_preferred_tier_switches_when_better() {
+        let mut history = PerformanceHistory::new();
+        // Council has 4/4 = 100 % on "lifetime"; Worker has 0 data → 0.5 fallback
+        for _ in 0..4 {
+            history.record_outcome(ModelTier::Council, Some("lifetime"), true);
+        }
+
+        // Council is ≥ 10 % better than Worker's neutral 0.5, so prefer Council
+        assert_eq!(
+            history.preferred_tier_for_category("lifetime", ModelTier::Worker),
+            ModelTier::Council
+        );
+    }
+
+    // ── DynamicRouter tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_dynamic_router_no_history_falls_back_to_base() {
+        let router = DynamicRouter::new();
+        // No errors → Worker (same as base router)
+        let selection = router.select_for_errors_dynamic(&[]);
+        assert_eq!(selection.tier, ModelTier::Worker);
+    }
+
+    #[test]
+    fn test_dynamic_router_with_history_overrides_tier() {
+        use crate::feedback::error_parser::{ErrorCategory, ParsedError};
+
+        let mut router = DynamicRouter::new();
+
+        // Simulate Council succeeding 4 times on "lifetime" errors
+        let category_str = ErrorCategory::Lifetime.to_string();
+        for _ in 0..4 {
+            let sel = ModelSelection::new(ModelTier::Council, "test");
+            router.record_outcome(&sel, Some(&category_str), true);
+        }
+
+        // Build a fake lifetime ParsedError using the actual struct fields
+        let fake_error = ParsedError {
+            category: ErrorCategory::Lifetime,
+            code: None,
+            message: "lifetime error".to_string(),
+            file: None,
+            line: None,
+            column: None,
+            suggestion: None,
+            rendered: "lifetime error".to_string(),
+            labels: vec![],
+        };
+
+        // Base router would pick Council for lifetime anyway, but let's verify
+        // the dynamic path works end-to-end without panicking
+        let selection = router.select_for_errors_dynamic(&[fake_error]);
+        // Council should be selected (either by base logic or by history)
+        assert_eq!(selection.tier, ModelTier::Council);
+    }
+
+    #[test]
+    fn test_dynamic_router_history_accessor() {
+        let mut router = DynamicRouter::new();
+        router.record_outcome(
+            &ModelSelection::new(ModelTier::Worker, "test"),
+            Some("type_mismatch"),
+            true,
+        );
+        let history = router.history();
+        assert_eq!(history.success_rate_for_tier(ModelTier::Worker), 1.0);
     }
 }
