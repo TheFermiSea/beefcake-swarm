@@ -51,6 +51,7 @@
 pub mod benchmark;
 pub mod context_packer;
 pub mod council;
+pub mod debate;
 pub mod ensemble;
 pub mod escalation;
 pub mod events;
