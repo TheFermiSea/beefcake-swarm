@@ -14,6 +14,7 @@
 pub mod budget;
 pub mod compactor;
 pub mod errors;
+pub mod observability;
 pub mod store;
 pub mod summarizer;
 
@@ -24,5 +25,6 @@ pub use compactor::{
     CompactionEvent, CompactionPolicy, CompactionResult, CompactionTriggerKind, MemoryCompactor,
 };
 pub use errors::{CompactionError, CompactionErrorKind, SummarizationError};
+pub use observability::{CompactionMetrics, CompactionObserver, CompactionStats};
 pub use store::{MemoryEntry, MemoryEntryKind, MemorySnapshot, SwarmMemory, SwarmMemoryStore};
 pub use summarizer::{MockSummarizer, Summarizer, SummaryRequest, SummaryResponse};
