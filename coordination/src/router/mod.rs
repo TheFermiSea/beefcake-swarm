@@ -19,6 +19,7 @@
 //! Complex/Multi      | OR1 (reasoning)   | -
 //! ```
 
+pub mod circuit_breaker;
 pub mod classifier;
 pub mod prompts;
 pub mod task_classifier;
@@ -26,6 +27,7 @@ pub mod task_classifier;
 pub use classifier::{
     ComplexityFactors, PreRoutingAnalysis, PreRoutingClassifier, RiskFactor, RiskKind, RiskLevel,
 };
+pub use circuit_breaker::{CircuitBreaker, CircuitState, FallbackLadder};
 pub use prompts::{FixPromptBuilder, PromptTemplate};
 pub use task_classifier::{
     DynamicRouter, ModelRouter, ModelSelection, ModelTier, PerformanceHistory, PerformanceRecord,
