@@ -190,6 +190,19 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
         prompt.push('\n');
     }
 
+    // Scope constraints — explicitly tell the worker what it may modify
+    if !packet.files_touched.is_empty() {
+        prompt.push_str("## Scope Constraints\n");
+        prompt.push_str("**IMPORTANT:** Only modify these files:\n");
+        for f in &packet.files_touched {
+            prompt.push_str(&format!("- `{f}`\n"));
+        }
+        prompt.push_str("\nDo NOT modify any other files. Do NOT reformat, refactor, or ");
+        prompt.push_str("\"improve\" code outside the listed files. If you believe additional ");
+        prompt
+            .push_str("files need changes, note them in your response but do not modify them.\n\n");
+    }
+
     prompt.push_str(&format!(
         "**Max patch size:** {} LOC\n",
         packet.max_patch_loc

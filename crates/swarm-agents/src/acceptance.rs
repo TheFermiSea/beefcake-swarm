@@ -41,6 +41,13 @@ pub struct AcceptancePolicy {
     /// meaningful but auto-fix resolved pre-existing warnings.
     /// Default: 5. Set to 0 to disable.
     pub min_diff_lines: usize,
+
+    /// Fine-grained file scope: if non-empty, only these specific files may
+    /// be modified. Prevents workers from touching code outside the task scope.
+    /// Paths are relative to the worktree root.
+    /// Default: empty (no file-level restriction — use `scope_to_crates` for coarser control).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowed_files: Vec<String>,
 }
 
 impl Default for AcceptancePolicy {
@@ -51,6 +58,7 @@ impl Default for AcceptancePolicy {
             require_test_changes: false,
             scope_to_crates: Vec::new(),
             min_diff_lines: 5,
+            allowed_files: Vec::new(),
         }
     }
 }
@@ -155,6 +163,25 @@ pub fn check_acceptance(
                 }
                 Err(e) => {
                     warn!("Failed to check scope: {e} — skipping scope check");
+                }
+            }
+        }
+    }
+
+    // Gate 5: File-level scope restriction
+    if !policy.allowed_files.is_empty() {
+        if let Some(commit) = initial_commit {
+            match check_file_scope(wt_path, commit, &policy.allowed_files) {
+                Ok(out_of_scope) => {
+                    if !out_of_scope.is_empty() {
+                        rejections.push(format!(
+                            "Changes outside allowed files: {}",
+                            out_of_scope.join(", ")
+                        ));
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to check file scope: {e} — skipping file scope check");
                 }
             }
         }
@@ -265,6 +292,45 @@ fn check_scope(
     Ok(out_of_scope)
 }
 
+/// Check if all changed files are in the allowed files list.
+///
+/// Returns a list of files that are outside the allowed scope.
+fn check_file_scope(
+    wt_path: &Path,
+    initial_commit: &str,
+    allowed_files: &[String],
+) -> Result<Vec<String>, String> {
+    if allowed_files.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let output = std::process::Command::new("git")
+        .args(["diff", "--name-only", initial_commit, "HEAD"])
+        .current_dir(wt_path)
+        .output()
+        .map_err(|e| format!("Failed to run git diff --name-only: {e}"))?;
+
+    if !output.status.success() {
+        return Err(format!(
+            "git diff failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        ));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let out_of_scope: Vec<String> = stdout
+        .lines()
+        .filter(|file| {
+            !allowed_files
+                .iter()
+                .any(|allowed| *file == allowed.as_str())
+        })
+        .map(String::from)
+        .collect();
+
+    Ok(out_of_scope)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -287,6 +353,7 @@ mod tests {
             require_test_changes: false,
             scope_to_crates: Vec::new(),
             min_diff_lines: 0,
+            allowed_files: Vec::new(),
         };
 
         // With all gates disabled, should always pass
@@ -527,5 +594,129 @@ mod tests {
         // With no scope restriction, nothing is out of scope
         let out_of_scope = check_scope(dir.path(), &initial, &[]).unwrap();
         assert!(out_of_scope.is_empty());
+    }
+
+    #[test]
+    fn test_file_scope_check() {
+        let dir = tempfile::tempdir().unwrap();
+
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        std::fs::write(dir.path().join("README.md"), "# test\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let initial = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        // Modify allowed and disallowed files
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "// ok\n").unwrap();
+        std::fs::write(dir.path().join("src/main.rs"), "// not allowed\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "changes"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // Only src/lib.rs is allowed — src/main.rs should be flagged
+        let out_of_scope = check_file_scope(dir.path(), &initial, &["src/lib.rs".into()]).unwrap();
+        assert_eq!(out_of_scope, vec!["src/main.rs"]);
+
+        // With both files allowed, nothing is out of scope
+        let out_of_scope = check_file_scope(
+            dir.path(),
+            &initial,
+            &["src/lib.rs".into(), "src/main.rs".into()],
+        )
+        .unwrap();
+        assert!(out_of_scope.is_empty());
+
+        // With empty allowed list, no restriction
+        let out_of_scope = check_file_scope(dir.path(), &initial, &[]).unwrap();
+        assert!(out_of_scope.is_empty());
+    }
+
+    #[test]
+    fn test_scope_constraints_in_prompt() {
+        use coordination::escalation::state::SwarmTier;
+        use coordination::work_packet::types::WorkPacket;
+
+        let packet = WorkPacket {
+            bead_id: "test-123".into(),
+            branch: "fix/scope".into(),
+            checkpoint: "abc123".into(),
+            objective: "Add scope constraints".into(),
+            files_touched: vec!["src/acceptance.rs".into(), "src/orchestrator.rs".into()],
+            key_symbols: vec![],
+            file_contexts: vec![],
+            verification_gates: vec![],
+            failure_signals: vec![],
+            constraints: vec![],
+            iteration: 1,
+            target_tier: SwarmTier::Worker,
+            escalation_reason: None,
+            error_history: vec![],
+            previous_attempts: vec![],
+            iteration_deltas: vec![],
+            relevant_heuristics: vec![],
+            relevant_playbooks: vec![],
+            decisions: vec![],
+            generated_at: chrono::Utc::now(),
+            max_patch_loc: 150,
+            delegation_chain: vec![],
+            skill_hints: vec![],
+            replay_hints: vec![],
+        };
+
+        let prompt = crate::orchestrator::format_task_prompt(&packet);
+        assert!(
+            prompt.contains("Scope Constraints"),
+            "Prompt should include scope section"
+        );
+        assert!(
+            prompt.contains("src/acceptance.rs"),
+            "Prompt should list allowed files"
+        );
+        assert!(
+            prompt.contains("Do NOT modify any other files"),
+            "Prompt should warn about scope"
+        );
     }
 }
