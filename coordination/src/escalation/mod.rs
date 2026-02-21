@@ -33,9 +33,11 @@
 pub mod delight;
 pub mod engine;
 pub mod friction;
+pub mod heuristics;
 pub mod state;
 
 pub use delight::{DelightDetector, DelightIntensity, DelightKind, DelightSignal};
 pub use engine::{EscalationDecision, EscalationEngine};
 pub use friction::{FrictionDetector, FrictionKind, FrictionSeverity, FrictionSignal};
+pub use heuristics::{compute_heuristics, SessionSample, TelemetryHeuristics};
 pub use state::{EscalationState, SwarmTier, TierBudget};
