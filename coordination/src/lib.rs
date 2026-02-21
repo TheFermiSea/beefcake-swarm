@@ -49,6 +49,7 @@
 #![allow(clippy::uninlined_format_args)]
 
 pub mod agent_profile;
+pub mod analytics;
 pub mod benchmark;
 pub mod context_packer;
 pub mod council;
@@ -95,6 +96,9 @@ pub use state::{
     EnsembleSession, EnsembleTask, ModelId, ModelResult, SharedContext, SharedStateStore,
     StateStore, TaskStatus, VoteRecord, VotingStrategy,
 };
+
+// Re-export analytics types
+pub use analytics::skills::{Skill, SkillHint, SkillLibrary, SkillTrigger, TaskContext};
 
 // Re-export key event types
 pub use events::{

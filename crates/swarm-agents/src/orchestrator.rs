@@ -1862,6 +1862,7 @@ mod tests {
             max_patch_loc: 200,
             iteration_deltas: vec![],
             delegation_chain: vec![],
+            skill_hints: vec![],
         }
     }
 
