@@ -63,9 +63,48 @@ pub struct AttemptMetrics {
     pub errors_after: usize,
     /// Whether this attempt succeeded
     pub compiled: bool,
+    /// The code artifact produced during this iteration
+    pub generated_code: Option<String>,
+    /// The compiler error output from this iteration
+    pub compiler_output: Option<String>,
 }
 
 impl AttemptMetrics {
+    /// Create a new `AttemptMetrics`; artifact fields default to `None`
+    pub fn new(
+        attempt_number: u32,
+        model_tier: String,
+        tokens: u32,
+        time_ms: u64,
+        errors_before: usize,
+        errors_after: usize,
+        compiled: bool,
+    ) -> Self {
+        Self {
+            attempt_number,
+            model_tier,
+            tokens,
+            time_ms,
+            errors_before,
+            errors_after,
+            compiled,
+            generated_code: None,
+            compiler_output: None,
+        }
+    }
+
+    /// Attach the generated code artifact to this attempt record
+    pub fn with_generated_code(mut self, code: String) -> Self {
+        self.generated_code = Some(code);
+        self
+    }
+
+    /// Attach the compiler output to this attempt record
+    pub fn with_compiler_output(mut self, output: String) -> Self {
+        self.compiler_output = Some(output);
+        self
+    }
+
     /// Check if this attempt made progress (reduced errors)
     pub fn made_progress(&self) -> bool {
         self.compiled || self.errors_after < self.errors_before
@@ -346,6 +385,27 @@ impl MetricsTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_attempt_metrics_artifact_tracking() {
+        let attempt = AttemptMetrics::new(1, "worker".to_string(), 512, 1500, 3, 0, true)
+            .with_generated_code("fn main() {}".to_string())
+            .with_compiler_output(String::new());
+
+        assert_eq!(attempt.attempt_number, 1);
+        assert!(attempt.compiled);
+        assert!(attempt.made_progress());
+        assert_eq!(attempt.generated_code.as_deref(), Some("fn main() {}"));
+        assert_eq!(attempt.compiler_output.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn test_attempt_metrics_artifact_fields_default_to_none() {
+        let attempt = AttemptMetrics::new(2, "council".to_string(), 256, 800, 1, 1, false);
+        assert!(attempt.generated_code.is_none());
+        assert!(attempt.compiler_output.is_none());
+        assert!(!attempt.made_progress());
+    }
 
     #[test]
     fn test_problem_metrics() {
