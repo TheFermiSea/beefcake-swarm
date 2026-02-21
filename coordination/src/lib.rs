@@ -80,7 +80,8 @@ pub use harness::{load_session_state, save_session_state};
 pub use harness::{
     FeatureCategory, FeatureSpec, GitManager, HarnessConfig, HarnessError, HarnessResult,
     HarnessState, InterventionType, PendingIntervention, ProgressEntry, ProgressMarker,
-    ProgressTracker, SessionManager, SessionState, SessionStatus, SessionSummary, StartupContext,
+    ProgressTracker, SessionManager, SessionRetrospective, SessionState, SessionStatus,
+    SessionSummary, StartupContext,
 };
 
 // Re-export key ensemble types
