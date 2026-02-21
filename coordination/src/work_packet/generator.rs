@@ -174,6 +174,7 @@ impl WorkPacketGenerator {
             iteration_deltas: vec![], // Populated by delta computation
             delegation_chain: vec![], // Populated during manager-to-manager handoffs
             skill_hints: vec![],      // Populated by orchestrator from skill library
+            replay_hints: vec![],     // Populated by orchestrator from trace index
         }
     }
 
