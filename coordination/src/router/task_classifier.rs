@@ -451,7 +451,9 @@ impl PerformanceHistory {
             ModelTier::Council => ModelTier::Worker,
         };
 
-        let other_record = self.category_performance.get(&(other_tier, category.to_string()));
+        let other_record = self
+            .category_performance
+            .get(&(other_tier, category.to_string()));
 
         // If there is no data for the other tier, stay with base
         let other_record = match other_record {
@@ -508,10 +510,7 @@ impl DynamicRouter {
 
         if preferred != base.tier {
             let rate = self.history.success_rate_for_category(preferred, &category);
-            let reason = format!(
-                "historical performance: {:.0}% success rate",
-                rate * 100.0
-            );
+            let reason = format!("historical performance: {:.0}% success rate", rate * 100.0);
             ModelSelection::new(preferred, reason)
         } else {
             base
