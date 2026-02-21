@@ -704,6 +704,7 @@ mod tests {
             skill_hints: vec![],
             replay_hints: vec![],
             validator_feedback: vec![],
+            change_contract: None,
         };
 
         let prompt = crate::orchestrator::format_task_prompt(&packet);

@@ -16,6 +16,6 @@ pub mod types;
 
 pub use generator::WorkPacketGenerator;
 pub use types::{
-    Constraint, ContextProvenance, DelegationStep, FileContext, IterationDelta, KeySymbol,
-    WorkPacket,
+    ChangeContract, Constraint, ContextProvenance, ContractRiskLevel, DelegationStep, FileContext,
+    Invariant, IterationDelta, KeySymbol, TestPlanEntry, TestPlanKind, WorkPacket,
 };
