@@ -737,10 +737,7 @@ impl DynamicRouter {
             if best_tier != base.tier {
                 let reason = format!(
                     "smart score: {:.2} (q={:.2} l={:.2} b={:.2})",
-                    best_score.composite,
-                    best_score.quality,
-                    best_score.latency,
-                    best_score.budget
+                    best_score.composite, best_score.quality, best_score.latency, best_score.budget
                 );
                 return (ModelSelection::new(best_tier, reason), best_score);
             }
