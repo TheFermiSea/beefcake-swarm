@@ -84,9 +84,16 @@ impl TelemetryHeuristics {
         let n = sessions.len() as f64;
 
         let avg_no_change_rate = sessions.iter().map(|s| s.no_change_rate).sum::<f64>() / n;
-        let avg_iterations = sessions.iter().map(|s| s.total_iterations as f64).sum::<f64>() / n;
-        let avg_no_change =
-            sessions.iter().map(|s| s.total_no_change_iterations as f64).sum::<f64>() / n;
+        let avg_iterations = sessions
+            .iter()
+            .map(|s| s.total_iterations as f64)
+            .sum::<f64>()
+            / n;
+        let avg_no_change = sessions
+            .iter()
+            .map(|s| s.total_no_change_iterations as f64)
+            .sum::<f64>()
+            / n;
         let success_rate = sessions.iter().filter(|s| s.success).count() as f64 / n;
 
         // repeat_threshold: lower when no-change rate is high (escalate sooner)
@@ -203,7 +210,10 @@ mod tests {
             make_session(false, 4, 2, 0.5),
         ];
         let h = TelemetryHeuristics::from_sessions(&sessions);
-        assert_eq!(h.repeat_threshold, 1, "High no-change rate should yield repeat_threshold=1");
+        assert_eq!(
+            h.repeat_threshold, 1,
+            "High no-change rate should yield repeat_threshold=1"
+        );
     }
 
     #[test]
@@ -223,10 +233,7 @@ mod tests {
 
     #[test]
     fn test_to_escalation_config() {
-        let sessions = vec![
-            make_session(true, 3, 1, 0.1),
-            make_session(true, 2, 0, 0.0),
-        ];
+        let sessions = vec![make_session(true, 3, 1, 0.1), make_session(true, 2, 0, 0.0)];
         let h = TelemetryHeuristics::from_sessions(&sessions);
         let cfg = h.to_escalation_config();
 
