@@ -115,6 +115,9 @@ pub use escalation::{
     EscalationDecision, EscalationEngine, EscalationState, SwarmTier, TierBudget,
 };
 
+// Re-export friction detection types
+pub use escalation::{FrictionDetector, FrictionKind, FrictionSeverity, FrictionSignal};
+
 // Re-export work packet types
 pub use work_packet::{Constraint, FileContext, KeySymbol, WorkPacket, WorkPacketGenerator};
 
