@@ -173,6 +173,7 @@ impl WorkPacketGenerator {
             max_patch_loc: self.default_max_loc,
             iteration_deltas: vec![], // Populated by delta computation
             delegation_chain: vec![], // Populated during manager-to-manager handoffs
+            skill_hints: vec![],      // Populated by orchestrator from skill library
         }
     }
 

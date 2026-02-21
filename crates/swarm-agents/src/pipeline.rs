@@ -424,6 +424,7 @@ mod tests {
             generated_at: chrono::Utc::now(),
             max_patch_loc: 150,
             delegation_chain: vec![],
+            skill_hints: vec![],
         }
     }
 

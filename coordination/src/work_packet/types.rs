@@ -1,5 +1,6 @@
 //! Work Packet types — structured context for model tier handoffs
 
+use crate::analytics::skills::SkillHint;
 use crate::escalation::state::SwarmTier;
 use crate::feedback::error_parser::ErrorCategory;
 use crate::verifier::report::FailureSignal;
@@ -59,6 +60,9 @@ pub struct WorkPacket {
     /// Chain of delegation steps (manager-to-manager handoffs)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub delegation_chain: Vec<DelegationStep>,
+    /// Skill hints from the skill library — approaches that worked for similar tasks
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub skill_hints: Vec<SkillHint>,
 }
 
 impl WorkPacket {
@@ -292,6 +296,7 @@ mod tests {
             max_patch_loc: 150,
             iteration_deltas: vec![],
             delegation_chain: vec![],
+            skill_hints: vec![],
         };
 
         let summary = packet.summary();
@@ -333,6 +338,7 @@ mod tests {
             max_patch_loc: 150,
             iteration_deltas: vec![],
             delegation_chain: vec![],
+            skill_hints: vec![],
         };
 
         let json = serde_json::to_string_pretty(&packet).unwrap();
@@ -369,6 +375,7 @@ mod tests {
             max_patch_loc: 150,
             iteration_deltas: vec![],
             delegation_chain: vec![],
+            skill_hints: vec![],
         };
 
         // Should be a reasonable estimate
