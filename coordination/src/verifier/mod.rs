@@ -31,8 +31,10 @@
 //! println!("Gates passed: {}/{}", report.gates_passed, report.gates_total);
 //! ```
 
+pub mod normalized;
 pub mod pipeline;
 pub mod report;
 
+pub use normalized::{ErrorBucket, GateSummary, NormalizedOutput};
 pub use pipeline::{Verifier, VerifierConfig};
 pub use report::{GateOutcome, GateResult, VerifierReport};
