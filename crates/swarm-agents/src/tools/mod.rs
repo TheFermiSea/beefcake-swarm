@@ -6,6 +6,7 @@
 pub mod bundles;
 pub mod exec_tool;
 pub mod fs_tools;
+pub mod migration_matrix;
 pub mod notebook_tool;
 pub mod patch_tool;
 pub mod proxy_wrappers;
