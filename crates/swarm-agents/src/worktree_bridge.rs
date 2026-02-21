@@ -403,6 +403,79 @@ impl WorktreeBridge {
         Ok(())
     }
 
+    /// Clean up zombie `swarm/*` branches that have no associated worktree.
+    ///
+    /// These accumulate when the orchestrator crashes mid-run or worktrees are
+    /// manually deleted without cleaning up branches. Runs on startup to prevent
+    /// branch pollution.
+    ///
+    /// Steps:
+    /// 1. `git worktree prune` — sync bookkeeping with filesystem
+    /// 2. List all local branches matching `swarm/*`
+    /// 3. For each, check if a live worktree references that branch
+    /// 4. If not, force-delete the orphaned branch
+    ///
+    /// Returns the list of branches that were cleaned up.
+    pub fn cleanup_stale(&self) -> Result<Vec<String>> {
+        // 1. Prune worktree bookkeeping
+        let _ = Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&self.repo_root)
+            .output();
+
+        // 2. Get all local branches matching swarm/*
+        let branch_output = Command::new("git")
+            .args(["branch", "--list", "swarm/*"])
+            .current_dir(&self.repo_root)
+            .output()
+            .context("Failed to list swarm branches")?;
+
+        let branch_text = String::from_utf8_lossy(&branch_output.stdout);
+        let swarm_branches: Vec<String> = branch_text
+            .lines()
+            .map(|l| l.trim().trim_start_matches("* ").to_string())
+            .filter(|b| !b.is_empty())
+            .collect();
+
+        if swarm_branches.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // 3. Get live worktree branches
+        let live_worktrees = self.list().unwrap_or_default();
+        let live_branches: std::collections::HashSet<&str> =
+            live_worktrees.iter().map(|w| w.branch.as_str()).collect();
+
+        // 4. Delete orphaned branches
+        let mut cleaned = Vec::new();
+        for branch in &swarm_branches {
+            if live_branches.contains(branch.as_str()) {
+                continue;
+            }
+
+            tracing::info!(branch = %branch, "Cleaning up zombie branch (no worktree)");
+            let del = Command::new("git")
+                .args(["branch", "-D", branch])
+                .current_dir(&self.repo_root)
+                .output();
+
+            match del {
+                Ok(ref out) if out.status.success() => {
+                    cleaned.push(branch.clone());
+                }
+                Ok(ref out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    tracing::warn!(branch = %branch, "Failed to delete zombie branch: {}", stderr.trim());
+                }
+                Err(e) => {
+                    tracing::warn!(branch = %branch, "Failed to run git branch -D: {e}");
+                }
+            }
+        }
+
+        Ok(cleaned)
+    }
+
     /// List active worktrees.
     pub fn list(&self) -> Result<Vec<WorktreeInfo>> {
         let output = Command::new("git")
@@ -805,5 +878,126 @@ mod tests {
         bridge
             .cleanup("conflict-test")
             .expect("cleanup after conflict");
+    }
+
+    #[test]
+    fn test_cleanup_stale_removes_orphaned_branches() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let wt_base = tempfile::tempdir().unwrap();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(repo_dir.path().join("README.md"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
+            .expect("bridge creation");
+
+        // Create orphaned swarm branches (no worktree)
+        Command::new("git")
+            .args(["branch", "swarm/zombie-1"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["branch", "swarm/zombie-2"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        // Create a live worktree (should NOT be cleaned up)
+        let _wt_path = bridge.create("live-issue").expect("create worktree");
+
+        // Run cleanup_stale
+        let cleaned = bridge.cleanup_stale().expect("cleanup_stale");
+
+        // Should have cleaned the two zombies
+        assert_eq!(
+            cleaned.len(),
+            2,
+            "expected 2 zombies cleaned, got: {cleaned:?}"
+        );
+        assert!(cleaned.contains(&"swarm/zombie-1".to_string()));
+        assert!(cleaned.contains(&"swarm/zombie-2".to_string()));
+
+        // Verify zombie branches are gone
+        let branches = Command::new("git")
+            .args(["branch", "--list", "swarm/*"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        let branch_list = String::from_utf8_lossy(&branches.stdout);
+        assert!(
+            !branch_list.contains("zombie"),
+            "zombie branches should be gone, got: {branch_list}"
+        );
+
+        // Live worktree branch should still exist
+        assert!(
+            branch_list.contains("swarm/live-issue"),
+            "live branch should still exist, got: {branch_list}"
+        );
+    }
+
+    #[test]
+    fn test_cleanup_stale_no_zombies() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let wt_base = tempfile::tempdir().unwrap();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(repo_dir.path().join("README.md"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
+            .expect("bridge creation");
+
+        // No swarm branches at all
+        let cleaned = bridge.cleanup_stale().expect("cleanup_stale");
+        assert!(cleaned.is_empty(), "nothing to clean");
     }
 }

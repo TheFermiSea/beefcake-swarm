@@ -162,6 +162,17 @@ async fn main() -> Result<()> {
     };
     let worktree_bridge = WorktreeBridge::new(config.worktree_base.clone(), &repo_root)?;
 
+    // --- Clean up zombie branches from previous crashed runs ---
+    match worktree_bridge.cleanup_stale() {
+        Ok(cleaned) if !cleaned.is_empty() => {
+            info!(count = cleaned.len(), branches = ?cleaned, "Cleaned up zombie swarm branches");
+        }
+        Ok(_) => {}
+        Err(e) => {
+            warn!("Failed to clean up stale branches: {e}");
+        }
+    }
+
     // --- Issue selection: 3 branches ---
     let kb_ref: Option<&dyn KnowledgeBase> = knowledge_base
         .as_ref()
