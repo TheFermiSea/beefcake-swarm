@@ -18,3 +18,5 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 anyhow = "1"
 
+[patch.crates-io]
+rig-core = { path = "patches/rig-core-0.30.0" }
