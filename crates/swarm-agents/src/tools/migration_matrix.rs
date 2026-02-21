@@ -12,6 +12,37 @@
 //! - **SecuritySensitive**: Handles untrusted input, enforces allowlists, or
 //!   performs filesystem mutations with safety guards. Manual impl required
 //!   and any changes need security review.
+//!
+//! # Guardrails
+//!
+//! The [`validate_no_unsafe_derive_migration`] function scans tool source files
+//! for `#[rig_tool]` attributes and fails if any `ManualRequired` or
+//! `SecuritySensitive` tool has been accidentally annotated. This is enforced
+//! in the test suite to catch unsafe migrations in CI.
+//!
+//! # Policy: Stateful Tool Wrapper Requirements
+//!
+//! All tools that interact with the filesystem, execute commands, or depend
+//! on injected state MUST use manual `impl Tool for T` blocks. This policy
+//! exists because:
+//!
+//! 1. **Sandbox enforcement**: Path traversal checks must run before any I/O.
+//!    The derive macro cannot inject pre-call validation.
+//! 2. **Blast-radius guards**: Write tools reject changes that shrink files >50%.
+//!    This safety logic lives in the `call()` method body.
+//! 3. **Command allowlisting**: `run_command` blocks shell metacharacters and
+//!    restricts executables to a curated list. Derive cannot express this.
+//! 4. **Error resilience**: `query_notebook` returns `Ok(error_message)` instead
+//!    of propagating errors, keeping agents functional when KB is down.
+//! 5. **State injection**: All tools receive `working_dir` or `Arc<dyn KnowledgeBase>`
+//!    at construction time. The derive macro generates `Default`-constructible
+//!    tools, which cannot satisfy this requirement.
+//!
+//! To add a new derive-safe tool, it must:
+//! - Take no construction-time state (no `working_dir`, no injected deps)
+//! - Perform no filesystem I/O
+//! - Have no security-sensitive validation logic
+//! - Be added to [`TOOL_MATRIX`] with `MigrationCategory::DeriveSafe`
 
 use serde::{Deserialize, Serialize};
 
@@ -199,6 +230,53 @@ const fn count_by_category(cat: MigrationCategory) -> usize {
     count
 }
 
+/// Scan tool source files for `#[rig_tool]` attributes and return any that
+/// appear on tools classified as `ManualRequired` or `SecuritySensitive`.
+///
+/// Returns a list of violation descriptions. Empty = all clear.
+///
+/// This function reads the actual source files at test time to detect if
+/// someone adds `#[rig_tool]` to a tool that shouldn't use it.
+pub fn validate_no_unsafe_derive_migration() -> Vec<String> {
+    let mut violations = Vec::new();
+
+    // Find the crate root by walking up from CARGO_MANIFEST_DIR or using env
+    let crate_root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+
+    for entry in TOOL_MATRIX {
+        if entry.category == MigrationCategory::DeriveSafe {
+            continue; // Derive-safe tools are allowed to use #[rig_tool]
+        }
+
+        let source_path = crate_root.join(entry.source_file);
+        let content = match std::fs::read_to_string(&source_path) {
+            Ok(c) => c,
+            Err(_) => continue, // File not found — skip (might be in a different layout)
+        };
+
+        // Look for #[rig_tool] attribute near the struct definition
+        // We search for the pattern: #[rig_tool] followed by the struct name
+        if content.contains("#[rig_tool]") || content.contains("#[rig::tool]") {
+            // Check if this specific struct is annotated
+            let struct_pattern = format!("struct {}", entry.struct_name);
+            if let Some(struct_pos) = content.find(&struct_pattern) {
+                // Look backwards from the struct for rig_tool attribute (within 200 chars)
+                let search_start = struct_pos.saturating_sub(200);
+                let preceding = &content[search_start..struct_pos];
+                if preceding.contains("#[rig_tool]") || preceding.contains("#[rig::tool]") {
+                    violations.push(format!(
+                        "  - {} ({}) in {} is {:?} but has #[rig_tool] attribute. \
+                         Remove derive and use manual Tool impl.",
+                        entry.struct_name, entry.name, entry.source_file, entry.category
+                    ));
+                }
+            }
+        }
+    }
+
+    violations
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -306,6 +384,57 @@ mod tests {
                 "Proxy wrappers should not be in the matrix: {}",
                 entry.name
             );
+        }
+    }
+
+    #[test]
+    fn test_guardrail_no_unsafe_derive_migration() {
+        // Scan tool source files for `#[rig_tool]` attributes on tools classified
+        // as ManualRequired or SecuritySensitive. This catches accidental derive
+        // migration that bypasses the safety review process.
+        let violations = validate_no_unsafe_derive_migration();
+        assert!(
+            violations.is_empty(),
+            "Unsafe derive migration detected! The following tools have \
+             #[rig_tool] but are classified as ManualRequired or SecuritySensitive:\n{}",
+            violations.join("\n")
+        );
+    }
+
+    #[test]
+    fn test_all_tools_have_rationale() {
+        for entry in TOOL_MATRIX {
+            assert!(
+                !entry.rationale.is_empty(),
+                "Tool {} must have a rationale for its classification",
+                entry.name
+            );
+            // Rationale should be substantive (>20 chars)
+            assert!(
+                entry.rationale.len() > 20,
+                "Tool {} rationale is too short: '{}'",
+                entry.name,
+                entry.rationale
+            );
+        }
+    }
+
+    #[test]
+    fn test_security_sensitive_must_have_sandbox_or_allowlist() {
+        // SecuritySensitive tools must enforce either sandbox or have
+        // explicit security rationale mentioning allowlist/guard.
+        for entry in TOOL_MATRIX {
+            if entry.category == MigrationCategory::SecuritySensitive {
+                let has_security_enforcement = entry.sandbox_enforced
+                    || entry.rationale.contains("allowlist")
+                    || entry.rationale.contains("guard");
+                assert!(
+                    has_security_enforcement,
+                    "SecuritySensitive tool {} must have sandbox enforcement \
+                     or mention allowlist/guard in rationale",
+                    entry.name
+                );
+            }
         }
     }
 }
