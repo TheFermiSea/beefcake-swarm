@@ -10,6 +10,7 @@ pub mod cloud;
 pub mod coder;
 pub mod manager;
 pub mod reviewer;
+pub mod specialists;
 
 use std::path::Path;
 use std::sync::Arc;
@@ -96,10 +97,36 @@ impl AgentFactory {
         reviewer::build_reviewer(&self.clients.local, &self.config.fast_endpoint.model)
     }
 
+    /// Build the planner specialist.
+    ///
+    /// Read-only tools for analysis. Produces structured JSON repair plans.
+    pub fn build_planner(&self, wt_path: &Path) -> OaiAgent {
+        specialists::build_planner_named(
+            &self.clients.reasoning,
+            &self.config.reasoning_endpoint.model,
+            wt_path,
+            "planner",
+            self.config.cloud_only,
+        )
+    }
+
+    /// Build the fixer specialist.
+    ///
+    /// Full editing tools. Takes a plan and implements it step by step.
+    pub fn build_fixer(&self, wt_path: &Path) -> OaiAgent {
+        specialists::build_fixer_named(
+            &self.clients.local,
+            &self.config.fast_endpoint.model,
+            wt_path,
+            "fixer",
+            self.config.cloud_only,
+        )
+    }
+
     /// Build the Manager agent.
     ///
     /// When cloud is available: Cloud model (Opus 4.6) manages local workers
-    /// including OR1-Behemoth as a reasoning tool.
+    /// including OR1-Behemoth as a reasoning tool and planner/fixer specialists.
     /// Worker agents are registered with `proxy_` prefixed names to work around
     /// the CLIAPIProxy tool name prefixing behavior.
     ///
@@ -114,6 +141,20 @@ impl AgentFactory {
             );
             // Workers get proxy_ prefix for CLIAPIProxy compatibility.
             // proxy_tools=true so tool names match after CLIAPIProxy prefixing.
+            let planner = specialists::build_planner_named(
+                &self.clients.reasoning,
+                &self.config.reasoning_endpoint.model,
+                wt_path,
+                "proxy_planner",
+                true,
+            );
+            let fixer = specialists::build_fixer_named(
+                &self.clients.local,
+                &self.config.fast_endpoint.model,
+                wt_path,
+                "proxy_fixer",
+                true,
+            );
             let rust_coder = coder::build_rust_coder_named(
                 &self.clients.local,
                 &self.config.fast_endpoint.model,
@@ -144,6 +185,8 @@ impl AgentFactory {
                 rust_coder,
                 general_coder,
                 reviewer,
+                planner,
+                fixer,
                 reasoning_worker: Some(reasoning_worker),
                 notebook_bridge: self.notebook_bridge.clone(),
             };
@@ -160,6 +203,8 @@ impl AgentFactory {
                 "No cloud endpoint — building local manager (OR1-Behemoth)"
             );
             // Local manager doesn't need proxy prefix
+            let planner = self.build_planner(wt_path);
+            let fixer = self.build_fixer(wt_path);
             let rust_coder = self.build_rust_coder(wt_path);
             let general_coder = self.build_general_coder(wt_path);
             let reviewer = self.build_reviewer();
@@ -167,6 +212,8 @@ impl AgentFactory {
                 rust_coder,
                 general_coder,
                 reviewer,
+                planner,
+                fixer,
                 reasoning_worker: None,
                 notebook_bridge: self.notebook_bridge.clone(),
             };

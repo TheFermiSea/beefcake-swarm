@@ -35,6 +35,10 @@ pub struct ManagerWorkers {
     pub rust_coder: OaiAgent,
     pub general_coder: OaiAgent,
     pub reviewer: OaiAgent,
+    /// Planning specialist — produces structured repair plans (read-only tools).
+    pub planner: OaiAgent,
+    /// Implementation specialist — follows plans with targeted edits.
+    pub fixer: OaiAgent,
     /// OR1-Behemoth reasoning worker (cloud manager only).
     pub reasoning_worker: Option<OaiAgent>,
     /// Optional knowledge base for the query_notebook tool.
@@ -61,6 +65,9 @@ pub fn build_cloud_manager(
         .description("Cloud-backed orchestrator that delegates to local HPC model workers")
         .preamble(prompts::CLOUD_MANAGER_PREAMBLE)
         .temperature(0.3)
+        // Agent-as-Tool: specialists
+        .tool(workers.planner)
+        .tool(workers.fixer)
         // Agent-as-Tool: workers
         .tool(workers.rust_coder)
         .tool(workers.general_coder)
@@ -99,6 +106,9 @@ pub fn build_local_manager(
         .description("Orchestrator that decomposes tasks and delegates to specialized workers")
         .preamble(prompts::LOCAL_MANAGER_PREAMBLE)
         .temperature(0.3)
+        // Agent-as-Tool: specialists
+        .tool(workers.planner)
+        .tool(workers.fixer)
         // Agent-as-Tool: workers
         .tool(workers.rust_coder)
         .tool(workers.general_coder)
