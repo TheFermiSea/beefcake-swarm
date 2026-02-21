@@ -57,6 +57,7 @@ pub mod escalation;
 pub mod events;
 pub mod feedback;
 pub mod harness;
+pub mod memory;
 pub mod perf_control;
 pub mod registry;
 pub mod resilience;
