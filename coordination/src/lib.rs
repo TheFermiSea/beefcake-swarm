@@ -63,6 +63,7 @@ pub mod router;
 pub mod shell_safety;
 pub mod slurm;
 pub mod state;
+pub mod tool_schema;
 pub mod verifier;
 pub mod work_packet;
 
