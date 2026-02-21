@@ -57,6 +57,7 @@ pub mod events;
 pub mod feedback;
 pub mod harness;
 pub mod registry;
+pub mod resilience;
 pub mod rollout;
 pub mod router;
 pub mod shell_safety;
@@ -140,6 +141,9 @@ pub use router::{
 
 // Re-export provider registry types
 pub use registry::{ProviderCapabilities, ProviderEntry, ProviderHealth, ProviderRegistry};
+
+// Re-export resilience types
+pub use resilience::{DegradationLevel, DegradedResponse, FallbackChain, FallbackTier, ToolHealth};
 
 // Re-export rollout types
 pub use rollout::{

@@ -283,10 +283,7 @@ mod tests {
     fn test_sanitize_identifier() {
         assert_eq!(sanitize_identifier("hello-world"), "hello-world");
         assert_eq!(sanitize_identifier("test_123.rs"), "test_123.rs");
-        assert_eq!(
-            sanitize_identifier("../../etc/passwd"),
-            ".._.._etc_passwd"
-        );
+        assert_eq!(sanitize_identifier("../../etc/passwd"), ".._.._etc_passwd");
         assert_eq!(sanitize_identifier("file name"), "file_name");
         assert_eq!(sanitize_identifier("a;b|c&d"), "a_b_c_d");
     }
