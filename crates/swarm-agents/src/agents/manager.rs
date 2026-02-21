@@ -14,14 +14,7 @@ use rig::providers::openai;
 
 use crate::notebook_bridge::KnowledgeBase;
 use crate::prompts;
-use crate::tools::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
-use crate::tools::notebook_tool::QueryNotebookTool;
-use crate::tools::patch_tool::EditFileTool;
-use crate::tools::proxy_wrappers::{
-    ProxyEditFile, ProxyListFiles, ProxyQueryNotebook, ProxyReadFile, ProxyRunVerifier,
-    ProxyWriteFile,
-};
-use crate::tools::verifier_tool::RunVerifierTool;
+use crate::tools::bundles;
 
 use super::coder::OaiAgent;
 
@@ -79,19 +72,12 @@ pub fn build_cloud_manager(
     }
 
     // Deterministic tools — proxy-prefixed for CLIAPIProxy compatibility.
-    // The proxy prepends `proxy_` to tool names; pre-prefixing prevents mismatch.
-    builder = builder
-        .tool(ProxyRunVerifier(
-            RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()),
-        ))
-        .tool(ProxyReadFile(ReadFileTool::new(wt_path)))
-        .tool(ProxyWriteFile(WriteFileTool::new(wt_path)))
-        .tool(ProxyEditFile(EditFileTool::new(wt_path)))
-        .tool(ProxyListFiles(ListFilesTool::new(wt_path)));
+    builder = builder.tools(bundles::manager_tools(wt_path, verifier_packages, true));
 
     // Knowledge base tool (optional — gracefully absent if not configured)
-    if let Some(kb) = workers.notebook_bridge {
-        builder = builder.tool(ProxyQueryNotebook(QueryNotebookTool::new(kb)));
+    let kb_tools = bundles::notebook_tool(workers.notebook_bridge, true);
+    if !kb_tools.is_empty() {
+        builder = builder.tools(kb_tools);
     }
 
     builder.default_max_turns(manager_max_turns()).build()
@@ -117,16 +103,13 @@ pub fn build_local_manager(
         .tool(workers.rust_coder)
         .tool(workers.general_coder)
         .tool(workers.reviewer)
-        // Deterministic tools
-        .tool(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()))
-        .tool(ReadFileTool::new(wt_path))
-        .tool(WriteFileTool::new(wt_path))
-        .tool(EditFileTool::new(wt_path))
-        .tool(ListFilesTool::new(wt_path));
+        // Deterministic tools — no proxy prefix for local models
+        .tools(bundles::manager_tools(wt_path, verifier_packages, false));
 
     // Knowledge base tool (optional)
-    if let Some(kb) = workers.notebook_bridge {
-        builder = builder.tool(QueryNotebookTool::new(kb));
+    let kb_tools = bundles::notebook_tool(workers.notebook_bridge, false);
+    if !kb_tools.is_empty() {
+        builder = builder.tools(kb_tools);
     }
 
     builder.default_max_turns(manager_max_turns()).build()
