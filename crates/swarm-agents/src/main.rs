@@ -139,7 +139,7 @@ async fn main() -> Result<()> {
                 None
             }
             Err(e) => {
-                warn!("NotebookLM registry not loaded: {e} — running without knowledge base");
+                warn!(error = %e, "NotebookLM registry not loaded — running without knowledge base");
                 None
             }
         }
@@ -169,7 +169,7 @@ async fn main() -> Result<()> {
         }
         Ok(_) => {}
         Err(e) => {
-            warn!("Failed to clean up stale branches: {e}");
+            warn!(error = %e, "Failed to clean up stale branches");
         }
     }
 
@@ -227,7 +227,7 @@ async fn main() -> Result<()> {
         let issues = match beads.list_ready() {
             Ok(issues) => issues,
             Err(e) => {
-                warn!("Beads not available: {e}");
+                warn!(error = %e, "Beads not available");
                 info!("No issues to process. Orchestrator exiting.");
                 return Ok(());
             }
@@ -260,7 +260,7 @@ async fn main() -> Result<()> {
                     info!(id = %candidate.id, "Issue already claimed, trying next");
                 }
                 Err(e) => {
-                    warn!(id = %candidate.id, "Failed to claim issue: {e}, trying next");
+                    warn!(id = %candidate.id, error = %e, "Failed to claim issue, trying next");
                 }
             }
         }
