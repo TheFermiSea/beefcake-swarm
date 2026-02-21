@@ -59,6 +59,7 @@ pub mod harness;
 pub mod registry;
 pub mod rollout;
 pub mod router;
+pub mod shell_safety;
 pub mod slurm;
 pub mod state;
 pub mod verifier;

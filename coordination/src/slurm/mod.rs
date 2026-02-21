@@ -452,10 +452,13 @@ impl SlurmInferenceManager {
         Self::new(SlurmConfig::default())
     }
 
-    /// Run a SLURM command, optionally via SSH to slurm-ctl
+    /// Run a SLURM command, optionally via SSH to slurm-ctl.
+    ///
+    /// When running over SSH, arguments are individually shell-escaped
+    /// to prevent command injection via metacharacters.
     fn run_slurm_cmd(&self, cmd: &str, args: &[&str]) -> Result<String, SlurmError> {
         let output = if let Some(ref host) = self.config.slurm_host {
-            let full_cmd = format!("{} {}", cmd, args.join(" "));
+            let full_cmd = crate::shell_safety::build_ssh_command(cmd, args);
             Command::new("ssh")
                 .args([host.as_str(), &full_cmd])
                 .output()?

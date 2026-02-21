@@ -280,8 +280,7 @@ impl RolloutManager {
             .get(feature_id)
             .ok_or_else(|| RolloutError::NotFound(feature_id.to_string()))?;
 
-        gate.check(feature)
-            .map_err(RolloutError::GateCheckFailed)?;
+        gate.check(feature).map_err(RolloutError::GateCheckFailed)?;
 
         self.advance_with_reason(feature_id, reason)
     }
