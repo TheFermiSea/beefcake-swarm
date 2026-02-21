@@ -1,3 +1,4 @@
-//! Analytics module: skill library and pattern indexing.
+//! Analytics module: skill library, pattern indexing, and acceptance verification.
 
 pub mod skills;
+pub mod verification;

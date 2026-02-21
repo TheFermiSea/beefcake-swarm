@@ -99,6 +99,9 @@ pub use state::{
 
 // Re-export analytics types
 pub use analytics::skills::{Skill, SkillHint, SkillLibrary, SkillTrigger, TaskContext};
+pub use analytics::verification::{
+    AcceptancePolicy, AcceptanceStatus, UseOutcome, VerificationTracker,
+};
 
 // Re-export key event types
 pub use events::{
