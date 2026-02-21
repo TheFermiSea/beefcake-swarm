@@ -46,6 +46,22 @@ pub enum CoderRoute {
     GeneralCoder,
 }
 
+/// Query the knowledge base with graceful degradation on failure.
+///
+/// Wraps `KnowledgeBase::query` with error handling so that any KB failure
+/// (connection error, auth failure, or a hanging `nlm` CLI subprocess) returns
+/// an empty string instead of propagating an error. This ensures KB
+/// unavailability never blocks the orchestration loop.
+fn query_kb_with_failsafe(kb: &dyn KnowledgeBase, role: &str, question: &str) -> String {
+    match kb.query(role, question) {
+        Ok(response) => response,
+        Err(e) => {
+            warn!(role, error = %e, "KB query failed — proceeding without context");
+            String::new()
+        }
+    }
+}
+
 /// Route to the appropriate coder based on error category distribution.
 ///
 /// Uses a weighted scoring system rather than a simple `any()` check:
@@ -822,11 +838,10 @@ pub async fn process_issue(
                 "What architectural context is relevant for: {}? Issue: {}",
                 issue.title, issue.id
             );
-            if let Ok(response) = kb.query("project_brain", &brain_question) {
-                if !response.is_empty() {
-                    packet.relevant_heuristics.push(response);
-                    info!(iteration, "Enriched packet with Project Brain context");
-                }
+            let response = query_kb_with_failsafe(kb, "project_brain", &brain_question);
+            if !response.is_empty() {
+                packet.relevant_heuristics.push(response);
+                info!(iteration, "Enriched packet with Project Brain context");
             }
 
             // On retries, also query Debugging KB for error-specific patterns
@@ -838,11 +853,10 @@ pub async fn process_issue(
                     .collect::<Vec<_>>()
                     .join("; ");
                 let debug_question = format!("Known fixes for these Rust errors: {error_desc}");
-                if let Ok(response) = kb.query("debugging_kb", &debug_question) {
-                    if !response.is_empty() {
-                        packet.relevant_playbooks.push(response);
-                        info!(iteration, "Enriched packet with Debugging KB patterns");
-                    }
+                let response = query_kb_with_failsafe(kb, "debugging_kb", &debug_question);
+                if !response.is_empty() {
+                    packet.relevant_playbooks.push(response);
+                    info!(iteration, "Enriched packet with Debugging KB patterns");
                 }
             }
         }
@@ -1351,14 +1365,13 @@ pub async fn process_issue(
                 .collect();
             if !error_cats.is_empty() {
                 let question = format!("Known fix for Rust errors: {}", error_cats.join(", "));
-                if let Ok(response) = kb.query("debugging_kb", &question) {
-                    if !response.is_empty() {
-                        info!(
-                            iteration,
-                            kb_suggestion_len = response.len(),
-                            "Found known fix in Debugging KB — will inject in next iteration"
-                        );
-                    }
+                let response = query_kb_with_failsafe(kb, "debugging_kb", &question);
+                if !response.is_empty() {
+                    info!(
+                        iteration,
+                        kb_suggestion_len = response.len(),
+                        "Found known fix in Debugging KB — will inject in next iteration"
+                    );
                 }
             }
         }
@@ -2220,5 +2233,61 @@ mod tests {
         let commits = git_mgr.recent_commits(1).unwrap();
         assert!(commits[0].message.starts_with("[swarm]"));
         assert!(commits[0].is_harness_checkpoint);
+    }
+
+    /// Verify that `query_kb_with_failsafe` returns an empty string when the
+    /// KB fails, rather than propagating the error.
+    #[test]
+    fn test_query_kb_with_failsafe_on_failure() {
+        use crate::notebook_bridge::KnowledgeBase;
+        use anyhow::Result;
+
+        struct FailingKb;
+        impl KnowledgeBase for FailingKb {
+            fn query(&self, _role: &str, _question: &str) -> Result<String> {
+                anyhow::bail!("simulated nlm connection failure")
+            }
+            fn add_source_text(&self, _role: &str, _title: &str, _content: &str) -> Result<()> {
+                Ok(())
+            }
+            fn add_source_file(&self, _role: &str, _file_path: &str) -> Result<()> {
+                Ok(())
+            }
+            fn is_available(&self) -> bool {
+                false
+            }
+        }
+
+        let kb = FailingKb;
+        // Must not panic or propagate error — returns empty string
+        let result = query_kb_with_failsafe(&kb, "project_brain", "What is the architecture?");
+        assert_eq!(result, "", "failsafe must return empty string on KB error");
+    }
+
+    /// Verify that `query_kb_with_failsafe` returns the response when the KB succeeds.
+    #[test]
+    fn test_query_kb_with_failsafe_on_success() {
+        use crate::notebook_bridge::KnowledgeBase;
+        use anyhow::Result;
+
+        struct SucceedingKb;
+        impl KnowledgeBase for SucceedingKb {
+            fn query(&self, _role: &str, _question: &str) -> Result<String> {
+                Ok("The architecture uses a 4-tier escalation ladder.".to_string())
+            }
+            fn add_source_text(&self, _role: &str, _title: &str, _content: &str) -> Result<()> {
+                Ok(())
+            }
+            fn add_source_file(&self, _role: &str, _file_path: &str) -> Result<()> {
+                Ok(())
+            }
+            fn is_available(&self) -> bool {
+                true
+            }
+        }
+
+        let kb = SucceedingKb;
+        let result = query_kb_with_failsafe(&kb, "project_brain", "What is the architecture?");
+        assert_eq!(result, "The architecture uses a 4-tier escalation ladder.");
     }
 }
