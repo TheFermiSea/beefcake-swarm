@@ -33,6 +33,105 @@ pub struct CloudEndpoint {
     pub model: String,
 }
 
+/// A single entry in the cloud model fallback matrix.
+#[derive(Debug, Clone, Deserialize)]
+pub struct CloudFallbackEntry {
+    /// Model name as used in API requests.
+    pub model: String,
+    /// Human-readable tier label (e.g., "primary", "fallback-1").
+    pub tier_label: String,
+    /// Maximum tokens for responses from this model.
+    pub max_tokens: u32,
+}
+
+/// Ordered list of cloud models to attempt, with automatic fallback.
+///
+/// When the primary cloud model fails (rate limit, timeout, error),
+/// the orchestrator tries the next model in the matrix.
+#[derive(Debug, Clone)]
+pub struct CloudFallbackMatrix {
+    /// Ordered entries: first is primary, rest are fallbacks.
+    pub entries: Vec<CloudFallbackEntry>,
+}
+
+impl CloudFallbackMatrix {
+    /// The primary (first-choice) cloud model, if any.
+    pub fn primary(&self) -> Option<&CloudFallbackEntry> {
+        self.entries.first()
+    }
+
+    /// Fallback models (everything after the primary).
+    pub fn fallbacks(&self) -> &[CloudFallbackEntry] {
+        if self.entries.len() > 1 {
+            &self.entries[1..]
+        } else {
+            &[]
+        }
+    }
+
+    /// Number of models in the matrix.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// Whether the matrix is empty.
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Build from `SWARM_CLOUD_FALLBACK_MODELS` env var (comma-separated model names).
+    ///
+    /// Falls back to [`Self::default_matrix`] if the env var is unset or empty.
+    pub fn from_env() -> Self {
+        match std::env::var("SWARM_CLOUD_FALLBACK_MODELS") {
+            Ok(val) if !val.trim().is_empty() => {
+                let entries = val
+                    .split(',')
+                    .enumerate()
+                    .map(|(i, m)| {
+                        let model = m.trim().to_string();
+                        let tier_label = if i == 0 {
+                            "primary".to_string()
+                        } else {
+                            format!("fallback-{i}")
+                        };
+                        CloudFallbackEntry {
+                            model,
+                            tier_label,
+                            max_tokens: 4096,
+                        }
+                    })
+                    .collect();
+                Self { entries }
+            }
+            _ => Self::default_matrix(),
+        }
+    }
+
+    /// Default matrix: Opus 4.6 → Sonnet 4.5 → Gemini 2.5 Flash.
+    pub fn default_matrix() -> Self {
+        Self {
+            entries: vec![
+                CloudFallbackEntry {
+                    model: "claude-opus-4-6-thinking".to_string(),
+                    tier_label: "primary".to_string(),
+                    max_tokens: 4096,
+                },
+                CloudFallbackEntry {
+                    model: "claude-sonnet-4-5-20250929".to_string(),
+                    tier_label: "fallback-1".to_string(),
+                    max_tokens: 4096,
+                },
+                CloudFallbackEntry {
+                    model: "gemini-2.5-flash".to_string(),
+                    tier_label: "fallback-2".to_string(),
+                    max_tokens: 4096,
+                },
+            ],
+        }
+    }
+}
+
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
@@ -62,6 +161,10 @@ pub struct SwarmConfig {
     /// Requires `cloud_endpoint` to be configured.
     /// Populated from `--cloud-only` CLI flag or `SWARM_CLOUD_ONLY=1` env var.
     pub cloud_only: bool,
+    /// Ordered cloud model fallback matrix.
+    /// When the primary cloud model fails, the orchestrator tries the next model.
+    /// Populated from `SWARM_CLOUD_FALLBACK_MODELS` env var (comma-separated) or defaults.
+    pub cloud_fallback_matrix: CloudFallbackMatrix,
     /// Maximum consecutive no-change iterations before circuit breaker fires.
     /// When an agent responds without producing any file changes for this many
     /// iterations in a row, the loop breaks and creates a stuck intervention.
@@ -123,6 +226,7 @@ impl Default for SwarmConfig {
             cloud_only: std::env::var("SWARM_CLOUD_ONLY")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            cloud_fallback_matrix: CloudFallbackMatrix::from_env(),
             max_consecutive_no_change: std::env::var("SWARM_MAX_NO_CHANGE")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -186,6 +290,7 @@ impl SwarmConfig {
             verifier_packages: Vec::new(),
             cloud_max_retries: 3,
             cloud_only: false,
+            cloud_fallback_matrix: CloudFallbackMatrix::default_matrix(),
             max_consecutive_no_change: 3,
             min_objective_len: 10,
         }
@@ -383,5 +488,38 @@ mod tests {
         let config = SwarmConfig::proxy_config();
         let clients = ClientSet::from_config(&config);
         assert!(clients.is_ok());
+    }
+
+    #[test]
+    fn test_cloud_fallback_matrix_default() {
+        let matrix = CloudFallbackMatrix::default_matrix();
+        assert_eq!(matrix.len(), 3);
+        assert!(!matrix.is_empty());
+        let primary = matrix.primary().unwrap();
+        assert_eq!(primary.model, "claude-opus-4-6-thinking");
+        assert_eq!(primary.tier_label, "primary");
+        let fallbacks = matrix.fallbacks();
+        assert_eq!(fallbacks.len(), 2);
+        assert_eq!(fallbacks[0].model, "claude-sonnet-4-5-20250929");
+        assert_eq!(fallbacks[1].model, "gemini-2.5-flash");
+    }
+
+    #[test]
+    fn test_cloud_fallback_matrix_empty() {
+        let matrix = CloudFallbackMatrix { entries: vec![] };
+        assert!(matrix.is_empty());
+        assert_eq!(matrix.len(), 0);
+        assert!(matrix.primary().is_none());
+        assert!(matrix.fallbacks().is_empty());
+    }
+
+    #[test]
+    fn test_cloud_fallback_matrix_in_config() {
+        let config = SwarmConfig::proxy_config();
+        assert_eq!(config.cloud_fallback_matrix.len(), 3);
+        assert_eq!(
+            config.cloud_fallback_matrix.primary().unwrap().model,
+            "claude-opus-4-6-thinking"
+        );
     }
 }
