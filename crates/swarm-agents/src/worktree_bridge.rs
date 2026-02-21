@@ -5,13 +5,58 @@
 
 use anyhow::{bail, Context, Result};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Output};
+use std::time::Duration;
 
 /// Info about an active worktree.
 #[derive(Debug, Clone)]
 pub struct WorktreeInfo {
     pub path: PathBuf,
     pub branch: String,
+}
+
+/// Backoff delays for transient git retries (milliseconds).
+const RETRY_DELAYS_MS: &[u64] = &[100, 500, 2000];
+
+/// Retry a git command with exponential backoff for transient failures.
+///
+/// Transient failures include `index.lock` errors (concurrent access) and
+/// `Unable to create` errors. Non-transient failures are returned immediately.
+pub fn retry_git_command(args: &[&str], working_dir: &Path, max_retries: u32) -> Result<Output> {
+    for attempt in 0..=max_retries {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(working_dir)
+            .output()
+            .context("Failed to execute git command")?;
+
+        if output.status.success() {
+            return Ok(output);
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let is_transient = stderr.contains("index.lock") || stderr.contains("Unable to create");
+
+        if attempt < max_retries && is_transient {
+            let delay = RETRY_DELAYS_MS
+                .get(attempt as usize)
+                .copied()
+                .unwrap_or(2000);
+            tracing::warn!(
+                attempt = attempt + 1,
+                max_retries,
+                delay_ms = delay,
+                "Transient git failure, retrying: {}",
+                stderr.trim()
+            );
+            std::thread::sleep(Duration::from_millis(delay));
+            continue;
+        }
+
+        return Ok(output);
+    }
+
+    unreachable!()
 }
 
 /// Manages git worktrees for swarm agent tasks.
@@ -135,17 +180,13 @@ impl WorktreeBridge {
             }
         }
 
-        let output = Command::new("git")
-            .args([
-                "worktree",
-                "add",
-                "-b",
-                &branch,
-                &wt_path.display().to_string(),
-            ])
-            .current_dir(&self.repo_root)
-            .output()
-            .context("Failed to run git worktree add")?;
+        let wt_path_str = wt_path.display().to_string();
+        let output = retry_git_command(
+            &["worktree", "add", "-b", &branch, &wt_path_str],
+            &self.repo_root,
+            3,
+        )
+        .context("Failed to run git worktree add")?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
@@ -245,17 +286,13 @@ impl WorktreeBridge {
         }
 
         // Merge the branch into the main repo
-        let merge = Command::new("git")
-            .args([
-                "merge",
-                "--no-ff",
-                &branch,
-                "-m",
-                &format!("swarm: merge {issue_id}"),
-            ])
-            .current_dir(&self.repo_root)
-            .output()
-            .context("Failed to merge worktree branch")?;
+        let merge_msg = format!("swarm: merge {issue_id}");
+        let merge = retry_git_command(
+            &["merge", "--no-ff", &branch, "-m", &merge_msg],
+            &self.repo_root,
+            3,
+        )
+        .context("Failed to merge worktree branch")?;
 
         if !merge.status.success() {
             let stderr = String::from_utf8_lossy(&merge.stderr);
@@ -408,6 +445,28 @@ impl WorktreeBridge {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_retry_git_command_succeeds_first_try() {
+        let dir = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // A simple git command should succeed on the first try
+        let output = retry_git_command(&["status"], dir.path(), 3).unwrap();
+        assert!(output.status.success());
+    }
+
+    #[test]
+    fn test_retry_git_command_non_transient_failure_no_retry() {
+        let dir = tempfile::tempdir().unwrap();
+        // Not a git repo — should fail immediately (non-transient error)
+        let output = retry_git_command(&["status"], dir.path(), 3).unwrap();
+        assert!(!output.status.success());
+    }
 
     #[test]
     fn test_sanitize_id() {

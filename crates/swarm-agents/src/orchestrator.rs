@@ -6,7 +6,7 @@
 use std::path::Path;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use rig::completion::Prompt;
 use rig::providers::openai;
 use tracing::{debug, error, info, warn};
@@ -347,12 +347,8 @@ pub async fn try_auto_fix(
 /// Uses `git add .` (not `-A`) to respect `.gitignore` and avoid staging
 /// agent-generated artifacts.
 pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> {
-    // Stage changes (respects .gitignore)
-    let add = tokio::process::Command::new("git")
-        .args(["add", "."])
-        .current_dir(wt_path)
-        .output()
-        .await?;
+    // Stage changes (respects .gitignore) — retry for transient index.lock errors
+    let add = retry_git_command_async(&["add", "."], wt_path, 3).await?;
     if !add.status.success() {
         let stderr = String::from_utf8_lossy(&add.stderr);
         anyhow::bail!("git add failed (iteration {iteration}): {stderr}");
@@ -370,19 +366,61 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
         return Ok(false);
     }
 
-    // Commit
+    // Commit — retry for transient index.lock errors
     let msg = format!("swarm: iteration {iteration} changes");
-    let commit = tokio::process::Command::new("git")
-        .args(["commit", "-m", &msg])
-        .current_dir(wt_path)
-        .output()
-        .await?;
+    let commit = retry_git_command_async(&["commit", "-m", &msg], wt_path, 3).await?;
     if !commit.status.success() {
         let stderr = String::from_utf8_lossy(&commit.stderr);
         anyhow::bail!("git commit failed: {stderr}");
     }
 
     Ok(true)
+}
+
+/// Backoff delays for transient git retries (milliseconds).
+const ASYNC_RETRY_DELAYS_MS: &[u64] = &[100, 500, 2000];
+
+/// Async version of retry_git_command for tokio contexts.
+async fn retry_git_command_async(
+    args: &[&str],
+    working_dir: &Path,
+    max_retries: u32,
+) -> Result<std::process::Output> {
+    for attempt in 0..=max_retries {
+        let output = tokio::process::Command::new("git")
+            .args(args)
+            .current_dir(working_dir)
+            .output()
+            .await
+            .context("Failed to execute git command")?;
+
+        if output.status.success() {
+            return Ok(output);
+        }
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let is_transient = stderr.contains("index.lock") || stderr.contains("Unable to create");
+
+        if attempt < max_retries && is_transient {
+            let delay = ASYNC_RETRY_DELAYS_MS
+                .get(attempt as usize)
+                .copied()
+                .unwrap_or(2000);
+            warn!(
+                attempt = attempt + 1,
+                max_retries,
+                delay_ms = delay,
+                "Transient git failure, retrying: {}",
+                stderr.trim()
+            );
+            tokio::time::sleep(Duration::from_millis(delay)).await;
+            continue;
+        }
+
+        return Ok(output);
+    }
+
+    unreachable!()
 }
 
 /// Result of a single cloud model validation.
