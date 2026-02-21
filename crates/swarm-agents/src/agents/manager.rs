@@ -14,10 +14,12 @@ use rig::providers::openai;
 
 use crate::notebook_bridge::KnowledgeBase;
 use crate::prompts;
-use crate::tools::fs_tools::{ListFilesTool, ReadFileTool};
+use crate::tools::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
 use crate::tools::notebook_tool::QueryNotebookTool;
+use crate::tools::patch_tool::EditFileTool;
 use crate::tools::proxy_wrappers::{
-    ProxyListFiles, ProxyQueryNotebook, ProxyReadFile, ProxyRunVerifier,
+    ProxyEditFile, ProxyListFiles, ProxyQueryNotebook, ProxyReadFile, ProxyRunVerifier,
+    ProxyWriteFile,
 };
 use crate::tools::verifier_tool::RunVerifierTool;
 
@@ -83,6 +85,8 @@ pub fn build_cloud_manager(
             RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()),
         ))
         .tool(ProxyReadFile(ReadFileTool::new(wt_path)))
+        .tool(ProxyWriteFile(WriteFileTool::new(wt_path)))
+        .tool(ProxyEditFile(EditFileTool::new(wt_path)))
         .tool(ProxyListFiles(ListFilesTool::new(wt_path)));
 
     // Knowledge base tool (optional — gracefully absent if not configured)
@@ -116,6 +120,8 @@ pub fn build_local_manager(
         // Deterministic tools
         .tool(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()))
         .tool(ReadFileTool::new(wt_path))
+        .tool(WriteFileTool::new(wt_path))
+        .tool(EditFileTool::new(wt_path))
         .tool(ListFilesTool::new(wt_path));
 
     // Knowledge base tool (optional)

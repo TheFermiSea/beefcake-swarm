@@ -39,11 +39,14 @@ macro_rules! proxy_tool {
     };
 }
 
-use super::fs_tools::{ListFilesTool, ReadFileTool};
+use super::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
 use super::notebook_tool::QueryNotebookTool;
+use super::patch_tool::EditFileTool;
 use super::verifier_tool::RunVerifierTool;
 
 proxy_tool!(ProxyReadFile wraps ReadFileTool as "proxy_read_file");
+proxy_tool!(ProxyWriteFile wraps WriteFileTool as "proxy_write_file");
+proxy_tool!(ProxyEditFile wraps EditFileTool as "proxy_edit_file");
 proxy_tool!(ProxyListFiles wraps ListFilesTool as "proxy_list_files");
 proxy_tool!(ProxyRunVerifier wraps RunVerifierTool as "proxy_run_verifier");
 proxy_tool!(ProxyQueryNotebook wraps QueryNotebookTool as "proxy_query_notebook");
