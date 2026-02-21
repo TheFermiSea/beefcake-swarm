@@ -6,6 +6,7 @@ pub mod knowledge_sync;
 pub mod notebook_bridge;
 pub mod orchestrator;
 pub mod prompts;
+pub mod state_machine;
 pub mod telemetry;
 pub mod tools;
 pub mod worktree_bridge;
