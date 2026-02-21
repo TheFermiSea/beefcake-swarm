@@ -144,6 +144,7 @@ impl std::error::Error for IllegalTransition {}
 ///
 /// Tracks the current state, enforces legal transitions, and maintains
 /// a complete log of all transitions for replay and diagnostics.
+#[derive(Debug)]
 pub struct StateMachine {
     current: OrchestratorState,
     iteration: u32,
@@ -251,6 +252,178 @@ impl StateMachine {
 impl Default for StateMachine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Checkpoint / Resume — typed state snapshots for crash-safe recovery
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Current checkpoint schema version. Bump on breaking changes.
+pub const CHECKPOINT_SCHEMA_VERSION: u8 = 1;
+
+/// A typed snapshot of the state machine at a stable transition point.
+///
+/// Written to disk after every stable transition (states where it's safe
+/// to resume: after Verifying, after Implementing, after Escalating).
+/// On restart, the orchestrator loads the checkpoint and rebuilds the
+/// state machine from it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateCheckpoint {
+    /// Schema version for forward-compatibility detection.
+    pub schema_version: u8,
+    /// Unique ID for this checkpoint (monotonically increasing).
+    pub checkpoint_id: u64,
+    /// The state at checkpoint time.
+    pub state: OrchestratorState,
+    /// Current iteration number.
+    pub iteration: u32,
+    /// Complete transition history up to this point.
+    pub transitions: Vec<TransitionRecord>,
+    /// ISO 8601 timestamp when the checkpoint was created.
+    pub created_at: String,
+    /// Git commit hash at checkpoint time (for worktree state verification).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git_hash: Option<String>,
+    /// Issue ID being processed.
+    pub issue_id: String,
+}
+
+/// Result of attempting to resume from a checkpoint.
+#[derive(Debug)]
+pub enum ResumeResult {
+    /// Successfully restored state machine from checkpoint.
+    Restored(StateMachine),
+    /// Checkpoint is from an incompatible schema version.
+    IncompatibleSchema {
+        checkpoint_version: u8,
+        current_version: u8,
+    },
+    /// Checkpoint is stale (git hash doesn't match worktree).
+    StaleCheckpoint {
+        expected_hash: String,
+        actual_hash: String,
+    },
+}
+
+/// States that are safe to checkpoint at (stable transition points).
+fn is_checkpointable(state: OrchestratorState) -> bool {
+    matches!(
+        state,
+        OrchestratorState::Implementing
+            | OrchestratorState::Verifying
+            | OrchestratorState::Escalating
+            | OrchestratorState::Validating
+    )
+}
+
+impl StateMachine {
+    /// Create a checkpoint of the current state.
+    ///
+    /// Returns `None` if the current state is not a stable checkpoint point
+    /// (terminal states and pre-loop states are not checkpointable).
+    pub fn checkpoint(&self, issue_id: &str, git_hash: Option<&str>) -> Option<StateCheckpoint> {
+        if !is_checkpointable(self.current) {
+            return None;
+        }
+
+        Some(StateCheckpoint {
+            schema_version: CHECKPOINT_SCHEMA_VERSION,
+            checkpoint_id: self.transitions.len() as u64,
+            state: self.current,
+            iteration: self.iteration,
+            transitions: self.transitions.clone(),
+            created_at: chrono::Utc::now().to_rfc3339(),
+            git_hash: git_hash.map(String::from),
+            issue_id: issue_id.to_string(),
+        })
+    }
+
+    /// Resume a state machine from a checkpoint.
+    ///
+    /// Validates schema version compatibility. If `expected_git_hash` is
+    /// provided, verifies it matches the checkpoint's git hash (detects
+    /// stale checkpoints from a different worktree state).
+    pub fn resume_from(
+        checkpoint: &StateCheckpoint,
+        expected_git_hash: Option<&str>,
+    ) -> ResumeResult {
+        // Schema compatibility check
+        if checkpoint.schema_version != CHECKPOINT_SCHEMA_VERSION {
+            return ResumeResult::IncompatibleSchema {
+                checkpoint_version: checkpoint.schema_version,
+                current_version: CHECKPOINT_SCHEMA_VERSION,
+            };
+        }
+
+        // Staleness check: if both hashes are available, they must match
+        if let (Some(expected), Some(checkpoint_hash)) =
+            (expected_git_hash, checkpoint.git_hash.as_deref())
+        {
+            if expected != checkpoint_hash {
+                return ResumeResult::StaleCheckpoint {
+                    expected_hash: expected.to_string(),
+                    actual_hash: checkpoint_hash.to_string(),
+                };
+            }
+        }
+
+        let sm = StateMachine {
+            current: checkpoint.state,
+            iteration: checkpoint.iteration,
+            created_at: Instant::now(), // Reset wall-clock (can't restore Instant)
+            transitions: checkpoint.transitions.clone(),
+        };
+
+        tracing::info!(
+            state = %sm.current,
+            iteration = sm.iteration,
+            transitions = sm.transitions.len(),
+            "Resumed state machine from checkpoint"
+        );
+
+        ResumeResult::Restored(sm)
+    }
+}
+
+/// Write a state checkpoint to disk.
+pub fn save_checkpoint(checkpoint: &StateCheckpoint, path: &std::path::Path) {
+    match serde_json::to_string_pretty(checkpoint) {
+        Ok(json) => match std::fs::write(path, json) {
+            Ok(()) => tracing::info!(
+                path = %path.display(),
+                state = %checkpoint.state,
+                iteration = checkpoint.iteration,
+                "Saved state checkpoint"
+            ),
+            Err(e) => tracing::warn!("Failed to write checkpoint: {e}"),
+        },
+        Err(e) => tracing::warn!("Failed to serialize checkpoint: {e}"),
+    }
+}
+
+/// Load a state checkpoint from disk.
+pub fn load_checkpoint(path: &std::path::Path) -> Option<StateCheckpoint> {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => match serde_json::from_str::<StateCheckpoint>(&contents) {
+            Ok(cp) => {
+                tracing::info!(
+                    path = %path.display(),
+                    state = %cp.state,
+                    iteration = cp.iteration,
+                    "Loaded state checkpoint"
+                );
+                Some(cp)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to parse checkpoint: {e}");
+                None
+            }
+        },
+        Err(e) => {
+            tracing::debug!("No checkpoint file at {}: {e}", path.display());
+            None
+        }
     }
 }
 
@@ -505,5 +678,229 @@ mod tests {
         .unwrap();
         sm.advance(OrchestratorState::Implementing, None).unwrap();
         assert_eq!(sm.current(), OrchestratorState::Implementing);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Checkpoint / Resume Tests
+    // ──────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_checkpoint_at_verifying() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(1);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+
+        let cp = sm.checkpoint("issue-123", Some("abc1234")).unwrap();
+        assert_eq!(cp.schema_version, CHECKPOINT_SCHEMA_VERSION);
+        assert_eq!(cp.state, OrchestratorState::Verifying);
+        assert_eq!(cp.iteration, 1);
+        assert_eq!(cp.issue_id, "issue-123");
+        assert_eq!(cp.git_hash.as_deref(), Some("abc1234"));
+        assert_eq!(cp.transitions.len(), 4);
+    }
+
+    #[test]
+    fn test_checkpoint_not_allowed_at_terminal() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.fail("test").unwrap();
+
+        // Terminal states are not checkpointable
+        assert!(sm.checkpoint("issue", None).is_none());
+    }
+
+    #[test]
+    fn test_checkpoint_not_allowed_at_pre_loop() {
+        let sm = StateMachine::new();
+        // SelectingIssue is not checkpointable
+        assert!(sm.checkpoint("issue", None).is_none());
+    }
+
+    #[test]
+    fn test_resume_from_checkpoint() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(2);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+
+        let cp = sm.checkpoint("issue-456", Some("def5678")).unwrap();
+
+        // Resume from checkpoint
+        match StateMachine::resume_from(&cp, Some("def5678")) {
+            ResumeResult::Restored(restored) => {
+                assert_eq!(restored.current(), OrchestratorState::Verifying);
+                assert_eq!(restored.iteration(), 2);
+                assert_eq!(restored.transitions().len(), 4);
+                // Can continue from restored state
+                // (verify we can actually transition)
+            }
+            other => panic!("Expected Restored, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resume_continues_transitions() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(1);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+
+        let cp = sm.checkpoint("issue", None).unwrap();
+
+        match StateMachine::resume_from(&cp, None) {
+            ResumeResult::Restored(mut restored) => {
+                // Can advance from restored state
+                restored
+                    .advance(OrchestratorState::Implementing, Some("resumed — retrying"))
+                    .unwrap();
+                assert_eq!(restored.current(), OrchestratorState::Implementing);
+                // Transition log includes both original and new transitions
+                assert_eq!(restored.transitions().len(), 5);
+            }
+            other => panic!("Expected Restored, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resume_incompatible_schema() {
+        let cp = StateCheckpoint {
+            schema_version: 99, // Future version
+            checkpoint_id: 0,
+            state: OrchestratorState::Verifying,
+            iteration: 1,
+            transitions: vec![],
+            created_at: "2026-01-01T00:00:00Z".into(),
+            git_hash: None,
+            issue_id: "issue".into(),
+        };
+
+        match StateMachine::resume_from(&cp, None) {
+            ResumeResult::IncompatibleSchema {
+                checkpoint_version,
+                current_version,
+            } => {
+                assert_eq!(checkpoint_version, 99);
+                assert_eq!(current_version, CHECKPOINT_SCHEMA_VERSION);
+            }
+            other => panic!("Expected IncompatibleSchema, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_resume_stale_checkpoint() {
+        let cp = StateCheckpoint {
+            schema_version: CHECKPOINT_SCHEMA_VERSION,
+            checkpoint_id: 0,
+            state: OrchestratorState::Verifying,
+            iteration: 1,
+            transitions: vec![],
+            created_at: "2026-01-01T00:00:00Z".into(),
+            git_hash: Some("old_hash".into()),
+            issue_id: "issue".into(),
+        };
+
+        match StateMachine::resume_from(&cp, Some("new_hash")) {
+            ResumeResult::StaleCheckpoint {
+                expected_hash,
+                actual_hash,
+            } => {
+                assert_eq!(expected_hash, "new_hash");
+                assert_eq!(actual_hash, "old_hash");
+            }
+            other => panic!("Expected StaleCheckpoint, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_checkpoint_serde_roundtrip() {
+        let cp = StateCheckpoint {
+            schema_version: CHECKPOINT_SCHEMA_VERSION,
+            checkpoint_id: 5,
+            state: OrchestratorState::Implementing,
+            iteration: 3,
+            transitions: vec![TransitionRecord {
+                from: OrchestratorState::Verifying,
+                to: OrchestratorState::Implementing,
+                iteration: 2,
+                elapsed_ms: 5000,
+                reason: Some("retry after errors".into()),
+            }],
+            created_at: "2026-02-21T00:00:00Z".into(),
+            git_hash: Some("abc123".into()),
+            issue_id: "beefcake-xyz".into(),
+        };
+
+        let json = serde_json::to_string_pretty(&cp).unwrap();
+        let restored: StateCheckpoint = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.schema_version, CHECKPOINT_SCHEMA_VERSION);
+        assert_eq!(restored.state, OrchestratorState::Implementing);
+        assert_eq!(restored.iteration, 3);
+        assert_eq!(restored.transitions.len(), 1);
+        assert_eq!(restored.issue_id, "beefcake-xyz");
+    }
+
+    #[test]
+    fn test_save_and_load_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(".swarm-state-checkpoint.json");
+
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(1);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+
+        let cp = sm.checkpoint("test-issue", Some("deadbeef")).unwrap();
+        save_checkpoint(&cp, &path);
+        assert!(path.exists());
+
+        let loaded = load_checkpoint(&path).unwrap();
+        assert_eq!(loaded.state, OrchestratorState::Verifying);
+        assert_eq!(loaded.iteration, 1);
+        assert_eq!(loaded.issue_id, "test-issue");
+        assert_eq!(loaded.git_hash.as_deref(), Some("deadbeef"));
+    }
+
+    #[test]
+    fn test_load_nonexistent_checkpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("no-such-file.json");
+        assert!(load_checkpoint(&path).is_none());
+    }
+
+    #[test]
+    fn test_resume_no_git_hash_skips_staleness() {
+        // When checkpoint has no git hash, staleness check is skipped
+        let cp = StateCheckpoint {
+            schema_version: CHECKPOINT_SCHEMA_VERSION,
+            checkpoint_id: 0,
+            state: OrchestratorState::Implementing,
+            iteration: 1,
+            transitions: vec![],
+            created_at: "2026-01-01T00:00:00Z".into(),
+            git_hash: None,
+            issue_id: "issue".into(),
+        };
+
+        // Even with a provided expected hash, no staleness error
+        match StateMachine::resume_from(&cp, Some("any_hash")) {
+            ResumeResult::Restored(sm) => {
+                assert_eq!(sm.current(), OrchestratorState::Implementing);
+            }
+            other => panic!("Expected Restored, got {other:?}"),
+        }
     }
 }
