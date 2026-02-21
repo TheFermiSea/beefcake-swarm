@@ -115,6 +115,56 @@ pub struct CheckpointSummary {
     pub feature_id: Option<String>,
 }
 
+/// Post-session retrospective analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionRetrospective {
+    /// Session identifier
+    pub session_id: String,
+
+    /// Final session status
+    pub status: SessionStatus,
+
+    /// Total iterations used out of max
+    pub iterations_used: u32,
+
+    /// Maximum iterations allowed
+    pub max_iterations: u32,
+
+    /// Iteration efficiency (iterations_used / max_iterations as percentage)
+    pub iteration_efficiency_pct: f32,
+
+    /// Total features attempted
+    pub features_attempted: usize,
+
+    /// Features successfully completed
+    pub features_completed: usize,
+
+    /// Features that failed
+    pub features_failed: usize,
+
+    /// Feature completion rate (0.0 - 1.0)
+    pub feature_completion_rate: f32,
+
+    /// Number of checkpoints created
+    pub checkpoints_created: usize,
+
+    /// Number of rollbacks performed
+    pub rollbacks_performed: usize,
+
+    /// Number of errors encountered
+    pub errors_encountered: usize,
+
+    /// Average iterations per completed feature (None if no features completed)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avg_iterations_per_feature: Option<f32>,
+
+    /// Identified patterns or observations
+    pub observations: Vec<String>,
+
+    /// Recommended actions for next session
+    pub recommendations: Vec<String>,
+}
+
 impl SessionState {
     /// Create a new session with default settings
     pub fn new(working_directory: PathBuf, max_iterations: u32) -> Self {

@@ -512,6 +512,21 @@ pub struct HarnessClaimSubSessionResultResponse {
     pub progress_logged: bool,
 }
 
+/// Request for harness_retrospective tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct HarnessRetrospectiveRequest {
+    /// Include all progress entries in analysis (default: true)
+    #[schemars(description = "Include full progress history in retrospective analysis")]
+    pub include_full_history: Option<bool>,
+}
+
+/// Response for harness_retrospective tool
+#[derive(Debug, Serialize)]
+pub struct HarnessRetrospectiveResponse {
+    pub success: bool,
+    pub retrospective: crate::harness::types::SessionRetrospective,
+}
+
 // ============================================================================
 // Tool Implementation Functions
 // ============================================================================
@@ -1768,6 +1783,25 @@ pub fn harness_list_sub_sessions(state: &HarnessState) -> Vec<crate::harness::ty
                 .collect()
         })
         .unwrap_or_default()
+}
+
+/// Generate a post-session retrospective analysis
+pub fn harness_retrospective(
+    state: &HarnessState,
+    _req: HarnessRetrospectiveRequest,
+) -> HarnessResult<HarnessRetrospectiveResponse> {
+    let session = state
+        .session
+        .as_ref()
+        .ok_or_else(|| crate::harness::error::HarnessError::session("No active session"))?;
+
+    let all_entries = state.progress.read_all().unwrap_or_default();
+    let retrospective = session.retrospective(&all_entries);
+
+    Ok(HarnessRetrospectiveResponse {
+        success: true,
+        retrospective,
+    })
 }
 
 #[cfg(test)]
