@@ -238,17 +238,40 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        // Sort by priority (lowest number = highest priority), pick first
+        // Sort by priority (lowest number = highest priority)
         let mut sorted = issues;
         sorted.sort_by_key(|i| i.priority.unwrap_or(4));
-        let issue = &sorted[0];
 
-        info!(
-            id = %issue.id,
-            title = %issue.title,
-            priority = ?issue.priority,
-            "Picked issue to work on"
-        );
+        // Try to claim each issue in priority order (prevents race with other instances)
+        let mut claimed_issue = None;
+        for candidate in &sorted {
+            match beads.try_claim(&candidate.id) {
+                Ok(true) => {
+                    info!(
+                        id = %candidate.id,
+                        title = %candidate.title,
+                        priority = ?candidate.priority,
+                        "Claimed issue to work on"
+                    );
+                    claimed_issue = Some(candidate);
+                    break;
+                }
+                Ok(false) => {
+                    info!(id = %candidate.id, "Issue already claimed, trying next");
+                }
+                Err(e) => {
+                    warn!(id = %candidate.id, "Failed to claim issue: {e}, trying next");
+                }
+            }
+        }
+
+        let issue = match claimed_issue {
+            Some(i) => i,
+            None => {
+                info!("All ready issues already claimed. Orchestrator exiting.");
+                return Ok(());
+            }
+        };
 
         orchestrator::process_issue(&config, &factory, &worktree_bridge, issue, &beads, kb_ref)
             .await?;

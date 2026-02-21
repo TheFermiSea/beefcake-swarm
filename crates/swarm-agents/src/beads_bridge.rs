@@ -21,6 +21,18 @@ pub trait IssueTracker {
     fn list_ready(&self) -> Result<Vec<BeadsIssue>>;
     fn update_status(&self, id: &str, status: &str) -> Result<()>;
     fn close(&self, id: &str, reason: Option<&str>) -> Result<()>;
+
+    /// Atomically claim an issue for this orchestrator instance.
+    ///
+    /// Returns `Ok(true)` if the issue was successfully claimed (transitioned
+    /// from `open` → `in_progress`), or `Ok(false)` if it was already claimed
+    /// by another instance.
+    ///
+    /// Default implementation just calls `update_status` (no race protection).
+    fn try_claim(&self, id: &str) -> Result<bool> {
+        self.update_status(id, "in_progress")?;
+        Ok(true)
+    }
 }
 
 /// No-op tracker for beads-free mode.
@@ -84,6 +96,30 @@ impl BeadsBridge {
     }
 }
 
+impl BeadsBridge {
+    /// Look up a single issue by ID.
+    pub fn show(&self, id: &str) -> Result<BeadsIssue> {
+        let output = Command::new(&self.bin)
+            .args(["show", id, "--json"])
+            .output()
+            .context(format!("Failed to run `{} show {id}`", self.bin))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!("{} show failed: {stderr}", self.bin);
+        }
+
+        // `bd show --json` returns an array with one element
+        let issues: Vec<BeadsIssue> = serde_json::from_slice(&output.stdout)
+            .context(format!("Failed to parse {} show output", self.bin))?;
+
+        issues
+            .into_iter()
+            .next()
+            .context(format!("No issue found with id {id}"))
+    }
+}
+
 impl IssueTracker for BeadsBridge {
     /// List ready issues (open and not blocked), sorted by priority.
     fn list_ready(&self) -> Result<Vec<BeadsIssue>> {
@@ -139,5 +175,25 @@ impl IssueTracker for BeadsBridge {
         }
 
         Ok(())
+    }
+
+    /// Atomically claim an issue: check status first, then update.
+    ///
+    /// Returns `Ok(false)` if the issue is already `in_progress` or `closed`,
+    /// preventing two orchestrator instances from claiming the same issue.
+    fn try_claim(&self, id: &str) -> Result<bool> {
+        // Check current status before claiming
+        let issue = self.show(id)?;
+        if issue.status != "open" {
+            tracing::info!(
+                id = %id,
+                status = %issue.status,
+                "Issue already claimed or closed, skipping"
+            );
+            return Ok(false);
+        }
+
+        self.update_status(id, "in_progress")?;
+        Ok(true)
     }
 }
