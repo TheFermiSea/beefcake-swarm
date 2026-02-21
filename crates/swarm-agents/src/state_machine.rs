@@ -8,8 +8,9 @@
 //! The orchestrator loop calls `advance()` to move between states. Each call
 //! validates the transition is legal and records it in the transition log.
 
+use std::collections::HashMap;
 use std::fmt;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -252,6 +253,262 @@ impl StateMachine {
 impl Default for StateMachine {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Per-State Timeout and Cancellation Budgets
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Why a state was cancelled (deterministic reason codes).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CancellationReason {
+    /// Wall-clock timeout for this state was exceeded.
+    Timeout {
+        state: OrchestratorState,
+        elapsed_ms: u64,
+        limit_ms: u64,
+    },
+    /// Iteration budget for this state was exhausted.
+    BudgetExhausted {
+        state: OrchestratorState,
+        used: u32,
+        limit: u32,
+    },
+    /// Global iteration limit reached across all states.
+    GlobalBudgetExhausted { total_iterations: u32, limit: u32 },
+    /// External cancellation (e.g., operator signal).
+    External { reason: String },
+}
+
+impl fmt::Display for CancellationReason {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Timeout {
+                state,
+                elapsed_ms,
+                limit_ms,
+            } => {
+                write!(f, "Timeout in {state}: {elapsed_ms}ms > {limit_ms}ms limit")
+            }
+            Self::BudgetExhausted { state, used, limit } => {
+                write!(f, "Budget exhausted in {state}: {used}/{limit} iterations")
+            }
+            Self::GlobalBudgetExhausted {
+                total_iterations,
+                limit,
+            } => {
+                write!(
+                    f,
+                    "Global budget exhausted: {total_iterations}/{limit} iterations"
+                )
+            }
+            Self::External { reason } => write!(f, "External cancellation: {reason}"),
+        }
+    }
+}
+
+/// Budget configuration for a single state.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct StateBudget {
+    /// Maximum wall-clock time in this state (milliseconds).
+    /// `None` means no timeout.
+    pub timeout_ms: Option<u64>,
+    /// Maximum iterations allowed in this state.
+    /// `None` means unlimited (bounded by global budget).
+    pub max_iterations: Option<u32>,
+}
+
+impl StateBudget {
+    /// Create a budget with both timeout and iteration limit.
+    pub fn new(timeout: Duration, max_iterations: u32) -> Self {
+        Self {
+            timeout_ms: Some(timeout.as_millis() as u64),
+            max_iterations: Some(max_iterations),
+        }
+    }
+
+    /// Create a timeout-only budget.
+    pub fn timeout_only(timeout: Duration) -> Self {
+        Self {
+            timeout_ms: Some(timeout.as_millis() as u64),
+            max_iterations: None,
+        }
+    }
+
+    /// Create an iteration-only budget.
+    pub fn iterations_only(max: u32) -> Self {
+        Self {
+            timeout_ms: None,
+            max_iterations: Some(max),
+        }
+    }
+
+    /// Unlimited budget (no timeout, no iteration limit).
+    pub fn unlimited() -> Self {
+        Self {
+            timeout_ms: None,
+            max_iterations: None,
+        }
+    }
+}
+
+/// Per-state budget configuration for the state machine.
+///
+/// Default budgets match the existing orchestrator behavior:
+/// - Implementing: 45 min timeout, 6 iterations
+/// - Verifying: 5 min timeout
+/// - Validating: 10 min timeout
+/// - Escalating: 2 min timeout
+/// - Merging: 5 min timeout
+/// - Others: no budget
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BudgetConfig {
+    /// Per-state budgets. States not in the map have no budget.
+    pub budgets: HashMap<OrchestratorState, StateBudget>,
+    /// Global iteration limit across all states.
+    pub global_max_iterations: u32,
+}
+
+impl Default for BudgetConfig {
+    fn default() -> Self {
+        let mut budgets = HashMap::new();
+        budgets.insert(
+            OrchestratorState::Implementing,
+            StateBudget::new(Duration::from_secs(45 * 60), 6),
+        );
+        budgets.insert(
+            OrchestratorState::Verifying,
+            StateBudget::timeout_only(Duration::from_secs(5 * 60)),
+        );
+        budgets.insert(
+            OrchestratorState::Validating,
+            StateBudget::timeout_only(Duration::from_secs(10 * 60)),
+        );
+        budgets.insert(
+            OrchestratorState::Escalating,
+            StateBudget::timeout_only(Duration::from_secs(2 * 60)),
+        );
+        budgets.insert(
+            OrchestratorState::Merging,
+            StateBudget::timeout_only(Duration::from_secs(5 * 60)),
+        );
+        Self {
+            budgets,
+            global_max_iterations: 10,
+        }
+    }
+}
+
+/// Tracks per-state time and iteration counts for budget enforcement.
+#[derive(Debug)]
+pub struct BudgetTracker {
+    config: BudgetConfig,
+    /// When each state was last entered.
+    state_entered_at: Option<Instant>,
+    /// Count of times each state has been entered (for iteration budgets).
+    state_entry_counts: HashMap<OrchestratorState, u32>,
+    /// Total iterations across all states.
+    total_iterations: u32,
+}
+
+impl BudgetTracker {
+    /// Create a new tracker with the given budget configuration.
+    pub fn new(config: BudgetConfig) -> Self {
+        Self {
+            config,
+            state_entered_at: None,
+            state_entry_counts: HashMap::new(),
+            total_iterations: 0,
+        }
+    }
+
+    /// Create a tracker with default budgets.
+    pub fn with_defaults() -> Self {
+        Self::new(BudgetConfig::default())
+    }
+
+    /// Notify the tracker that a state transition occurred.
+    ///
+    /// Call this after each successful `StateMachine::advance()`.
+    pub fn on_state_entered(&mut self, state: OrchestratorState) {
+        self.state_entered_at = Some(Instant::now());
+        *self.state_entry_counts.entry(state).or_insert(0) += 1;
+        self.total_iterations += 1;
+    }
+
+    /// Check if the current state has exceeded its budget.
+    ///
+    /// Returns `Some(CancellationReason)` if the budget is exceeded.
+    pub fn check_budget(&self, current_state: OrchestratorState) -> Option<CancellationReason> {
+        // Global iteration check
+        if self.total_iterations > self.config.global_max_iterations {
+            return Some(CancellationReason::GlobalBudgetExhausted {
+                total_iterations: self.total_iterations,
+                limit: self.config.global_max_iterations,
+            });
+        }
+
+        // Per-state checks
+        if let Some(budget) = self.config.budgets.get(&current_state) {
+            // Timeout check
+            if let (Some(limit_ms), Some(entered_at)) = (budget.timeout_ms, self.state_entered_at) {
+                let elapsed_ms = entered_at.elapsed().as_millis() as u64;
+                if elapsed_ms > limit_ms {
+                    return Some(CancellationReason::Timeout {
+                        state: current_state,
+                        elapsed_ms,
+                        limit_ms,
+                    });
+                }
+            }
+
+            // Iteration count check
+            if let Some(max_iters) = budget.max_iterations {
+                let used = self
+                    .state_entry_counts
+                    .get(&current_state)
+                    .copied()
+                    .unwrap_or(0);
+                if used > max_iters {
+                    return Some(CancellationReason::BudgetExhausted {
+                        state: current_state,
+                        used,
+                        limit: max_iters,
+                    });
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Get the number of times a state has been entered.
+    pub fn entry_count(&self, state: OrchestratorState) -> u32 {
+        self.state_entry_counts.get(&state).copied().unwrap_or(0)
+    }
+
+    /// Get the total iterations across all states.
+    pub fn total_iterations(&self) -> u32 {
+        self.total_iterations
+    }
+
+    /// Get the remaining iteration budget for a state, if configured.
+    pub fn remaining_iterations(&self, state: OrchestratorState) -> Option<u32> {
+        self.config
+            .budgets
+            .get(&state)
+            .and_then(|b| b.max_iterations)
+            .map(|max| {
+                let used = self.state_entry_counts.get(&state).copied().unwrap_or(0);
+                max.saturating_sub(used)
+            })
+    }
+
+    /// Get the budget configuration.
+    pub fn config(&self) -> &BudgetConfig {
+        &self.config
     }
 }
 
@@ -902,5 +1159,251 @@ mod tests {
             }
             other => panic!("Expected Restored, got {other:?}"),
         }
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Budget / Timeout Tests
+    // ──────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_budget_config_defaults() {
+        let config = BudgetConfig::default();
+        assert_eq!(config.global_max_iterations, 10);
+
+        // Implementing has both timeout and iteration limit
+        let imp = config
+            .budgets
+            .get(&OrchestratorState::Implementing)
+            .unwrap();
+        assert_eq!(imp.timeout_ms, Some(45 * 60 * 1000));
+        assert_eq!(imp.max_iterations, Some(6));
+
+        // Verifying has timeout only
+        let ver = config.budgets.get(&OrchestratorState::Verifying).unwrap();
+        assert!(ver.timeout_ms.is_some());
+        assert!(ver.max_iterations.is_none());
+
+        // SelectingIssue has no budget
+        assert!(config
+            .budgets
+            .get(&OrchestratorState::SelectingIssue)
+            .is_none());
+    }
+
+    #[test]
+    fn test_budget_tracker_no_violation() {
+        let mut tracker = BudgetTracker::with_defaults();
+        tracker.on_state_entered(OrchestratorState::Implementing);
+
+        // Fresh entry — no violations
+        assert!(tracker
+            .check_budget(OrchestratorState::Implementing)
+            .is_none());
+        assert_eq!(tracker.entry_count(OrchestratorState::Implementing), 1);
+        assert_eq!(tracker.total_iterations(), 1);
+    }
+
+    #[test]
+    fn test_budget_tracker_iteration_exhaustion() {
+        let config = BudgetConfig {
+            budgets: {
+                let mut m = HashMap::new();
+                m.insert(
+                    OrchestratorState::Implementing,
+                    StateBudget::iterations_only(2),
+                );
+                m
+            },
+            global_max_iterations: 100,
+        };
+        let mut tracker = BudgetTracker::new(config);
+
+        // Enter state 3 times (limit is 2)
+        tracker.on_state_entered(OrchestratorState::Implementing);
+        assert!(tracker
+            .check_budget(OrchestratorState::Implementing)
+            .is_none());
+
+        tracker.on_state_entered(OrchestratorState::Implementing);
+        assert!(tracker
+            .check_budget(OrchestratorState::Implementing)
+            .is_none());
+
+        tracker.on_state_entered(OrchestratorState::Implementing);
+        match tracker.check_budget(OrchestratorState::Implementing) {
+            Some(CancellationReason::BudgetExhausted { state, used, limit }) => {
+                assert_eq!(state, OrchestratorState::Implementing);
+                assert_eq!(used, 3);
+                assert_eq!(limit, 2);
+            }
+            other => panic!("Expected BudgetExhausted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_budget_tracker_global_exhaustion() {
+        let config = BudgetConfig {
+            budgets: HashMap::new(),
+            global_max_iterations: 3,
+        };
+        let mut tracker = BudgetTracker::new(config);
+
+        tracker.on_state_entered(OrchestratorState::Implementing);
+        tracker.on_state_entered(OrchestratorState::Verifying);
+        tracker.on_state_entered(OrchestratorState::Implementing);
+        assert!(tracker
+            .check_budget(OrchestratorState::Implementing)
+            .is_none());
+
+        // 4th entry exceeds global limit of 3
+        tracker.on_state_entered(OrchestratorState::Verifying);
+        match tracker.check_budget(OrchestratorState::Verifying) {
+            Some(CancellationReason::GlobalBudgetExhausted {
+                total_iterations,
+                limit,
+            }) => {
+                assert_eq!(total_iterations, 4);
+                assert_eq!(limit, 3);
+            }
+            other => panic!("Expected GlobalBudgetExhausted, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_budget_tracker_remaining_iterations() {
+        let config = BudgetConfig {
+            budgets: {
+                let mut m = HashMap::new();
+                m.insert(
+                    OrchestratorState::Implementing,
+                    StateBudget::iterations_only(5),
+                );
+                m
+            },
+            global_max_iterations: 100,
+        };
+        let mut tracker = BudgetTracker::new(config);
+
+        assert_eq!(
+            tracker.remaining_iterations(OrchestratorState::Implementing),
+            Some(5)
+        );
+
+        tracker.on_state_entered(OrchestratorState::Implementing);
+        tracker.on_state_entered(OrchestratorState::Implementing);
+        assert_eq!(
+            tracker.remaining_iterations(OrchestratorState::Implementing),
+            Some(3)
+        );
+
+        // State without configured budget returns None
+        assert!(tracker
+            .remaining_iterations(OrchestratorState::Verifying)
+            .is_none());
+    }
+
+    #[test]
+    fn test_budget_tracker_unconfigured_state() {
+        let tracker = BudgetTracker::with_defaults();
+        // SelectingIssue has no budget — always OK (global check still runs)
+        assert!(tracker
+            .check_budget(OrchestratorState::SelectingIssue)
+            .is_none());
+    }
+
+    #[test]
+    fn test_state_budget_constructors() {
+        let full = StateBudget::new(Duration::from_secs(300), 5);
+        assert_eq!(full.timeout_ms, Some(300_000));
+        assert_eq!(full.max_iterations, Some(5));
+
+        let timeout = StateBudget::timeout_only(Duration::from_secs(60));
+        assert_eq!(timeout.timeout_ms, Some(60_000));
+        assert!(timeout.max_iterations.is_none());
+
+        let iters = StateBudget::iterations_only(10);
+        assert!(iters.timeout_ms.is_none());
+        assert_eq!(iters.max_iterations, Some(10));
+
+        let unlimited = StateBudget::unlimited();
+        assert!(unlimited.timeout_ms.is_none());
+        assert!(unlimited.max_iterations.is_none());
+    }
+
+    #[test]
+    fn test_cancellation_reason_display() {
+        let timeout = CancellationReason::Timeout {
+            state: OrchestratorState::Implementing,
+            elapsed_ms: 5000,
+            limit_ms: 3000,
+        };
+        assert!(timeout.to_string().contains("Timeout"));
+        assert!(timeout.to_string().contains("5000ms"));
+
+        let budget = CancellationReason::BudgetExhausted {
+            state: OrchestratorState::Implementing,
+            used: 7,
+            limit: 6,
+        };
+        assert!(budget.to_string().contains("7/6"));
+
+        let global = CancellationReason::GlobalBudgetExhausted {
+            total_iterations: 11,
+            limit: 10,
+        };
+        assert!(global.to_string().contains("11/10"));
+
+        let external = CancellationReason::External {
+            reason: "operator signal".into(),
+        };
+        assert!(external.to_string().contains("operator signal"));
+    }
+
+    #[test]
+    fn test_cancellation_reason_serde_roundtrip() {
+        let reasons = vec![
+            CancellationReason::Timeout {
+                state: OrchestratorState::Verifying,
+                elapsed_ms: 12345,
+                limit_ms: 10000,
+            },
+            CancellationReason::BudgetExhausted {
+                state: OrchestratorState::Implementing,
+                used: 7,
+                limit: 6,
+            },
+            CancellationReason::GlobalBudgetExhausted {
+                total_iterations: 11,
+                limit: 10,
+            },
+            CancellationReason::External {
+                reason: "test".into(),
+            },
+        ];
+
+        for reason in &reasons {
+            let json = serde_json::to_string(reason).unwrap();
+            let restored: CancellationReason = serde_json::from_str(&json).unwrap();
+            assert_eq!(&restored, reason);
+        }
+    }
+
+    #[test]
+    fn test_budget_config_serde_roundtrip() {
+        let config = BudgetConfig::default();
+        let json = serde_json::to_string_pretty(&config).unwrap();
+        let restored: BudgetConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.global_max_iterations, config.global_max_iterations);
+        assert_eq!(restored.budgets.len(), config.budgets.len());
+    }
+
+    #[test]
+    fn test_budget_tracker_config_accessor() {
+        let tracker = BudgetTracker::with_defaults();
+        let config = tracker.config();
+        assert_eq!(config.global_max_iterations, 10);
+        assert!(config
+            .budgets
+            .contains_key(&OrchestratorState::Implementing));
     }
 }
