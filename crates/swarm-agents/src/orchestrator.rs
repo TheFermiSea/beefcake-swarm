@@ -11,12 +11,6 @@ use rig::completion::Prompt;
 use rig::providers::openai;
 use tracing::{error, info, warn};
 
-/// Default wall-clock timeout for worker prompt calls.
-const DEFAULT_WORKER_TIMEOUT_SECS: u64 = 30 * 60; // 30 minutes
-/// Default wall-clock timeout for manager prompt calls.
-/// Prevents runaway managers that exceed their turn limits (rig doesn't enforce
-/// `default_max_turns` on the outer agent in `.prompt()` calls).
-const DEFAULT_MANAGER_TIMEOUT_SECS: u64 = 45 * 60; // 45 minutes
 /// Default timeout for each cloud validation call.
 const DEFAULT_VALIDATION_TIMEOUT_SECS: u64 = 120; // 2 minutes
 
@@ -33,8 +27,8 @@ use coordination::feedback::ErrorCategory;
 use coordination::save_session_state;
 use coordination::{
     ContextPacker, EscalationEngine, EscalationState, GitManager, InterventionType,
-    PendingIntervention, ProgressTracker, SessionManager, SwarmTier, TierBudget, Verifier,
-    VerifierConfig, VerifierReport, WorkPacket,
+    PendingIntervention, ProgressTracker, SessionManager, SwarmTier, TierBudget, TurnPolicy,
+    Verifier, VerifierConfig, VerifierReport, WorkPacket,
 };
 
 /// Coder routing decision with confidence level.
@@ -661,9 +655,11 @@ pub async fn process_issue(
     beads: &dyn IssueTracker,
     knowledge_base: Option<&dyn KnowledgeBase>,
 ) -> Result<bool> {
-    let worker_timeout = timeout_from_env("SWARM_WORKER_TIMEOUT_SECS", DEFAULT_WORKER_TIMEOUT_SECS);
+    let worker_policy = TurnPolicy::for_tier(SwarmTier::Worker);
+    let council_policy = TurnPolicy::for_tier(SwarmTier::Council);
+    let worker_timeout = timeout_from_env("SWARM_WORKER_TIMEOUT_SECS", worker_policy.timeout_secs);
     let manager_timeout =
-        timeout_from_env("SWARM_MANAGER_TIMEOUT_SECS", DEFAULT_MANAGER_TIMEOUT_SECS);
+        timeout_from_env("SWARM_MANAGER_TIMEOUT_SECS", council_policy.timeout_secs);
 
     // Root span for the entire issue processing session (OpenTelemetry-compatible)
     let process_span = tracing::info_span!(

@@ -113,7 +113,7 @@ pub use verifier::{GateOutcome, GateResult, Verifier, VerifierConfig, VerifierRe
 
 // Re-export escalation types
 pub use escalation::{
-    EscalationDecision, EscalationEngine, EscalationState, SwarmTier, TierBudget,
+    EscalationDecision, EscalationEngine, EscalationState, SwarmTier, TierBudget, TurnPolicy,
 };
 
 // Re-export telemetry heuristic types
