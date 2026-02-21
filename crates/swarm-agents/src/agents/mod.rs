@@ -99,18 +99,21 @@ impl AgentFactory {
                 model = %cloud_ep.model,
                 "Building cloud-backed manager with proxy-prefixed workers"
             );
-            // Workers get proxy_ prefix for CLIAPIProxy compatibility
+            // Workers get proxy_ prefix for CLIAPIProxy compatibility.
+            // proxy_tools=true so tool names match after CLIAPIProxy prefixing.
             let rust_coder = coder::build_rust_coder_named(
                 &self.clients.local,
                 &self.config.fast_endpoint.model,
                 wt_path,
                 "proxy_rust_coder",
+                true,
             );
             let general_coder = coder::build_general_coder_named(
                 &self.clients.local,
                 &self.config.coder_endpoint.model,
                 wt_path,
                 "proxy_general_coder",
+                true,
             );
             let reviewer = reviewer::build_reviewer_named(
                 &self.clients.local,
@@ -122,6 +125,7 @@ impl AgentFactory {
                 &self.config.reasoning_endpoint.model,
                 wt_path,
                 "proxy_reasoning_worker",
+                true,
             );
             let workers = manager::ManagerWorkers {
                 rust_coder,
