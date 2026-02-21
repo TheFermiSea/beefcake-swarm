@@ -6,7 +6,7 @@
 use crate::escalation::state::{EscalationState, SwarmTier};
 use crate::verifier::report::VerifierReport;
 use crate::work_packet::types::{
-    Constraint, ConstraintKind, FileContext, KeySymbol, SymbolKind, WorkPacket,
+    Constraint, ConstraintKind, ContextProvenance, FileContext, KeySymbol, SymbolKind, WorkPacket,
 };
 use chrono::Utc;
 use regex::Regex;
@@ -171,6 +171,7 @@ impl WorkPacketGenerator {
             decisions: vec![],           // Populated from Decision Journal
             generated_at: Utc::now(),
             max_patch_loc: self.default_max_loc,
+            iteration_deltas: vec![], // Populated by delta computation
             delegation_chain: vec![], // Populated during manager-to-manager handoffs
         }
     }
@@ -296,6 +297,8 @@ impl WorkPacketGenerator {
                         end_line: end,
                         content: context_content,
                         relevance: format!("{} error at line {}", signal.category, line),
+                        priority: 0, // Error context — highest priority
+                        provenance: ContextProvenance::CompilerError,
                     });
                 }
             }
@@ -343,6 +346,8 @@ impl WorkPacketGenerator {
                                 end_line: end,
                                 content: context_content,
                                 relevance: format!("{} gate error at line {}", gate.gate, line),
+                                priority: 0, // Error context — highest priority
+                                provenance: ContextProvenance::CompilerError,
                             });
                         }
                     }
@@ -385,6 +390,8 @@ impl WorkPacketGenerator {
                 end_line: end,
                 content: context_content,
                 relevance: "Modified file (header)".to_string(),
+                priority: 1, // Modified file
+                provenance: ContextProvenance::Diff,
             });
         }
 

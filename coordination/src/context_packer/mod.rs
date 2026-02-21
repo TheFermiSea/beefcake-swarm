@@ -5,6 +5,8 @@
 
 pub mod file_walker;
 pub mod packer;
+pub mod source_provider;
 
 pub use file_walker::FileWalker;
 pub use packer::ContextPacker;
+pub use source_provider::SourceFileProvider;

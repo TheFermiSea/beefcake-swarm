@@ -141,7 +141,7 @@ pub use escalation::{DelightDetector, DelightIntensity, DelightKind, DelightSign
 pub use work_packet::{Constraint, FileContext, KeySymbol, WorkPacket, WorkPacketGenerator};
 
 // Re-export context packer types
-pub use context_packer::{ContextPacker, FileWalker};
+pub use context_packer::{ContextPacker, FileWalker, SourceFileProvider};
 
 // Re-export pre-routing classifier types
 pub use router::{

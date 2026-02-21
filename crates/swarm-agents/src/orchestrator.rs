@@ -1839,6 +1839,7 @@ mod tests {
             decisions: vec![],
             generated_at: Utc::now(),
             max_patch_loc: 200,
+            iteration_deltas: vec![],
             delegation_chain: vec![],
         }
     }

@@ -39,6 +39,10 @@ pub struct WorkPacket {
     pub error_history: Vec<ErrorCategory>,
     /// Previous fix attempts (brief descriptions)
     pub previous_attempts: Vec<String>,
+    /// Structured iteration deltas (last 2-3 iterations).
+    /// Captures what changed between iterations rather than flat attempt strings.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub iteration_deltas: Vec<IterationDelta>,
     /// Heuristics from the knowledge base relevant to this task
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub relevant_heuristics: Vec<String>,
@@ -58,11 +62,15 @@ pub struct WorkPacket {
 }
 
 impl WorkPacket {
-    /// Estimate token count of the serialized packet
+    /// Estimate token count of the serialized packet.
+    ///
+    /// Uses character count (not byte count) for accuracy with multi-byte
+    /// UTF-8 content, plus a 10% safety margin to avoid context overflow.
     pub fn estimated_tokens(&self) -> usize {
-        // Rough estimate: ~4 chars per token for JSON
+        // ~4 chars per token for JSON, with 10% safety margin
         let json = serde_json::to_string(self).unwrap_or_default();
-        json.len() / 4
+        let char_count = json.chars().count();
+        (char_count as f64 * 1.1 / 4.0).ceil() as usize
     }
 
     /// Get a compact summary for logging
@@ -152,6 +160,46 @@ pub struct FileContext {
     pub content: String,
     /// Why this context is relevant
     pub relevance: String,
+    /// Trim priority: 0 = error context (highest, never trim first),
+    /// 1 = modified file, 2 = structural/header, 3 = reference (lowest).
+    #[serde(default = "default_priority")]
+    pub priority: u8,
+    /// How this context was sourced (for provenance tracking).
+    #[serde(default)]
+    pub provenance: ContextProvenance,
+}
+
+fn default_priority() -> u8 {
+    2
+}
+
+/// How a FileContext was sourced — enables decay and deduplication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ContextProvenance {
+    /// Extracted from a compiler error location.
+    CompilerError,
+    /// From a git diff of modified files.
+    Diff,
+    /// Dependency/import chain.
+    Dependency,
+    /// Imported based on usage/reference.
+    Import,
+    /// File header scan during initial pack.
+    #[default]
+    Header,
+}
+
+impl std::fmt::Display for ContextProvenance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::CompilerError => write!(f, "compiler_error"),
+            Self::Diff => write!(f, "diff"),
+            Self::Dependency => write!(f, "dependency"),
+            Self::Import => write!(f, "import"),
+            Self::Header => write!(f, "header"),
+        }
+    }
 }
 
 /// A constraint the model must respect
@@ -181,6 +229,29 @@ pub enum ConstraintKind {
     Performance,
     /// Custom constraint
     Custom,
+}
+
+/// Structured delta between consecutive iterations.
+///
+/// Captures what changed between iterations (not just what happened),
+/// enabling models to see "you fixed X but broke Y" patterns.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct IterationDelta {
+    /// Iteration number this delta describes.
+    pub iteration: u32,
+    /// Error categories that were fixed (improved) in this iteration.
+    pub fixed_errors: Vec<ErrorCategory>,
+    /// Error categories that were newly introduced (regressed).
+    pub new_errors: Vec<ErrorCategory>,
+    /// Files modified in this iteration.
+    pub files_modified: Vec<String>,
+    /// What the model claimed it was doing (extracted from response).
+    pub hypothesis: Option<String>,
+    /// Concise summary of the result (e.g., "borrow error fixed, but
+    /// introduced lifetime error in return type").
+    pub result_summary: String,
+    /// Strategy used (e.g., "added Arc wrapper", "changed lifetime annotation").
+    pub strategy_used: String,
 }
 
 /// Record of a delegation between managers
@@ -219,6 +290,7 @@ mod tests {
             decisions: vec![],
             generated_at: Utc::now(),
             max_patch_loc: 150,
+            iteration_deltas: vec![],
             delegation_chain: vec![],
         };
 
@@ -259,6 +331,7 @@ mod tests {
             decisions: vec![],
             generated_at: Utc::now(),
             max_patch_loc: 150,
+            iteration_deltas: vec![],
             delegation_chain: vec![],
         };
 
@@ -294,6 +367,7 @@ mod tests {
             decisions: vec![],
             generated_at: Utc::now(),
             max_patch_loc: 150,
+            iteration_deltas: vec![],
             delegation_chain: vec![],
         };
 
