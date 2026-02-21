@@ -38,6 +38,142 @@ pub struct ArtifactRecord {
     pub size_delta: Option<i64>,
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Typed Execution Artifacts — structured decision records for replay/diagnostics
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Current schema version for execution artifacts.
+/// Bump when adding/removing/renaming fields.
+pub const ARTIFACT_SCHEMA_VERSION: u8 = 1;
+
+/// Snapshot of the routing decision for an iteration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RouteDecision {
+    /// Which coder was selected (e.g. "RustCoder", "GeneralCoder").
+    pub coder: String,
+    /// Error categories that influenced the routing decision.
+    pub input_error_categories: Vec<String>,
+    /// The tier at the time of routing.
+    pub tier: String,
+    /// Free-text rationale (e.g. "borrow errors → RustCoder").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rationale: Option<String>,
+}
+
+/// Compact snapshot of verifier gate results.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerifierSnapshot {
+    /// Whether all gates passed.
+    pub all_green: bool,
+    /// Per-gate results: (gate_name, passed, error_count).
+    pub gates: Vec<GateSnapshot>,
+    /// Total errors across all gates.
+    pub total_errors: usize,
+    /// Top error categories from the verifier.
+    pub error_categories: Vec<String>,
+}
+
+/// Result of a single verifier gate.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GateSnapshot {
+    pub name: String,
+    pub passed: bool,
+    pub error_count: usize,
+    /// First few error messages (truncated for space).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sample_errors: Vec<String>,
+}
+
+/// Snapshot of the cloud evaluator (validator) result.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EvaluatorSnapshot {
+    /// Model used for evaluation.
+    pub model: String,
+    /// The verdict: pass, fail, or needs_escalation.
+    pub verdict: String,
+    /// Confidence score (0.0–1.0).
+    pub confidence: f32,
+    /// Whether the schema was valid (fail-closed on invalid).
+    pub schema_valid: bool,
+    /// Blocking issues identified by the evaluator.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocking_issues: Vec<String>,
+    /// Suggested next action from the evaluator.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub suggested_next_action: Option<String>,
+}
+
+/// Why the system decided to retry, escalate, or stop.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RetryAction {
+    /// Continue at the same tier.
+    Retry,
+    /// Escalate to a higher tier.
+    Escalate { from_tier: String, to_tier: String },
+    /// Issue resolved — merge and close.
+    Resolved,
+    /// Give up — stuck or budget exhausted.
+    GiveUp { reason: String },
+}
+
+/// Rationale for the retry/escalate/stop decision.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RetryRationale {
+    /// What action was taken.
+    pub action: RetryAction,
+    /// Error count before this decision.
+    pub error_count_before: usize,
+    /// Error count after this iteration's changes.
+    pub error_count_after: usize,
+    /// Whether a regression was detected.
+    pub regression: bool,
+    /// Number of consecutive no-change iterations.
+    pub consecutive_no_change: u32,
+    /// Remaining iteration budget.
+    pub budget_remaining: u32,
+}
+
+/// Complete typed execution artifact for a single iteration.
+///
+/// Captures every decision point for offline replay and root-cause analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExecutionArtifact {
+    /// Schema version for backward compatibility.
+    pub schema_version: u8,
+    /// Routing decision snapshot.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_decision: Option<RouteDecision>,
+    /// Verifier gate results.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verifier_snapshot: Option<VerifierSnapshot>,
+    /// Cloud evaluator result.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluator_snapshot: Option<EvaluatorSnapshot>,
+    /// Retry/escalate/stop rationale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_rationale: Option<RetryRationale>,
+}
+
+impl ExecutionArtifact {
+    /// Create a new empty artifact with the current schema version.
+    pub fn new() -> Self {
+        Self {
+            schema_version: ARTIFACT_SCHEMA_VERSION,
+            route_decision: None,
+            verifier_snapshot: None,
+            evaluator_snapshot: None,
+            retry_rationale: None,
+        }
+    }
+}
+
+impl Default for ExecutionArtifact {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Metrics for a single iteration within a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IterationMetrics {
@@ -58,6 +194,9 @@ pub struct IterationMetrics {
     pub coder_route: Option<String>,
     /// File-level footprint of this iteration.
     pub artifacts: Vec<ArtifactRecord>,
+    /// Typed execution artifact for replay and diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution_artifact: Option<ExecutionArtifact>,
 }
 
 /// Metrics for a complete orchestrator session.
@@ -116,6 +255,7 @@ struct IterationBuilder {
     escalated: bool,
     coder_route: Option<String>,
     artifacts: Vec<ArtifactRecord>,
+    execution_artifact: ExecutionArtifact,
 }
 
 impl MetricsCollector {
@@ -150,6 +290,7 @@ impl MetricsCollector {
             escalated: false,
             coder_route: None,
             artifacts: Vec::new(),
+            execution_artifact: ExecutionArtifact::new(),
         });
     }
 
@@ -232,9 +373,48 @@ impl MetricsCollector {
         }
     }
 
+    /// Record the routing decision for this iteration.
+    pub fn record_route_decision(&mut self, decision: RouteDecision) {
+        if let Some(ref mut iter) = self.current_iteration {
+            iter.execution_artifact.route_decision = Some(decision);
+        }
+    }
+
+    /// Record the verifier snapshot for this iteration.
+    pub fn record_verifier_snapshot(&mut self, snapshot: VerifierSnapshot) {
+        if let Some(ref mut iter) = self.current_iteration {
+            iter.execution_artifact.verifier_snapshot = Some(snapshot);
+        }
+    }
+
+    /// Record the evaluator (cloud validator) snapshot for this iteration.
+    pub fn record_evaluator_snapshot(&mut self, snapshot: EvaluatorSnapshot) {
+        if let Some(ref mut iter) = self.current_iteration {
+            iter.execution_artifact.evaluator_snapshot = Some(snapshot);
+        }
+    }
+
+    /// Record the retry/escalate rationale for this iteration.
+    pub fn record_retry_rationale(&mut self, rationale: RetryRationale) {
+        if let Some(ref mut iter) = self.current_iteration {
+            iter.execution_artifact.retry_rationale = Some(rationale);
+        }
+    }
+
     /// Finish the current iteration and store its metrics.
     pub fn finish_iteration(&mut self) {
         if let Some(iter) = self.current_iteration.take() {
+            // Only attach the artifact if any decision was recorded
+            let artifact = if iter.execution_artifact.route_decision.is_some()
+                || iter.execution_artifact.verifier_snapshot.is_some()
+                || iter.execution_artifact.evaluator_snapshot.is_some()
+                || iter.execution_artifact.retry_rationale.is_some()
+            {
+                Some(iter.execution_artifact)
+            } else {
+                None
+            };
+
             self.iterations.push(IterationMetrics {
                 iteration: iter.iteration,
                 tier: iter.tier,
@@ -252,6 +432,7 @@ impl MetricsCollector {
                 escalated: iter.escalated,
                 coder_route: iter.coder_route,
                 artifacts: iter.artifacts,
+                execution_artifact: artifact,
             });
         }
     }
@@ -346,6 +527,88 @@ pub fn append_telemetry(metrics: &SessionMetrics, repo_root: &Path) {
             }
         }
         Err(e) => warn!("Failed to serialize telemetry: {e}"),
+    }
+}
+
+/// Write execution artifacts from session metrics to `.swarm-artifacts/` directory.
+///
+/// Creates one JSON file per iteration: `iteration-001.json`, `iteration-002.json`, etc.
+/// Only writes files for iterations that have execution artifacts attached.
+/// Supports retention: if `max_sessions` is set, prunes oldest session directories.
+pub fn write_execution_artifacts(
+    metrics: &SessionMetrics,
+    wt_path: &Path,
+    max_sessions: Option<usize>,
+) {
+    let artifacts_dir = wt_path.join(".swarm-artifacts").join(&metrics.session_id);
+
+    // Create the session directory
+    if let Err(e) = std::fs::create_dir_all(&artifacts_dir) {
+        warn!("Failed to create artifacts directory: {e}");
+        return;
+    }
+
+    let mut written = 0usize;
+    for iter_metrics in &metrics.iterations {
+        if let Some(ref artifact) = iter_metrics.execution_artifact {
+            let filename = format!("iteration-{:03}.json", iter_metrics.iteration);
+            let path = artifacts_dir.join(&filename);
+            match serde_json::to_string_pretty(artifact) {
+                Ok(json) => match std::fs::write(&path, json) {
+                    Ok(()) => written += 1,
+                    Err(e) => warn!("Failed to write artifact {filename}: {e}"),
+                },
+                Err(e) => warn!("Failed to serialize artifact {filename}: {e}"),
+            }
+        }
+    }
+
+    if written > 0 {
+        info!(
+            path = %artifacts_dir.display(),
+            count = written,
+            "Wrote execution artifacts"
+        );
+    }
+
+    // Retention: prune old session directories if max_sessions is set
+    if let Some(max) = max_sessions {
+        let parent = wt_path.join(".swarm-artifacts");
+        prune_artifact_sessions(&parent, max);
+    }
+}
+
+/// Remove oldest session artifact directories to stay within the retention limit.
+fn prune_artifact_sessions(artifacts_root: &Path, max_sessions: usize) {
+    let entries: Vec<_> = match std::fs::read_dir(artifacts_root) {
+        Ok(rd) => rd
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+            .collect(),
+        Err(_) => return,
+    };
+
+    if entries.len() <= max_sessions {
+        return;
+    }
+
+    // Sort by modification time (oldest first)
+    let mut sorted: Vec<_> = entries
+        .into_iter()
+        .filter_map(|e| {
+            let mtime = e.metadata().ok()?.modified().ok()?;
+            Some((mtime, e.path()))
+        })
+        .collect();
+    sorted.sort_by_key(|(mtime, _)| *mtime);
+
+    let to_remove = sorted.len() - max_sessions;
+    for (_, path) in sorted.into_iter().take(to_remove) {
+        if let Err(e) = std::fs::remove_dir_all(&path) {
+            warn!("Failed to prune artifact session {}: {e}", path.display());
+        } else {
+            info!(path = %path.display(), "Pruned old artifact session");
+        }
     }
 }
 
@@ -907,6 +1170,7 @@ mod tests {
             escalated: false,
             coder_route: None,
             artifacts: vec![],
+            execution_artifact: None,
         });
         metrics1.iterations.push(IterationMetrics {
             iteration: 2,
@@ -925,6 +1189,7 @@ mod tests {
             escalated: false,
             coder_route: None,
             artifacts: vec![],
+            execution_artifact: None,
         });
 
         let mut metrics2 = SessionMetrics {
@@ -958,6 +1223,7 @@ mod tests {
             escalated: false,
             coder_route: None,
             artifacts: vec![],
+            execution_artifact: None,
         });
 
         append_telemetry(&metrics1, dir.path());
@@ -1217,5 +1483,311 @@ mod tests {
             .find(|m| m.name == "success_rate")
             .unwrap();
         assert_eq!(sr.status, SloStatus::Met); // 0.50 >= 0.50
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Typed Execution Artifact Tests
+    // ──────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_execution_artifact_default() {
+        let artifact = ExecutionArtifact::new();
+        assert_eq!(artifact.schema_version, ARTIFACT_SCHEMA_VERSION);
+        assert!(artifact.route_decision.is_none());
+        assert!(artifact.verifier_snapshot.is_none());
+        assert!(artifact.evaluator_snapshot.is_none());
+        assert!(artifact.retry_rationale.is_none());
+    }
+
+    #[test]
+    fn test_execution_artifact_serde_roundtrip() {
+        let artifact = ExecutionArtifact {
+            schema_version: ARTIFACT_SCHEMA_VERSION,
+            route_decision: Some(RouteDecision {
+                coder: "RustCoder".into(),
+                input_error_categories: vec!["BorrowChecker".into(), "Lifetime".into()],
+                tier: "Integrator".into(),
+                rationale: Some("borrow errors → RustCoder".into()),
+            }),
+            verifier_snapshot: Some(VerifierSnapshot {
+                all_green: false,
+                gates: vec![
+                    GateSnapshot {
+                        name: "fmt".into(),
+                        passed: true,
+                        error_count: 0,
+                        sample_errors: vec![],
+                    },
+                    GateSnapshot {
+                        name: "clippy".into(),
+                        passed: false,
+                        error_count: 2,
+                        sample_errors: vec!["unused variable `x`".into()],
+                    },
+                ],
+                total_errors: 2,
+                error_categories: vec!["Clippy".into()],
+            }),
+            evaluator_snapshot: Some(EvaluatorSnapshot {
+                model: "claude-sonnet-4-5".into(),
+                verdict: "fail".into(),
+                confidence: 0.85,
+                schema_valid: true,
+                blocking_issues: vec!["clippy warnings remain".into()],
+                suggested_next_action: Some("fix clippy warnings".into()),
+            }),
+            retry_rationale: Some(RetryRationale {
+                action: RetryAction::Retry,
+                error_count_before: 5,
+                error_count_after: 2,
+                regression: false,
+                consecutive_no_change: 0,
+                budget_remaining: 4,
+            }),
+        };
+
+        let json = serde_json::to_string_pretty(&artifact).unwrap();
+        let restored: ExecutionArtifact = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(restored.schema_version, ARTIFACT_SCHEMA_VERSION);
+        let rd = restored.route_decision.unwrap();
+        assert_eq!(rd.coder, "RustCoder");
+        assert_eq!(rd.input_error_categories.len(), 2);
+
+        let vs = restored.verifier_snapshot.unwrap();
+        assert!(!vs.all_green);
+        assert_eq!(vs.gates.len(), 2);
+        assert_eq!(vs.total_errors, 2);
+
+        let es = restored.evaluator_snapshot.unwrap();
+        assert_eq!(es.verdict, "fail");
+        assert_eq!(es.confidence, 0.85);
+        assert!(es.schema_valid);
+
+        let rr = restored.retry_rationale.unwrap();
+        assert!(matches!(rr.action, RetryAction::Retry));
+        assert_eq!(rr.budget_remaining, 4);
+    }
+
+    #[test]
+    fn test_execution_artifact_backward_compat_missing_fields() {
+        // Simulate loading an older JSON that doesn't have execution_artifact
+        let json = r#"{
+            "iteration": 1, "tier": "Integrator", "agent_model": "m1",
+            "agent_prompt_tokens": 100, "agent_completion_tokens": 50,
+            "agent_response_ms": 1000, "verifier_ms": 500,
+            "error_count": 0, "error_categories": [],
+            "no_change": false, "auto_fix_applied": false,
+            "regression_detected": false, "rollback_performed": false,
+            "escalated": false, "artifacts": []
+        }"#;
+        let metrics: IterationMetrics = serde_json::from_str(json).unwrap();
+        assert!(metrics.execution_artifact.is_none());
+    }
+
+    #[test]
+    fn test_collector_records_execution_artifacts() {
+        let mut collector = MetricsCollector::new("sess-ea", "issue-ea", "Artifact test");
+
+        collector.start_iteration(1, "Integrator");
+        collector.record_route_decision(RouteDecision {
+            coder: "GeneralCoder".into(),
+            input_error_categories: vec![],
+            tier: "Integrator".into(),
+            rationale: None,
+        });
+        collector.record_verifier_snapshot(VerifierSnapshot {
+            all_green: true,
+            gates: vec![GateSnapshot {
+                name: "fmt".into(),
+                passed: true,
+                error_count: 0,
+                sample_errors: vec![],
+            }],
+            total_errors: 0,
+            error_categories: vec![],
+        });
+        collector.record_retry_rationale(RetryRationale {
+            action: RetryAction::Resolved,
+            error_count_before: 3,
+            error_count_after: 0,
+            regression: false,
+            consecutive_no_change: 0,
+            budget_remaining: 5,
+        });
+        collector.finish_iteration();
+
+        let metrics = collector.finalize(true, "Integrator");
+        let artifact = metrics.iterations[0].execution_artifact.as_ref().unwrap();
+        assert!(artifact.route_decision.is_some());
+        assert!(artifact.verifier_snapshot.is_some());
+        assert!(artifact.retry_rationale.is_some());
+        assert!(artifact.evaluator_snapshot.is_none());
+    }
+
+    #[test]
+    fn test_collector_omits_empty_artifact() {
+        let mut collector = MetricsCollector::new("sess-empty", "issue-empty", "Empty artifact");
+        collector.start_iteration(1, "Worker");
+        // Don't record any artifact components
+        collector.finish_iteration();
+
+        let metrics = collector.finalize(true, "Worker");
+        // No artifact attached when nothing was recorded
+        assert!(metrics.iterations[0].execution_artifact.is_none());
+    }
+
+    #[test]
+    fn test_retry_action_escalate_serde() {
+        let rationale = RetryRationale {
+            action: RetryAction::Escalate {
+                from_tier: "Integrator".into(),
+                to_tier: "Cloud".into(),
+            },
+            error_count_before: 5,
+            error_count_after: 5,
+            regression: false,
+            consecutive_no_change: 2,
+            budget_remaining: 3,
+        };
+        let json = serde_json::to_string(&rationale).unwrap();
+        let restored: RetryRationale = serde_json::from_str(&json).unwrap();
+        match restored.action {
+            RetryAction::Escalate {
+                from_tier, to_tier, ..
+            } => {
+                assert_eq!(from_tier, "Integrator");
+                assert_eq!(to_tier, "Cloud");
+            }
+            _ => panic!("Expected Escalate variant"),
+        }
+    }
+
+    #[test]
+    fn test_retry_action_give_up_serde() {
+        let rationale = RetryRationale {
+            action: RetryAction::GiveUp {
+                reason: "budget exhausted".into(),
+            },
+            error_count_before: 10,
+            error_count_after: 10,
+            regression: false,
+            consecutive_no_change: 3,
+            budget_remaining: 0,
+        };
+        let json = serde_json::to_string(&rationale).unwrap();
+        assert!(json.contains("give_up"));
+        assert!(json.contains("budget exhausted"));
+    }
+
+    #[test]
+    fn test_write_execution_artifacts_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let metrics = SessionMetrics {
+            session_id: "test-session-art".into(),
+            issue_id: "test-issue".into(),
+            issue_title: "Test".into(),
+            success: true,
+            total_iterations: 2,
+            final_tier: "Integrator".into(),
+            elapsed_ms: 5000,
+            total_no_change_iterations: 0,
+            no_change_rate: 0.0,
+            cloud_validations: vec![],
+            iterations: vec![
+                IterationMetrics {
+                    iteration: 1,
+                    tier: "Integrator".into(),
+                    agent_model: "m1".into(),
+                    agent_prompt_tokens: 0,
+                    agent_completion_tokens: 0,
+                    agent_response_ms: 0,
+                    verifier_ms: 0,
+                    error_count: 0,
+                    error_categories: vec![],
+                    no_change: false,
+                    auto_fix_applied: false,
+                    regression_detected: false,
+                    rollback_performed: false,
+                    escalated: false,
+                    coder_route: None,
+                    artifacts: vec![],
+                    execution_artifact: Some(ExecutionArtifact {
+                        schema_version: ARTIFACT_SCHEMA_VERSION,
+                        route_decision: Some(RouteDecision {
+                            coder: "RustCoder".into(),
+                            input_error_categories: vec![],
+                            tier: "Integrator".into(),
+                            rationale: None,
+                        }),
+                        verifier_snapshot: None,
+                        evaluator_snapshot: None,
+                        retry_rationale: None,
+                    }),
+                },
+                IterationMetrics {
+                    iteration: 2,
+                    tier: "Integrator".into(),
+                    agent_model: "m1".into(),
+                    agent_prompt_tokens: 0,
+                    agent_completion_tokens: 0,
+                    agent_response_ms: 0,
+                    verifier_ms: 0,
+                    error_count: 0,
+                    error_categories: vec![],
+                    no_change: false,
+                    auto_fix_applied: false,
+                    regression_detected: false,
+                    rollback_performed: false,
+                    escalated: false,
+                    coder_route: None,
+                    artifacts: vec![],
+                    // No artifact for this iteration
+                    execution_artifact: None,
+                },
+            ],
+            timestamp: "2026-01-01T00:00:00Z".into(),
+        };
+
+        write_execution_artifacts(&metrics, dir.path(), None);
+
+        let art_dir = dir.path().join(".swarm-artifacts").join("test-session-art");
+        assert!(art_dir.exists());
+
+        // Only iteration 1 has an artifact
+        let iter1 = art_dir.join("iteration-001.json");
+        assert!(iter1.exists());
+        let iter2 = art_dir.join("iteration-002.json");
+        assert!(!iter2.exists());
+
+        // Verify content is valid JSON
+        let content = std::fs::read_to_string(&iter1).unwrap();
+        let loaded: ExecutionArtifact = serde_json::from_str(&content).unwrap();
+        assert_eq!(loaded.schema_version, ARTIFACT_SCHEMA_VERSION);
+        assert_eq!(loaded.route_decision.unwrap().coder, "RustCoder");
+    }
+
+    #[test]
+    fn test_artifact_retention_pruning() {
+        let dir = tempfile::tempdir().unwrap();
+        let artifacts_root = dir.path().join(".swarm-artifacts");
+
+        // Create 5 session directories with staggered modification times
+        for i in 1..=5 {
+            let session_dir = artifacts_root.join(format!("session-{i}"));
+            std::fs::create_dir_all(&session_dir).unwrap();
+            std::fs::write(session_dir.join("iteration-001.json"), "{}").unwrap();
+            // Small delay to ensure different modification times
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+
+        // Prune to keep only 3
+        prune_artifact_sessions(&artifacts_root, 3);
+
+        let remaining: Vec<_> = std::fs::read_dir(&artifacts_root)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(remaining.len(), 3);
     }
 }
