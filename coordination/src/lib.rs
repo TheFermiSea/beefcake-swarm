@@ -63,6 +63,7 @@ pub mod perf_control;
 pub mod registry;
 pub mod resilience;
 pub mod reviewer_policy;
+pub mod reviewer_tools;
 pub mod rollout;
 pub mod router;
 pub mod shell_safety;

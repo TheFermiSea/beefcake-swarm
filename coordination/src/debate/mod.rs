@@ -31,6 +31,7 @@
 pub mod consensus;
 pub mod critique;
 pub mod guardrails;
+pub mod memory_bridge;
 pub mod orchestrator;
 pub mod persistence;
 pub mod state;
