@@ -3,6 +3,7 @@
 //! Each tool implements `rig::tool::Tool` and can be attached to agents
 //! via `AgentBuilder::tool()`. Tools are sandboxed to a worktree root.
 
+pub mod bundles;
 pub mod exec_tool;
 pub mod fs_tools;
 pub mod notebook_tool;
