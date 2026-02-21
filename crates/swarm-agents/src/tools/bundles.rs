@@ -33,6 +33,8 @@ pub enum WorkerRole {
     RustSpecialist,
     /// General coder / reasoning worker: read, write, edit, list_files, run_command.
     General,
+    /// Planner: read-only tools for analysis (read_file, list_files, run_command).
+    Planner,
 }
 
 /// Build the tool bundle for a worker agent.
@@ -40,32 +42,52 @@ pub enum WorkerRole {
 /// When `proxy` is true, tools are wrapped with `proxy_` prefixed names
 /// for CLIAPIProxy compatibility.
 pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dyn ToolDyn>> {
-    let mut tools: Vec<Box<dyn ToolDyn>> = if proxy {
-        vec![
-            Box::new(ProxyReadFile(ReadFileTool::new(wt_path))),
-            Box::new(ProxyWriteFile(WriteFileTool::new(wt_path))),
-            Box::new(ProxyEditFile(EditFileTool::new(wt_path))),
-            Box::new(ProxyRunCommand(RunCommandTool::new(wt_path))),
-        ]
-    } else {
-        vec![
-            Box::new(ReadFileTool::new(wt_path)),
-            Box::new(WriteFileTool::new(wt_path)),
-            Box::new(EditFileTool::new(wt_path)),
-            Box::new(RunCommandTool::new(wt_path)),
-        ]
-    };
+    match role {
+        WorkerRole::Planner => {
+            // Read-only tools for analysis: read_file, list_files, run_command.
+            if proxy {
+                vec![
+                    Box::new(ProxyReadFile(ReadFileTool::new(wt_path))),
+                    Box::new(ProxyListFiles(ListFilesTool::new(wt_path))),
+                    Box::new(ProxyRunCommand(RunCommandTool::new(wt_path))),
+                ]
+            } else {
+                vec![
+                    Box::new(ReadFileTool::new(wt_path)),
+                    Box::new(ListFilesTool::new(wt_path)),
+                    Box::new(RunCommandTool::new(wt_path)),
+                ]
+            }
+        }
+        _ => {
+            let mut tools: Vec<Box<dyn ToolDyn>> = if proxy {
+                vec![
+                    Box::new(ProxyReadFile(ReadFileTool::new(wt_path))),
+                    Box::new(ProxyWriteFile(WriteFileTool::new(wt_path))),
+                    Box::new(ProxyEditFile(EditFileTool::new(wt_path))),
+                    Box::new(ProxyRunCommand(RunCommandTool::new(wt_path))),
+                ]
+            } else {
+                vec![
+                    Box::new(ReadFileTool::new(wt_path)),
+                    Box::new(WriteFileTool::new(wt_path)),
+                    Box::new(EditFileTool::new(wt_path)),
+                    Box::new(RunCommandTool::new(wt_path)),
+                ]
+            };
 
-    // General/reasoning workers also get list_files for directory exploration.
-    if role == WorkerRole::General {
-        if proxy {
-            tools.push(Box::new(ProxyListFiles(ListFilesTool::new(wt_path))));
-        } else {
-            tools.push(Box::new(ListFilesTool::new(wt_path)));
+            // General/reasoning workers also get list_files for directory exploration.
+            if role == WorkerRole::General {
+                if proxy {
+                    tools.push(Box::new(ProxyListFiles(ListFilesTool::new(wt_path))));
+                } else {
+                    tools.push(Box::new(ListFilesTool::new(wt_path)));
+                }
+            }
+
+            tools
         }
     }
-
-    tools
 }
 
 /// Build the deterministic tool bundle for a manager agent.
@@ -177,6 +199,44 @@ mod tests {
     fn test_manager_proxy_names_have_prefix() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &[], true);
+        for tool in &tools {
+            assert!(
+                tool.name().starts_with("proxy_"),
+                "Expected proxy_ prefix: {}",
+                tool.name()
+            );
+        }
+    }
+
+    #[test]
+    fn test_worker_planner_has_3_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = worker_tools(dir.path(), WorkerRole::Planner, false);
+        assert_eq!(
+            tools.len(),
+            3,
+            "Planner should have 3 read-only tools (read, list, run)"
+        );
+    }
+
+    #[test]
+    fn test_worker_planner_no_write_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = worker_tools(dir.path(), WorkerRole::Planner, false);
+        let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
+        assert!(
+            !names
+                .iter()
+                .any(|n| n.contains("write") || n.contains("edit")),
+            "Planner should not have write/edit tools, got: {names:?}"
+        );
+    }
+
+    #[test]
+    fn test_worker_planner_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = worker_tools(dir.path(), WorkerRole::Planner, true);
+        assert_eq!(tools.len(), 3);
         for tool in &tools {
             assert!(
                 tool.name().starts_with("proxy_"),
