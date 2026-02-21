@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::Result;
 use rig::completion::Prompt;
 use rig::providers::openai;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// Default timeout for each cloud validation call.
 const DEFAULT_VALIDATION_TIMEOUT_SECS: u64 = 120; // 2 minutes
@@ -1448,6 +1448,15 @@ pub async fn process_issue(
             format!("Issue {} resolved", issue.id),
         );
 
+        // --- Integration Point 4: Retrospective knowledge capture ---
+        if let Some(kb) = knowledge_base {
+            let entries = progress.read_all().unwrap_or_default();
+            let retro = session.retrospective(&entries);
+            let svc = knowledge_sync::KnowledgeSyncService::new(kb);
+            let captures = svc.capture_from_retrospective(&retro, &issue.id, &issue.title);
+            debug!(count = captures.len(), "Retrospective captures uploaded");
+        }
+
         info!(
             id = %issue.id,
             session_id = session.short_id(),
@@ -1479,6 +1488,18 @@ pub async fn process_issue(
                 escalation.summary()
             ),
         );
+
+        // --- Integration Point 4: Retrospective knowledge capture (failure) ---
+        if let Some(kb) = knowledge_base {
+            let entries = progress.read_all().unwrap_or_default();
+            let retro = session.retrospective(&entries);
+            let svc = knowledge_sync::KnowledgeSyncService::new(kb);
+            let captures = svc.capture_from_retrospective(&retro, &issue.id, &issue.title);
+            debug!(
+                count = captures.len(),
+                "Retrospective captures uploaded (failure path)"
+            );
+        }
 
         // Persist session state for potential resume after SLURM preemption
         let state_path = wt_path.join(".swarm-session.json");
