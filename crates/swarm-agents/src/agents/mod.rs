@@ -49,20 +49,30 @@ impl AgentFactory {
     }
 
     /// Build the Rust specialist coder (strand-14B on vasp-02).
+    ///
+    /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
+    /// route through CLIAPIProxy which mangles tool names.
     pub fn build_rust_coder(&self, wt_path: &Path) -> OaiAgent {
-        coder::build_rust_coder(
+        coder::build_rust_coder_named(
             &self.clients.local,
             &self.config.fast_endpoint.model,
             wt_path,
+            "rust_coder",
+            self.config.cloud_only,
         )
     }
 
     /// Build the general coder (Qwen3-Coder-Next on vasp-02).
+    ///
+    /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
+    /// route through CLIAPIProxy which mangles tool names.
     pub fn build_general_coder(&self, wt_path: &Path) -> OaiAgent {
-        coder::build_general_coder(
+        coder::build_general_coder_named(
             &self.clients.local,
             &self.config.coder_endpoint.model,
             wt_path,
+            "general_coder",
+            self.config.cloud_only,
         )
     }
 
@@ -70,11 +80,14 @@ impl AgentFactory {
     ///
     /// Tool-equipped agent for deep analysis and complex fixes.
     /// Used as a worker tool by the cloud manager.
+    /// In `cloud_only` mode, registers proxy-prefixed tools.
     pub fn build_reasoning_worker(&self, wt_path: &Path) -> OaiAgent {
-        coder::build_reasoning_worker(
+        coder::build_reasoning_worker_named(
             &self.clients.reasoning,
             &self.config.reasoning_endpoint.model,
             wt_path,
+            "reasoning_worker",
+            self.config.cloud_only,
         )
     }
 
