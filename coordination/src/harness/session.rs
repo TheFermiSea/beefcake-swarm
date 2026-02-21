@@ -257,6 +257,146 @@ impl SessionManager {
             errors,
         }
     }
+
+    /// Generate a post-session retrospective analysis
+    pub fn retrospective(
+        &self,
+        progress_entries: &[crate::harness::types::ProgressEntry],
+    ) -> crate::harness::types::SessionRetrospective {
+        use crate::harness::types::{ProgressMarker, SessionRetrospective};
+        use std::collections::HashSet;
+
+        let mut features_started: HashSet<String> = HashSet::new();
+        let mut features_completed: HashSet<String> = HashSet::new();
+        let mut features_failed: HashSet<String> = HashSet::new();
+        let mut checkpoints = 0usize;
+        let mut rollbacks = 0usize;
+        let mut errors = 0usize;
+
+        for entry in progress_entries {
+            // Match session ID (handle short IDs from log)
+            let session_matches = if entry.session_id.len() == 8 {
+                self.state.id.starts_with(&entry.session_id)
+            } else {
+                entry.session_id == self.state.id
+            };
+            if !session_matches {
+                continue;
+            }
+
+            match entry.marker {
+                ProgressMarker::FeatureStart => {
+                    if let Some(ref fid) = entry.feature_id {
+                        features_started.insert(fid.clone());
+                    }
+                }
+                ProgressMarker::FeatureComplete => {
+                    if let Some(ref fid) = entry.feature_id {
+                        features_completed.insert(fid.clone());
+                    }
+                }
+                ProgressMarker::FeatureFailed => {
+                    if let Some(ref fid) = entry.feature_id {
+                        features_failed.insert(fid.clone());
+                    }
+                }
+                ProgressMarker::Checkpoint => checkpoints += 1,
+                ProgressMarker::Rollback => rollbacks += 1,
+                ProgressMarker::Error => errors += 1,
+                _ => {}
+            }
+        }
+
+        let features_attempted = features_started.len();
+        let features_completed_count = features_completed.len();
+        let features_failed_count = features_failed.len();
+
+        let feature_completion_rate = if features_attempted > 0 {
+            features_completed_count as f32 / features_attempted as f32
+        } else {
+            0.0
+        };
+
+        let avg_iterations_per_feature = if features_completed_count > 0 {
+            Some(self.state.iteration as f32 / features_completed_count as f32)
+        } else {
+            None
+        };
+
+        let iteration_efficiency_pct = if self.state.max_iterations > 0 {
+            (self.state.iteration as f32 / self.state.max_iterations as f32) * 100.0
+        } else {
+            0.0
+        };
+
+        // Generate observations
+        let mut observations = Vec::new();
+        if rollbacks > 0 {
+            observations.push(format!(
+                "{} rollback(s) performed — consider smaller, more frequent checkpoints",
+                rollbacks
+            ));
+        }
+        if errors > 0 {
+            observations.push(format!("{} error(s) logged during session", errors));
+        }
+        if features_failed_count > 0 {
+            observations.push(format!(
+                "{} feature(s) failed verification",
+                features_failed_count
+            ));
+        }
+        if feature_completion_rate >= 1.0 && features_attempted > 0 {
+            observations.push("All attempted features completed successfully".to_string());
+        }
+        if self.state.iteration == self.state.max_iterations {
+            observations.push("Session reached maximum iteration limit".to_string());
+        }
+
+        // Generate recommendations
+        let mut recommendations = Vec::new();
+        if rollbacks > 1 {
+            recommendations.push(
+                "Increase checkpoint frequency to reduce rollback scope".to_string(),
+            );
+        }
+        if features_failed_count > 0 {
+            recommendations.push(format!(
+                "Review failed features before next session: {:?}",
+                features_failed.into_iter().collect::<Vec<_>>()
+            ));
+        }
+        if avg_iterations_per_feature.map(|a| a > 5.0).unwrap_or(false) {
+            recommendations.push(
+                "High iterations per feature — consider breaking features into smaller tasks"
+                    .to_string(),
+            );
+        }
+        if features_attempted == 0 {
+            recommendations.push(
+                "No features were started — ensure features.json is configured correctly"
+                    .to_string(),
+            );
+        }
+
+        SessionRetrospective {
+            session_id: self.state.id.clone(),
+            status: self.state.status,
+            iterations_used: self.state.iteration,
+            max_iterations: self.state.max_iterations,
+            iteration_efficiency_pct,
+            features_attempted,
+            features_completed: features_completed_count,
+            features_failed: features_failed_count,
+            feature_completion_rate,
+            checkpoints_created: checkpoints,
+            rollbacks_performed: rollbacks,
+            errors_encountered: errors,
+            avg_iterations_per_feature,
+            observations,
+            recommendations,
+        }
+    }
 }
 
 /// Session summary for reporting
@@ -449,6 +589,49 @@ mod tests {
         let manager = SessionManager::new(PathBuf::from("/tmp"), 10);
         let short = manager.short_id();
         assert_eq!(short.len(), 8);
+    }
+
+    #[test]
+    fn test_retrospective() {
+        use crate::harness::types::{ProgressEntry, ProgressMarker};
+        let mut manager = SessionManager::new(PathBuf::from("/tmp"), 10);
+        manager.start().unwrap();
+        manager.next_iteration().unwrap();
+        manager.next_iteration().unwrap();
+        manager.next_iteration().unwrap();
+        manager.complete();
+
+        let session_id = manager.session_id().to_string();
+
+        let entries = vec![
+            ProgressEntry::new(&session_id, 1, ProgressMarker::FeatureStart, "Started f1")
+                .with_feature("f1"),
+            ProgressEntry::new(&session_id, 2, ProgressMarker::FeatureComplete, "Done f1")
+                .with_feature("f1"),
+            ProgressEntry::new(&session_id, 2, ProgressMarker::Checkpoint, "Checkpoint"),
+            ProgressEntry::new(&session_id, 3, ProgressMarker::FeatureStart, "Started f2")
+                .with_feature("f2"),
+            ProgressEntry::new(&session_id, 3, ProgressMarker::FeatureFailed, "Failed f2")
+                .with_feature("f2"),
+            ProgressEntry::new(&session_id, 3, ProgressMarker::Error, "Error occurred"),
+        ];
+
+        let retro = manager.retrospective(&entries);
+
+        assert_eq!(retro.session_id, session_id);
+        assert_eq!(retro.iterations_used, 3);
+        assert_eq!(retro.max_iterations, 10);
+        assert_eq!(retro.features_attempted, 2);
+        assert_eq!(retro.features_completed, 1);
+        assert_eq!(retro.features_failed, 1);
+        assert!((retro.feature_completion_rate - 0.5).abs() < 0.01);
+        assert_eq!(retro.checkpoints_created, 1);
+        assert_eq!(retro.rollbacks_performed, 0);
+        assert_eq!(retro.errors_encountered, 1);
+        assert!(retro.avg_iterations_per_feature.is_some());
+        assert!((retro.avg_iterations_per_feature.unwrap() - 3.0).abs() < 0.01);
+        assert!(!retro.observations.is_empty());
+        assert!(!retro.recommendations.is_empty());
     }
 
     #[test]
