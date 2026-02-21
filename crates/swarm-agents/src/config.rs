@@ -36,7 +36,7 @@ pub struct CloudEndpoint {
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
-    /// strand-rust-coder-14B (Rust specialist)
+    /// HydraCoder (Rust specialist)
     pub fast_endpoint: Endpoint,
     /// Qwen3-Coder-Next (general coding, 256K context)
     pub coder_endpoint: Endpoint,
@@ -80,7 +80,7 @@ impl Default for SwarmConfig {
                 url: std::env::var("SWARM_FAST_URL")
                     .unwrap_or_else(|_| "http://vasp-02:8080/v1".into()),
                 model: std::env::var("SWARM_FAST_MODEL")
-                    .unwrap_or_else(|_| "strand-rust-coder-14b-q8_0.gguf".into()),
+                    .unwrap_or_else(|_| "HydraCoder.i1-Q4_K_M".into()),
                 tier: Tier::Fast,
                 api_key: std::env::var("SWARM_FAST_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),

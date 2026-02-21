@@ -33,7 +33,7 @@ fn reasoning_max_turns() -> usize {
         .unwrap_or(DEFAULT_REASONING_MAX_TURNS)
 }
 
-/// Build the Rust specialist coder (strand-rust-coder-14B).
+/// Build the Rust specialist coder (HydraCoder).
 ///
 /// Tools: read_file, write_file, run_command.
 /// Used for borrow checker, lifetime, trait bound, and type mismatch errors.

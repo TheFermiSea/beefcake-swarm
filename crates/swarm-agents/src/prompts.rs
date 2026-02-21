@@ -142,7 +142,7 @@ after you return — do NOT continue iterating.
 - **Do NOT re-verify or re-delegate after the verifier passes. Stop and return.**
 ";
 
-/// Rust specialist coder preamble (strand-rust-coder-14B).
+/// Rust specialist coder preamble (HydraCoder).
 pub const RUST_CODER_PREAMBLE: &str = "\
 You are a Rust specialist. You fix compilation errors, resolve borrow checker issues, \
 and write idiomatic Rust code.
