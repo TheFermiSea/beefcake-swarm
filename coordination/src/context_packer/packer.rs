@@ -7,7 +7,7 @@ use crate::context_packer::file_walker::FileWalker;
 use crate::escalation::state::{EscalationState, SwarmTier};
 use crate::verifier::report::VerifierReport;
 use crate::work_packet::generator::WorkPacketGenerator;
-use crate::work_packet::types::{FileContext, WorkPacket};
+use crate::work_packet::types::{ContextProvenance, FileContext, WorkPacket};
 use chrono::Utc;
 use regex::Regex;
 use std::path::{Path, PathBuf};
@@ -194,6 +194,8 @@ impl ContextPacker {
                         "ERROR: {} at line {} (full file)",
                         signal.category, error_line
                     ),
+                    priority: 0, // Error context — highest priority
+                    provenance: ContextProvenance::CompilerError,
                 });
             }
         }
@@ -260,6 +262,8 @@ impl ContextPacker {
                             "ERROR: {} gate at line {} (full file)",
                             gate.gate, error_line
                         ),
+                        priority: 0, // Error context — highest priority
+                        provenance: ContextProvenance::CompilerError,
                     });
                 }
             }
@@ -301,6 +305,8 @@ impl ContextPacker {
                 end_line: line_count,
                 content: context_content,
                 relevance: "Modified file (full content for retry)".to_string(),
+                priority: 1, // Modified file
+                provenance: ContextProvenance::Diff,
             });
         }
 
@@ -346,6 +352,8 @@ impl ContextPacker {
                 end_line: end,
                 content: context_content,
                 relevance: "Worktree file (header)".to_string(),
+                priority: 2, // Structural/header context
+                provenance: ContextProvenance::Header,
             });
         }
 
@@ -353,7 +361,15 @@ impl ContextPacker {
     }
 
     /// Trim a WorkPacket to fit within the token budget.
+    ///
+    /// Sorts file contexts by priority (lowest priority number = most important)
+    /// so `pop()` removes the least important contexts first.
     fn trim_to_budget(&self, packet: &mut WorkPacket) {
+        // Sort so highest-priority-number (least important) is last → popped first
+        packet
+            .file_contexts
+            .sort_by(|a, b| a.priority.cmp(&b.priority));
+
         // Drop file contexts from the end until we're under budget
         while packet.estimated_tokens() > self.max_context_tokens
             && !packet.file_contexts.is_empty()
@@ -448,6 +464,8 @@ mod tests {
                 end_line: 100,
                 content: "x".repeat(500),
                 relevance: "test".to_string(),
+                priority: 3,
+                provenance: ContextProvenance::Header,
             });
         }
 
