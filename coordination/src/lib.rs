@@ -131,5 +131,8 @@ pub use work_packet::{Constraint, FileContext, KeySymbol, WorkPacket, WorkPacket
 // Re-export context packer types
 pub use context_packer::{ContextPacker, FileWalker};
 
+// Re-export pre-routing classifier types
+pub use router::{ComplexityFactors, PreRoutingAnalysis, PreRoutingClassifier, RiskFactor, RiskKind, RiskLevel};
+
 // Re-export provider registry types
 pub use registry::{ProviderCapabilities, ProviderEntry, ProviderHealth, ProviderRegistry};
