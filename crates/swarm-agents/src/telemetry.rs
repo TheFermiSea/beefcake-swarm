@@ -11,6 +11,33 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+/// The action performed on a file artifact during an iteration.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ArtifactAction {
+    /// File was read but not modified.
+    Read,
+    /// File was modified (existed before the iteration).
+    Modified,
+    /// File was created during this iteration.
+    Created,
+    /// File was deleted during this iteration.
+    Deleted,
+}
+
+/// A record of a single file artifact touched during an iteration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ArtifactRecord {
+    /// Relative path to the file within the worktree.
+    pub path: String,
+    /// The action performed on the file.
+    pub action: ArtifactAction,
+    /// Optional line range affected (start, end), inclusive.
+    pub line_range: Option<(u32, u32)>,
+    /// Net change in file size in bytes (positive = grew, negative = shrank).
+    pub size_delta: Option<i64>,
+}
+
 /// Metrics for a single iteration within a session.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IterationMetrics {
@@ -29,6 +56,8 @@ pub struct IterationMetrics {
     pub rollback_performed: bool,
     pub escalated: bool,
     pub coder_route: Option<String>,
+    /// File-level footprint of this iteration.
+    pub artifacts: Vec<ArtifactRecord>,
 }
 
 /// Metrics for a complete orchestrator session.
@@ -86,6 +115,7 @@ struct IterationBuilder {
     rollback_performed: bool,
     escalated: bool,
     coder_route: Option<String>,
+    artifacts: Vec<ArtifactRecord>,
 }
 
 impl MetricsCollector {
@@ -119,6 +149,7 @@ impl MetricsCollector {
             rollback_performed: false,
             escalated: false,
             coder_route: None,
+            artifacts: Vec::new(),
         });
     }
 
@@ -194,6 +225,13 @@ impl MetricsCollector {
         }
     }
 
+    /// Record a file artifact touched during this iteration.
+    pub fn record_artifact(&mut self, artifact: ArtifactRecord) {
+        if let Some(ref mut iter) = self.current_iteration {
+            iter.artifacts.push(artifact);
+        }
+    }
+
     /// Finish the current iteration and store its metrics.
     pub fn finish_iteration(&mut self) {
         if let Some(iter) = self.current_iteration.take() {
@@ -213,6 +251,7 @@ impl MetricsCollector {
                 rollback_performed: iter.rollback_performed,
                 escalated: iter.escalated,
                 coder_route: iter.coder_route,
+                artifacts: iter.artifacts,
             });
         }
     }
@@ -308,6 +347,24 @@ pub fn append_telemetry(metrics: &SessionMetrics, repo_root: &Path) {
         }
         Err(e) => warn!("Failed to serialize telemetry: {e}"),
     }
+}
+
+/// Compute the churn score for a set of artifact records.
+///
+/// Churn score is the ratio of modification actions (Modified + Deleted) to
+/// total artifact touches. A score of 1.0 means every touched file was
+/// modified or deleted; 0.0 means only reads and creates occurred.
+///
+/// Returns 0.0 when `artifacts` is empty.
+pub fn artifact_churn_score(artifacts: &[ArtifactRecord]) -> f64 {
+    if artifacts.is_empty() {
+        return 0.0;
+    }
+    let modifications = artifacts
+        .iter()
+        .filter(|a| matches!(a.action, ArtifactAction::Modified | ArtifactAction::Deleted))
+        .count();
+    modifications as f64 / artifacts.len() as f64
 }
 
 /// Aggregate analytics computed from multiple sessions.
@@ -630,6 +687,7 @@ mod tests {
             rollback_performed: false,
             escalated: false,
             coder_route: None,
+            artifacts: vec![],
         });
         metrics1.iterations.push(IterationMetrics {
             iteration: 2,
@@ -647,6 +705,7 @@ mod tests {
             rollback_performed: false,
             escalated: false,
             coder_route: None,
+            artifacts: vec![],
         });
 
         let mut metrics2 = SessionMetrics {
@@ -679,6 +738,7 @@ mod tests {
             rollback_performed: false,
             escalated: false,
             coder_route: None,
+            artifacts: vec![],
         });
 
         append_telemetry(&metrics1, dir.path());
@@ -699,5 +759,115 @@ mod tests {
         expected_errors.insert("Syntax".to_string(), 2);
         expected_errors.insert("Type".to_string(), 1);
         assert_eq!(analytics.error_category_frequencies, expected_errors);
+    }
+
+    #[test]
+    fn test_artifact_churn_score_empty() {
+        assert_eq!(artifact_churn_score(&[]), 0.0);
+    }
+
+    #[test]
+    fn test_artifact_churn_score_all_reads() {
+        let artifacts = vec![
+            ArtifactRecord {
+                path: "src/lib.rs".into(),
+                action: ArtifactAction::Read,
+                line_range: None,
+                size_delta: None,
+            },
+            ArtifactRecord {
+                path: "src/main.rs".into(),
+                action: ArtifactAction::Read,
+                line_range: None,
+                size_delta: None,
+            },
+        ];
+        assert_eq!(artifact_churn_score(&artifacts), 0.0);
+    }
+
+    #[test]
+    fn test_artifact_churn_score_all_modifications() {
+        let artifacts = vec![
+            ArtifactRecord {
+                path: "src/lib.rs".into(),
+                action: ArtifactAction::Modified,
+                line_range: Some((1, 50)),
+                size_delta: Some(100),
+            },
+            ArtifactRecord {
+                path: "src/old.rs".into(),
+                action: ArtifactAction::Deleted,
+                line_range: None,
+                size_delta: Some(-200),
+            },
+        ];
+        assert_eq!(artifact_churn_score(&artifacts), 1.0);
+    }
+
+    #[test]
+    fn test_artifact_churn_score_mixed() {
+        // 2 modifications out of 4 total = 0.5
+        let artifacts = vec![
+            ArtifactRecord {
+                path: "src/a.rs".into(),
+                action: ArtifactAction::Read,
+                line_range: None,
+                size_delta: None,
+            },
+            ArtifactRecord {
+                path: "src/b.rs".into(),
+                action: ArtifactAction::Modified,
+                line_range: Some((10, 20)),
+                size_delta: Some(50),
+            },
+            ArtifactRecord {
+                path: "src/c.rs".into(),
+                action: ArtifactAction::Created,
+                line_range: None,
+                size_delta: Some(300),
+            },
+            ArtifactRecord {
+                path: "src/d.rs".into(),
+                action: ArtifactAction::Deleted,
+                line_range: None,
+                size_delta: Some(-150),
+            },
+        ];
+        assert_eq!(artifact_churn_score(&artifacts), 0.5);
+    }
+
+    #[test]
+    fn test_record_artifact_stored_in_iteration() {
+        let mut collector = MetricsCollector::new("sess-art", "issue-art", "Artifact test");
+
+        collector.start_iteration(1, "Worker");
+        collector.record_artifact(ArtifactRecord {
+            path: "src/foo.rs".into(),
+            action: ArtifactAction::Modified,
+            line_range: Some((1, 30)),
+            size_delta: Some(42),
+        });
+        collector.record_artifact(ArtifactRecord {
+            path: "src/bar.rs".into(),
+            action: ArtifactAction::Created,
+            line_range: None,
+            size_delta: Some(100),
+        });
+        collector.finish_iteration();
+
+        let metrics = collector.finalize(true, "Worker");
+        assert_eq!(metrics.iterations[0].artifacts.len(), 2);
+        assert_eq!(metrics.iterations[0].artifacts[0].path, "src/foo.rs");
+        assert_eq!(
+            metrics.iterations[0].artifacts[0].action,
+            ArtifactAction::Modified
+        );
+        assert_eq!(metrics.iterations[0].artifacts[0].line_range, Some((1, 30)));
+        assert_eq!(metrics.iterations[0].artifacts[0].size_delta, Some(42));
+        assert_eq!(metrics.iterations[0].artifacts[1].path, "src/bar.rs");
+        assert_eq!(
+            metrics.iterations[0].artifacts[1].action,
+            ArtifactAction::Created
+        );
     }
 }

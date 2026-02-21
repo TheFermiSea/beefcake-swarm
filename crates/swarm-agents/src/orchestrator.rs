@@ -435,6 +435,59 @@ fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
     }
 }
 
+/// Collect artifact records from the git diff between two commits.
+///
+/// Parses `git diff --numstat` to determine which files were added, modified,
+/// or deleted. Files that existed before (`from`) and after (`to`) are
+/// `Modified`; files only in `to` are `Created`; files only in `from` are
+/// `Deleted`. The `size_delta` is approximated as `(added - removed)` lines
+/// (a line-count proxy; byte-level deltas would require `--stat`).
+fn collect_artifacts_from_diff(
+    wt_path: &Path,
+    from: &str,
+    to: &str,
+) -> Vec<telemetry::ArtifactRecord> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--numstat", from, to])
+        .current_dir(wt_path)
+        .output();
+
+    let stdout = match output {
+        Ok(ref out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
+        _ => return Vec::new(),
+    };
+
+    stdout
+        .lines()
+        .filter_map(|line| {
+            // numstat format: "<added>\t<removed>\t<path>"
+            // Binary files show "-\t-\t<path>"
+            let parts: Vec<&str> = line.splitn(3, '\t').collect();
+            if parts.len() < 3 {
+                return None;
+            }
+            let added: i64 = parts[0].parse().unwrap_or(0);
+            let removed: i64 = parts[1].parse().unwrap_or(0);
+            let path = parts[2].trim().to_string();
+
+            let action = if added > 0 && removed == 0 {
+                telemetry::ArtifactAction::Created
+            } else if added == 0 && removed > 0 {
+                telemetry::ArtifactAction::Deleted
+            } else {
+                telemetry::ArtifactAction::Modified
+            };
+
+            Some(telemetry::ArtifactRecord {
+                path,
+                action,
+                line_range: None,
+                size_delta: Some(added - removed),
+            })
+        })
+        .collect()
+}
+
 /// Returns `true` when the auto-fix false-positive guard should apply.
 ///
 /// The guard fires only when auto-fix actually ran this iteration AND a minimum
@@ -1004,6 +1057,16 @@ pub async fn process_issue(
 
         // Capture the post-agent commit hash (before auto-fix) for diff sizing.
         let post_agent_commit = git_mgr.current_commit_full().ok();
+
+        // --- Record artifact footprint from git diff ---
+        if let (Some(ref pre), Some(ref post)) = (&pre_worker_commit, &post_agent_commit) {
+            if pre != post {
+                let artifacts = collect_artifacts_from_diff(&wt_path, pre, post);
+                for artifact in artifacts {
+                    metrics.record_artifact(artifact);
+                }
+            }
+        }
 
         if !has_changes {
             escalation.record_no_change();
