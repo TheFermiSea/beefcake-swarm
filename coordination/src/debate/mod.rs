@@ -18,11 +18,31 @@
 //!   │                                                     (→ arbitration)
 //!   └─ abort at any point → Aborted
 //! ```
+//!
+//! # Modules
+//!
+//! - [`state`] — Phase state machine, session tracking, transitions
+//! - [`consensus`] — Verdict protocol, consensus detection, stall detection
+//! - [`guardrails`] — Deadlock/timeout guardrails
+//! - [`orchestrator`] — High-level debate driver tying everything together
+//! - [`critique`] — Structured reviewer→coder feedback plumbing
+//! - [`persistence`] — Checkpoint/resume for interrupted debates
 
 pub mod consensus;
+pub mod critique;
 pub mod guardrails;
+pub mod orchestrator;
+pub mod persistence;
 pub mod state;
 
 pub use consensus::{ConsensusCheck, ConsensusOutcome, ConsensusProtocol, Verdict};
+pub use critique::{
+    CritiqueCategory, CritiqueItem, CritiqueSeverity, PatchCritique, RepairInstruction,
+};
 pub use guardrails::{DeadlockOutcome, GuardrailConfig, GuardrailEngine};
+pub use orchestrator::{
+    CoderOutput, DebateConfig, DebateError, DebateOrchestrator, DebateOutcome, NextAction,
+    ReviewerOutput,
+};
+pub use persistence::{CheckpointManager, DebateCheckpoint, IntegrityStatus, PersistenceError};
 pub use state::{DebatePhase, DebateSession, DebateTransition, ParticipantRole, RoundRecord};
