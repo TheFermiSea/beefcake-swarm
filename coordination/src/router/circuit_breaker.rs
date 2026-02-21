@@ -34,6 +34,10 @@ fn unix_now() -> u64 {
 pub struct CircuitBreaker {
     consecutive_failures: HashMap<ModelId, u32>,
     last_failure_secs: HashMap<ModelId, u64>,
+    /// Consecutive 429 rate-limit hits per model (for exponential backoff).
+    rate_limit_hits: HashMap<ModelId, u32>,
+    /// Unix timestamp when rate-limit cooldown expires per model.
+    rate_limit_until: HashMap<ModelId, u64>,
     /// Consecutive failures before the circuit opens.
     pub failure_threshold: u32,
     /// Seconds after last failure before Open → HalfOpen.
@@ -46,6 +50,8 @@ impl CircuitBreaker {
         Self {
             consecutive_failures: HashMap::new(),
             last_failure_secs: HashMap::new(),
+            rate_limit_hits: HashMap::new(),
+            rate_limit_until: HashMap::new(),
             failure_threshold,
             cooldown_secs,
         }
@@ -55,6 +61,8 @@ impl CircuitBreaker {
     pub fn record_success(&mut self, model: ModelId) {
         self.consecutive_failures.remove(&model);
         self.last_failure_secs.remove(&model);
+        self.rate_limit_hits.remove(&model);
+        self.rate_limit_until.remove(&model);
     }
 
     /// Record a failure — may trip circuit to Open.
@@ -64,8 +72,37 @@ impl CircuitBreaker {
         self.last_failure_secs.insert(model, unix_now());
     }
 
+    /// Record a 429 rate-limit response with adaptive exponential backoff.
+    ///
+    /// Cooldown doubles each consecutive hit: 2 s, 4 s, 8 s, … capped at 120 s.
+    /// Also records a regular failure so the normal circuit-breaker logic applies.
+    pub fn record_rate_limit(&mut self, model: ModelId) {
+        let hits = self.rate_limit_hits.entry(model).or_insert(0);
+        *hits += 1;
+        let cooldown = 2u64
+            .saturating_mul(2u64.saturating_pow((*hits).saturating_sub(1)))
+            .min(120);
+        self.rate_limit_until.insert(model, unix_now() + cooldown);
+        self.record_failure(model);
+    }
+
+    /// Remaining rate-limit cooldown seconds for `model`, or `None` if not rate-limited.
+    pub fn rate_limit_cooldown(&self, model: ModelId) -> Option<u64> {
+        let &until = self.rate_limit_until.get(&model)?;
+        let now = unix_now();
+        if now < until {
+            Some(until - now)
+        } else {
+            None
+        }
+    }
+
     /// Current state of the circuit for `model`.
     pub fn state(&self, model: ModelId) -> CircuitState {
+        // Rate-limit cooldown takes priority
+        if self.rate_limit_cooldown(model).is_some() {
+            return CircuitState::Open;
+        }
         let failures = self.consecutive_failures.get(&model).copied().unwrap_or(0);
         if failures < self.failure_threshold {
             return CircuitState::Closed;
@@ -195,5 +232,50 @@ mod tests {
         let cb = CircuitBreaker::default();
         let ladder = FallbackLadder::default_ladder();
         assert_eq!(ladder.next_available(&cb), Some(ModelId::HydraCoder));
+    }
+
+    #[test]
+    fn test_rate_limit_exponential_backoff() {
+        let mut cb = CircuitBreaker::new(10, 9999);
+        cb.record_rate_limit(ModelId::HydraCoder);
+        assert!(cb.rate_limit_cooldown(ModelId::HydraCoder).is_some());
+        assert_eq!(cb.state(ModelId::HydraCoder), CircuitState::Open);
+        assert!(!cb.is_available(ModelId::HydraCoder));
+        assert_eq!(cb.failure_count(ModelId::HydraCoder), 1);
+    }
+
+    #[test]
+    fn test_rate_limit_resets_on_success() {
+        let mut cb = CircuitBreaker::new(10, 9999);
+        cb.record_rate_limit(ModelId::Opus45);
+        assert!(cb.rate_limit_cooldown(ModelId::Opus45).is_some());
+        cb.record_success(ModelId::Opus45);
+        assert!(cb.rate_limit_cooldown(ModelId::Opus45).is_none());
+        assert_eq!(cb.state(ModelId::Opus45), CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_rate_limit_cooldown_expires() {
+        let mut cb = CircuitBreaker::new(10, 9999);
+        // Manually set rate_limit_until to the past so cooldown is expired
+        cb.rate_limit_until
+            .insert(ModelId::Qwen35, unix_now().saturating_sub(1));
+        cb.rate_limit_hits.insert(ModelId::Qwen35, 1);
+        assert!(cb.rate_limit_cooldown(ModelId::Qwen35).is_none());
+        assert_eq!(cb.state(ModelId::Qwen35), CircuitState::Closed);
+    }
+
+    #[test]
+    fn test_rate_limit_no_cooldown_for_unlimited() {
+        let cb = CircuitBreaker::default();
+        assert!(cb.rate_limit_cooldown(ModelId::HydraCoder).is_none());
+    }
+
+    #[test]
+    fn test_rate_limit_fallback_skips_rate_limited() {
+        let mut cb = CircuitBreaker::new(10, 9999);
+        cb.record_rate_limit(ModelId::HydraCoder);
+        let ladder = FallbackLadder::default_ladder();
+        assert_eq!(ladder.next_available(&cb), Some(ModelId::Qwen35));
     }
 }
