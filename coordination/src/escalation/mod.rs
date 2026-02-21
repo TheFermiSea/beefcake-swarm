@@ -31,7 +31,9 @@
 //! ```
 
 pub mod engine;
+pub mod friction;
 pub mod state;
 
 pub use engine::{EscalationDecision, EscalationEngine};
+pub use friction::{FrictionDetector, FrictionKind, FrictionSeverity, FrictionSignal};
 pub use state::{EscalationState, SwarmTier, TierBudget};
