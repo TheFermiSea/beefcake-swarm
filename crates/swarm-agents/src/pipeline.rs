@@ -426,6 +426,7 @@ mod tests {
             delegation_chain: vec![],
             skill_hints: vec![],
             replay_hints: vec![],
+            validator_feedback: vec![],
         }
     }
 

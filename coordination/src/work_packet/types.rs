@@ -4,7 +4,7 @@ use crate::analytics::replay::ReplayHint;
 use crate::analytics::skills::SkillHint;
 use crate::escalation::state::SwarmTier;
 use crate::feedback::error_parser::ErrorCategory;
-use crate::verifier::report::FailureSignal;
+use crate::verifier::report::{FailureSignal, ValidatorFeedback};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -67,6 +67,9 @@ pub struct WorkPacket {
     /// Replay hints from the experience trace index — past successful session traces
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub replay_hints: Vec<ReplayHint>,
+    /// Structured validator feedback from prior iteration (TextGrad pattern)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub validator_feedback: Vec<ValidatorFeedback>,
 }
 
 impl WorkPacket {
@@ -302,6 +305,7 @@ mod tests {
             delegation_chain: vec![],
             skill_hints: vec![],
             replay_hints: vec![],
+            validator_feedback: vec![],
         };
 
         let summary = packet.summary();
@@ -345,6 +349,7 @@ mod tests {
             delegation_chain: vec![],
             skill_hints: vec![],
             replay_hints: vec![],
+            validator_feedback: vec![],
         };
 
         let json = serde_json::to_string_pretty(&packet).unwrap();
@@ -383,6 +388,7 @@ mod tests {
             delegation_chain: vec![],
             skill_hints: vec![],
             replay_hints: vec![],
+            validator_feedback: vec![],
         };
 
         // Should be a reasonable estimate
