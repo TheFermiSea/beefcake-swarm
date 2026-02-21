@@ -326,6 +326,212 @@ impl RulePackRegistry {
     }
 }
 
+impl RulePackRegistry {
+    /// Load a single rule pack from a YAML string.
+    ///
+    /// The YAML format matches the `RulePack` serde structure:
+    /// ```yaml
+    /// name: my-pack
+    /// description: My custom rules
+    /// rules:
+    ///   - rule_id: no-debug
+    ///     description: Remove debug prints
+    ///     severity: Warning
+    ///     language: rust
+    ///     pattern: "dbg!($$$ARGS)"
+    ///     category: cleanup
+    ///     enabled: true
+    /// ```
+    pub fn load_yaml(yaml: &str) -> Result<RulePack, RuleIngestionError> {
+        serde_yaml::from_str(yaml).map_err(|e| RuleIngestionError {
+            source_path: None,
+            kind: IngestionErrorKind::ParseError,
+            detail: format!("YAML parse error: {}", e),
+        })
+    }
+
+    /// Load a rule pack from a YAML file path.
+    pub fn load_yaml_file(path: &std::path::Path) -> Result<RulePack, RuleIngestionError> {
+        let content = std::fs::read_to_string(path).map_err(|e| RuleIngestionError {
+            source_path: Some(path.display().to_string()),
+            kind: IngestionErrorKind::IoError,
+            detail: format!("Failed to read file: {}", e),
+        })?;
+        let mut pack =
+            serde_yaml::from_str::<RulePack>(&content).map_err(|e| RuleIngestionError {
+                source_path: Some(path.display().to_string()),
+                kind: IngestionErrorKind::ParseError,
+                detail: format!("YAML parse error: {}", e),
+            })?;
+
+        // Tag rules with source file for traceability
+        for rule in &mut pack.rules {
+            if rule.rule_file.is_none() {
+                rule.rule_file = Some(path.display().to_string());
+            }
+        }
+
+        Ok(pack)
+    }
+
+    /// Load all YAML rule pack files from a directory.
+    ///
+    /// Scans for `*.yml` and `*.yaml` files, loads each as a `RulePack`,
+    /// and registers them. Returns a summary of loaded packs and errors.
+    pub fn load_directory(
+        &mut self,
+        dir: &std::path::Path,
+    ) -> Result<IngestionSummary, RuleIngestionError> {
+        if !dir.is_dir() {
+            return Err(RuleIngestionError {
+                source_path: Some(dir.display().to_string()),
+                kind: IngestionErrorKind::IoError,
+                detail: "Path is not a directory".to_string(),
+            });
+        }
+
+        let mut summary = IngestionSummary::default();
+
+        let entries = std::fs::read_dir(dir).map_err(|e| RuleIngestionError {
+            source_path: Some(dir.display().to_string()),
+            kind: IngestionErrorKind::IoError,
+            detail: format!("Failed to read directory: {}", e),
+        })?;
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(e) => e,
+                Err(e) => {
+                    summary.errors.push(RuleIngestionError {
+                        source_path: None,
+                        kind: IngestionErrorKind::IoError,
+                        detail: format!("Failed to read dir entry: {}", e),
+                    });
+                    continue;
+                }
+            };
+
+            let path = entry.path();
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if ext != "yml" && ext != "yaml" {
+                continue;
+            }
+
+            match Self::load_yaml_file(&path) {
+                Ok(pack) => {
+                    let name = pack.name.clone();
+                    let rule_count = pack.enabled_count();
+                    self.register(pack);
+                    summary.loaded_packs.push(name);
+                    summary.total_rules += rule_count;
+                }
+                Err(e) => {
+                    summary.errors.push(e);
+                }
+            }
+        }
+
+        summary.loaded_packs.sort();
+        Ok(summary)
+    }
+
+    /// Create a registry with defaults, then overlay packs from a directory.
+    pub fn with_defaults_and_directory(
+        dir: &std::path::Path,
+    ) -> Result<(Self, IngestionSummary), RuleIngestionError> {
+        let mut registry = Self::with_defaults();
+        let summary = registry.load_directory(dir)?;
+        Ok((registry, summary))
+    }
+
+    /// Export a pack to YAML string.
+    pub fn export_yaml(pack: &RulePack) -> Result<String, RuleIngestionError> {
+        serde_yaml::to_string(pack).map_err(|e| RuleIngestionError {
+            source_path: None,
+            kind: IngestionErrorKind::SerializeError,
+            detail: format!("YAML serialize error: {}", e),
+        })
+    }
+
+    /// Compute a version hash for all registered rules (deterministic ordering).
+    pub fn version_hash(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut sorted_packs: Vec<_> = self.packs.iter().collect();
+        sorted_packs.sort_by_key(|(name, _)| (*name).clone());
+        for (name, pack) in sorted_packs {
+            name.hash(&mut hasher);
+            pack.rules.len().hash(&mut hasher);
+            for rule in &pack.rules {
+                rule.rule_id.hash(&mut hasher);
+                rule.enabled.hash(&mut hasher);
+            }
+        }
+        hasher.finish()
+    }
+}
+
+/// Error from rule ingestion.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuleIngestionError {
+    /// Path that caused the error (if file-based).
+    pub source_path: Option<String>,
+    /// Error kind.
+    pub kind: IngestionErrorKind,
+    /// Human-readable detail.
+    pub detail: String,
+}
+
+impl std::fmt::Display for RuleIngestionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self.source_path {
+            Some(path) => write!(f, "[{}] {}: {}", path, self.kind, self.detail),
+            None => write!(f, "{}: {}", self.kind, self.detail),
+        }
+    }
+}
+
+impl std::error::Error for RuleIngestionError {}
+
+/// Kind of ingestion error.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum IngestionErrorKind {
+    /// File I/O error.
+    IoError,
+    /// YAML parse error.
+    ParseError,
+    /// YAML serialize error.
+    SerializeError,
+}
+
+impl std::fmt::Display for IngestionErrorKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::IoError => write!(f, "io_error"),
+            Self::ParseError => write!(f, "parse_error"),
+            Self::SerializeError => write!(f, "serialize_error"),
+        }
+    }
+}
+
+/// Summary of a directory ingestion operation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct IngestionSummary {
+    /// Names of successfully loaded packs.
+    pub loaded_packs: Vec<String>,
+    /// Total rules across loaded packs.
+    pub total_rules: usize,
+    /// Errors encountered during loading.
+    pub errors: Vec<RuleIngestionError>,
+}
+
+impl IngestionSummary {
+    /// Whether all files loaded successfully.
+    pub fn all_ok(&self) -> bool {
+        self.errors.is_empty()
+    }
+}
+
 impl Default for RulePackRegistry {
     fn default() -> Self {
         Self::with_defaults()
