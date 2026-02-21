@@ -27,10 +27,7 @@ pub enum DelightKind {
     /// Only low-complexity errors remain
     LowComplexityOnly { max_complexity: u8 },
     /// Resolved within budget (iterations used vs budget)
-    EfficientResolution {
-        iterations_used: u32,
-        budget: u32,
-    },
+    EfficientResolution { iterations_used: u32, budget: u32 },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -211,7 +208,10 @@ mod tests {
         let mut s = EscalationState::new("t");
         s.record_iteration(vec![], 0, true);
         let signals = DelightDetector::detect(&s, &green_rep());
-        assert!(has(&signals, |k| matches!(k, DelightKind::FirstPassSuccess)));
+        assert!(has(&signals, |k| matches!(
+            k,
+            DelightKind::FirstPassSuccess
+        )));
         let sig = signals
             .iter()
             .find(|s| matches!(s.kind, DelightKind::FirstPassSuccess))
@@ -225,10 +225,10 @@ mod tests {
         s.record_iteration(vec![ErrorCategory::TypeMismatch], 10, false);
         s.record_iteration(vec![ErrorCategory::TypeMismatch], 1, false);
         let signals = DelightDetector::detect(&s, &rep());
-        assert!(has(
-            &signals,
-            |k| matches!(k, DelightKind::RapidConvergence { .. })
-        ));
+        assert!(has(&signals, |k| matches!(
+            k,
+            DelightKind::RapidConvergence { .. }
+        )));
     }
 
     #[test]
@@ -238,10 +238,10 @@ mod tests {
         s.record_iteration(vec![ErrorCategory::TypeMismatch], 4, false);
         s.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false);
         let signals = DelightDetector::detect(&s, &rep());
-        assert!(has(
-            &signals,
-            |k| matches!(k, DelightKind::SteadyProgress { .. })
-        ));
+        assert!(has(&signals, |k| matches!(
+            k,
+            DelightKind::SteadyProgress { .. }
+        )));
     }
 
     #[test]
@@ -249,9 +249,9 @@ mod tests {
         let mut s = EscalationState::new("t");
         s.record_iteration(vec![], 0, true);
         let signals = DelightDetector::detect(&s, &green_rep());
-        assert!(has(
-            &signals,
-            |k| matches!(k, DelightKind::EfficientResolution { .. })
-        ));
+        assert!(has(&signals, |k| matches!(
+            k,
+            DelightKind::EfficientResolution { .. }
+        )));
     }
 }
