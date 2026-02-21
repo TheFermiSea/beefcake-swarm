@@ -65,6 +65,46 @@ pub struct TierBudget {
     pub max_consultations: u32,
 }
 
+/// Per-tier turn and timeout policy.
+///
+/// Centralises the agent turn limits and wall-clock timeouts that were
+/// previously scattered across `coder.rs`, `manager.rs`, and `orchestrator.rs`.
+/// The orchestrator queries `TurnPolicy::for_tier()` instead of hard-coding
+/// constants, making calibration a single-file change.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct TurnPolicy {
+    /// Maximum tool-call turns the agent may take per invocation.
+    pub max_turns: usize,
+    /// Wall-clock timeout (seconds) for a single agent invocation.
+    pub timeout_secs: u64,
+}
+
+impl TurnPolicy {
+    /// Calibrated defaults per tier.
+    ///
+    /// | Tier    | max_turns | timeout  | Rationale                              |
+    /// |---------|-----------|----------|----------------------------------------|
+    /// | Worker  | 15        | 30 min   | Fast coder, bounded tool loops         |
+    /// | Council | 20        | 45 min   | Manager delegates to workers via tools |
+    /// | Human   | 0         | 0        | No automated agent                     |
+    pub fn for_tier(tier: SwarmTier) -> Self {
+        match tier {
+            SwarmTier::Worker => Self {
+                max_turns: 15,
+                timeout_secs: 30 * 60,
+            },
+            SwarmTier::Council => Self {
+                max_turns: 20,
+                timeout_secs: 45 * 60,
+            },
+            SwarmTier::Human => Self {
+                max_turns: 0,
+                timeout_secs: 0,
+            },
+        }
+    }
+}
+
 /// Record of a single iteration attempt
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct IterationRecord {
@@ -459,5 +499,20 @@ mod tests {
         );
         assert_eq!(state.current_tier, SwarmTier::Council);
         assert_eq!(state.escalation_history.len(), 1);
+    }
+
+    #[test]
+    fn test_turn_policy_defaults() {
+        let worker = TurnPolicy::for_tier(SwarmTier::Worker);
+        assert_eq!(worker.max_turns, 15);
+        assert_eq!(worker.timeout_secs, 30 * 60);
+
+        let council = TurnPolicy::for_tier(SwarmTier::Council);
+        assert_eq!(council.max_turns, 20);
+        assert_eq!(council.timeout_secs, 45 * 60);
+
+        let human = TurnPolicy::for_tier(SwarmTier::Human);
+        assert_eq!(human.max_turns, 0);
+        assert_eq!(human.timeout_secs, 0);
     }
 }
