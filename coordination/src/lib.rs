@@ -58,6 +58,7 @@ pub mod feedback;
 pub mod harness;
 pub mod registry;
 pub mod resilience;
+pub mod reviewer_policy;
 pub mod rollout;
 pub mod router;
 pub mod shell_safety;
