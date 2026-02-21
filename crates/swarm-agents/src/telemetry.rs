@@ -225,6 +225,22 @@ impl MetricsCollector {
         });
     }
 
+    /// Build a `LoopMetrics` snapshot from the current in-progress iteration.
+    ///
+    /// Returns `None` if no iteration is in progress.
+    pub fn build_loop_metrics(&self, all_green: bool) -> Option<LoopMetrics> {
+        self.current_iteration.as_ref().map(|iter| LoopMetrics {
+            iteration: iter.iteration,
+            tier: iter.tier.clone(),
+            agent_ms: iter.agent_response_ms,
+            verifier_ms: iter.verifier_ms,
+            error_count: iter.error_count,
+            all_green,
+            escalated: iter.escalated,
+            no_change: iter.no_change,
+        })
+    }
+
     /// Finalize and produce the complete session metrics.
     pub fn finalize(mut self, success: bool, final_tier: &str) -> SessionMetrics {
         // Flush any in-progress iteration
@@ -304,6 +320,39 @@ pub struct AggregateAnalytics {
     pub total_prompt_tokens: u64,
     pub total_completion_tokens: u64,
     pub error_category_frequencies: std::collections::HashMap<String, usize>,
+}
+
+/// Per-iteration loop metrics emitted as a structured tracing event.
+///
+/// Compatible with OpenTelemetry exporters via `tracing-opentelemetry`.
+#[derive(Debug, Clone)]
+pub struct LoopMetrics {
+    pub iteration: u32,
+    pub tier: String,
+    pub agent_ms: u64,
+    pub verifier_ms: u64,
+    pub error_count: usize,
+    pub all_green: bool,
+    pub escalated: bool,
+    pub no_change: bool,
+}
+
+impl LoopMetrics {
+    /// Emit this as a structured tracing event (OpenTelemetry-compatible).
+    pub fn emit(&self) {
+        tracing::info!(
+            target: "swarm.metrics",
+            iteration = self.iteration,
+            tier = %self.tier,
+            agent_ms = self.agent_ms,
+            verifier_ms = self.verifier_ms,
+            error_count = self.error_count,
+            all_green = self.all_green,
+            escalated = self.escalated,
+            no_change = self.no_change,
+            "loop_iteration_complete"
+        );
+    }
 }
 
 /// Reads and analyzes telemetry data from `.swarm-telemetry.jsonl` files.

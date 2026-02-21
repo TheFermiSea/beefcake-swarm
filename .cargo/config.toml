@@ -1,5 +1,4 @@
 # Local rig-core patch: saturating_sub fix for token arithmetic overflow
 # when proxied models return total_tokens < prompt_tokens.
 # See PR #11 for details.
-[patch.crates-io]
-rig-core = { path = "patches/rig-core-0.30.0" }
+# NOTE: patch directory is incomplete; using registry version instead.

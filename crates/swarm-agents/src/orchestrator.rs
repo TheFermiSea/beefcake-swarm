@@ -596,6 +596,17 @@ pub async fn process_issue(
     let manager_timeout =
         timeout_from_env("SWARM_MANAGER_TIMEOUT_SECS", DEFAULT_MANAGER_TIMEOUT_SECS);
 
+    // Root span for the entire issue processing session (OpenTelemetry-compatible)
+    let process_span = tracing::info_span!(
+        "swarm.process_issue",
+        "issue.id" = %issue.id,
+        "issue.title" = %issue.title,
+        "session.id" = tracing::field::Empty,
+        "success" = tracing::field::Empty,
+        "total_iterations" = tracing::field::Empty,
+    );
+    let _process_guard = process_span.enter();
+
     // --- Validate objective ---
     let title_trimmed = issue.title.trim();
     if title_trimmed.is_empty() || title_trimmed.len() < config.min_objective_len {
@@ -643,6 +654,7 @@ pub async fn process_issue(
         // Non-fatal — continue without session tracking
     }
     session.set_current_feature(&issue.id);
+    process_span.record("session.id", session.session_id());
 
     // Log session start
     let _ = progress.log_session_start(
@@ -716,6 +728,17 @@ pub async fn process_issue(
 
         let tier = escalation.current_tier;
         metrics.start_iteration(iteration, &format!("{tier:?}"));
+        let iter_span = tracing::info_span!(
+            "swarm.iteration",
+            iteration = iteration,
+            "tier" = ?tier,
+            "issue.id" = %issue.id,
+            "all_green" = tracing::field::Empty,
+            "error_count" = tracing::field::Empty,
+            "agent_ms" = tracing::field::Empty,
+            "verifier_ms" = tracing::field::Empty,
+        );
+        let _iter_guard = iter_span.enter();
         info!(
             iteration,
             ?tier,
@@ -894,7 +917,9 @@ pub async fn process_issue(
         };
 
         // Handle agent failure
-        metrics.record_agent_time(agent_start.elapsed());
+        let agent_elapsed = agent_start.elapsed();
+        metrics.record_agent_time(agent_elapsed);
+        iter_span.record("agent_ms", agent_elapsed.as_millis() as u64);
         let response = match agent_future {
             Ok(r) => {
                 // Log the actual response text for debugging (truncated to 500 chars)
@@ -1070,7 +1095,11 @@ pub async fn process_issue(
         let verifier_start = std::time::Instant::now();
         let verifier = Verifier::new(&wt_path, verifier_config.clone());
         let mut report = verifier.run_pipeline().await;
-        metrics.record_verifier_time(verifier_start.elapsed());
+        let verifier_elapsed = verifier_start.elapsed();
+        metrics.record_verifier_time(verifier_elapsed);
+        iter_span.record("verifier_ms", verifier_elapsed.as_millis() as u64);
+        iter_span.record("all_green", report.all_green);
+        iter_span.record("error_count", report.failure_signals.len() as u64);
 
         info!(
             iteration,
@@ -1093,6 +1122,11 @@ pub async fn process_issue(
         let error_count = report.failure_signals.len();
         let cat_names: Vec<String> = error_cats.iter().map(|c| format!("{c:?}")).collect();
         metrics.record_verifier_results(error_count, cat_names);
+
+        // Emit OpenTelemetry-compatible loop metrics event
+        if let Some(lm) = metrics.build_loop_metrics(report.all_green) {
+            lm.emit();
+        }
 
         // --- Regression detection: rollback if errors increased ---
         if !report.all_green {
@@ -1421,6 +1455,10 @@ pub async fn process_issue(
     let session_metrics = metrics.finalize(success, &final_tier);
     telemetry::write_session_metrics(&session_metrics, &wt_path);
     telemetry::append_telemetry(&session_metrics, worktree_bridge.repo_root());
+
+    // Record final outcome on the root span
+    process_span.record("success", success);
+    process_span.record("total_iterations", session_metrics.total_iterations as u64);
 
     Ok(success)
 }
