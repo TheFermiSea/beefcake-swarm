@@ -7,8 +7,9 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+use super::error::{AnalyticsError, AnalyticsResult};
 
 use crate::feedback::error_parser::ErrorCategory;
 use crate::work_packet::types::IterationDelta;
@@ -169,16 +170,15 @@ impl TraceIndex {
     }
 
     /// Load traces from a JSON file. Returns empty index if file doesn't exist.
-    pub fn load(path: &Path) -> Result<Self> {
+    pub fn load(path: &Path) -> AnalyticsResult<Self> {
         if !path.exists() {
             return Ok(Self::new());
         }
-        let data = std::fs::read_to_string(path).context(format!(
-            "Failed to read trace index from {}",
-            path.display()
-        ))?;
-        let traces: Vec<ExperienceTrace> =
-            serde_json::from_str(&data).context("Failed to parse trace index JSON")?;
+        let data = std::fs::read_to_string(path).map_err(|e| AnalyticsError::FileRead {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        let traces: Vec<ExperienceTrace> = serde_json::from_str(&data)?;
         Ok(Self {
             traces,
             min_similarity: DEFAULT_MIN_SIMILARITY,
@@ -186,11 +186,12 @@ impl TraceIndex {
     }
 
     /// Persist traces to a JSON file.
-    pub fn save(&self, path: &Path) -> Result<()> {
-        let data =
-            serde_json::to_string_pretty(&self.traces).context("Failed to serialize traces")?;
-        std::fs::write(path, data)
-            .context(format!("Failed to write trace index to {}", path.display()))?;
+    pub fn save(&self, path: &Path) -> AnalyticsResult<()> {
+        let data = serde_json::to_string_pretty(&self.traces)?;
+        std::fs::write(path, data).map_err(|e| AnalyticsError::FileWrite {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
         Ok(())
     }
 
