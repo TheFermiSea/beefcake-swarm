@@ -48,6 +48,7 @@
 #![allow(dead_code)]
 #![allow(clippy::uninlined_format_args)]
 
+pub mod agent_profile;
 pub mod benchmark;
 pub mod context_packer;
 pub mod council;
