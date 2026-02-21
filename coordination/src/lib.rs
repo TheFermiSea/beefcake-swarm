@@ -98,6 +98,7 @@ pub use state::{
 };
 
 // Re-export analytics types
+pub use analytics::error::{AnalyticsError, AnalyticsResult};
 pub use analytics::replay::{ExperienceTrace, ReplayHint, TraceContext, TraceIndex, TraceOutcome};
 pub use analytics::skills::{Skill, SkillHint, SkillLibrary, SkillTrigger, TaskContext};
 pub use analytics::verification::{

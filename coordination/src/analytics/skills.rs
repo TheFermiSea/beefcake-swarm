@@ -7,9 +7,10 @@
 
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
+
+use super::error::{AnalyticsError, AnalyticsResult};
 
 use crate::feedback::error_parser::ErrorCategory;
 
@@ -180,16 +181,15 @@ impl SkillLibrary {
     }
 
     /// Load a skill library from a JSON file. Returns empty library if file doesn't exist.
-    pub fn load(path: &Path) -> Result<Self> {
+    pub fn load(path: &Path) -> AnalyticsResult<Self> {
         if !path.exists() {
             return Ok(Self::new());
         }
-        let data = std::fs::read_to_string(path).context(format!(
-            "Failed to read skill library from {}",
-            path.display()
-        ))?;
-        let skills: Vec<Skill> =
-            serde_json::from_str(&data).context("Failed to parse skill library JSON")?;
+        let data = std::fs::read_to_string(path).map_err(|e| AnalyticsError::FileRead {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
+        let skills: Vec<Skill> = serde_json::from_str(&data)?;
         Ok(Self {
             skills,
             min_samples: DEFAULT_MIN_SAMPLES,
@@ -198,13 +198,12 @@ impl SkillLibrary {
     }
 
     /// Persist the skill library to a JSON file.
-    pub fn save(&self, path: &Path) -> Result<()> {
-        let data = serde_json::to_string_pretty(&self.skills)
-            .context("Failed to serialize skill library")?;
-        std::fs::write(path, data).context(format!(
-            "Failed to write skill library to {}",
-            path.display()
-        ))?;
+    pub fn save(&self, path: &Path) -> AnalyticsResult<()> {
+        let data = serde_json::to_string_pretty(&self.skills)?;
+        std::fs::write(path, data).map_err(|e| AnalyticsError::FileWrite {
+            path: path.to_path_buf(),
+            source: e,
+        })?;
         Ok(())
     }
 
