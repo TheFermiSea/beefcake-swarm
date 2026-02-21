@@ -257,6 +257,201 @@ impl Default for StateMachine {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Transition Audit Log — structured export for post-run reasoning
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A structured audit report of a state machine run.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditReport {
+    /// Final state of the run.
+    pub final_state: OrchestratorState,
+    /// Total number of transitions.
+    pub transition_count: usize,
+    /// Final iteration number.
+    pub iteration: u32,
+    /// Total wall-clock duration in milliseconds.
+    pub total_elapsed_ms: u64,
+    /// Number of times each state was entered.
+    pub state_visit_counts: HashMap<OrchestratorState, u32>,
+    /// Number of retry loops (Verifying/Validating → Implementing).
+    pub retry_count: u32,
+    /// Number of escalations (→ Escalating).
+    pub escalation_count: u32,
+    /// The full ordered transition log.
+    pub transitions: Vec<TransitionRecord>,
+    /// Any invariant violations detected.
+    pub invariant_violations: Vec<String>,
+}
+
+impl StateMachine {
+    /// Generate a structured audit report from the state machine's history.
+    pub fn audit_report(&self) -> AuditReport {
+        let mut state_visits: HashMap<OrchestratorState, u32> = HashMap::new();
+        let mut retry_count = 0u32;
+        let mut escalation_count = 0u32;
+
+        for t in &self.transitions {
+            *state_visits.entry(t.to).or_insert(0) += 1;
+
+            // Count retries: going back to Implementing from Verifying/Validating
+            if t.to == OrchestratorState::Implementing
+                && (t.from == OrchestratorState::Verifying
+                    || t.from == OrchestratorState::Validating)
+            {
+                retry_count += 1;
+            }
+
+            // Count escalations
+            if t.to == OrchestratorState::Escalating {
+                escalation_count += 1;
+            }
+        }
+
+        let violations = check_invariants(&self.transitions, self.current);
+
+        AuditReport {
+            final_state: self.current,
+            transition_count: self.transitions.len(),
+            iteration: self.iteration,
+            total_elapsed_ms: self.created_at.elapsed().as_millis() as u64,
+            state_visit_counts: state_visits,
+            retry_count,
+            escalation_count,
+            transitions: self.transitions.clone(),
+            invariant_violations: violations,
+        }
+    }
+
+    /// Export the transition log as a JSON string.
+    pub fn export_transitions_json(&self) -> Result<String, serde_json::Error> {
+        serde_json::to_string_pretty(&self.transitions)
+    }
+}
+
+impl fmt::Display for AuditReport {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "=== State Machine Audit Report ===")?;
+        writeln!(f, "Final state: {}", self.final_state)?;
+        writeln!(f, "Transitions: {}", self.transition_count)?;
+        writeln!(f, "Iterations: {}", self.iteration)?;
+        writeln!(f, "Retries: {}", self.retry_count)?;
+        writeln!(f, "Escalations: {}", self.escalation_count)?;
+
+        if !self.invariant_violations.is_empty() {
+            writeln!(f, "VIOLATIONS ({}):", self.invariant_violations.len())?;
+            for v in &self.invariant_violations {
+                writeln!(f, "  - {v}")?;
+            }
+        } else {
+            writeln!(f, "Invariants: all passed")?;
+        }
+
+        writeln!(f, "--- Transition Log ---")?;
+        for (i, t) in self.transitions.iter().enumerate() {
+            let reason = t.reason.as_deref().unwrap_or("");
+            writeln!(
+                f,
+                "  [{i}] {} → {} (iter={}, +{}ms) {reason}",
+                t.from, t.to, t.iteration, t.elapsed_ms
+            )?;
+        }
+        Ok(())
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// State Invariants — assertions that should hold for any valid run
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Check structural invariants on a completed transition log.
+///
+/// Returns a list of violation descriptions (empty = all invariants hold).
+pub fn check_invariants(
+    transitions: &[TransitionRecord],
+    final_state: OrchestratorState,
+) -> Vec<String> {
+    let mut violations = Vec::new();
+
+    // INV-1: Every transition must be legal according to the transition table.
+    for (i, t) in transitions.iter().enumerate() {
+        if !is_legal_transition(t.from, t.to) {
+            violations.push(format!(
+                "INV-1 (legal transitions): transition [{i}] {} → {} is illegal",
+                t.from, t.to
+            ));
+        }
+    }
+
+    // INV-2: Terminal states are absorbing — no transitions after Resolved/Failed.
+    let mut saw_terminal = false;
+    for (i, t) in transitions.iter().enumerate() {
+        if saw_terminal {
+            violations.push(format!(
+                "INV-2 (terminal absorbing): transition [{i}] {} → {} occurs after terminal state",
+                t.from, t.to
+            ));
+        }
+        if t.to.is_terminal() {
+            saw_terminal = true;
+        }
+    }
+
+    // INV-3: If run ended in terminal, the last transition should land on it.
+    if final_state.is_terminal() && !transitions.is_empty() {
+        if let Some(last) = transitions.last() {
+            if last.to != final_state {
+                violations.push(format!(
+                    "INV-3 (terminal consistency): final_state={final_state} but last transition lands on {}",
+                    last.to
+                ));
+            }
+        }
+    }
+
+    // INV-4: Consecutive transitions must chain (each from == previous to).
+    for window in transitions.windows(2) {
+        if window[1].from != window[0].to {
+            violations.push(format!(
+                "INV-4 (chain continuity): expected from={} but got from={} at transition to {}",
+                window[0].to, window[1].from, window[1].to
+            ));
+        }
+    }
+
+    // INV-5: First transition (if any) must start from SelectingIssue.
+    if let Some(first) = transitions.first() {
+        if first.from != OrchestratorState::SelectingIssue {
+            violations.push(format!(
+                "INV-5 (initial state): first transition starts from {} instead of SelectingIssue",
+                first.from
+            ));
+        }
+    }
+
+    // INV-6: Iteration counter must be non-decreasing.
+    for window in transitions.windows(2) {
+        if window[1].iteration < window[0].iteration {
+            violations.push(format!(
+                "INV-6 (iteration monotonic): iteration decreased from {} to {} at {} → {}",
+                window[0].iteration, window[1].iteration, window[1].from, window[1].to
+            ));
+        }
+    }
+
+    // INV-7: elapsed_ms must be non-decreasing.
+    for window in transitions.windows(2) {
+        if window[1].elapsed_ms < window[0].elapsed_ms {
+            violations.push(format!(
+                "INV-7 (time monotonic): elapsed_ms decreased from {} to {} at {} → {}",
+                window[0].elapsed_ms, window[1].elapsed_ms, window[1].from, window[1].to
+            ));
+        }
+    }
+
+    violations
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Per-State Timeout and Cancellation Budgets
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -1405,5 +1600,500 @@ mod tests {
         assert!(config
             .budgets
             .contains_key(&OrchestratorState::Implementing));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Audit Report Tests
+    // ──────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_audit_report_happy_path() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(1);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+        sm.advance(OrchestratorState::Validating, None).unwrap();
+        sm.advance(OrchestratorState::Merging, None).unwrap();
+        sm.advance(OrchestratorState::Resolved, None).unwrap();
+
+        let report = sm.audit_report();
+        assert_eq!(report.final_state, OrchestratorState::Resolved);
+        assert_eq!(report.transition_count, 7);
+        assert_eq!(report.retry_count, 0);
+        assert_eq!(report.escalation_count, 0);
+        assert!(report.invariant_violations.is_empty());
+    }
+
+    #[test]
+    fn test_audit_report_with_retries() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(1);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+        // Retry from verifying
+        sm.advance(OrchestratorState::Implementing, Some("retry"))
+            .unwrap();
+        sm.set_iteration(2);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+        sm.advance(OrchestratorState::Validating, None).unwrap();
+        // Retry from validating
+        sm.advance(OrchestratorState::Implementing, Some("retry"))
+            .unwrap();
+        sm.set_iteration(3);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+        sm.advance(OrchestratorState::Merging, None).unwrap();
+        sm.advance(OrchestratorState::Resolved, None).unwrap();
+
+        let report = sm.audit_report();
+        assert_eq!(report.retry_count, 2);
+        assert_eq!(report.escalation_count, 0);
+        assert!(report.invariant_violations.is_empty());
+    }
+
+    #[test]
+    fn test_audit_report_with_escalation() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(1);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+        sm.advance(OrchestratorState::Escalating, Some("stuck"))
+            .unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(2);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+        sm.advance(OrchestratorState::Merging, None).unwrap();
+        sm.advance(OrchestratorState::Resolved, None).unwrap();
+
+        let report = sm.audit_report();
+        assert_eq!(report.escalation_count, 1);
+        assert!(report.invariant_violations.is_empty());
+    }
+
+    #[test]
+    fn test_audit_report_counts_state_visits() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(1);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(2);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+        sm.advance(OrchestratorState::Merging, None).unwrap();
+        sm.advance(OrchestratorState::Resolved, None).unwrap();
+
+        let report = sm.audit_report();
+        assert_eq!(
+            report
+                .state_visit_counts
+                .get(&OrchestratorState::Implementing),
+            Some(&2)
+        );
+        assert_eq!(
+            report.state_visit_counts.get(&OrchestratorState::Verifying),
+            Some(&2)
+        );
+        assert_eq!(
+            report.state_visit_counts.get(&OrchestratorState::Merging),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn test_audit_report_display() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.fail("test").unwrap();
+
+        let report = sm.audit_report();
+        let display = report.to_string();
+        assert!(display.contains("Audit Report"));
+        assert!(display.contains("Failed"));
+        assert!(display.contains("Invariants: all passed"));
+    }
+
+    #[test]
+    fn test_audit_report_serde_roundtrip() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.fail("test failure").unwrap();
+
+        let report = sm.audit_report();
+        let json = serde_json::to_string_pretty(&report).unwrap();
+        let restored: AuditReport = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.final_state, OrchestratorState::Failed);
+        assert_eq!(restored.transition_count, 3);
+    }
+
+    #[test]
+    fn test_export_transitions_json() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, Some("test"))
+            .unwrap();
+
+        let json = sm.export_transitions_json().unwrap();
+        let parsed: Vec<TransitionRecord> = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].to, OrchestratorState::PreparingWorktree);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Invariant Tests
+    // ──────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_invariants_happy_path_clean() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+        sm.advance(OrchestratorState::Merging, None).unwrap();
+        sm.advance(OrchestratorState::Resolved, None).unwrap();
+
+        let violations = check_invariants(sm.transitions(), sm.current());
+        assert!(violations.is_empty(), "Violations: {violations:?}");
+    }
+
+    #[test]
+    fn test_invariant_detects_illegal_transition() {
+        // Manually construct an illegal log
+        let transitions = vec![TransitionRecord {
+            from: OrchestratorState::SelectingIssue,
+            to: OrchestratorState::Merging, // Illegal skip
+            iteration: 0,
+            elapsed_ms: 0,
+            reason: None,
+        }];
+
+        let violations = check_invariants(&transitions, OrchestratorState::Merging);
+        assert!(violations.iter().any(|v| v.contains("INV-1")));
+    }
+
+    #[test]
+    fn test_invariant_detects_post_terminal_transition() {
+        let transitions = vec![
+            TransitionRecord {
+                from: OrchestratorState::SelectingIssue,
+                to: OrchestratorState::Failed,
+                iteration: 0,
+                elapsed_ms: 0,
+                reason: None,
+            },
+            TransitionRecord {
+                from: OrchestratorState::Failed,
+                to: OrchestratorState::Implementing, // After terminal
+                iteration: 1,
+                elapsed_ms: 100,
+                reason: None,
+            },
+        ];
+
+        let violations = check_invariants(&transitions, OrchestratorState::Implementing);
+        assert!(violations.iter().any(|v| v.contains("INV-2")));
+    }
+
+    #[test]
+    fn test_invariant_detects_chain_discontinuity() {
+        let transitions = vec![
+            TransitionRecord {
+                from: OrchestratorState::SelectingIssue,
+                to: OrchestratorState::PreparingWorktree,
+                iteration: 0,
+                elapsed_ms: 0,
+                reason: None,
+            },
+            TransitionRecord {
+                from: OrchestratorState::Implementing, // Discontinuity
+                to: OrchestratorState::Verifying,
+                iteration: 1,
+                elapsed_ms: 100,
+                reason: None,
+            },
+        ];
+
+        let violations = check_invariants(&transitions, OrchestratorState::Verifying);
+        assert!(violations.iter().any(|v| v.contains("INV-4")));
+    }
+
+    #[test]
+    fn test_invariant_detects_wrong_initial_state() {
+        let transitions = vec![TransitionRecord {
+            from: OrchestratorState::Implementing, // Wrong start
+            to: OrchestratorState::Verifying,
+            iteration: 1,
+            elapsed_ms: 0,
+            reason: None,
+        }];
+
+        let violations = check_invariants(&transitions, OrchestratorState::Verifying);
+        assert!(violations.iter().any(|v| v.contains("INV-5")));
+    }
+
+    #[test]
+    fn test_invariant_detects_iteration_decrease() {
+        let transitions = vec![
+            TransitionRecord {
+                from: OrchestratorState::SelectingIssue,
+                to: OrchestratorState::PreparingWorktree,
+                iteration: 5,
+                elapsed_ms: 0,
+                reason: None,
+            },
+            TransitionRecord {
+                from: OrchestratorState::PreparingWorktree,
+                to: OrchestratorState::Planning,
+                iteration: 3, // Decreased
+                elapsed_ms: 100,
+                reason: None,
+            },
+        ];
+
+        let violations = check_invariants(&transitions, OrchestratorState::Planning);
+        assert!(violations.iter().any(|v| v.contains("INV-6")));
+    }
+
+    #[test]
+    fn test_invariant_detects_time_decrease() {
+        let transitions = vec![
+            TransitionRecord {
+                from: OrchestratorState::SelectingIssue,
+                to: OrchestratorState::PreparingWorktree,
+                iteration: 0,
+                elapsed_ms: 500,
+                reason: None,
+            },
+            TransitionRecord {
+                from: OrchestratorState::PreparingWorktree,
+                to: OrchestratorState::Planning,
+                iteration: 0,
+                elapsed_ms: 200, // Decreased
+                reason: None,
+            },
+        ];
+
+        let violations = check_invariants(&transitions, OrchestratorState::Planning);
+        assert!(violations.iter().any(|v| v.contains("INV-7")));
+    }
+
+    #[test]
+    fn test_invariants_empty_log() {
+        let violations = check_invariants(&[], OrchestratorState::SelectingIssue);
+        assert!(violations.is_empty());
+    }
+
+    // ──────────────────────────────────────────────────────────────────────
+    // Property-Style Tests — exhaustive/systematic scenario coverage
+    // ──────────────────────────────────────────────────────────────────────
+
+    /// All non-terminal states can transition to Failed.
+    #[test]
+    fn test_property_any_non_terminal_can_fail() {
+        let non_terminal = [
+            OrchestratorState::SelectingIssue,
+            OrchestratorState::PreparingWorktree,
+            OrchestratorState::Planning,
+            OrchestratorState::Implementing,
+            OrchestratorState::Verifying,
+            OrchestratorState::Validating,
+            OrchestratorState::Escalating,
+            OrchestratorState::Merging,
+        ];
+
+        for state in non_terminal {
+            assert!(
+                is_legal_transition(state, OrchestratorState::Failed),
+                "{state} → Failed should be legal"
+            );
+        }
+    }
+
+    /// Terminal states cannot transition to anything.
+    #[test]
+    fn test_property_terminal_states_absorbing() {
+        let terminals = [OrchestratorState::Resolved, OrchestratorState::Failed];
+        let all_states = [
+            OrchestratorState::SelectingIssue,
+            OrchestratorState::PreparingWorktree,
+            OrchestratorState::Planning,
+            OrchestratorState::Implementing,
+            OrchestratorState::Verifying,
+            OrchestratorState::Validating,
+            OrchestratorState::Escalating,
+            OrchestratorState::Merging,
+            OrchestratorState::Resolved,
+            OrchestratorState::Failed,
+        ];
+
+        for terminal in terminals {
+            for target in all_states {
+                assert!(
+                    !is_legal_transition(terminal, target),
+                    "{terminal} → {target} should be illegal (terminal is absorbing)"
+                );
+            }
+        }
+    }
+
+    /// Every retry loop through the state machine is bounded by budget.
+    #[test]
+    fn test_property_retry_loop_bounded_by_budget() {
+        let config = BudgetConfig {
+            budgets: {
+                let mut m = HashMap::new();
+                m.insert(
+                    OrchestratorState::Implementing,
+                    StateBudget::iterations_only(3),
+                );
+                m
+            },
+            global_max_iterations: 100,
+        };
+        let mut tracker = BudgetTracker::new(config);
+        let mut sm = StateMachine::new();
+
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+
+        let mut retries = 0u32;
+        for iter in 1..=10 {
+            sm.advance(OrchestratorState::Implementing, None).unwrap();
+            tracker.on_state_entered(OrchestratorState::Implementing);
+            sm.set_iteration(iter);
+
+            if let Some(_reason) = tracker.check_budget(OrchestratorState::Implementing) {
+                sm.fail("budget exhausted").unwrap();
+                break;
+            }
+
+            sm.advance(OrchestratorState::Verifying, None).unwrap();
+            tracker.on_state_entered(OrchestratorState::Verifying);
+
+            // Simulate failure: go back to implementing
+            if !sm.is_terminal() {
+                retries += 1;
+            }
+        }
+
+        // Budget was 3, so we should have been stopped
+        assert!(sm.is_terminal() || retries <= 3);
+        let report = sm.audit_report();
+        assert!(report.invariant_violations.is_empty());
+    }
+
+    /// Escalation always returns to Implementing (deterministic trigger).
+    #[test]
+    fn test_property_escalation_deterministic_reentry() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(1);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+
+        // Escalate
+        sm.advance(OrchestratorState::Escalating, Some("error repeat"))
+            .unwrap();
+
+        // The only legal transition from Escalating (besides Failed) is Implementing
+        assert!(is_legal_transition(
+            OrchestratorState::Escalating,
+            OrchestratorState::Implementing
+        ));
+
+        // No other non-fail transitions from Escalating
+        for state in [
+            OrchestratorState::SelectingIssue,
+            OrchestratorState::PreparingWorktree,
+            OrchestratorState::Planning,
+            OrchestratorState::Verifying,
+            OrchestratorState::Validating,
+            OrchestratorState::Escalating,
+            OrchestratorState::Merging,
+            OrchestratorState::Resolved,
+        ] {
+            assert!(
+                !is_legal_transition(OrchestratorState::Escalating, state),
+                "Escalating → {state} should be illegal"
+            );
+        }
+    }
+
+    /// Multiple escalations in a single run maintain invariants.
+    #[test]
+    fn test_property_multiple_escalations_maintain_invariants() {
+        let mut sm = StateMachine::new();
+        sm.advance(OrchestratorState::PreparingWorktree, None)
+            .unwrap();
+        sm.advance(OrchestratorState::Planning, None).unwrap();
+
+        for iter in 1..=3 {
+            sm.advance(OrchestratorState::Implementing, None).unwrap();
+            sm.set_iteration(iter);
+            sm.advance(OrchestratorState::Verifying, None).unwrap();
+            sm.advance(OrchestratorState::Escalating, Some("stuck"))
+                .unwrap();
+        }
+
+        // Final attempt succeeds
+        sm.advance(OrchestratorState::Implementing, None).unwrap();
+        sm.set_iteration(4);
+        sm.advance(OrchestratorState::Verifying, None).unwrap();
+        sm.advance(OrchestratorState::Merging, None).unwrap();
+        sm.advance(OrchestratorState::Resolved, None).unwrap();
+
+        let report = sm.audit_report();
+        assert_eq!(report.escalation_count, 3);
+        assert_eq!(report.retry_count, 0); // Escalations are not retries
+        assert!(report.invariant_violations.is_empty());
+    }
+
+    /// Global budget caps total iterations across all states.
+    #[test]
+    fn test_property_global_budget_caps_all_states() {
+        let config = BudgetConfig {
+            budgets: HashMap::new(),
+            global_max_iterations: 5,
+        };
+        let mut tracker = BudgetTracker::new(config);
+
+        let states = [
+            OrchestratorState::Implementing,
+            OrchestratorState::Verifying,
+            OrchestratorState::Implementing,
+            OrchestratorState::Verifying,
+            OrchestratorState::Implementing,
+        ];
+
+        for &s in &states {
+            tracker.on_state_entered(s);
+        }
+        assert!(tracker
+            .check_budget(OrchestratorState::Implementing)
+            .is_none());
+
+        // One more pushes over
+        tracker.on_state_entered(OrchestratorState::Verifying);
+        assert!(matches!(
+            tracker.check_budget(OrchestratorState::Verifying),
+            Some(CancellationReason::GlobalBudgetExhausted { .. })
+        ));
     }
 }
