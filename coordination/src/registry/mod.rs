@@ -3,9 +3,9 @@
 //! Tracks which providers are available, their capabilities (context window,
 //! supported features), and live health metadata (availability, latency, error rates).
 
+use crate::state::types::{ModelId, ModelKind};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::state::types::{ModelId, ModelKind};
 
 fn unix_now() -> u64 {
     std::time::SystemTime::now()
