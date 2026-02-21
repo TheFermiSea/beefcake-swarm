@@ -29,5 +29,5 @@ pub use classifier::{
 pub use prompts::{FixPromptBuilder, PromptTemplate};
 pub use task_classifier::{
     DynamicRouter, ModelRouter, ModelSelection, ModelTier, PerformanceHistory, PerformanceRecord,
-    TaskClassification, TaskType,
+    ScoringWeights, SmartScore, TaskClassification, TaskType,
 };
