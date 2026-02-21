@@ -30,10 +30,12 @@
 //! If still stuck → create blocking beads issue, flag for human intervention
 //! ```
 
+pub mod delight;
 pub mod engine;
 pub mod friction;
 pub mod state;
 
+pub use delight::{DelightDetector, DelightIntensity, DelightKind, DelightSignal};
 pub use engine::{EscalationDecision, EscalationEngine};
 pub use friction::{FrictionDetector, FrictionKind, FrictionSeverity, FrictionSignal};
 pub use state::{EscalationState, SwarmTier, TierBudget};

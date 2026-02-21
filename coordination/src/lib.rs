@@ -119,6 +119,9 @@ pub use escalation::{
 // Re-export friction detection types
 pub use escalation::{FrictionDetector, FrictionKind, FrictionSeverity, FrictionSignal};
 
+// Re-export delight detection types
+pub use escalation::{DelightDetector, DelightIntensity, DelightKind, DelightSignal};
+
 // Re-export work packet types
 pub use work_packet::{Constraint, FileContext, KeySymbol, WorkPacket, WorkPacketGenerator};
 
