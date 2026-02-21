@@ -46,8 +46,8 @@ pub fn retry_git_command(args: &[&str], working_dir: &Path, max_retries: u32) ->
                 attempt = attempt + 1,
                 max_retries,
                 delay_ms = delay,
-                "Transient git failure, retrying: {}",
-                stderr.trim()
+                stderr = %stderr.trim(),
+                "Transient git failure, retrying"
             );
             std::thread::sleep(Duration::from_millis(delay));
             continue;
@@ -167,7 +167,7 @@ impl WorktreeBridge {
         let branch_list = String::from_utf8_lossy(&check_output.stdout);
         if !branch_list.trim().is_empty() {
             // 3. If branch exists, delete it
-            tracing::warn!("Branch {} already exists, deleting", branch);
+            tracing::warn!(branch = %branch, "Branch already exists, deleting");
             let del_output = Command::new("git")
                 .args(["branch", "-D", &branch])
                 .current_dir(&self.repo_root)
@@ -308,7 +308,7 @@ impl WorktreeBridge {
 
         if !remove.status.success() {
             let stderr = String::from_utf8_lossy(&remove.stderr);
-            tracing::warn!("git worktree remove warning: {stderr}");
+            tracing::warn!(stderr = %stderr.trim(), "git worktree remove warning");
         }
 
         // Delete the branch
@@ -320,7 +320,7 @@ impl WorktreeBridge {
 
         if !del.status.success() {
             let stderr = String::from_utf8_lossy(&del.stderr);
-            tracing::warn!("git branch -d warning: {stderr}");
+            tracing::warn!(stderr = %stderr.trim(), "git branch -d warning");
         }
 
         Ok(())
@@ -361,14 +361,14 @@ impl WorktreeBridge {
             match remove {
                 Ok(ref out) if !out.status.success() => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    tracing::warn!("cleanup: git worktree remove --force failed: {stderr}");
+                    tracing::warn!(stderr = %stderr.trim(), "cleanup: git worktree remove --force failed");
                     // Fallback: try removing the directory directly
                     if wt_path.exists() {
                         let _ = std::fs::remove_dir_all(&wt_path);
                     }
                 }
                 Err(e) => {
-                    tracing::warn!("cleanup: failed to run git worktree remove: {e}");
+                    tracing::warn!(error = %e, "cleanup: failed to run git worktree remove");
                     if wt_path.exists() {
                         let _ = std::fs::remove_dir_all(&wt_path);
                     }
@@ -392,10 +392,10 @@ impl WorktreeBridge {
         match del {
             Ok(ref out) if !out.status.success() => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
-                tracing::warn!("cleanup: git branch -D failed: {stderr}");
+                tracing::warn!(stderr = %stderr.trim(), "cleanup: git branch -D failed");
             }
             Err(e) => {
-                tracing::warn!("cleanup: failed to run git branch -D: {e}");
+                tracing::warn!(error = %e, "cleanup: failed to run git branch -D");
             }
             _ => {}
         }
@@ -465,10 +465,10 @@ impl WorktreeBridge {
                 }
                 Ok(ref out) => {
                     let stderr = String::from_utf8_lossy(&out.stderr);
-                    tracing::warn!(branch = %branch, "Failed to delete zombie branch: {}", stderr.trim());
+                    tracing::warn!(branch = %branch, stderr = %stderr.trim(), "Failed to delete zombie branch");
                 }
                 Err(e) => {
-                    tracing::warn!(branch = %branch, "Failed to run git branch -D: {e}");
+                    tracing::warn!(branch = %branch, error = %e, "Failed to run git branch -D");
                 }
             }
         }
