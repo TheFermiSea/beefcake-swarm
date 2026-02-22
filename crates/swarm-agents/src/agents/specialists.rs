@@ -53,7 +53,7 @@ pub fn build_planner_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    client
+    let mut builder = client
         .agent(model)
         .name(name)
         .description(
@@ -66,8 +66,16 @@ pub fn build_planner_named(
             WorkerRole::Planner,
             proxy_tools,
         ))
-        .default_max_turns(planner_max_turns())
-        .build()
+        .default_max_turns(planner_max_turns());
+
+    // Attach GBNF grammar for structured plan output when enabled.
+    if let Some(params) =
+        crate::grammars::params_if_enabled(crate::grammars::Grammar::PlannerOutput)
+    {
+        builder = builder.additional_params(params);
+    }
+
+    builder.build()
 }
 
 /// Build the fixer specialist.
