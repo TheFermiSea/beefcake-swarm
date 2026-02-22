@@ -137,6 +137,24 @@ impl Verifier {
         report.branch = self.git_branch();
         report.commit = self.git_commit();
 
+        // Gate 0: Pre-gate safety scan for dangerous code patterns
+        let safety_warnings = super::safety_scan::scan_diff(&self.working_dir);
+        if !safety_warnings.is_empty() {
+            tracing::warn!(
+                count = safety_warnings.len(),
+                "Safety scan detected dangerous patterns in agent diff"
+            );
+            for w in &safety_warnings {
+                tracing::warn!(
+                    category = %w.category,
+                    file = %w.file,
+                    reason = %w.reason,
+                    "Safety warning"
+                );
+            }
+        }
+        report.safety_warnings = safety_warnings;
+
         // Gate 1: cargo fmt --check
         if self.config.check_fmt {
             let result = self.run_fmt_gate().await;
@@ -192,12 +210,22 @@ impl Verifier {
 
     /// Run a tokio command with the configured gate timeout.
     ///
+    /// On Unix, creates a new process group so that on timeout the entire
+    /// process tree (including descendants like test binaries) is killed.
     /// Returns `Ok(output)` on success, `Err(message)` on timeout or spawn failure.
     async fn run_with_timeout(
         &self,
         cmd: &mut tokio::process::Command,
     ) -> Result<std::process::Output, String> {
         cmd.current_dir(&self.working_dir).kill_on_drop(true);
+
+        // Create a new process group so we can kill the entire tree on timeout.
+        // process_group(0) calls setpgid(0, 0) which puts the child in its own
+        // group. When kill_on_drop fires, tokio kills the child; the group
+        // ensures all descendants (e.g. cargo-spawned test binaries) also die.
+        #[cfg(unix)]
+        cmd.process_group(0);
+
         let timeout_dur = Duration::from_secs(self.config.gate_timeout_secs);
         match tokio::time::timeout(timeout_dur, cmd.output()).await {
             Ok(Ok(output)) => Ok(output),
