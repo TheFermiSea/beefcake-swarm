@@ -939,6 +939,40 @@ impl ContextPacker {
             packet.previous_attempts.pop();
         }
     }
+
+    /// Evaluate context quality using probe-based testing.
+    ///
+    /// Generates deterministic probe questions from the full iteration history,
+    /// then checks if the answers are recoverable from the structured summary.
+    /// Returns the probe results and logs a warning if below the threshold.
+    pub fn evaluate_context_quality(
+        &self,
+        deltas: &[crate::work_packet::types::IterationDelta],
+        summary: &crate::harness::types::StructuredSessionSummary,
+    ) -> crate::context_packer::probes::ProbeResults {
+        let generator = crate::context_packer::probes::ProbeGenerator::new();
+        let evaluator = crate::context_packer::probes::ProbeEvaluator::new();
+        let probes = generator.generate_probes(deltas);
+        let results = evaluator.evaluate(summary, &probes);
+
+        if !evaluator.is_adequate(&results) {
+            eprintln!(
+                "[context_packer] WARNING: Probe pass rate {:.0}% ({}/{}) below threshold {:.0}%. \
+                 Summary may be too lossy. Failed probes: {:?}",
+                results.pass_rate * 100.0,
+                results.pass_count,
+                results.pass_count + results.fail_count,
+                evaluator.min_pass_rate * 100.0,
+                results
+                    .failed_probes
+                    .iter()
+                    .map(|p| &p.question)
+                    .collect::<Vec<_>>(),
+            );
+        }
+
+        results
+    }
 }
 
 #[cfg(test)]
