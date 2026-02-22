@@ -70,6 +70,7 @@ pub mod rollout;
 pub mod router;
 pub mod shell_safety;
 pub mod slurm;
+pub mod speculation;
 pub mod state;
 pub mod tool_bundle;
 pub mod tool_schema;
