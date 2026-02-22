@@ -6,6 +6,7 @@
 pub mod ast_index;
 pub mod file_walker;
 pub mod packer;
+pub mod probes;
 pub mod source_provider;
 
 pub use ast_index::{FileSymbolIndex, RustSymbol, SymbolKind};
