@@ -171,5 +171,6 @@ pub use resilience::{DegradationLevel, DegradedResponse, FallbackChain, Fallback
 
 // Re-export rollout types
 pub use rollout::{
-    Cohort, FeatureFlag, RolloutError, RolloutManager, RolloutStage, RolloutSummary, SafetyGate,
+    Cohort, FeatureFlag, FeatureFlagOverrides, FeatureFlags, RolloutError, RolloutManager,
+    RolloutStage, RolloutSummary, SafetyGate,
 };

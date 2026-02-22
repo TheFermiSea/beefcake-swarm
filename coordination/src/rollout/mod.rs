@@ -25,6 +25,10 @@
 //! assert!(!mgr.is_enabled("debate_loop", &Cohort::Production));
 //! ```
 
+pub mod feature_flags;
+
+pub use feature_flags::{FeatureFlagOverrides, FeatureFlags};
+
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
