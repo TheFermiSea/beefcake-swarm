@@ -76,6 +76,17 @@ pub struct FeatureFlags {
     ///
     /// Env: `SWARM_STRUCTURED_EVALUATOR_REQUIRED`
     pub structured_evaluator_required: bool,
+
+    /// Enable worker-first mode with manager-on-escalation.
+    ///
+    /// When enabled, tasks start at the Worker tier (local models) instead
+    /// of the Council tier (cloud manager). The cloud manager is only
+    /// invoked when escalation triggers fire (repeated errors, excessive
+    /// failures, multi-file complexity, or worker budget exhaustion).
+    /// Reduces median iteration time for simple issues.
+    ///
+    /// Env: `SWARM_WORKER_FIRST_ENABLED`
+    pub worker_first_enabled: bool,
 }
 
 impl Default for FeatureFlags {
@@ -86,6 +97,7 @@ impl Default for FeatureFlags {
             state_machine_enabled: false,
             speculative_canary_enabled: false,
             structured_evaluator_required: false,
+            worker_first_enabled: false,
         }
     }
 }
@@ -102,6 +114,7 @@ impl FeatureFlags {
             state_machine_enabled: parse_bool_env("SWARM_STATE_MACHINE_ENABLED"),
             speculative_canary_enabled: parse_bool_env("SWARM_CANARY_ENABLED"),
             structured_evaluator_required: parse_bool_env("SWARM_STRUCTURED_EVALUATOR_REQUIRED"),
+            worker_first_enabled: parse_bool_env("SWARM_WORKER_FIRST_ENABLED"),
         }
     }
 
@@ -114,6 +127,7 @@ impl FeatureFlags {
             state_machine_enabled: true,
             speculative_canary_enabled: true,
             structured_evaluator_required: true,
+            worker_first_enabled: true,
         }
     }
 
@@ -132,6 +146,9 @@ impl FeatureFlags {
         if let Some(v) = overrides.structured_evaluator_required {
             self.structured_evaluator_required = v;
         }
+        if let Some(v) = overrides.worker_first_enabled {
+            self.worker_first_enabled = v;
+        }
     }
 
     /// Merge another flags struct, overriding only fields that are `true`.
@@ -143,6 +160,7 @@ impl FeatureFlags {
         self.state_machine_enabled |= other.state_machine_enabled;
         self.speculative_canary_enabled |= other.speculative_canary_enabled;
         self.structured_evaluator_required |= other.structured_evaluator_required;
+        self.worker_first_enabled |= other.worker_first_enabled;
     }
 
     /// Returns a list of enabled feature names.
@@ -160,6 +178,9 @@ impl FeatureFlags {
         if self.structured_evaluator_required {
             features.push("structured_evaluator");
         }
+        if self.worker_first_enabled {
+            features.push("worker_first");
+        }
         features
     }
 
@@ -174,7 +195,11 @@ impl FeatureFlags {
             || self.state_machine_enabled
             || self.speculative_canary_enabled
             || self.structured_evaluator_required
+            || self.worker_first_enabled
     }
+
+    /// Total number of feature flags.
+    const FLAG_COUNT: usize = 5;
 
     /// Format as a human-readable summary line.
     pub fn summary(&self) -> String {
@@ -185,7 +210,7 @@ impl FeatureFlags {
             format!(
                 "Feature flags: {}/{} enabled [{}]",
                 enabled.len(),
-                4,
+                Self::FLAG_COUNT,
                 enabled.join(", ")
             )
         }
@@ -207,11 +232,12 @@ impl std::fmt::Display for FeatureFlags {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "smart_router={} state_machine={} canary={} structured_eval={}",
+            "smart_router={} state_machine={} canary={} structured_eval={} worker_first={}",
             flag_str(self.smart_router_enabled),
             flag_str(self.state_machine_enabled),
             flag_str(self.speculative_canary_enabled),
             flag_str(self.structured_evaluator_required),
+            flag_str(self.worker_first_enabled),
         )
     }
 }
@@ -226,6 +252,7 @@ pub struct FeatureFlagOverrides {
     pub state_machine_enabled: Option<bool>,
     pub speculative_canary_enabled: Option<bool>,
     pub structured_evaluator_required: Option<bool>,
+    pub worker_first_enabled: Option<bool>,
 }
 
 impl FeatureFlagOverrides {
@@ -235,6 +262,7 @@ impl FeatureFlagOverrides {
             || self.state_machine_enabled.is_some()
             || self.speculative_canary_enabled.is_some()
             || self.structured_evaluator_required.is_some()
+            || self.worker_first_enabled.is_some()
     }
 }
 
@@ -284,8 +312,9 @@ mod tests {
         assert!(flags.state_machine_enabled);
         assert!(flags.speculative_canary_enabled);
         assert!(flags.structured_evaluator_required);
+        assert!(flags.worker_first_enabled);
         assert!(flags.any_enabled());
-        assert_eq!(flags.enabled_count(), 4);
+        assert_eq!(flags.enabled_count(), 5);
     }
 
     #[test]
@@ -352,20 +381,22 @@ mod tests {
             state_machine_enabled: false,
             speculative_canary_enabled: false,
             structured_evaluator_required: true,
+            worker_first_enabled: false,
         };
         let other = FeatureFlags {
             smart_router_enabled: false,
             state_machine_enabled: true,
             speculative_canary_enabled: true,
             structured_evaluator_required: false,
+            worker_first_enabled: true,
         };
         flags.merge_enabled(&other);
 
-        // Union: all should be true
         assert!(flags.smart_router_enabled);
         assert!(flags.state_machine_enabled);
         assert!(flags.speculative_canary_enabled);
         assert!(flags.structured_evaluator_required);
+        assert!(flags.worker_first_enabled);
     }
 
     #[test]
@@ -375,6 +406,7 @@ mod tests {
             state_machine_enabled: false,
             speculative_canary_enabled: true,
             structured_evaluator_required: false,
+            worker_first_enabled: false,
         };
         let features = flags.enabled_features();
         assert_eq!(features, vec!["smart_router", "speculative_canary"]);
@@ -387,11 +419,12 @@ mod tests {
             state_machine_enabled: false,
             speculative_canary_enabled: true,
             structured_evaluator_required: false,
+            worker_first_enabled: true,
         };
         let display = flags.to_string();
         assert_eq!(
             display,
-            "smart_router=ON state_machine=OFF canary=ON structured_eval=OFF"
+            "smart_router=ON state_machine=OFF canary=ON structured_eval=OFF worker_first=ON"
         );
     }
 
@@ -411,9 +444,10 @@ mod tests {
             state_machine_enabled: true,
             speculative_canary_enabled: false,
             structured_evaluator_required: false,
+            worker_first_enabled: false,
         };
         let summary = flags.summary();
-        assert!(summary.contains("2/4 enabled"));
+        assert!(summary.contains("2/5 enabled"));
         assert!(summary.contains("smart_router"));
         assert!(summary.contains("state_machine"));
     }
@@ -425,6 +459,7 @@ mod tests {
             state_machine_enabled: false,
             speculative_canary_enabled: true,
             structured_evaluator_required: true,
+            worker_first_enabled: false,
         };
         let json = flags.to_json();
         let restored = FeatureFlags::from_json(&json).unwrap();
@@ -450,6 +485,7 @@ mod tests {
             state_machine_enabled: None,
             speculative_canary_enabled: Some(false),
             structured_evaluator_required: None,
+            worker_first_enabled: Some(true),
         };
         let json = serde_json::to_string(&overrides).unwrap();
         let restored: FeatureFlagOverrides = serde_json::from_str(&json).unwrap();

@@ -36,6 +36,7 @@ pub mod engine;
 pub mod friction;
 pub mod heuristics;
 pub mod state;
+pub mod worker_first;
 
 pub use auto_ticket::{
     FailureSignature, RecurrentFailureDetector, TicketPriority, TicketSuggestion,
@@ -45,3 +46,4 @@ pub use engine::{EscalationDecision, EscalationEngine};
 pub use friction::{FrictionDetector, FrictionKind, FrictionSeverity, FrictionSignal};
 pub use heuristics::{compute_heuristics, SessionSample, TelemetryHeuristics};
 pub use state::{EscalationState, SwarmTier, TierBudget, TurnPolicy};
+pub use worker_first::{classify_initial_tier, InitialTierRecommendation, TaskComplexity};
