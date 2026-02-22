@@ -6,6 +6,7 @@
 //! Fallback (no cloud):
 //!   Local Manager (OR1-Behemoth) → Local Workers (strand-14B, Qwen3-Coder-Next)
 
+pub mod adversary;
 pub mod cloud;
 pub mod coder;
 pub mod manager;
@@ -119,6 +120,20 @@ impl AgentFactory {
             &self.config.fast_endpoint.model,
             wt_path,
             "fixer",
+            self.config.cloud_only,
+        )
+    }
+
+    /// Build the adversarial breaker agent.
+    ///
+    /// Red-teams the implementation after verifier passes.
+    /// Writes adversarial test files and runs them to find correctness bugs.
+    pub fn build_breaker(&self, wt_path: &Path) -> OaiAgent {
+        adversary::build_breaker_named(
+            &self.clients.local,
+            &self.config.fast_endpoint.model,
+            wt_path,
+            "breaker",
             self.config.cloud_only,
         )
     }
