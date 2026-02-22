@@ -32,6 +32,7 @@
 pub mod harness;
 pub mod metrics;
 pub mod problem;
+pub mod slo;
 
 pub use harness::{
     compare_metrics, compute_metrics, format_comparison, MetricsDelta, OrchestrationMetrics,
@@ -39,3 +40,8 @@ pub use harness::{
 };
 pub use metrics::{AttemptMetrics, BenchmarkMetrics, ProblemMetrics};
 pub use problem::{BenchmarkConfig, BenchmarkProblem, BenchmarkSession, Difficulty, ProblemStatus};
+pub use slo::{
+    default_dashboard_spec, default_slo_targets, evaluate_slos, evaluate_slos_with_targets,
+    AlertSeverity, DashboardPanel, DashboardSpec, MetricDirection, MetricField, PanelType,
+    SloReport, SloResult, SloTarget,
+};
