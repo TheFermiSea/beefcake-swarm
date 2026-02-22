@@ -4,12 +4,14 @@
 //! progress logging, and human intervention requests.
 
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
 use rig::completion::Prompt;
 use rig::providers::openai;
 use tracing::{debug, error, info, warn};
+
+use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 
 /// Default timeout for each cloud validation call.
 const DEFAULT_VALIDATION_TIMEOUT_SECS: u64 = 120; // 2 minutes
@@ -1066,8 +1068,8 @@ pub async fn process_issue(
         // Hierarchy (no cloud):
         //   Worker: local coders
         //   Council+Human: local manager (OR1-Behemoth) with coders as tools
-        let agent_start = std::time::Instant::now();
-        let agent_future = match tier {
+        let agent_start = Instant::now();
+        let (agent_future, adapter) = match tier {
             SwarmTier::Worker => {
                 let recent_cats: Vec<ErrorCategory> = escalation
                     .recent_error_categories
@@ -1080,8 +1082,16 @@ pub async fn process_issue(
                         info!(iteration, "Routing to rust_coder (strand-14B)");
                         metrics.record_coder_route("RustCoder");
                         metrics.record_agent_metrics("strand-14B", 0, 0);
-                        match tokio::time::timeout(worker_timeout, rust_coder.prompt(&task_prompt))
-                            .await
+                        let adapter = RuntimeAdapter::new(AdapterConfig {
+                            agent_name: "strand-14B".into(),
+                            deadline: Some(Instant::now() + worker_timeout),
+                            ..Default::default()
+                        });
+                        let result = match tokio::time::timeout(
+                            worker_timeout,
+                            rust_coder.prompt(&task_prompt).with_hook(adapter.clone()),
+                        )
+                        .await
                         {
                             Ok(result) => result,
                             Err(_elapsed) => {
@@ -1093,15 +1103,23 @@ pub async fn process_issue(
                                 Ok("rust_coder timed out. Changes are on disk for verifier."
                                     .to_string())
                             }
-                        }
+                        };
+                        (result, adapter)
                     }
                     CoderRoute::GeneralCoder => {
                         info!(iteration, "Routing to general_coder (Qwen3-Coder-Next)");
                         metrics.record_coder_route("GeneralCoder");
                         metrics.record_agent_metrics("Qwen3-Coder-Next", 0, 0);
-                        match tokio::time::timeout(
+                        let adapter = RuntimeAdapter::new(AdapterConfig {
+                            agent_name: "Qwen3-Coder-Next".into(),
+                            deadline: Some(Instant::now() + worker_timeout),
+                            ..Default::default()
+                        });
+                        let result = match tokio::time::timeout(
                             worker_timeout,
-                            general_coder.prompt(&task_prompt),
+                            general_coder
+                                .prompt(&task_prompt)
+                                .with_hook(adapter.clone()),
                         )
                         .await
                         {
@@ -1115,7 +1133,8 @@ pub async fn process_issue(
                                 Ok("general_coder timed out. Changes are on disk for verifier."
                                     .to_string())
                             }
-                        }
+                        };
+                        (result, adapter)
                     }
                 }
             }
@@ -1125,12 +1144,22 @@ pub async fn process_issue(
                     "Routing to manager (cloud-backed or OR1 fallback)"
                 );
                 metrics.record_agent_metrics("manager", 0, 0);
+                let adapter = RuntimeAdapter::new(AdapterConfig {
+                    agent_name: "manager".into(),
+                    deadline: Some(Instant::now() + manager_timeout),
+                    ..Default::default()
+                });
                 // Wrap manager call with timeout to enforce turn limits.
                 // Rig doesn't enforce default_max_turns on the outer .prompt() agent,
                 // so managers can run indefinitely. This hard-caps wall-clock time.
-                match tokio::time::timeout(
+                let result = match tokio::time::timeout(
                     manager_timeout,
-                    prompt_with_retry(&manager, &task_prompt, config.cloud_max_retries),
+                    prompt_with_hook_and_retry(
+                        &manager,
+                        &task_prompt,
+                        config.cloud_max_retries,
+                        adapter.clone(),
+                    ),
                 )
                 .await
                 {
@@ -1145,9 +1174,25 @@ pub async fn process_issue(
                         // Any file changes the manager made are already on disk.
                         Ok("Manager timed out. Changes are on disk for verifier.".to_string())
                     }
-                }
+                };
+                (result, adapter)
             }
         };
+
+        // Log runtime adapter report for tool-event visibility
+        let adapter_report = adapter.report();
+        info!(
+            iteration,
+            agent = %adapter_report.agent_name,
+            turns = adapter_report.turn_count,
+            tool_calls = adapter_report.total_tool_calls,
+            tool_time_ms = adapter_report.total_tool_time_ms,
+            terminated_early = adapter_report.terminated_early,
+            "Runtime adapter report"
+        );
+        if let Some(ref reason) = adapter_report.termination_reason {
+            warn!(iteration, reason = %reason, "Agent terminated early by adapter");
+        }
 
         // Handle agent failure
         let agent_elapsed = agent_start.elapsed();
@@ -1835,6 +1880,52 @@ async fn prompt_with_retry(
                     backoff_secs = backoff.as_secs(),
                     error = %err_str,
                     "Transient error — retrying"
+                );
+                last_err = Some(e);
+                tokio::time::sleep(backoff).await;
+            }
+        }
+    }
+    Err(last_err.unwrap())
+}
+
+/// Like [`prompt_with_retry`] but attaches a [`RuntimeAdapter`] hook to each attempt.
+///
+/// The hook provides tool-event visibility and budget enforcement for the manager tier.
+async fn prompt_with_hook_and_retry(
+    agent: &crate::agents::coder::OaiAgent,
+    prompt: &str,
+    max_retries: u32,
+    hook: RuntimeAdapter,
+) -> Result<String, rig::completion::PromptError> {
+    let mut last_err = None;
+    for attempt in 0..=max_retries {
+        match agent.prompt(prompt).with_hook(hook.clone()).await {
+            Ok(response) => return Ok(response),
+            Err(e) => {
+                let err_str = format!("{e}");
+                let err_lower = err_str.to_ascii_lowercase();
+                let is_transient = err_str.contains("502")
+                    || err_str.contains("503")
+                    || err_str.contains("429")
+                    || err_lower.contains("connection")
+                    || err_lower.contains("timed out")
+                    || err_lower.contains("timeout")
+                    || err_lower.contains("no message or tool call (empty)")
+                    || err_lower.contains("response contained no message or tool call")
+                    || err_lower.contains("jsonerror");
+
+                if !is_transient || attempt == max_retries {
+                    return Err(e);
+                }
+
+                let backoff = Duration::from_secs(2u64.pow(attempt + 1));
+                warn!(
+                    attempt = attempt + 1,
+                    max_retries,
+                    backoff_secs = backoff.as_secs(),
+                    error = %err_str,
+                    "Transient error — retrying (with hook)"
                 );
                 last_err = Some(e);
                 tokio::time::sleep(backoff).await;
