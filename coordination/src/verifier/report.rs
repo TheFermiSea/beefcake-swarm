@@ -186,6 +186,9 @@ pub struct VerifierReport {
     /// Git commit SHA (if available)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub commit: Option<String>,
+    /// Pre-gate safety scan warnings (dangerous patterns in agent diff)
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub safety_warnings: Vec<super::safety_scan::SafetyWarning>,
 }
 
 impl VerifierReport {
@@ -205,6 +208,7 @@ impl VerifierReport {
             working_dir,
             branch: None,
             commit: None,
+            safety_warnings: Vec::new(),
         }
     }
 
