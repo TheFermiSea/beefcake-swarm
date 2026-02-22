@@ -29,8 +29,13 @@
 //!    d. Track metrics (tokens, iterations, model used)
 //! 3. Generate summary report
 
+pub mod harness;
 pub mod metrics;
 pub mod problem;
 
+pub use harness::{
+    compare_metrics, compute_metrics, format_comparison, MetricsDelta, OrchestrationMetrics,
+    SessionOutcome, SessionRecord,
+};
 pub use metrics::{AttemptMetrics, BenchmarkMetrics, ProblemMetrics};
 pub use problem::{BenchmarkConfig, BenchmarkProblem, BenchmarkSession, Difficulty, ProblemStatus};
