@@ -5,6 +5,7 @@ pub mod config;
 pub mod contracts;
 pub mod dashboard;
 pub mod grammars;
+pub mod kb_refresh;
 pub mod knowledge_sync;
 pub mod notebook_bridge;
 pub mod orchestrator;
