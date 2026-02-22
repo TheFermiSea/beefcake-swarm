@@ -189,6 +189,9 @@ pub struct VerifierReport {
     /// Pre-gate safety scan warnings (dangerous patterns in agent diff)
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub safety_warnings: Vec<super::safety_scan::SafetyWarning>,
+    /// Diff risk profile (populated when adaptive mode is enabled)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub risk_profile: Option<super::risk_profile::DiffRiskProfile>,
 }
 
 impl VerifierReport {
@@ -209,6 +212,7 @@ impl VerifierReport {
             branch: None,
             commit: None,
             safety_warnings: Vec::new(),
+            risk_profile: None,
         }
     }
 
