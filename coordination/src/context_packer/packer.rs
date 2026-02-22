@@ -313,7 +313,13 @@ impl ContextPacker {
         contexts
     }
 
-    /// Build file contexts from a list of relative paths (first 30 lines each).
+    /// Build file contexts from a list of relative paths using AST-aware extraction.
+    ///
+    /// For each Rust file, uses tree-sitter to extract:
+    /// - Import/use statements (first ~10 lines)
+    /// - Compact symbol summary (pub structs, traits, fns with line ranges)
+    ///
+    /// Falls back to first-30-lines for non-Rust files or parse failures.
     fn build_file_contexts(&self, files: &[String]) -> Vec<FileContext> {
         let mut contexts = Vec::new();
         let mut total_chars = 0usize;
@@ -331,15 +337,21 @@ impl ContextPacker {
             };
 
             let lines: Vec<&str> = content.lines().collect();
-            let end = lines.len().min(30);
 
-            let context_content: String = lines[..end]
-                .iter()
-                .enumerate()
-                .map(|(i, l)| format!("{:4} | {}", i + 1, l))
-                .collect::<Vec<_>>()
-                .join("\n");
+            // Try AST-aware extraction
+            let context_content =
+                Self::build_ast_context(file, &content, &lines).unwrap_or_else(|| {
+                    // Fallback: first 30 lines
+                    let end = lines.len().min(30);
+                    lines[..end]
+                        .iter()
+                        .enumerate()
+                        .map(|(i, l)| format!("{:4} | {}", i + 1, l))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                });
 
+            let end_line = lines.len().min(30);
             let ctx_chars = context_content.len() + file.len() + 50; // overhead
             if total_chars + ctx_chars > char_budget {
                 break;
@@ -349,15 +361,62 @@ impl ContextPacker {
             contexts.push(FileContext {
                 file: file.clone(),
                 start_line: 1,
-                end_line: end,
+                end_line,
                 content: context_content,
-                relevance: "Worktree file (header)".to_string(),
+                relevance: "Worktree file (AST summary)".to_string(),
                 priority: 2, // Structural/header context
                 provenance: ContextProvenance::Header,
             });
         }
 
         contexts
+    }
+
+    /// Build AST-aware context for a single Rust file.
+    ///
+    /// Returns `Some(content)` with imports + symbol summary, or `None` if
+    /// tree-sitter parsing fails (caller falls back to first-30-lines).
+    fn build_ast_context(file: &str, source: &str, lines: &[&str]) -> Option<String> {
+        use crate::context_packer::ast_index::FileSymbolIndex;
+
+        let index = FileSymbolIndex::from_source(file, source);
+        if index.symbols.is_empty() {
+            return None; // Parse failure or empty file — fallback
+        }
+
+        let mut parts = Vec::new();
+
+        // Part 1: Imports (use statements and mod declarations from the top)
+        let import_lines: Vec<String> = lines
+            .iter()
+            .take(50) // scan first 50 lines for imports
+            .enumerate()
+            .filter(|(_, l)| {
+                let trimmed = l.trim();
+                trimmed.starts_with("use ")
+                    || trimmed.starts_with("pub use ")
+                    || trimmed.starts_with("mod ")
+                    || trimmed.starts_with("pub mod ")
+                    || trimmed.starts_with("//!")
+            })
+            .map(|(i, l)| format!("{:4} | {}", i + 1, l))
+            .collect();
+
+        if !import_lines.is_empty() {
+            parts.push(format!("// Imports:\n{}", import_lines.join("\n")));
+        }
+
+        // Part 2: AST symbol summary
+        let summary = index.compact_summary();
+        if !summary.is_empty() {
+            parts.push(format!("// Symbols:\n{}", summary));
+        }
+
+        if parts.is_empty() {
+            return None;
+        }
+
+        Some(parts.join("\n\n"))
     }
 
     /// Trim a WorkPacket to fit within the token budget.
