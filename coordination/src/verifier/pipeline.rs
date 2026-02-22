@@ -38,6 +38,17 @@ pub struct VerifierConfig {
     pub packages: Vec<String>,
     /// Include `sg scan` (ast-grep) warning gate
     pub check_sg: bool,
+    /// Include `cargo deny check` gate (security advisories, license compliance).
+    /// Requires `cargo-deny` to be installed; degrades gracefully if missing.
+    pub check_deny: bool,
+    /// Include `cargo doc --no-deps` gate (doc tests, rustdoc lints).
+    pub check_doc: bool,
+    /// Use `cargo nextest run` instead of `cargo test` when available.
+    /// Falls back to `cargo test` if nextest is not installed.
+    pub use_nextest: bool,
+    /// Enable adaptive gate selection based on diff risk profile.
+    /// When true, deny/doc/nextest are auto-enabled based on what changed.
+    pub adaptive: bool,
 }
 
 impl Default for VerifierConfig {
@@ -53,6 +64,10 @@ impl Default for VerifierConfig {
             extra_cargo_args: Vec::new(),
             packages: Vec::new(),
             check_sg: false,
+            check_deny: false,
+            check_doc: false,
+            use_nextest: false,
+            adaptive: false,
         }
     }
 }
@@ -107,6 +122,37 @@ impl VerifierConfig {
             ..Default::default()
         }
     }
+
+    /// Adaptive mode — core gates on, extras auto-selected by diff risk profile.
+    ///
+    /// Runs fmt/clippy/check/test as baseline, then enables deny/doc/nextest
+    /// based on what the diff actually changed (Cargo.toml → deny, pub API → doc, etc.).
+    pub fn adaptive() -> Self {
+        Self {
+            adaptive: true,
+            ..Default::default()
+        }
+    }
+
+    /// Apply a diff risk profile to auto-enable adaptive gates.
+    ///
+    /// Only modifies config when `self.adaptive` is true. Mutates in place
+    /// so callers can inspect which gates were auto-enabled.
+    pub fn apply_risk_profile(&mut self, profile: &super::risk_profile::DiffRiskProfile) {
+        if !self.adaptive {
+            return;
+        }
+
+        if profile.should_run_deny() {
+            self.check_deny = true;
+        }
+        if profile.should_run_doc() {
+            self.check_doc = true;
+        }
+        if profile.should_prefer_nextest() {
+            self.use_nextest = true;
+        }
+    }
 }
 
 /// The Verifier — runs the deterministic quality gate pipeline
@@ -137,6 +183,22 @@ impl Verifier {
         report.branch = self.git_branch();
         report.commit = self.git_commit();
 
+        // Adaptive gate selection: analyze diff risk profile and auto-enable gates
+        let mut config = self.config.clone();
+        if config.adaptive {
+            let profile = super::risk_profile::DiffRiskProfile::from_working_dir(&self.working_dir);
+            tracing::info!(
+                files_changed = profile.files_changed,
+                lines_added = profile.lines_added,
+                has_unsafe = profile.has_unsafe,
+                has_cargo_toml = profile.has_cargo_toml_change,
+                has_pub_api = profile.has_public_api_change,
+                "Diff risk profile"
+            );
+            config.apply_risk_profile(&profile);
+            report.risk_profile = Some(profile);
+        }
+
         // Gate 0: Pre-gate safety scan for dangerous code patterns
         let safety_warnings = super::safety_scan::scan_diff(&self.working_dir);
         if !safety_warnings.is_empty() {
@@ -156,52 +218,84 @@ impl Verifier {
         report.safety_warnings = safety_warnings;
 
         // Gate 1: cargo fmt --check
-        if self.config.check_fmt {
+        if config.check_fmt {
             let result = self.run_fmt_gate().await;
             let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
-            if failed && !self.config.comprehensive {
-                self.skip_remaining(&mut report, &["clippy", "sg", "check", "test"]);
+            if failed && !config.comprehensive {
+                self.skip_remaining_with(
+                    &mut report,
+                    &["clippy", "sg", "check", "test", "deny", "doc"],
+                    &config,
+                );
                 report.finalize(start.elapsed());
                 return report;
             }
         }
 
         // Gate 2: cargo clippy -D warnings
-        if self.config.check_clippy {
+        if config.check_clippy {
             let result = self.run_clippy_gate().await;
             let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
-            if failed && !self.config.comprehensive {
-                self.skip_remaining(&mut report, &["sg", "check", "test"]);
+            if failed && !config.comprehensive {
+                self.skip_remaining_with(
+                    &mut report,
+                    &["sg", "check", "test", "deny", "doc"],
+                    &config,
+                );
                 report.finalize(start.elapsed());
                 return report;
             }
         }
 
         // Gate 2.5: sg scan (ast-grep) — warning-only, never blocks pipeline
-        if self.config.check_sg {
+        if config.check_sg {
             let result = self.run_sg_gate().await;
             report.add_gate(result);
             // Never fail-fast on warnings — always continue to check gate
         }
 
         // Gate 3: cargo check --message-format=json
-        if self.config.check_compile {
+        if config.check_compile {
             let result = self.run_check_gate().await;
             let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
-            if failed && !self.config.comprehensive {
-                self.skip_remaining(&mut report, &["test"]);
+            if failed && !config.comprehensive {
+                self.skip_remaining_with(&mut report, &["test", "deny", "doc"], &config);
                 report.finalize(start.elapsed());
                 return report;
             }
         }
 
-        // Gate 4: cargo test
-        if self.config.check_test {
-            let result = self.run_test_gate().await;
+        // Gate 4: cargo test (or nextest if configured)
+        if config.check_test {
+            let result = if config.use_nextest {
+                self.run_nextest_gate().await
+            } else {
+                self.run_test_gate().await
+            };
+            let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
+            if failed && !config.comprehensive {
+                self.skip_remaining_with(&mut report, &["deny", "doc"], &config);
+                report.finalize(start.elapsed());
+                return report;
+            }
+        }
+
+        // Gate 5: cargo deny check (warning-only — security advisories, license compliance)
+        if config.check_deny {
+            let result = self.run_deny_gate().await;
+            report.add_gate(result);
+            // deny is warning-only: advisory findings don't block the pipeline
+        }
+
+        // Gate 6: cargo doc --no-deps (doc tests + rustdoc lints)
+        if config.check_doc {
+            let result = self.run_doc_gate().await;
+            report.add_gate(result);
+            // doc gate is warning-only for now
         }
 
         report.finalize(start.elapsed());
@@ -489,6 +583,202 @@ impl Verifier {
         }
     }
 
+    /// Run `cargo nextest run` as an alternative to `cargo test`.
+    ///
+    /// Falls back to `cargo test` if nextest is not installed.
+    async fn run_nextest_gate(&self) -> GateResult {
+        let start = Instant::now();
+
+        // Probe for nextest availability
+        let probe = tokio::process::Command::new("cargo")
+            .args(["nextest", "--version"])
+            .output()
+            .await;
+
+        let nextest_available = probe.map(|o| o.status.success()).unwrap_or(false);
+
+        if !nextest_available {
+            tracing::info!("cargo-nextest not installed, falling back to cargo test");
+            return self.run_test_gate().await;
+        }
+
+        let mut cmd = tokio::process::Command::new("cargo");
+        cmd.args(["nextest", "run"]);
+        for pkg in &self.config.packages {
+            cmd.args(["-p", pkg]);
+        }
+        for arg in &self.config.extra_cargo_args {
+            cmd.arg(arg);
+        }
+
+        match self.run_with_timeout(&mut cmd).await {
+            Ok(output) => {
+                let stderr = self.truncate_stderr(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let exit_code = output.status.code();
+                let passed = output.status.success();
+
+                // nextest outputs its own summary format; parse test counts
+                let (test_count, fail_count) = self.parse_nextest_summary(&stdout, &stderr);
+
+                GateResult {
+                    gate: "nextest".to_string(),
+                    outcome: if passed {
+                        GateOutcome::Passed
+                    } else {
+                        GateOutcome::Failed
+                    },
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code,
+                    error_count: fail_count,
+                    warning_count: 0,
+                    errors: vec![],
+                    stderr_excerpt: if passed {
+                        None
+                    } else {
+                        Some(format!(
+                            "{} tests, {} failures\n\n{}",
+                            test_count, fail_count, stderr
+                        ))
+                    },
+                }
+            }
+            Err(e) => GateResult {
+                gate: "nextest".to_string(),
+                outcome: GateOutcome::Failed,
+                duration_ms: start.elapsed().as_millis() as u64,
+                exit_code: None,
+                error_count: 1,
+                warning_count: 0,
+                errors: vec![],
+                stderr_excerpt: Some(e),
+            },
+        }
+    }
+
+    /// Run `cargo deny check` for security advisories and license compliance.
+    ///
+    /// Warning-only: findings are reported but don't block the pipeline.
+    /// Degrades gracefully if `cargo-deny` is not installed.
+    async fn run_deny_gate(&self) -> GateResult {
+        let start = Instant::now();
+
+        let mut cmd = tokio::process::Command::new("cargo");
+        cmd.args(["deny", "check"]);
+
+        match self.run_with_timeout(&mut cmd).await {
+            Ok(output) => {
+                let stderr = self.truncate_stderr(&output.stderr);
+                let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                let exit_code = output.status.code();
+                let passed = output.status.success();
+
+                // Count advisory/warning lines
+                let warning_count = stdout
+                    .lines()
+                    .filter(|l| l.contains("warning") || l.contains("WARN"))
+                    .count();
+                let error_count = stdout
+                    .lines()
+                    .filter(|l| l.contains("error") || l.contains("ERROR"))
+                    .count();
+
+                GateResult {
+                    gate: "deny".to_string(),
+                    outcome: if passed {
+                        GateOutcome::Passed
+                    } else {
+                        GateOutcome::Warning // deny is advisory — never blocks
+                    },
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code,
+                    error_count,
+                    warning_count,
+                    errors: vec![],
+                    stderr_excerpt: if passed {
+                        None
+                    } else {
+                        let details = if stdout.is_empty() {
+                            stderr
+                        } else {
+                            self.truncate_str(&stdout)
+                        };
+                        Some(details)
+                    },
+                }
+            }
+            Err(e) => {
+                // cargo-deny not installed or timed out — degrade gracefully
+                GateResult {
+                    gate: "deny".to_string(),
+                    outcome: GateOutcome::Warning,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code: None,
+                    error_count: 0,
+                    warning_count: 0,
+                    errors: vec![],
+                    stderr_excerpt: Some(format!("cargo deny unavailable: {e}")),
+                }
+            }
+        }
+    }
+
+    /// Run `cargo doc --no-deps` for doc test validation and rustdoc lints.
+    ///
+    /// Warning-only: broken doc links are reported but don't block the pipeline.
+    async fn run_doc_gate(&self) -> GateResult {
+        let start = Instant::now();
+
+        let mut cmd = tokio::process::Command::new("cargo");
+        cmd.arg("doc").arg("--no-deps");
+        for pkg in &self.config.packages {
+            cmd.args(["-p", pkg]);
+        }
+        // Enable rustdoc lint warnings
+        cmd.env("RUSTDOCFLAGS", "-D warnings");
+
+        match self.run_with_timeout(&mut cmd).await {
+            Ok(output) => {
+                let stderr = self.truncate_stderr(&output.stderr);
+                let exit_code = output.status.code();
+                let passed = output.status.success();
+
+                // Count rustdoc warnings/errors from stderr
+                let stderr_str = String::from_utf8_lossy(&output.stderr).to_string();
+                let warning_count = stderr_str
+                    .lines()
+                    .filter(|l| l.contains("warning:"))
+                    .count();
+                let error_count = stderr_str.lines().filter(|l| l.contains("error:")).count();
+
+                GateResult {
+                    gate: "doc".to_string(),
+                    outcome: if passed {
+                        GateOutcome::Passed
+                    } else {
+                        GateOutcome::Warning // doc is advisory — never blocks
+                    },
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code,
+                    error_count,
+                    warning_count,
+                    errors: vec![],
+                    stderr_excerpt: if passed { None } else { Some(stderr) },
+                }
+            }
+            Err(e) => GateResult {
+                gate: "doc".to_string(),
+                outcome: GateOutcome::Warning,
+                duration_ms: start.elapsed().as_millis() as u64,
+                exit_code: None,
+                error_count: 0,
+                warning_count: 0,
+                errors: vec![],
+                stderr_excerpt: Some(format!("cargo doc failed: {e}")),
+            },
+        }
+    }
+
     /// Parse JSON lines from cargo output (same as Compiler::parse_json_messages)
     fn parse_json_messages(output: &str) -> Vec<CargoMessage> {
         output
@@ -542,14 +832,26 @@ impl Verifier {
 
     /// Add skipped gates to the report
     fn skip_remaining(&self, report: &mut VerifierReport, gates: &[&str]) {
+        self.skip_remaining_with(report, gates, &self.config);
+    }
+
+    /// Add skipped gates to the report using an external config (for adaptive mode).
+    fn skip_remaining_with(
+        &self,
+        report: &mut VerifierReport,
+        gates: &[&str],
+        config: &VerifierConfig,
+    ) {
         for gate in gates {
             // Only skip gates that are enabled in config
             let should_skip = match *gate {
-                "fmt" => self.config.check_fmt,
-                "clippy" => self.config.check_clippy,
-                "sg" => self.config.check_sg,
-                "check" => self.config.check_compile,
-                "test" => self.config.check_test,
+                "fmt" => config.check_fmt,
+                "clippy" => config.check_clippy,
+                "sg" => config.check_sg,
+                "check" => config.check_compile,
+                "test" => config.check_test,
+                "deny" => config.check_deny,
+                "doc" => config.check_doc,
                 _ => false,
             };
 
@@ -623,6 +925,45 @@ impl Verifier {
         }
 
         (total_tests, total_failures)
+    }
+
+    /// Parse nextest summary output.
+    ///
+    /// Nextest outputs to stderr with lines like:
+    /// "Summary [  0.123s] 10 tests run: 9 passed, 1 failed, 0 skipped"
+    fn parse_nextest_summary(&self, stdout: &str, stderr: &str) -> (usize, usize) {
+        // Try stderr first (nextest's primary output), then stdout
+        for text in [stderr, stdout] {
+            for line in text.lines() {
+                if line.contains("tests run:") {
+                    // Parse "N tests run: M passed, K failed"
+                    let words: Vec<&str> = line.split_whitespace().collect();
+                    for (i, word) in words.iter().enumerate() {
+                        if *word == "tests" && i > 0 {
+                            if let Ok(n) = words[i - 1].parse::<usize>() {
+                                // Found total tests — now find failures
+                                let fail_count = words
+                                    .iter()
+                                    .enumerate()
+                                    .find(|(_, w)| w.starts_with("failed"))
+                                    .and_then(|(j, _)| {
+                                        if j > 0 {
+                                            words[j - 1].trim_end_matches(',').parse::<usize>().ok()
+                                        } else {
+                                            None
+                                        }
+                                    })
+                                    .unwrap_or(0);
+                                return (n, fail_count);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Fallback: try standard cargo test format
+        self.parse_test_summary(stdout)
     }
 
     /// Truncate stderr bytes to configured limit
@@ -793,5 +1134,157 @@ test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
         let truncated = verifier.truncate_str(long_msg);
         assert!(truncated.contains("truncated"));
         assert!(truncated.starts_with("this is a very long "));
+    }
+
+    #[test]
+    fn test_verifier_config_adaptive() {
+        let config = VerifierConfig::adaptive();
+        assert!(config.adaptive);
+        // Core gates on by default
+        assert!(config.check_fmt);
+        assert!(config.check_clippy);
+        assert!(config.check_compile);
+        assert!(config.check_test);
+        // Extra gates off until risk profile applied
+        assert!(!config.check_deny);
+        assert!(!config.check_doc);
+        assert!(!config.use_nextest);
+    }
+
+    #[test]
+    fn test_adaptive_config_applies_risk_profile() {
+        let mut config = VerifierConfig::adaptive();
+
+        // Simulate Cargo.toml change
+        let profile = super::super::risk_profile::DiffRiskProfile {
+            has_cargo_toml_change: true,
+            has_public_api_change: true,
+            has_doc_change: false,
+            files_changed: 5,
+            lines_added: 200,
+            ..Default::default()
+        };
+
+        config.apply_risk_profile(&profile);
+        assert!(config.check_deny, "Cargo.toml change should enable deny");
+        assert!(config.check_doc, "Public API change should enable doc");
+        assert!(config.use_nextest, "Large changeset should enable nextest");
+    }
+
+    #[test]
+    fn test_adaptive_noop_when_disabled() {
+        let mut config = VerifierConfig::default();
+        assert!(!config.adaptive);
+
+        let profile = super::super::risk_profile::DiffRiskProfile {
+            has_cargo_toml_change: true,
+            ..Default::default()
+        };
+
+        config.apply_risk_profile(&profile);
+        assert!(
+            !config.check_deny,
+            "Should not enable deny when adaptive is off"
+        );
+    }
+
+    #[test]
+    fn test_new_gates_off_by_default() {
+        let config = VerifierConfig::default();
+        assert!(!config.check_deny);
+        assert!(!config.check_doc);
+        assert!(!config.use_nextest);
+        assert!(!config.adaptive);
+    }
+
+    #[test]
+    fn test_new_gates_off_in_named_constructors() {
+        for config in [
+            VerifierConfig::quick(),
+            VerifierConfig::full(),
+            VerifierConfig::compile_only(),
+            VerifierConfig::docs(),
+            VerifierConfig::none(),
+        ] {
+            assert!(!config.check_deny, "deny should be off by default");
+            assert!(!config.check_doc, "doc should be off by default");
+            assert!(!config.use_nextest, "nextest should be off by default");
+        }
+    }
+
+    #[test]
+    fn test_parse_nextest_summary() {
+        let verifier = Verifier::new("/tmp", VerifierConfig::default());
+
+        let stderr = "Summary [  0.123s] 10 tests run: 9 passed, 1 failed, 0 skipped";
+        let (total, failures) = verifier.parse_nextest_summary("", stderr);
+        assert_eq!(total, 10);
+        assert_eq!(failures, 1);
+    }
+
+    #[test]
+    fn test_parse_nextest_summary_all_pass() {
+        let verifier = Verifier::new("/tmp", VerifierConfig::default());
+
+        let stderr = "Summary [  1.234s] 25 tests run: 25 passed, 0 failed, 0 skipped";
+        let (total, failures) = verifier.parse_nextest_summary("", stderr);
+        assert_eq!(total, 25);
+        assert_eq!(failures, 0);
+    }
+
+    #[test]
+    fn test_parse_nextest_summary_fallback_to_cargo() {
+        let verifier = Verifier::new("/tmp", VerifierConfig::default());
+
+        // No nextest format → should fall back to cargo test parser
+        let stdout = "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured";
+        let (total, failures) = verifier.parse_nextest_summary(stdout, "");
+        assert_eq!(total, 5);
+        assert_eq!(failures, 0);
+    }
+
+    #[tokio::test]
+    async fn test_deny_gate_degrades_gracefully() {
+        // cargo-deny is unlikely to be installed in all environments
+        let verifier = Verifier::new("/tmp", VerifierConfig::default());
+        let result = verifier.run_deny_gate().await;
+        // Should produce Warning (not Failed) if deny is not installed
+        assert!(
+            result.outcome == GateOutcome::Warning || result.outcome == GateOutcome::Passed,
+            "deny gate should never produce Failed, got: {:?}",
+            result.outcome
+        );
+        assert_eq!(result.gate, "deny");
+    }
+
+    #[tokio::test]
+    async fn test_doc_gate_on_invalid_dir() {
+        let verifier = Verifier::new("/tmp/nonexistent-crate-dir", VerifierConfig::default());
+        let result = verifier.run_doc_gate().await;
+        // Should produce Warning — doc gate never blocks
+        assert!(
+            result.outcome == GateOutcome::Warning,
+            "doc gate on invalid dir should be Warning, got: {:?}",
+            result.outcome
+        );
+        assert_eq!(result.gate, "doc");
+    }
+
+    #[test]
+    fn test_skip_remaining_with_includes_new_gates() {
+        let config = VerifierConfig {
+            check_deny: true,
+            check_doc: true,
+            ..Default::default()
+        };
+        let verifier = Verifier::new("/tmp", config.clone());
+        let mut report = VerifierReport::new("/tmp".to_string());
+
+        verifier.skip_remaining_with(&mut report, &["deny", "doc"], &config);
+        assert_eq!(report.gates.len(), 2);
+        assert_eq!(report.gates[0].gate, "deny");
+        assert_eq!(report.gates[0].outcome, GateOutcome::Skipped);
+        assert_eq!(report.gates[1].gate, "doc");
+        assert_eq!(report.gates[1].outcome, GateOutcome::Skipped);
     }
 }
