@@ -3,6 +3,7 @@ pub mod agents;
 pub mod beads_bridge;
 pub mod config;
 pub mod contracts;
+pub mod grammars;
 pub mod knowledge_sync;
 pub mod notebook_bridge;
 pub mod orchestrator;
