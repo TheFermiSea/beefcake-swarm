@@ -60,6 +60,7 @@ pub mod events;
 pub mod feedback;
 pub mod harness;
 pub mod memory;
+pub mod otel;
 pub mod patch;
 pub mod perf_control;
 pub mod registry;
@@ -169,6 +170,9 @@ pub use registry::{ProviderCapabilities, ProviderEntry, ProviderHealth, Provider
 
 // Re-export resilience types
 pub use resilience::{DegradationLevel, DegradedResponse, FallbackChain, FallbackTier, ToolHealth};
+
+// Re-export OTel span helpers
+pub use otel::{AgentRole, SpanSummary};
 
 // Re-export rollout types
 pub use rollout::{
