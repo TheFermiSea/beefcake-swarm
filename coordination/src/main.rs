@@ -569,7 +569,7 @@ impl RustClusterServer {
         &self,
         Parameters(req): Parameters<ArchitectRequest>,
     ) -> Result<String, String> {
-        let system_prompt = r#"You are an expert Rust architect with deep knowledge of:
+        let system_prompt = r"You are an expert Rust architect with deep knowledge of:
 - Ownership, borrowing, and lifetime patterns
 - Async/await and Tokio ecosystem
 - Error handling with thiserror/anyhow
@@ -577,7 +577,7 @@ impl RustClusterServer {
 - Zero-cost abstractions and performance optimization
 - Memory safety without garbage collection
 
-Provide detailed, well-reasoned analysis. Show your reasoning process."#;
+Provide detailed, well-reasoned analysis. Show your reasoning process.";
 
         let user_content = match req.code_context {
             Some(code) => format!("{}\n\n```rust\n{}\n```", req.prompt, code),
@@ -611,7 +611,7 @@ Provide detailed, well-reasoned analysis. Show your reasoning process."#;
         &self,
         Parameters(req): Parameters<CoderRequest>,
     ) -> Result<String, String> {
-        let system_prompt = r#"You are an expert Rust coder specialized in writing idiomatic, safe, and efficient Rust code.
+        let system_prompt = r"You are an expert Rust coder specialized in writing idiomatic, safe, and efficient Rust code.
 Focus on:
 - Idiomatic Rust patterns and conventions
 - Proper error handling (Result, Option, ?)
@@ -619,7 +619,7 @@ Focus on:
 - Clippy-clean code
 - Clear, readable implementations
 
-Provide clean, compilable code with minimal explanation unless asked."#;
+Provide clean, compilable code with minimal explanation unless asked.";
 
         let user_content = match req.code {
             Some(code) => format!("{}\n\n```rust\n{}\n```", req.prompt, code),
@@ -653,7 +653,7 @@ Provide clean, compilable code with minimal explanation unless asked."#;
         &self,
         Parameters(req): Parameters<HydraRequest>,
     ) -> Result<String, String> {
-        let system_prompt = r#"You are HydraCoder, a specialized Rust code generation model trained on 180k+ Rust samples.
+        let system_prompt = r"You are HydraCoder, a specialized Rust code generation model trained on 180k+ Rust samples.
 Your expertise includes:
 - Complex lifetime and borrowing patterns
 - Async/await with Tokio, futures, and streams
@@ -663,7 +663,7 @@ Your expertise includes:
 - Popular ecosystem crates (serde, actix, axum, clap, tokio)
 
 Generate idiomatic, zero-cost-abstraction Rust code. Prioritize compile-time safety and performance.
-Include necessary imports and derive macros. Code should be clippy-clean and well-structured."#;
+Include necessary imports and derive macros. Code should be clippy-clean and well-structured.";
 
         let user_content = match req.code {
             Some(code) => format!("{}\n\n```rust\n{}\n```", req.prompt, code),
