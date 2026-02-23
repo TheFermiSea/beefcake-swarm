@@ -23,7 +23,7 @@ use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::config::SwarmConfig;
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
-use crate::telemetry::{self, MetricsCollector};
+use crate::telemetry::{self, MetricsCollector, TelemetryReader};
 use crate::worktree_bridge::WorktreeBridge;
 use coordination::benchmark::slo::{self, AlertSeverity};
 use coordination::benchmark::OrchestrationMetrics;
@@ -1866,6 +1866,45 @@ pub async fn process_issue(
         }
     }
 
+    // --- KB Refresh check ---
+    // Read historical telemetry to get total session count, then check if
+    // a KB refresh is due based on the session_interval policy.
+    let telemetry_path = worktree_bridge.repo_root().join(".swarm-telemetry.jsonl");
+    if let Ok(reader) = TelemetryReader::read_from_file(&telemetry_path) {
+        let total_sessions = reader.sessions().len();
+        let refresh_policy = crate::kb_refresh::RefreshPolicy::default();
+
+        if crate::kb_refresh::should_refresh(total_sessions, &refresh_policy) {
+            let analytics = reader.aggregate_analytics();
+            let skills = coordination::analytics::skills::SkillLibrary::new();
+            let now = chrono::Utc::now();
+
+            let refresh_report =
+                crate::kb_refresh::analyze_and_refresh(&analytics, &skills, &refresh_policy, now);
+            if refresh_report.has_actions() {
+                info!(
+                    actions = refresh_report.actions.len(),
+                    stale = refresh_report.stale_skills,
+                    promotions = refresh_report.promotions,
+                    undocumented = refresh_report.undocumented_errors,
+                    "KB refresh: {refresh_report}"
+                );
+            } else {
+                debug!(sessions = total_sessions, "KB refresh: no actions needed");
+            }
+        }
+
+        // --- Dashboard metrics ---
+        // Generate an all-time dashboard from accumulated telemetry and log summary.
+        let skills = coordination::analytics::skills::SkillLibrary::new();
+        let now = chrono::Utc::now();
+        let dashboard = crate::dashboard::generate(reader.sessions(), &skills, now);
+        let summary = crate::dashboard::format_summary(&dashboard);
+        info!(sessions = reader.sessions().len(), "\n{summary}");
+    } else {
+        debug!("No telemetry file found — skipping KB refresh and dashboard");
+    }
+
     Ok(success)
 }
 
@@ -2922,5 +2961,34 @@ mod tests {
         // summary() should produce readable output
         let summary = failed_report.summary();
         assert!(!summary.is_empty());
+    }
+
+    #[test]
+    fn test_kb_refresh_triggers_at_session_interval() {
+        use crate::kb_refresh::{self, RefreshPolicy};
+
+        let policy = RefreshPolicy::default(); // session_interval = 10
+
+        // Should not trigger at 5 sessions
+        assert!(!kb_refresh::should_refresh(5, &policy));
+        // Should trigger at 10 sessions
+        assert!(kb_refresh::should_refresh(10, &policy));
+        // Should trigger at 20 sessions
+        assert!(kb_refresh::should_refresh(20, &policy));
+    }
+
+    #[test]
+    fn test_dashboard_generates_from_empty_sessions() {
+        use crate::dashboard;
+        use coordination::analytics::skills::SkillLibrary;
+
+        let skills = SkillLibrary::new();
+        let now = chrono::Utc::now();
+        let metrics = dashboard::generate(&[], &skills, now);
+
+        assert_eq!(metrics.windows.len(), 4); // 24h, 7d, 30d, all-time
+        let summary = dashboard::format_summary(&metrics);
+        assert!(summary.contains("Self-Improvement Dashboard"));
+        assert!(summary.contains("Sessions: 0"));
     }
 }
