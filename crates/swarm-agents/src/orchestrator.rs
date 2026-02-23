@@ -25,7 +25,9 @@ use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::telemetry::{self, MetricsCollector};
 use crate::worktree_bridge::WorktreeBridge;
+use coordination::escalation::worker_first::classify_initial_tier;
 use coordination::feedback::ErrorCategory;
+use coordination::rollout::FeatureFlags;
 use coordination::save_session_state;
 use coordination::{
     ContextPacker, EscalationEngine, EscalationState, GitManager, InterventionType,
@@ -833,6 +835,10 @@ pub async fn process_issue(
     );
     let _process_guard = process_span.enter();
 
+    // --- Feature flags ---
+    let feature_flags = FeatureFlags::from_env();
+    info!(flags = %feature_flags, summary = %feature_flags.summary(), "Feature flags loaded");
+
     // --- Validate objective ---
     let title_trimmed = issue.title.trim();
     if title_trimmed.is_empty() || title_trimmed.len() < config.min_objective_len {
@@ -908,12 +914,23 @@ pub async fn process_issue(
 
     // --- Escalation state ---
     //
-    // Start at Council tier (cloud-backed manager) from the beginning.
-    // Cloud models (Opus 4.6) are the managers; local models are workers.
-    // Council gets 6 iterations before escalating to Human.
+    // When worker_first is enabled, classify the task to determine starting tier.
+    // Otherwise, default to Council (cloud-backed manager) from the beginning.
     let council_budget_iterations = u32_from_env("SWARM_COUNCIL_MAX_ITERATIONS", 6);
     let council_budget_consultations = u32_from_env("SWARM_COUNCIL_MAX_CONSULTATIONS", 6);
-    let initial_tier = tier_from_env("SWARM_INITIAL_TIER", SwarmTier::Council);
+    let initial_tier = if feature_flags.worker_first_enabled {
+        let recommendation = classify_initial_tier(&issue.title, &[]);
+        info!(
+            tier = ?recommendation.tier,
+            complexity = %recommendation.complexity,
+            confidence = recommendation.confidence,
+            reason = %recommendation.reason,
+            "Worker-first classification"
+        );
+        recommendation.tier
+    } else {
+        tier_from_env("SWARM_INITIAL_TIER", SwarmTier::Council)
+    };
     let engine = EscalationEngine::new();
     let mut escalation = EscalationState::new(&issue.id)
         .with_initial_tier(initial_tier)
@@ -2682,5 +2699,46 @@ mod tests {
         assert!(prompt.contains("lines 10-20"));
         assert!(prompt.contains("Add early return"));
         assert!(prompt.contains("No bounds checking"));
+    }
+
+    #[test]
+    fn test_feature_flags_loaded_from_env() {
+        // Verify FeatureFlags::from_env() works and summary is displayable.
+        // Unset to guarantee defaults.
+        std::env::remove_var("SWARM_SMART_ROUTER_ENABLED");
+        std::env::remove_var("SWARM_STATE_MACHINE_ENABLED");
+        std::env::remove_var("SWARM_CANARY_ENABLED");
+        std::env::remove_var("SWARM_STRUCTURED_EVALUATOR_REQUIRED");
+        std::env::remove_var("SWARM_WORKER_FIRST_ENABLED");
+
+        let flags = FeatureFlags::from_env();
+        assert!(!flags.any_enabled());
+        assert_eq!(
+            flags.summary(),
+            "Feature flags: all disabled (conservative mode)"
+        );
+
+        // Display trait works
+        let display = flags.to_string();
+        assert!(display.contains("smart_router=OFF"));
+        assert!(display.contains("worker_first=OFF"));
+    }
+
+    #[test]
+    fn test_worker_first_flag_routes_through_classifier() {
+        // When worker_first is enabled, classify_initial_tier determines the starting tier
+        // instead of defaulting to Council.
+
+        // Simple task → Worker
+        let rec = classify_initial_tier("Fix unused import in lib.rs", &[]);
+        assert_eq!(rec.tier, SwarmTier::Worker);
+
+        // Complex task → Council
+        let rec = classify_initial_tier("Refactor async orchestration with tokio", &[]);
+        assert_eq!(rec.tier, SwarmTier::Council);
+
+        // Unknown task → Worker (worker-first default)
+        let rec = classify_initial_tier("Add per-agent performance tracking", &[]);
+        assert_eq!(rec.tier, SwarmTier::Worker);
     }
 }
