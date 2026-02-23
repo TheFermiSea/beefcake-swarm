@@ -119,3 +119,54 @@ impl Tool for RunVerifierTool {
         Ok(output)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_run_verifier_args_deserialize_full() {
+        let json = r#"{"mode": "full"}"#;
+        let args: RunVerifierArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.mode.as_deref(), Some("full"));
+    }
+
+    #[test]
+    fn test_run_verifier_args_deserialize_quick() {
+        let json = r#"{"mode": "quick"}"#;
+        let args: RunVerifierArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.mode.as_deref(), Some("quick"));
+    }
+
+    #[test]
+    fn test_run_verifier_args_deserialize_none() {
+        let json = r#"{}"#;
+        let args: RunVerifierArgs = serde_json::from_str(json).unwrap();
+        assert!(args.mode.is_none());
+    }
+
+    #[test]
+    fn test_run_verifier_tool_new() {
+        let tool = RunVerifierTool::new(Path::new("/tmp/test"));
+        assert_eq!(tool.working_dir, PathBuf::from("/tmp/test"));
+        assert!(tool.packages.is_empty());
+    }
+
+    #[test]
+    fn test_run_verifier_tool_with_packages() {
+        let tool = RunVerifierTool::new(Path::new("/tmp/test"))
+            .with_packages(vec!["swarm-agents".to_string(), "coordination".to_string()]);
+        assert_eq!(tool.packages.len(), 2);
+        assert_eq!(tool.packages[0], "swarm-agents");
+        assert_eq!(tool.packages[1], "coordination");
+    }
+
+    #[test]
+    fn test_run_verifier_args_invalid_mode_still_deserializes() {
+        // Invalid mode value still deserializes — validation happens at call time
+        let json = r#"{"mode": "invalid"}"#;
+        let args: RunVerifierArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.mode.as_deref(), Some("invalid"));
+    }
+}

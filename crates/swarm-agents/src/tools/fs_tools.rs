@@ -199,6 +199,70 @@ fn has_json_escape_sequences(s: &str) -> bool {
         || inner.contains("\\u")
 }
 
+// ── Unit tests ──────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_read_file_args_deserialize() {
+        let json = r#"{"path": "src/main.rs"}"#;
+        let args: ReadFileArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.path, "src/main.rs");
+    }
+
+    #[test]
+    fn test_write_file_args_deserialize() {
+        let json = r#"{"path": "src/lib.rs", "content": "fn main() {}"}"#;
+        let args: WriteFileArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.path, "src/lib.rs");
+        assert_eq!(args.content, "fn main() {}");
+    }
+
+    #[test]
+    fn test_write_file_args_missing_content_fails() {
+        let json = r#"{"path": "src/lib.rs"}"#;
+        let result = serde_json::from_str::<WriteFileArgs>(json);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_has_json_escape_sequences_with_newlines() {
+        assert!(has_json_escape_sequences(r#""hello\nworld""#));
+    }
+
+    #[test]
+    fn test_has_json_escape_sequences_with_tabs() {
+        assert!(has_json_escape_sequences(r#""hello\tworld""#));
+    }
+
+    #[test]
+    fn test_has_json_escape_sequences_plain_quoted() {
+        // No escape sequences — just a quoted string
+        assert!(!has_json_escape_sequences(r#""hello world""#));
+    }
+
+    #[test]
+    fn test_has_json_escape_sequences_with_unicode() {
+        assert!(has_json_escape_sequences(r#""hello\u0020world""#));
+    }
+
+    #[test]
+    fn test_list_files_args_deserialize() {
+        let json = r#"{"path": ""}"#;
+        let args: ListFilesArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.path, "");
+    }
+
+    #[test]
+    fn test_list_files_args_with_subdir() {
+        let json = r#"{"path": "src/tools"}"#;
+        let args: ListFilesArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.path, "src/tools");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ListFilesTool
 // ---------------------------------------------------------------------------
