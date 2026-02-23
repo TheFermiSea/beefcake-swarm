@@ -286,6 +286,156 @@ impl Tool for EditFileTool {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- normalize_whitespace ---
+
+    #[test]
+    fn test_normalize_whitespace_collapses_spaces() {
+        assert_eq!(normalize_whitespace("  hello   world  "), "hello world");
+    }
+
+    #[test]
+    fn test_normalize_whitespace_preserves_lines() {
+        let input = "  fn main() {\n    println!(\"hi\");\n  }";
+        let expected = "fn main() {\nprintln!(\"hi\");\n}";
+        assert_eq!(normalize_whitespace(input), expected);
+    }
+
+    #[test]
+    fn test_normalize_whitespace_empty() {
+        assert_eq!(normalize_whitespace(""), "");
+    }
+
+    // --- find_all ---
+
+    #[test]
+    fn test_find_all_multiple_matches() {
+        let offsets = find_all("abcabcabc", "abc");
+        assert_eq!(offsets, vec![0, 3, 6]);
+    }
+
+    #[test]
+    fn test_find_all_no_match() {
+        let offsets = find_all("hello world", "xyz");
+        assert!(offsets.is_empty());
+    }
+
+    #[test]
+    fn test_find_all_single_match() {
+        let offsets = find_all("hello world", "world");
+        assert_eq!(offsets, vec![6]);
+    }
+
+    #[test]
+    fn test_find_all_overlapping() {
+        let offsets = find_all("aaa", "aa");
+        assert_eq!(offsets, vec![0, 1]);
+    }
+
+    // --- fuzzy_find_unique ---
+
+    #[test]
+    fn test_fuzzy_find_unique_whitespace_difference() {
+        let content = "fn main() {\n    println!(\"hi\");\n}\n";
+        let needle = "fn main() {\nprintln!(\"hi\");\n}";
+        let result = fuzzy_find_unique(content, needle);
+        assert!(result.is_some());
+        let (start, end) = result.unwrap();
+        // Should cover the entire content (3 lines)
+        assert_eq!(start, 0);
+        assert!(end <= content.len());
+    }
+
+    #[test]
+    fn test_fuzzy_find_unique_no_match() {
+        let content = "fn main() {\n    println!(\"hi\");\n}\n";
+        let needle = "fn foo() {\nbar();\n}";
+        let result = fuzzy_find_unique(content, needle);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fuzzy_find_unique_empty_needle() {
+        let result = fuzzy_find_unique("some content", "");
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_fuzzy_find_unique_ambiguous() {
+        // Two identical blocks — should return None (not unique)
+        let content = "fn a() {}\nfn b() {}\nfn a() {}\n";
+        let needle = "fn a() {}";
+        let result = fuzzy_find_unique(content, needle);
+        assert!(result.is_none());
+    }
+
+    // --- unescape_if_double_encoded ---
+
+    #[test]
+    fn test_unescape_double_encoded_with_escapes() {
+        let input = r#""hello\nworld""#;
+        let result = unescape_if_double_encoded(input);
+        assert_eq!(result, "hello\nworld");
+    }
+
+    #[test]
+    fn test_unescape_plain_quoted_no_escapes() {
+        // No escape sequences — should return unchanged
+        let input = r#""hello world""#;
+        let result = unescape_if_double_encoded(input);
+        assert_eq!(result, r#""hello world""#);
+    }
+
+    #[test]
+    fn test_unescape_not_quoted() {
+        let input = "hello world";
+        let result = unescape_if_double_encoded(input);
+        assert_eq!(result, "hello world");
+    }
+
+    // --- EditFileArgs deserialization ---
+
+    #[test]
+    fn test_edit_file_args_deserialize() {
+        let json =
+            r#"{"path": "src/lib.rs", "old_content": "fn old()", "new_content": "fn new()"}"#;
+        let args: EditFileArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.path, "src/lib.rs");
+        assert_eq!(args.old_content, "fn old()");
+        assert_eq!(args.new_content, "fn new()");
+    }
+
+    #[test]
+    fn test_edit_file_args_missing_field_fails() {
+        let json = r#"{"path": "src/lib.rs", "old_content": "fn old()"}"#;
+        let result = serde_json::from_str::<EditFileArgs>(json);
+        assert!(result.is_err());
+    }
+
+    // --- memchr_newline ---
+
+    #[test]
+    fn test_memchr_newline_finds_first() {
+        let bytes = b"hello\nworld";
+        assert_eq!(memchr_newline(bytes, 0), Some(5));
+    }
+
+    #[test]
+    fn test_memchr_newline_none() {
+        let bytes = b"hello world";
+        assert_eq!(memchr_newline(bytes, 0), None);
+    }
+
+    #[test]
+    fn test_memchr_newline_from_offset() {
+        let bytes = b"a\nb\nc";
+        assert_eq!(memchr_newline(bytes, 2), Some(3));
+    }
+}
+
 /// Detect and unescape double-JSON-encoded content from local models.
 /// Only unescapes when escape sequences (`\n`, `\t`, `\"`, `\\`) are present,
 /// preventing legitimate quoted text like `"hello"` from being stripped.
