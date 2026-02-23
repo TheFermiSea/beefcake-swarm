@@ -27,6 +27,7 @@ use crate::telemetry::{self, MetricsCollector};
 use crate::worktree_bridge::WorktreeBridge;
 use coordination::escalation::worker_first::classify_initial_tier;
 use coordination::feedback::ErrorCategory;
+use coordination::otel::{self, SpanSummary};
 use coordination::rollout::FeatureFlags;
 use coordination::save_session_state;
 use coordination::{
@@ -825,15 +826,9 @@ pub async fn process_issue(
         timeout_from_env("SWARM_MANAGER_TIMEOUT_SECS", council_policy.timeout_secs);
 
     // Root span for the entire issue processing session (OpenTelemetry-compatible)
-    let process_span = tracing::info_span!(
-        "swarm.process_issue",
-        "issue.id" = %issue.id,
-        "issue.title" = %issue.title,
-        "session.id" = tracing::field::Empty,
-        "success" = tracing::field::Empty,
-        "total_iterations" = tracing::field::Empty,
-    );
+    let process_span = otel::process_issue_span(&issue.id);
     let _process_guard = process_span.enter();
+    let process_start = Instant::now();
 
     // --- Feature flags ---
     let feature_flags = FeatureFlags::from_env();
@@ -886,7 +881,6 @@ pub async fn process_issue(
         // Non-fatal — continue without session tracking
     }
     session.set_current_feature(&issue.id);
-    process_span.record("session.id", session.session_id());
 
     // Log session start
     let _ = progress.log_session_start(
@@ -944,6 +938,7 @@ pub async fn process_issue(
     let mut success = false;
     let mut last_report: Option<VerifierReport> = None;
     let mut last_validator_feedback: Vec<ValidatorFeedback> = Vec::new();
+    let mut span_summary = SpanSummary::new();
 
     // Scope verifier to configured packages.
     // When empty, targets the entire workspace (useful for external repos).
@@ -972,17 +967,11 @@ pub async fn process_issue(
 
         let tier = escalation.current_tier;
         metrics.start_iteration(iteration, &format!("{tier:?}"));
-        let iter_span = tracing::info_span!(
-            "swarm.iteration",
-            iteration = iteration,
-            "tier" = ?tier,
-            "issue.id" = %issue.id,
-            "all_green" = tracing::field::Empty,
-            "error_count" = tracing::field::Empty,
-            "agent_ms" = tracing::field::Empty,
-            "verifier_ms" = tracing::field::Empty,
-        );
+        let tier_str = format!("{tier:?}");
+        let iter_span = otel::iteration_span(&issue.id, iteration, &tier_str);
         let _iter_guard = iter_span.enter();
+        let iter_start = Instant::now();
+        span_summary.record_iteration();
         info!(
             iteration,
             ?tier,
@@ -1220,7 +1209,7 @@ pub async fn process_issue(
         // Handle agent failure
         let agent_elapsed = agent_start.elapsed();
         metrics.record_agent_time(agent_elapsed);
-        iter_span.record("agent_ms", agent_elapsed.as_millis() as u64);
+        span_summary.record_agent(0); // token count not available from rig response
         let response = match agent_future {
             Ok(r) => {
                 // Log the actual response text for debugging (truncated to 500 chars)
@@ -1408,9 +1397,13 @@ pub async fn process_issue(
         let mut report = verifier.run_pipeline().await;
         let verifier_elapsed = verifier_start.elapsed();
         metrics.record_verifier_time(verifier_elapsed);
-        iter_span.record("verifier_ms", verifier_elapsed.as_millis() as u64);
-        iter_span.record("all_green", report.all_green);
-        iter_span.record("error_count", report.failure_signals.len() as u64);
+        otel::record_iteration_result(
+            &iter_span,
+            report.all_green,
+            report.failure_signals.len(),
+            0, // warnings not tracked separately in VerifierReport
+            iter_start.elapsed().as_millis() as u64,
+        );
 
         info!(
             iteration,
@@ -1418,6 +1411,12 @@ pub async fn process_issue(
             summary = %report.summary(),
             "Verifier report"
         );
+
+        // Record gate results into span summary
+        for gate in &report.gates {
+            let passed = matches!(gate.outcome, coordination::GateOutcome::Passed);
+            span_summary.record_gate(passed, gate.duration_ms);
+        }
 
         // --- Auto-fix: try to resolve trivial failures without LLM delegation ---
         let mut auto_fix_applied = false;
@@ -1626,6 +1625,14 @@ pub async fn process_issue(
 
         if decision.escalated {
             metrics.record_escalation();
+            span_summary.record_escalation();
+            let _esc_span = otel::escalation_span(
+                &issue.id,
+                &format!("{tier:?}"),
+                &format!("{:?}", decision.target_tier),
+                &decision.reason,
+                iteration,
+            );
             info!(
                 iteration,
                 from = ?tier,
@@ -1798,8 +1805,15 @@ pub async fn process_issue(
     telemetry::append_telemetry(&session_metrics, worktree_bridge.repo_root());
 
     // Record final outcome on the root span
-    process_span.record("success", success);
-    process_span.record("total_iterations", session_metrics.total_iterations as u64);
+    otel::record_process_result(
+        &process_span,
+        success,
+        session_metrics.total_iterations as u32,
+        process_start.elapsed().as_millis() as u64,
+    );
+
+    // Log span summary for post-run analysis
+    info!(summary = %span_summary, "OTel span summary");
 
     Ok(success)
 }
@@ -2746,5 +2760,50 @@ mod tests {
         // Unknown task → Worker (worker-first default)
         let rec = classify_initial_tier("Add per-agent performance tracking", &[]);
         assert_eq!(rec.tier, SwarmTier::Worker);
+    }
+
+    #[test]
+    fn test_otel_span_summary_accumulation() {
+        let mut summary = SpanSummary::new();
+
+        // Simulate a session with 3 iterations
+        for _ in 0..3 {
+            summary.record_iteration();
+            summary.record_agent(0);
+            // 4 gates per iteration: fmt, clippy, check, test
+            summary.record_gate(true, 100); // fmt
+            summary.record_gate(true, 500); // clippy
+            summary.record_gate(true, 300); // check
+            summary.record_gate(false, 200); // test fails
+        }
+        summary.record_escalation();
+
+        assert_eq!(summary.iterations, 3);
+        assert_eq!(summary.agent_invocations, 3);
+        assert_eq!(summary.gates, 12);
+        assert_eq!(summary.gates_passed, 9);
+        assert_eq!(summary.gates_failed, 3);
+        assert_eq!(summary.escalations, 1);
+        assert_eq!(summary.total_gate_duration_ms, 3300);
+        assert!((summary.gate_pass_rate() - 0.75).abs() < 0.01);
+
+        // Display trait produces readable output
+        let display = summary.to_string();
+        assert!(display.contains("iterations=3"));
+        assert!(display.contains("gates=9/12"));
+        assert!(display.contains("escalations=1"));
+    }
+
+    #[test]
+    fn test_otel_process_span_records_correctly() {
+        // Verify the OTel span builder functions work without panicking
+        let span = otel::process_issue_span("test-issue");
+        otel::record_process_result(&span, true, 3, 45000);
+
+        let iter_span = otel::iteration_span("test-issue", 1, "Worker");
+        otel::record_iteration_result(&iter_span, true, 0, 0, 12000);
+
+        let esc_span = otel::escalation_span("test-issue", "Worker", "Council", "error_repeat", 2);
+        drop(esc_span);
     }
 }
