@@ -131,9 +131,15 @@ impl RuntimeAdapter {
     }
 
     /// Extract the adapter report after a prompt completes.
-    pub fn report(&self) -> AdapterReport {
-        let state = self.state.lock().unwrap();
-        AdapterReport {
+    ///
+    /// Returns an error if the internal mutex is poisoned (another thread
+    /// panicked while holding the lock).
+    pub fn report(&self) -> Result<AdapterReport, String> {
+        let state = self
+            .state
+            .lock()
+            .map_err(|e| format!("RuntimeAdapter mutex poisoned: {e}"))?;
+        Ok(AdapterReport {
             agent_name: self.config.agent_name.clone(),
             tool_events: state.tool_events.clone(),
             turn_count: state.turn_count,
@@ -142,7 +148,7 @@ impl RuntimeAdapter {
             wall_time_ms: state.started_at.elapsed().as_millis() as u64,
             terminated_early: state.terminated_early,
             termination_reason: state.termination_reason.clone(),
-        }
+        })
     }
 
     fn truncate(s: &str, max_len: usize) -> String {
@@ -163,10 +169,15 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
         let state = self.state.clone();
         let agent_name = self.config.agent_name.clone();
         async move {
-            let turn = {
-                let mut s = state.lock().unwrap();
-                s.turn_count += 1;
-                s.turn_count
+            let turn = match state.lock() {
+                Ok(mut s) => {
+                    s.turn_count += 1;
+                    s.turn_count
+                }
+                Err(e) => {
+                    warn!(agent = %agent_name, error = %e, "Adapter state poisoned in on_completion_call");
+                    0
+                }
             };
             info!(agent = %agent_name, turn, "LLM turn started");
             HookAction::cont()
@@ -187,7 +198,20 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
         let args_preview = Self::truncate(args, config.preview_len);
 
         async move {
-            let mut s = state.lock().unwrap();
+            let mut s = match state.lock() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    warn!(
+                        agent = %config.agent_name,
+                        tool = %tool_name,
+                        error = %e,
+                        "Adapter state poisoned in on_tool_call — terminating"
+                    );
+                    return ToolCallHookAction::terminate(
+                        "Runtime adapter: internal state corrupted",
+                    );
+                }
+            };
 
             // Check deadline
             if let Some(deadline) = config.deadline {
@@ -257,7 +281,18 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
         let is_error = result.starts_with("Error") || result.starts_with("error");
 
         async move {
-            let mut s = state.lock().unwrap();
+            let mut s = match state.lock() {
+                Ok(guard) => guard,
+                Err(e) => {
+                    warn!(
+                        agent = %config.agent_name,
+                        tool = %tool_name,
+                        error = %e,
+                        "Adapter state poisoned in on_tool_result — skipping recording"
+                    );
+                    return HookAction::cont();
+                }
+            };
 
             let (args_preview, duration) =
                 if let Some(flight) = s.in_flight.remove(&internal_call_id) {
@@ -305,7 +340,7 @@ mod tests {
     #[test]
     fn test_adapter_default_report() {
         let adapter = RuntimeAdapter::new(AdapterConfig::default());
-        let report = adapter.report();
+        let report = adapter.report().unwrap();
         assert_eq!(report.agent_name, "unknown");
         assert_eq!(report.turn_count, 0);
         assert_eq!(report.total_tool_calls, 0);
@@ -322,7 +357,7 @@ mod tests {
             preview_len: 100,
         };
         let adapter = RuntimeAdapter::new(config);
-        let report = adapter.report();
+        let report = adapter.report().unwrap();
         assert_eq!(report.agent_name, "strand-14B");
     }
 
@@ -350,7 +385,7 @@ mod tests {
             assert_eq!(action, HookAction::cont());
         }
 
-        let report = adapter.report();
+        let report = adapter.report().unwrap();
         assert_eq!(report.turn_count, 3);
     }
 
@@ -388,7 +423,7 @@ mod tests {
         .await;
         assert_eq!(action, HookAction::cont());
 
-        let report = adapter.report();
+        let report = adapter.report().unwrap();
         assert_eq!(report.total_tool_calls, 1);
         assert_eq!(report.tool_events[0].tool_name, "read_file");
         assert_eq!(report.tool_events[0].outcome, ToolOutcome::Success);
@@ -427,7 +462,7 @@ mod tests {
             "Expected Terminate, got {action:?}"
         );
 
-        let report = adapter.report();
+        let report = adapter.report().unwrap();
         assert!(report.terminated_early);
         assert!(report
             .termination_reason
@@ -455,7 +490,7 @@ mod tests {
             "Expected Terminate for expired deadline, got {action:?}"
         );
 
-        let report = adapter.report();
+        let report = adapter.report().unwrap();
         assert!(report.terminated_early);
         assert!(report
             .termination_reason
@@ -487,7 +522,7 @@ mod tests {
         )
         .await;
 
-        let report = adapter.report();
+        let report = adapter.report().unwrap();
         assert_eq!(report.tool_events[0].outcome, ToolOutcome::Error);
     }
 

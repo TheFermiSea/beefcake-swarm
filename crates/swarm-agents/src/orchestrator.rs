@@ -1197,18 +1197,24 @@ pub async fn process_issue(
         };
 
         // Log runtime adapter report for tool-event visibility
-        let adapter_report = adapter.report();
-        info!(
-            iteration,
-            agent = %adapter_report.agent_name,
-            turns = adapter_report.turn_count,
-            tool_calls = adapter_report.total_tool_calls,
-            tool_time_ms = adapter_report.total_tool_time_ms,
-            terminated_early = adapter_report.terminated_early,
-            "Runtime adapter report"
-        );
-        if let Some(ref reason) = adapter_report.termination_reason {
-            warn!(iteration, reason = %reason, "Agent terminated early by adapter");
+        match adapter.report() {
+            Ok(adapter_report) => {
+                info!(
+                    iteration,
+                    agent = %adapter_report.agent_name,
+                    turns = adapter_report.turn_count,
+                    tool_calls = adapter_report.total_tool_calls,
+                    tool_time_ms = adapter_report.total_tool_time_ms,
+                    terminated_early = adapter_report.terminated_early,
+                    "Runtime adapter report"
+                );
+                if let Some(ref reason) = adapter_report.termination_reason {
+                    warn!(iteration, reason = %reason, "Agent terminated early by adapter");
+                }
+            }
+            Err(e) => {
+                warn!(iteration, error = %e, "Failed to extract runtime adapter report");
+            }
         }
 
         // Handle agent failure
