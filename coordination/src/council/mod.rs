@@ -486,7 +486,7 @@ Given an escalated coding problem, provide:
         );
 
         let request_body = serde_json::json!({
-            "model": "Qwen3.5-397B-A17B-UD-Q4_K_XL.gguf",
+            "model": "Qwen3.5-397B-A17B",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}

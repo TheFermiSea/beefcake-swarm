@@ -45,6 +45,7 @@ inference_job_exists() {
     case $tier in
         fast)      job_name="llama-14b" ;;
         reasoning) job_name="llama-72b" ;;
+        manager)   job_name="llama-qwen35" ;;
         *)         return 1 ;;
     esac
     squeue -n "$job_name" -h -t RUNNING,PENDING 2>/dev/null | grep -q .
@@ -57,6 +58,7 @@ inference_endpoint_healthy() {
     case $tier in
         fast)      pattern="*-14b.json" ;;
         reasoning) pattern="*-72b.json" ;;
+        manager)   pattern="*-qwen35.json" ;;
         *)         return 1 ;;
     esac
 
@@ -77,6 +79,7 @@ submit_inference_job() {
     case $tier in
         fast)      script="run-14b.slurm" ;;
         reasoning) script="run-72b-distributed.slurm" ;;
+        manager)   script="run-qwen35-distributed.slurm" ;;
         *)         log "ERROR: Unknown tier: $tier"; return 1 ;;
     esac
 
@@ -127,6 +130,8 @@ check_and_start_all() {
     check_tier "fast" || true
     # Reasoning tier (OR1-Behemoth 72B on vasp-01+03)
     check_tier "reasoning" || true
+    # Manager tier (Qwen3.5-397B MoE on all 3 nodes)
+    check_tier "manager" || true
 }
 
 # Single check mode
@@ -137,7 +142,7 @@ fi
 
 # Daemon mode
 log "AI Inference Daemon starting (interval: ${CHECK_INTERVAL}s)"
-log "Managing: fast+coder (vasp-02:8080, strand-14B + Qwen3-Coder-Next) + reasoning (vasp-01,vasp-03:8081)"
+log "Managing: fast+coder (vasp-02:8080, strand-14B + Qwen3-Coder-Next) + reasoning (vasp-01,vasp-03:8081) + manager (all:8081, Qwen3.5-397B)"
 log "VASP partitions monitored: $VASP_PARTITIONS"
 
 echo $$ > "$PID_FILE"
