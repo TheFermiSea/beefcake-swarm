@@ -752,6 +752,31 @@ impl DynamicRouter {
     }
 }
 
+/// Specific coder model route for task execution.
+///
+/// Represents which local coder model a task should be dispatched to,
+/// based on error classification and task complexity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CoderRoute {
+    /// Strand-Rust-Coder 14B — fast, idiomatic fixes.
+    Strand,
+    /// HydraCoder 31B MoE — specialized Rust patterns.
+    Hydra,
+    /// OR1-Behemoth 73B — deep reasoning for complex issues.
+    Architect,
+}
+
+impl std::fmt::Display for CoderRoute {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Strand => write!(f, "strand"),
+            Self::Hydra => write!(f, "hydra"),
+            Self::Architect => write!(f, "architect"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1069,5 +1094,12 @@ mod tests {
         let w = ScoringWeights::default();
         let (sel, _score) = router.select_with_scoring(&[], &w);
         assert_eq!(sel.tier, ModelTier::Worker);
+    }
+
+    #[test]
+    fn test_coder_route_display() {
+        assert_eq!(CoderRoute::Strand.to_string(), "strand");
+        assert_eq!(CoderRoute::Hydra.to_string(), "hydra");
+        assert_eq!(CoderRoute::Architect.to_string(), "architect");
     }
 }
