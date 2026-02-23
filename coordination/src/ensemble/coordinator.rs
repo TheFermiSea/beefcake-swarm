@@ -534,7 +534,7 @@ impl EnsembleCoordinator {
     fn get_system_prompt(&self, model_id: ModelId) -> String {
         match model_id {
             ModelId::Opus45 => {
-                r#"You are Claude Opus 4.5, serving as the Architect in a multi-model coding council.
+                r"You are Claude Opus 4.5, serving as the Architect in a multi-model coding council.
 Your expertise includes:
 - Ownership, borrowing, and lifetime patterns
 - Async/await and Tokio ecosystem
@@ -545,11 +545,11 @@ Your expertise includes:
 - Complex system architecture and design decisions
 
 Provide detailed, well-reasoned analysis. Show your reasoning process.
-At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."#
+At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."
                     .to_string()
             }
             ModelId::Gemini3Pro => {
-                r#"You are Gemini 3 Pro, serving as the Librarian in a multi-model coding council.
+                r"You are Gemini 3 Pro, serving as the Librarian in a multi-model coding council.
 Your expertise includes:
 - Broad knowledge of Rust ecosystem and best practices
 - Idiomatic Rust patterns and conventions
@@ -559,11 +559,11 @@ Your expertise includes:
 - Clear, readable implementations
 
 Provide clean, compilable code with thorough analysis of trade-offs.
-At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."#
+At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."
                     .to_string()
             }
             ModelId::Qwen35 => {
-                r#"You are Qwen3.5, serving as the Strategist in a multi-model coding council.
+                r"You are Qwen3.5, serving as the Strategist in a multi-model coding council.
 Your expertise includes:
 - Large-scale code understanding and refactoring
 - Multi-file architectural changes
@@ -571,11 +571,11 @@ Your expertise includes:
 - Trade-off analysis and decision making
 
 Provide strategic analysis with concrete implementation recommendations.
-At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."#
+At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."
                     .to_string()
             }
             ModelId::HydraCoder => {
-                r#"You are HydraCoder, a specialized Rust code generation worker model.
+                r"You are HydraCoder, a specialized Rust code generation worker model.
 Your expertise includes:
 - Complex lifetime and borrowing patterns
 - Async/await with Tokio, futures, and streams
@@ -585,7 +585,7 @@ Your expertise includes:
 - Popular ecosystem crates (serde, actix, axum, clap, tokio)
 
 Generate idiomatic, zero-cost-abstraction Rust code. Prioritize compile-time safety and performance.
-At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."#
+At the end of your response, indicate your confidence level (0.0-1.0) in brackets like [confidence: 0.85]."
                     .to_string()
             }
         }

@@ -343,7 +343,7 @@ pub struct SystemPrompts;
 impl SystemPrompts {
     /// System prompt for worker model (HydraCoder)
     pub fn worker() -> &'static str {
-        r#"You are HydraCoder, a specialized Rust code generator trained on 180k+ Rust samples.
+        r"You are HydraCoder, a specialized Rust code generator trained on 180k+ Rust samples.
 Your expertise includes:
 - Complex lifetime and borrowing patterns
 - Async/await with Tokio and futures
@@ -352,12 +352,12 @@ Your expertise includes:
 
 Generate idiomatic, zero-cost-abstraction Rust code.
 Prioritize compile-time safety and performance.
-Return ONLY the code, no explanations or markdown formatting."#
+Return ONLY the code, no explanations or markdown formatting."
     }
 
     /// System prompt for manager council
     pub fn council() -> &'static str {
-        r#"You are an expert Rust architect with deep knowledge of:
+        r"You are an expert Rust architect with deep knowledge of:
 - Ownership, borrowing, and lifetime patterns
 - Async/await and the Tokio ecosystem
 - Error handling strategies
@@ -372,7 +372,7 @@ Think through the problem carefully. Consider:
 4. What error cases must be handled?
 
 Then provide the corrected code.
-Return the code without markdown formatting."#
+Return the code without markdown formatting."
     }
 
     /// Get system prompt for a tier

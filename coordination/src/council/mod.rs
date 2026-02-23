@@ -249,7 +249,7 @@ impl CouncilMember for GeminiLibrarian {
     async fn query(&self, context: &EscalationContext) -> Result<CouncilResponse, CouncilError> {
         let start = std::time::Instant::now();
 
-        let system_prompt = r#"You are the Librarian of a development council, specializing in:
+        let system_prompt = r"You are the Librarian of a development council, specializing in:
 - Repository structure and code navigation
 - Understanding existing patterns and conventions
 - Documentation and API references
@@ -259,7 +259,7 @@ Given an escalated coding problem, provide context and insights about:
 1. Relevant files and code patterns
 2. Similar problems solved elsewhere in the codebase
 3. Documentation that might help
-4. Suggested approach based on codebase conventions"#;
+4. Suggested approach based on codebase conventions";
 
         let user_prompt = format!(
             "## Escalated Problem\n\n{}\n\n## Escalation Reason\n\n{:?}\n\n## Previous Attempts\n\n{}\n\n## Code Context\n\n{}",
@@ -312,13 +312,13 @@ Given an escalated coding problem, provide context and insights about:
             .await
             .map_err(|e| CouncilError::ParseError(e.to_string()))?;
 
-        let content = resp_json["candidates"][0]["content"]["parts"][0]["text"]
+        let response_text = resp_json["candidates"][0]["content"]["parts"][0]["text"]
             .as_str()
             .unwrap_or("")
             .to_string();
 
         Ok(CouncilResponse {
-            content,
+            content: response_text,
             confidence: 0.8,
             model: "gemini-3-pro".to_string(),
             tokens_used: 0, // Would parse from response
@@ -358,7 +358,7 @@ impl CouncilMember for ClaudeArchitect {
     async fn query(&self, context: &EscalationContext) -> Result<CouncilResponse, CouncilError> {
         let start = std::time::Instant::now();
 
-        let system_prompt = r#"You are the Architect of a development council, specializing in:
+        let system_prompt = r"You are the Architect of a development council, specializing in:
 - System design and architecture decisions
 - Safety contracts and invariants
 - Code review and quality assessment
@@ -368,7 +368,7 @@ Given an escalated coding problem, provide:
 1. Architectural analysis of the issue
 2. Recommended design approach
 3. Safety considerations and invariants to maintain
-4. Specific code fix or implementation guidance"#;
+4. Specific code fix or implementation guidance";
 
         let user_prompt = format!(
             "## Escalated Problem\n\n{}\n\n## Escalation Reason\n\n{:?}\n\n## Previous Attempts\n\n{}\n\n## Code Context\n\n{}",
@@ -416,13 +416,13 @@ Given an escalated coding problem, provide:
             .await
             .map_err(|e| CouncilError::ParseError(e.to_string()))?;
 
-        let content = resp_json["content"][0]["text"]
+        let response_text = resp_json["content"][0]["text"]
             .as_str()
             .unwrap_or("")
             .to_string();
 
         Ok(CouncilResponse {
-            content,
+            content: response_text,
             confidence: 0.9,
             model: "claude-opus-4-5".to_string(), // Actual model used in API call
             tokens_used: 0,
@@ -462,7 +462,7 @@ impl CouncilMember for Qwen35Strategist {
     async fn query(&self, context: &EscalationContext) -> Result<CouncilResponse, CouncilError> {
         let start = std::time::Instant::now();
 
-        let system_prompt = r#"You are the Strategist of a development council, specializing in:
+        let system_prompt = r"You are the Strategist of a development council, specializing in:
 - Deep reasoning about complex coding problems
 - Strategic planning and task decomposition
 - Breaking down large problems into actionable steps
@@ -472,7 +472,7 @@ Given an escalated coding problem, provide:
 1. Root cause analysis with reasoning chain
 2. Strategic task decomposition if the problem is too large
 3. Priority ordering of fixes with rationale
-4. Coordination advice for multi-file changes"#;
+4. Coordination advice for multi-file changes";
 
         let user_prompt = format!(
             "## Escalated Problem\n\n{}\n\n## Escalation Reason\n\n{:?}\n\n## Previous Attempts\n\n{}\n\n## Code Context\n\n{}",
@@ -518,13 +518,13 @@ Given an escalated coding problem, provide:
             .await
             .map_err(|e| CouncilError::ParseError(e.to_string()))?;
 
-        let content = resp_json["choices"][0]["message"]["content"]
+        let response_text = resp_json["choices"][0]["message"]["content"]
             .as_str()
             .unwrap_or("")
             .to_string();
 
         Ok(CouncilResponse {
-            content,
+            content: response_text,
             confidence: 0.85,
             model: "qwen3.5-397b".to_string(),
             tokens_used: 0,
