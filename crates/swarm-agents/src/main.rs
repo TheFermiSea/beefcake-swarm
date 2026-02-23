@@ -82,7 +82,21 @@ async fn main() -> Result<()> {
     // --- Health check endpoints with model verification ---
     if config.cloud_only {
         info!("Cloud-only mode — skipping local endpoint health checks");
-        if config.cloud_endpoint.is_none() {
+        if let Some(ref cloud_ep) = config.cloud_endpoint {
+            let cloud_ok =
+                check_endpoint_with_model(&cloud_ep.url, Some(&cloud_ep.api_key), None).await;
+            if !cloud_ok {
+                error!(
+                    url = %cloud_ep.url,
+                    "Cloud endpoint not reachable — aborting (cloud-only mode)"
+                );
+                anyhow::bail!(
+                    "Cloud endpoint {} is not reachable. Check proxy status.",
+                    cloud_ep.url
+                );
+            }
+            info!(url = %cloud_ep.url, "Cloud endpoint health check passed");
+        } else {
             error!("--cloud-only requires SWARM_CLOUD_URL to be configured");
             anyhow::bail!("Cloud-only mode requires cloud_endpoint");
         }

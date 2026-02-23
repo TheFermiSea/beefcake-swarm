@@ -1232,6 +1232,10 @@ pub async fn process_issue(
                     format!("Agent failed: {e}"),
                 );
                 // engine.decide() records the iteration internally — don't double-count
+                info!(
+                    iteration,
+                    "Running verifier after agent failure to assess codebase state"
+                );
                 let verifier = Verifier::new(&wt_path, verifier_config.clone());
                 let report = verifier.run_pipeline().await;
                 let decision = engine.decide(&mut escalation, &report);
@@ -1984,17 +1988,7 @@ async fn prompt_with_retry(
             Err(e) => {
                 let err_str = format!("{e}");
                 let err_lower = err_str.to_ascii_lowercase();
-                let is_transient = err_str.contains("502")
-                    || err_str.contains("503")
-                    || err_str.contains("429")
-                    || err_lower.contains("connection")
-                    || err_lower.contains("timed out")
-                    || err_lower.contains("timeout")
-                    // Proxy occasionally returns empty-but-200 payloads; retry recovers.
-                    || err_lower.contains("no message or tool call (empty)")
-                    || err_lower.contains("response contained no message or tool call")
-                    // Proxy/model schema mismatches can be intermittent during model churn.
-                    || err_lower.contains("jsonerror");
+                let is_transient = is_transient_error(&err_str, &err_lower);
 
                 if !is_transient || attempt == max_retries {
                     return Err(e);
@@ -2032,15 +2026,7 @@ async fn prompt_with_hook_and_retry(
             Err(e) => {
                 let err_str = format!("{e}");
                 let err_lower = err_str.to_ascii_lowercase();
-                let is_transient = err_str.contains("502")
-                    || err_str.contains("503")
-                    || err_str.contains("429")
-                    || err_lower.contains("connection")
-                    || err_lower.contains("timed out")
-                    || err_lower.contains("timeout")
-                    || err_lower.contains("no message or tool call (empty)")
-                    || err_lower.contains("response contained no message or tool call")
-                    || err_lower.contains("jsonerror");
+                let is_transient = is_transient_error(&err_str, &err_lower);
 
                 if !is_transient || attempt == max_retries {
                     return Err(e);
@@ -2060,6 +2046,27 @@ async fn prompt_with_hook_and_retry(
         }
     }
     Err(last_err.unwrap())
+}
+
+/// Classify whether an LLM API error is transient (connection failures, rate limits,
+/// proxy hiccups) and worth retrying, vs permanent (auth errors, schema mismatches).
+fn is_transient_error(err_str: &str, err_lower: &str) -> bool {
+    // HTTP status codes
+    err_str.contains("502")
+        || err_str.contains("503")
+        || err_str.contains("429")
+        // Connection-level failures (reqwest)
+        || err_lower.contains("connection")
+        || err_lower.contains("timed out")
+        || err_lower.contains("timeout")
+        || err_lower.contains("error sending request")
+        || err_lower.contains("broken pipe")
+        || err_lower.contains("reset by peer")
+        // Proxy occasionally returns empty-but-200 payloads; retry recovers.
+        || err_lower.contains("no message or tool call (empty)")
+        || err_lower.contains("response contained no message or tool call")
+        // Proxy/model schema mismatches can be intermittent during model churn.
+        || err_lower.contains("jsonerror")
 }
 
 /// Detect whether an issue is doc-oriented based on title/description keywords.
@@ -2990,5 +2997,52 @@ mod tests {
         let summary = dashboard::format_summary(&metrics);
         assert!(summary.contains("Self-Improvement Dashboard"));
         assert!(summary.contains("Sessions: 0"));
+    }
+
+    #[test]
+    fn test_is_transient_error_classifies_correctly() {
+        use super::is_transient_error;
+
+        // Connection-level failures from reqwest
+        let err = "Http client error: error sending request for url (http://example.com/v1/chat)";
+        assert!(
+            is_transient_error(err, &err.to_ascii_lowercase()),
+            "reqwest SendError should be transient"
+        );
+
+        // Standard HTTP status codes
+        assert!(is_transient_error("502 Bad Gateway", "502 bad gateway"));
+        assert!(is_transient_error(
+            "503 Service Unavailable",
+            "503 service unavailable"
+        ));
+        assert!(is_transient_error(
+            "429 Too Many Requests",
+            "429 too many requests"
+        ));
+
+        // Connection and timeout variants
+        assert!(is_transient_error(
+            "connection refused",
+            "connection refused"
+        ));
+        assert!(is_transient_error("request timed out", "request timed out"));
+        assert!(is_transient_error("read timeout", "read timeout"));
+        assert!(is_transient_error("broken pipe", "broken pipe"));
+        assert!(is_transient_error("reset by peer", "reset by peer"));
+
+        // Empty response from proxy
+        assert!(is_transient_error(
+            "no message or tool call (empty)",
+            "no message or tool call (empty)"
+        ));
+
+        // Permanent errors should NOT be transient
+        assert!(!is_transient_error("401 Unauthorized", "401 unauthorized"));
+        assert!(!is_transient_error("invalid api key", "invalid api key"));
+        assert!(!is_transient_error(
+            "model not found: gpt-99",
+            "model not found: gpt-99"
+        ));
     }
 }
