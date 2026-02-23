@@ -25,6 +25,8 @@ use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::telemetry::{self, MetricsCollector};
 use crate::worktree_bridge::WorktreeBridge;
+use coordination::benchmark::slo::{self, AlertSeverity};
+use coordination::benchmark::OrchestrationMetrics;
 use coordination::escalation::worker_first::classify_initial_tier;
 use coordination::feedback::ErrorCategory;
 use coordination::otel::{self, SpanSummary};
@@ -1815,6 +1817,55 @@ pub async fn process_issue(
     // Log span summary for post-run analysis
     info!(summary = %span_summary, "OTel span summary");
 
+    // --- SLO evaluation ---
+    // Build a single-session OrchestrationMetrics snapshot and evaluate SLOs.
+    // For single sessions, most aggregate metrics collapse to 0 or 1.
+    let escalated = session_metrics.iterations.iter().any(|i| i.escalated);
+    let orch_metrics = OrchestrationMetrics {
+        session_count: 1,
+        first_pass_rate: if session_metrics.total_iterations == 1 && success {
+            1.0
+        } else {
+            0.0
+        },
+        overall_success_rate: if success { 1.0 } else { 0.0 },
+        avg_iterations_to_green: session_metrics.total_iterations as f64,
+        median_iterations_to_green: session_metrics.total_iterations as f64,
+        escalation_rate: if escalated { 1.0 } else { 0.0 },
+        avg_escalations: if escalated { 1.0 } else { 0.0 },
+        latency_p50: Duration::from_millis(session_metrics.elapsed_ms),
+        latency_p95: Duration::from_millis(session_metrics.elapsed_ms),
+        latency_max: Duration::from_millis(session_metrics.elapsed_ms),
+        tokens_p50: 0,
+        tokens_p95: 0,
+        tokens_total: 0,
+        cost_total: 0.0,
+        cost_avg: 0.0,
+        stuck_rate: if !success { 1.0 } else { 0.0 },
+    };
+    let slo_report = slo::evaluate_slos(&orch_metrics);
+    match slo_report.overall_severity {
+        AlertSeverity::Ok => {
+            info!(passing = slo_report.passing, "SLO check: all passing");
+        }
+        AlertSeverity::Warning => {
+            warn!(
+                passing = slo_report.passing,
+                warnings = slo_report.warnings,
+                "SLO check: warnings detected\n{}",
+                slo_report.summary()
+            );
+        }
+        AlertSeverity::Critical => {
+            error!(
+                passing = slo_report.passing,
+                critical = slo_report.critical,
+                "SLO check: CRITICAL violations\n{}",
+                slo_report.summary()
+            );
+        }
+    }
+
     Ok(success)
 }
 
@@ -2805,5 +2856,71 @@ mod tests {
 
         let esc_span = otel::escalation_span("test-issue", "Worker", "Council", "error_repeat", 2);
         drop(esc_span);
+    }
+
+    #[test]
+    fn test_slo_evaluation_from_session_metrics() {
+        use coordination::benchmark::slo;
+        use coordination::benchmark::OrchestrationMetrics;
+        use std::time::Duration;
+
+        // Simulate a successful single-iteration session
+        let metrics = OrchestrationMetrics {
+            session_count: 1,
+            first_pass_rate: 1.0,
+            overall_success_rate: 1.0,
+            avg_iterations_to_green: 1.0,
+            median_iterations_to_green: 1.0,
+            escalation_rate: 0.0,
+            avg_escalations: 0.0,
+            latency_p50: Duration::from_secs(30),
+            latency_p95: Duration::from_secs(30),
+            latency_max: Duration::from_secs(30),
+            tokens_p50: 0,
+            tokens_p95: 0,
+            tokens_total: 0,
+            cost_total: 0.0,
+            cost_avg: 0.0,
+            stuck_rate: 0.0,
+        };
+
+        let report = slo::evaluate_slos(&metrics);
+        assert!(report.all_passing(), "Perfect session should pass all SLOs");
+        assert_eq!(report.warnings, 0);
+        assert_eq!(report.critical, 0);
+
+        // Simulate a failed session (stuck)
+        let failed_metrics = OrchestrationMetrics {
+            session_count: 1,
+            first_pass_rate: 0.0,
+            overall_success_rate: 0.0,
+            avg_iterations_to_green: 6.0,
+            median_iterations_to_green: 6.0,
+            escalation_rate: 1.0,
+            avg_escalations: 1.0,
+            latency_p50: Duration::from_secs(300),
+            latency_p95: Duration::from_secs(300),
+            latency_max: Duration::from_secs(300),
+            tokens_p50: 0,
+            tokens_p95: 0,
+            tokens_total: 0,
+            cost_total: 0.0,
+            cost_avg: 0.0,
+            stuck_rate: 1.0,
+        };
+
+        let failed_report = slo::evaluate_slos(&failed_metrics);
+        assert!(
+            !failed_report.all_passing(),
+            "Failed session should violate SLOs"
+        );
+        assert!(
+            failed_report.warnings + failed_report.critical > 0,
+            "Should have warnings or critical violations"
+        );
+
+        // summary() should produce readable output
+        let summary = failed_report.summary();
+        assert!(!summary.is_empty());
     }
 }
