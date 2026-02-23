@@ -155,7 +155,13 @@ impl RuntimeAdapter {
         if s.len() <= max_len {
             s.to_string()
         } else {
-            format!("{}...", &s[..max_len])
+            // Find nearest char boundary at or before max_len to avoid
+            // panicking on multi-byte UTF-8 characters (e.g. em dash '—').
+            let mut end = max_len;
+            while end > 0 && !s.is_char_boundary(end) {
+                end -= 1;
+            }
+            format!("{}...", &s[..end])
         }
     }
 }
@@ -366,6 +372,23 @@ mod tests {
         assert_eq!(RuntimeAdapter::truncate("hello", 10), "hello");
         assert_eq!(RuntimeAdapter::truncate("hello world", 5), "hello...");
         assert_eq!(RuntimeAdapter::truncate("", 5), "");
+    }
+
+    #[test]
+    fn test_truncate_multibyte_chars() {
+        // Em dash '—' is 3 bytes (0xE2 0x80 0x94). Slicing at byte 200
+        // inside the em dash would panic without the char-boundary fix.
+        let s = "a".repeat(198) + "—rest"; // bytes 198..201 are the em dash
+        assert_eq!(s.as_bytes()[198], 0xE2); // confirm multi-byte start
+                                             // Truncate at 200 falls inside '—'; should back up to 198
+        let t = RuntimeAdapter::truncate(&s, 200);
+        assert!(t.ends_with("..."));
+        assert_eq!(t.len(), 198 + 3); // 198 'a's + "..."
+
+        // Truncate at exact char boundary works normally
+        let t2 = RuntimeAdapter::truncate(&s, 201);
+        assert!(t2.ends_with("..."));
+        assert!(t2.contains('—'));
     }
 
     #[tokio::test]
