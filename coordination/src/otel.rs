@@ -345,6 +345,12 @@ pub struct SpanSummary {
     pub total_tokens: u64,
     /// Total duration across all gate spans (ms).
     pub total_gate_duration_ms: u64,
+    /// Total retry attempts made across all operations.
+    pub retry_attempts: u32,
+    /// Retry attempts that succeeded (operation passed on retry).
+    pub retry_successes: u32,
+    /// Operations where all retries were exhausted without success.
+    pub retries_exhausted: u32,
 }
 
 impl SpanSummary {
@@ -384,6 +390,20 @@ impl SpanSummary {
         self.iterations += 1;
     }
 
+    /// Record a retry attempt outcome.
+    ///
+    /// - `succeeded`: whether the retried operation eventually succeeded
+    /// - `exhausted`: whether the retry budget was fully consumed without success
+    pub fn record_retry(&mut self, succeeded: bool, exhausted: bool) {
+        self.retry_attempts += 1;
+        if succeeded {
+            self.retry_successes += 1;
+        }
+        if exhausted {
+            self.retries_exhausted += 1;
+        }
+    }
+
     /// Gate pass rate as a fraction (0.0 to 1.0).
     pub fn gate_pass_rate(&self) -> f64 {
         if self.gates == 0 {
@@ -399,13 +419,21 @@ impl SpanSummary {
         }
         self.total_gate_duration_ms as f64 / self.gates as f64
     }
+
+    /// Retry success rate as a fraction (0.0 to 1.0).
+    pub fn retry_success_rate(&self) -> f64 {
+        if self.retry_attempts == 0 {
+            return 0.0;
+        }
+        self.retry_successes as f64 / self.retry_attempts as f64
+    }
 }
 
 impl std::fmt::Display for SpanSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "iterations={} gates={}/{} agents={} tools={} escalations={} tokens={}",
+            "iterations={} gates={}/{} agents={} tools={} escalations={} tokens={} retries={}/{}",
             self.iterations,
             self.gates_passed,
             self.gates,
@@ -413,6 +441,8 @@ impl std::fmt::Display for SpanSummary {
             self.tool_calls,
             self.escalations,
             self.total_tokens,
+            self.retry_successes,
+            self.retry_attempts,
         )
     }
 }
@@ -531,6 +561,12 @@ mod tests {
         assert_eq!(summary.total_gate_duration_ms, 6500);
         assert!((summary.gate_pass_rate() - 0.6667).abs() < 0.01);
         assert!((summary.avg_gate_duration_ms() - 2166.67).abs() < 1.0);
+
+        summary.record_retry(true, false);
+        summary.record_retry(false, true);
+        assert_eq!(summary.retry_attempts, 2);
+        assert_eq!(summary.retry_successes, 1);
+        assert_eq!(summary.retries_exhausted, 1);
     }
 
     #[test]
@@ -549,6 +585,30 @@ mod tests {
     }
 
     #[test]
+    fn test_span_summary_retry_tracking() {
+        let mut summary = SpanSummary::new();
+        assert_eq!(summary.retry_attempts, 0);
+        assert_eq!(summary.retry_success_rate(), 0.0);
+
+        summary.record_retry(true, false);
+        summary.record_retry(true, false);
+        summary.record_retry(false, true);
+
+        assert_eq!(summary.retry_attempts, 3);
+        assert_eq!(summary.retry_successes, 2);
+        assert_eq!(summary.retries_exhausted, 1);
+        assert!((summary.retry_success_rate() - 0.6667).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_span_summary_display_includes_retries() {
+        let mut summary = SpanSummary::new();
+        summary.record_retry(true, false);
+        let display = summary.to_string();
+        assert!(display.contains("retries=1/1"));
+    }
+
+    #[test]
     fn test_span_summary_serialization() {
         let mut summary = SpanSummary::new();
         summary.record_iteration();
@@ -561,6 +621,7 @@ mod tests {
         assert_eq!(restored.gates, 1);
         assert_eq!(restored.gates_passed, 1);
         assert_eq!(restored.total_tokens, 512);
+        assert_eq!(restored.retry_attempts, 0);
     }
 
     #[test]
