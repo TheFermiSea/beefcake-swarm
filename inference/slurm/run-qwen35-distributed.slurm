@@ -353,7 +353,7 @@ for i in "${!RPC_NODES[@]}"; do
          --label \
          --output="$step_log" \
          --error="$step_log" \
-        bash -c "numactl --interleave=all LD_LIBRARY_PATH='$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB' CUDA_LAUNCH_BLOCKING=0 '$LLAMA_BIN/rpc-server' --host 0.0.0.0 --port '$RPC_PORT'" &
+        bash -c "LD_LIBRARY_PATH='$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB' CUDA_LAUNCH_BLOCKING=0 numactl --interleave=all '$LLAMA_BIN/rpc-server' --host 0.0.0.0 --port '$RPC_PORT'" &
     RPC_PIDS+=($!)
     WORKER_STATUS[$node]="starting"
     echo "    Step $i PID: ${RPC_PIDS[-1]}"
