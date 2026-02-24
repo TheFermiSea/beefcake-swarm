@@ -46,7 +46,8 @@
 set -euo pipefail
 
 # Configuration
-MODEL="${MODEL:-/scratch/ai/models/Qwen3.5-397B-A17B-UD-Q4_K_XL.gguf}"
+# Split GGUF: llama.cpp loads all shards when given the first shard path
+MODEL="${MODEL:-/scratch/ai/models/Qwen3.5-397B-A17B-GGUF/UD-Q4_K_XL/Qwen3.5-397B-A17B-UD-Q4_K_XL-00001-of-00006.gguf}"
 LLAMA_BIN="${LLAMA_BIN:-/cluster/shared/llama-cpp/bin}"
 CUDA_LIB="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/targets/x86_64-linux/lib"
 CUDA_COMPAT="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/compat"
@@ -288,14 +289,16 @@ if [[ ${#MISSING_NODES[@]} -gt 0 ]]; then
     echo "Model is stored on local /scratch (not NFS), so it must be copied to each node."
     echo ""
     echo "Download once and copy to other nodes:"
-    echo "  # Download to one node first:"
-    echo "  ssh root@10.0.0.20 'huggingface-cli download unsloth/Qwen3.5-397B-A17B-GGUF \\"
-    echo "    --local-dir /scratch/ai/models/ --include \"*UD-Q4_K_XL*\"'"
+    echo "  # Download to one node first (split GGUF, 6 shards):"
+    echo "  ssh root@10.0.0.20 'python3.11 -c \"from huggingface_hub import snapshot_download;"
+    echo "    snapshot_download(\\\"unsloth/Qwen3.5-397B-A17B-GGUF\\\","
+    echo "      local_dir=\\\"/scratch/ai/models/Qwen3.5-397B-A17B-GGUF\\\","
+    echo "      allow_patterns=[\\\"UD-Q4_K_XL/*\\\"])\"'"
     echo ""
     echo "  # Then copy to the other nodes:"
     echo "  for dest in 10.0.0.21 10.0.0.22; do"
-    echo "    rsync -avP root@10.0.0.20:/scratch/ai/models/Qwen3.5-397B-A17B-UD-Q4_K_XL.gguf \\"
-    echo "      root@\$dest:/scratch/ai/models/"
+    echo "    rsync -avP root@10.0.0.20:/scratch/ai/models/Qwen3.5-397B-A17B-GGUF/UD-Q4_K_XL/ \\"
+    echo "      root@\$dest:/scratch/ai/models/Qwen3.5-397B-A17B-GGUF/UD-Q4_K_XL/"
     echo "  done"
     exit 1
 fi
