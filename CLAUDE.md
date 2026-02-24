@@ -83,17 +83,17 @@ When cloud is unavailable, OR1-Behemoth serves as fallback local manager.
 |------|----------|-------|------------|
 | Fast (14B) | http://vasp-02:8080 | strand-rust-coder-14b-q8_0 | ~53 tok/s |
 | Coder (80B MoE) | http://vasp-02:8080 | Qwen3-Coder-Next | ~5-15 tok/s |
-| Reasoning (72B) | http://vasp-01:8081 | or1-behemoth-q4_k_m | ~13 tok/s |
+| Manager (397B MoE) | http://vasp-01:8081 | Qwen3.5-397B-A17B-UD-Q4_K_XL | ~5 tok/s gen, ~15 tok/s prompt |
 
 Role specialization:
 - **strand-14B** = "Mechanic" — fast Rust-specific fixes, borrow checker cascades, type errors
 - **Qwen3-Coder-Next** = "Implementer" — general coding, multi-file changes, 256K context (MoE offload to CPU)
-- **OR1-Behemoth** = "Architect" — complex reasoning, architecture decisions
+- **Qwen3.5-397B** = "Manager/Architect" — complex reasoning, architecture decisions, 256K context (3-node distributed, MoE experts on CPU)
 
 Start inference:
 ```bash
 ssh root@10.0.0.5 "sbatch /cluster/shared/scripts/llama-cpp/run-14b.slurm"
-ssh root@10.0.0.5 "sbatch /cluster/shared/scripts/llama-cpp/run-72b-distributed.slurm"
+ssh root@10.0.0.5 "sbatch /cluster/shared/scripts/llama-cpp/run-qwen35-distributed.slurm"
 ```
 
 ## External Tools (install separately)

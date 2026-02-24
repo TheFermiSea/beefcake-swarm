@@ -6,7 +6,7 @@
 #SBATCH --ntasks-per-node=1
 #SBATCH --nodelist=vasp-01,vasp-02,vasp-03
 #SBATCH --gres=gpu:v100s:1
-#SBATCH --cpus-per-task=32
+#SBATCH --cpus-per-task=36
 #SBATCH --mem=240G
 #SBATCH --time=24:00:00
 #SBATCH --requeue
@@ -21,7 +21,7 @@
 #   Serves as council Strategist + local manager fallback.
 #
 # Model: Qwen3.5-397B-A17B-UD-Q4_K_XL (~214GB, 397B total / 17B active MoE)
-# Throughput: TBD (MoE CPU-bound, expect 5-15 tok/s per slot)
+# Throughput: ~5 tok/s gen, ~15 tok/s prompt (single), ~6.3 agg gen (4 concurrent)
 # Context: 256K tokens native (no YaRN needed), 4 parallel slots default
 #
 # Uses llama.cpp RPC with LAYER SPLIT across 3x V100S GPUs (96GB total VRAM).
@@ -33,9 +33,10 @@
 #   OS + headroom: ~16GB
 #   Total: ~110GB per node of 256GB — plenty of room for 6-8 slots
 #
-# CPU allocation (32 cores/node):
-#   MoE expert computation dominates — all 32 threads available
-#   Batch processing uses 2048/512 for higher throughput with parallel slots
+# CPU allocation (36 cores/node):
+#   MoE expert computation dominates — all 36 threads available
+#   --threads controls decode (generation) threads, --threads-batch controls prompt/batch
+#   Decode can saturate memory bandwidth with fewer threads than batch processing
 #
 # NUMA topology (4 vNUMA nodes per VM, matching host SNC):
 #   vNUMA 0-1: Physical Socket 0 (GPU-local), ~64GB each
@@ -64,7 +65,10 @@ RPC_PORT="${RPC_PORT:-50052}"
 PARALLEL_SLOTS="${PARALLEL_SLOTS:-4}"
 CTX_SIZE="${CTX_SIZE:-262144}"  # 256K native context per slot
 N_PREDICT="${N_PREDICT:--1}"    # -1 = unlimited (default). Reasoning models need full context for CoT.
-THREADS="${THREADS:-32}"
+THREADS="${THREADS:-28}"             # Decode threads — fewer than max reduces memory bandwidth contention
+THREADS_BATCH="${THREADS_BATCH:-36}" # Batch/prompt threads — use all cores for prefill throughput
+BATCH_SIZE="${BATCH_SIZE:-2048}"
+UBATCH_SIZE="${UBATCH_SIZE:-512}"
 
 # Architectural configuration
 HEALTH_CHECK_INTERVAL="${HEALTH_CHECK_INTERVAL:-120}" # seconds between health checks
@@ -85,6 +89,9 @@ echo "RPC Port: ${RPC_PORT}"
 echo "Parallel Slots: ${PARALLEL_SLOTS}"
 echo "Context Size: ${CTX_SIZE} (per slot)"
 echo "Threads: ${THREADS}"
+echo "Threads (batch): ${THREADS_BATCH}"
+echo "Batch size: ${BATCH_SIZE}"
+echo "Ubatch size: ${UBATCH_SIZE}"
 echo "=========================================="
 
 ###############################################################################
@@ -452,6 +459,7 @@ SERVER_ARGS=(
     --parallel "$PARALLEL_SLOTS"
     # Threading for MoE CPU computation
     --threads "$THREADS"
+    --threads-batch "$THREADS_BATCH"
     # Continuous batching for multi-slot throughput
     --cont-batching
     # Flash attention for memory efficiency
@@ -467,9 +475,9 @@ SERVER_ARGS=(
     # Quantized KV cache — q4_0 keeps 256K context manageable
     --cache-type-k q4_0
     --cache-type-v q4_0
-    # Batch sizes: larger logical batch for multiple parallel slots
-    --batch-size 2048
-    --ubatch-size 512
+    # Batch sizes: tunable for MoE-on-CPU workload
+    --batch-size "$BATCH_SIZE"
+    --ubatch-size "$UBATCH_SIZE"
     # NUMA: defer to external numactl policy (interleave)
     --numa numactl
     # Metrics endpoint for monitoring
