@@ -212,30 +212,27 @@ health_monitor() {
 }
 
 ###############################################################################
-# Model Distribution Functions (using srun instead of SSH)
+# Model Distribution Functions (SSH for utility commands, srun for workers)
 ###############################################################################
 
-# Check model on a node (uses srun for remote, direct check for local)
+# Check model on a node (SSH for remote to avoid nested srun reliability issues)
 check_model() {
     local node=$1
     if [[ "$node" == "$(hostname -s)" || "$node" == "$(hostname -f)" ]]; then
-        # Local node - check directly
         [[ -f "$MODEL" ]]
     else
-        # Remote node - use srun
-        srun --nodes=1 --ntasks=1 --nodelist="$node" --quiet \
-            bash -c "[[ -f '$MODEL' ]]" 2>/dev/null
+        ssh -o ConnectTimeout=10 -o BatchMode=yes "$node" "[[ -f '$MODEL' ]]" 2>/dev/null
     fi
 }
 
-# Run command on node (local or via srun)
+# Run command on node (SSH for remote utility commands)
 run_on_node() {
     local node=$1
     shift
     if [[ "$node" == "$(hostname -s)" || "$node" == "$(hostname -f)" ]]; then
         bash -c "$*"
     else
-        srun --nodes=1 --ntasks=1 --nodelist="$node" --quiet bash -c "$*" 2>/dev/null
+        ssh -o ConnectTimeout=10 -o BatchMode=yes "$node" "$*" 2>/dev/null
     fi
 }
 
