@@ -147,10 +147,11 @@ cleanup() {
         kill -TERM "$HEAD_PID" 2>/dev/null || true
     fi
 
-    # Signal srun-launched RPC workers (SLURM propagates to cgroup)
-    for pid in "${RPC_PIDS[@]}"; do
-        echo "[$(date)] Signaling srun worker (PID $pid)..."
-        kill -TERM "$pid" 2>/dev/null || true
+    # Kill SSH-launched RPC workers on remote nodes
+    for node in "${RPC_NODES[@]}"; do
+        echo "[$(date)] Killing rpc-server on $node..."
+        ssh -o ConnectTimeout=5 -o BatchMode=yes "$node" \
+            "pkill -f 'rpc-server.*--port $RPC_PORT'" 2>/dev/null || true
     done
 
     # Wait for all background processes to complete gracefully
@@ -183,17 +184,15 @@ check_worker_port() {
     fi
 }
 
-# Check if a single RPC worker process is still running
+# Check if a single RPC worker process is still running on its remote node.
 # NOTE: TCP probe doesn't work after startup because llama.cpp RPC uses persistent connections.
 # Once the head node connects, the worker stops accepting new connections on the port.
-# Instead, we check if the srun process (tracked in RPC_PIDS) is still running.
+# With SSH-launched workers, we check the remote process via SSH.
 check_worker_health() {
     local node=$1
-    local idx=$2  # Index into RPC_PIDS array
-    local pid="${RPC_PIDS[$idx]:-}"
-
-    # Check if the srun process is still running
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    local idx=$2  # unused but kept for API compat
+    if ssh -o ConnectTimeout=5 -o BatchMode=yes "$node" \
+        "pgrep -f 'rpc-server.*--port $RPC_PORT'" >/dev/null 2>&1; then
         return 0
     else
         return 1
@@ -327,8 +326,9 @@ for node in "${RPC_NODES[@]}"; do
     fi
 done
 
-# Start RPC workers on non-head nodes using srun for proper SLURM lifecycle management
-# Architecture: Each srun step gets exclusive access to its allocated resources
+# Start RPC workers on non-head nodes using SSH for reliable remote launch.
+# srun steps within batch jobs can timeout on small clusters; SSH is more reliable
+# and the SLURM cgroup still contains the batch allocation for resource limits.
 
 # Write logs to shared storage for debugging
 SHARED_LOG_DIR="/cluster/shared/ai/logs/${SLURM_JOB_ID}"
@@ -338,26 +338,21 @@ echo "[$(date)] Starting RPC workers..."
 for i in "${!RPC_NODES[@]}"; do
     node="${RPC_NODES[$i]}"
     step_log="${SHARED_LOG_DIR}/rpc-${node}.log"
-    echo "  Starting RPC step $i on $node:$RPC_PORT (Logs: $step_log)"
+    echo "  Starting RPC worker $i on $node:$RPC_PORT (Logs: $step_log)"
 
-    # srun flags for proper resource isolation:
-    # --exclusive: Don't share resources with other steps
-    # --gres=gpu:1: Bind exactly one GPU to this step
-    # --cpus-per-task: Inherit from job allocation
-    # --label: Prefix output with step ID for debugging
-    srun --nodes=1 \
-         --ntasks=1 \
-         --nodelist="$node" \
-         --exclusive \
-         --gres=gpu:v100s:1 \
-         --label \
-         --output="$step_log" \
-         --error="$step_log" \
-        bash -c "LD_LIBRARY_PATH='$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB' CUDA_LAUNCH_BLOCKING=0 numactl --interleave=all '$LLAMA_BIN/rpc-server' --host 0.0.0.0 --port '$RPC_PORT'" &
+    ssh -o ConnectTimeout=10 -o BatchMode=yes "$node" \
+        "LD_LIBRARY_PATH='$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB' \
+         CUDA_LAUNCH_BLOCKING=0 \
+         nohup numactl --interleave=all \
+         '$LLAMA_BIN/rpc-server' --host 0.0.0.0 --port '$RPC_PORT' \
+         > '$step_log' 2>&1 &
+         echo \$!" &
     RPC_PIDS+=($!)
     WORKER_STATUS[$node]="starting"
-    echo "    Step $i PID: ${RPC_PIDS[-1]}"
+    echo "    SSH launcher PID: ${RPC_PIDS[-1]}"
 done
+# Wait for SSH commands to complete (they return after launching nohup background process)
+sleep 5
 
 # Wait for RPC workers with timeout and validation
 # Uses TCP probe here because persistent connection hasn't been established yet
@@ -461,8 +456,14 @@ SERVER_ARGS=(
     --cont-batching
     # Flash attention for memory efficiency
     --flash-attn on
-    # Jinja2 chat template support (required by Qwen models)
+    # Jinja2 chat template with model's native thinking support
     --jinja
+    # KNOWN ISSUE (llama.cpp #19690): Qwen3.5's hybrid Mamba/attention architecture
+    # forces full prompt re-processing on every request. The recurrent (Mamba) state
+    # also causes premature EOS after <think> tokens in chat mode.
+    # When the upstream fix lands, thinking will work without config changes.
+    # WORKAROUND: Use /completion endpoint with plain text Q&A formatting for now.
+    # e.g. "Question: ...\nAnswer: " format produces coherent multi-sentence output.
     # Quantized KV cache — q4_0 keeps 256K context manageable
     --cache-type-k q4_0
     --cache-type-v q4_0
