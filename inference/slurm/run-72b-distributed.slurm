@@ -27,7 +27,7 @@
 # slices, bypassing the head divisibility requirement (64 heads ÷ 2 for TP).
 #
 # Optimizations applied:
-# - NUMA binding: CPU/memory pinned to GPU-local NUMA node for IPoIB locality
+# - NUMA interleave: memory distributed across all 4 vNUMA nodes for bandwidth
 # - Matched batch sizes: ubatch=batch=512 reduces network round trips
 # - Memory locking: --mlock prevents model swap during long inference
 # - q4_0 KV cache: Reduces KV memory footprint in 64GB total VRAM
@@ -262,7 +262,7 @@ fi
 # Prefetch model on all nodes (parallel)
 echo "[$(date)] Prefetching model to page cache..."
 for node in "${NODES[@]}"; do
-    run_on_node "$node" "vmtouch -vt '$MODEL' 2>/dev/null || cat '$MODEL' > /dev/null" &
+    run_on_node "$node" "numactl --interleave=all sh -c 'vmtouch -vt \"$MODEL\" 2>/dev/null || cat \"$MODEL\" > /dev/null'" &
 done
 wait
 echo "[$(date)] Prefetch complete"
@@ -303,7 +303,7 @@ for i in "${!RPC_NODES[@]}"; do
          --label \
          --output="$step_log" \
          --error="$step_log" \
-        bash -c "LD_LIBRARY_PATH='$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB' CUDA_LAUNCH_BLOCKING=0 '$LLAMA_BIN/rpc-server' --host 0.0.0.0 --port '$RPC_PORT'" &
+        bash -c "numactl --interleave=all LD_LIBRARY_PATH='$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB' CUDA_LAUNCH_BLOCKING=0 '$LLAMA_BIN/rpc-server' --host 0.0.0.0 --port '$RPC_PORT'" &
     RPC_PIDS+=($!)
     WORKER_STATUS[$node]="starting"
     echo "    Step $i PID: ${RPC_PIDS[-1]}"
@@ -422,15 +422,12 @@ if [[ -n "$RPC_SERVERS" ]]; then
     SERVER_ARGS+=(--rpc "$RPC_SERVERS")
 fi
 
-# Detect GPU's NUMA node for optimal memory locality (reduces IPoIB latency)
-# Note: nvidia-smi topo output varies; we extract first digit and default to 0
-GPU_NUMA=$(nvidia-smi topo -m 2>/dev/null | grep -m1 GPU0 | awk '{print $NF}' | head -c1 || echo 0)
-[[ -z "$GPU_NUMA" || ! "$GPU_NUMA" =~ ^[0-9]$ ]] && GPU_NUMA=0
-echo "[$(date)] Binding to NUMA node $GPU_NUMA for GPU/InfiniBand affinity"
-
-# Run head node server with NUMA binding for optimal GPU/network locality
+# Run head node server with NUMA interleave for maximum aggregate memory bandwidth.
+# With 4 vNUMA nodes, interleave distributes model weight pages across all domains
+# for ~4x bandwidth vs single-node binding. GPU DMA routes through NUMA 0 regardless.
+echo "[$(date)] Launching with NUMA interleave (all nodes) for memory bandwidth"
 LD_LIBRARY_PATH="$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-numactl --cpunodebind="$GPU_NUMA" --membind="$GPU_NUMA" \
+numactl --interleave=all \
     "$LLAMA_BIN/llama-server" \
     "${SERVER_ARGS[@]}" &
 HEAD_PID=$!

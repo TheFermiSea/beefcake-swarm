@@ -37,6 +37,14 @@
 #   MoE expert computation dominates — all 32 threads available
 #   Batch processing uses 2048/512 for higher throughput with parallel slots
 #
+# NUMA topology (4 vNUMA nodes per VM, matching host SNC):
+#   vNUMA 0-1: Physical Socket 0 (GPU-local), ~64GB each
+#   vNUMA 2-3: Physical Socket 1, ~64GB each
+#   Memory interleaved across all 4 NUMA nodes (numactl --interleave=all)
+#   for maximum aggregate bandwidth on CPU-bound MoE expert computation.
+#   GPU DMA routes through NUMA 0 regardless of interleave policy.
+#   --numa numactl tells llama.cpp to defer NUMA policy to external numactl.
+#
 # Scaling: Set PARALLEL_SLOTS=6 or PARALLEL_SLOTS=8 at launch time.
 #   8 slots: ~342GB total across 768GB RAM — fits with 400+ GB headroom.
 #
@@ -307,7 +315,7 @@ fi
 # NOTE: No --mlock — model is ~214GB, too large to lock. vmtouch prefetch is sufficient.
 echo "[$(date)] Prefetching model to page cache on all nodes..."
 for node in "${NODES[@]}"; do
-    run_on_node "$node" "vmtouch -vt '$MODEL' 2>/dev/null || cat '$MODEL' > /dev/null" &
+    run_on_node "$node" "numactl --interleave=all sh -c 'vmtouch -vt \"$MODEL\" 2>/dev/null || cat \"$MODEL\" > /dev/null'" &
 done
 wait
 echo "[$(date)] Prefetch complete"
@@ -348,7 +356,7 @@ for i in "${!RPC_NODES[@]}"; do
          --label \
          --output="$step_log" \
          --error="$step_log" \
-        bash -c "LD_LIBRARY_PATH='$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB' CUDA_LAUNCH_BLOCKING=0 '$LLAMA_BIN/rpc-server' --host 0.0.0.0 --port '$RPC_PORT'" &
+        bash -c "numactl --interleave=all LD_LIBRARY_PATH='$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB' CUDA_LAUNCH_BLOCKING=0 '$LLAMA_BIN/rpc-server' --host 0.0.0.0 --port '$RPC_PORT'" &
     RPC_PIDS+=($!)
     WORKER_STATUS[$node]="starting"
     echo "    Step $i PID: ${RPC_PIDS[-1]}"
@@ -464,23 +472,23 @@ SERVER_ARGS=(
     # Batch sizes: larger logical batch for multiple parallel slots
     --batch-size 2048
     --ubatch-size 512
+    # NUMA: defer to external numactl policy (interleave)
+    --numa numactl
     # Metrics endpoint for monitoring
     --metrics
     # Longer timeout for 256K context operations
     --timeout 900
 )
 
-# Detect GPU's NUMA node for optimal memory locality (reduces IPoIB latency)
-# Note: nvidia-smi topo output varies; we extract first digit and default to 0
-GPU_NUMA=$(nvidia-smi topo -m 2>/dev/null | grep -m1 GPU0 | awk '{print $NF}' | head -c1 || echo 0)
-[[ -z "$GPU_NUMA" || ! "$GPU_NUMA" =~ ^[0-9]$ ]] && GPU_NUMA=0
-echo "[$(date)] Binding to NUMA node $GPU_NUMA for GPU/InfiniBand affinity"
-
-# Run head node server with NUMA binding for optimal GPU/network locality
+# Run head node server with NUMA interleave for maximum aggregate memory bandwidth.
+# MoE expert FFN layers (~196GB across 3 nodes) are CPU-bound — distributing pages
+# across all 4 NUMA domains gives ~4x the bandwidth vs binding to GPU-local node.
+# GPU DMA naturally routes through NUMA 0 regardless of interleave policy.
 # NOTE: No --mlock — model is ~214GB, too large to lock in memory.
 # vmtouch prefetch above ensures pages are in cache for fast startup.
+echo "[$(date)] Launching with NUMA interleave (all nodes) for MoE bandwidth"
 LD_LIBRARY_PATH="$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
-numactl --cpunodebind="$GPU_NUMA" --membind="$GPU_NUMA" \
+numactl --interleave=all \
     "$LLAMA_BIN/llama-server" \
     "${SERVER_ARGS[@]}" &
 HEAD_PID=$!
