@@ -357,14 +357,14 @@ mod tests {
     #[test]
     fn test_adapter_config_custom() {
         let config = AdapterConfig {
-            agent_name: "strand-14B".into(),
+            agent_name: "Qwen3.5-RustCoder".into(),
             max_tool_calls: Some(50),
             deadline: Some(Instant::now() + Duration::from_secs(1800)),
             preview_len: 100,
         };
         let adapter = RuntimeAdapter::new(config);
         let report = adapter.report().unwrap();
-        assert_eq!(report.agent_name, "strand-14B");
+        assert_eq!(report.agent_name, "Qwen3.5-RustCoder");
     }
 
     #[test]
@@ -552,7 +552,7 @@ mod tests {
     #[test]
     fn test_report_serialization() {
         let report = AdapterReport {
-            agent_name: "strand-14B".into(),
+            agent_name: "Qwen3.5-RustCoder".into(),
             tool_events: vec![ToolEvent {
                 tool_name: "read_file".into(),
                 args_preview: r#"{"path":"src/main.rs"}"#.into(),
@@ -570,7 +570,7 @@ mod tests {
 
         let json = serde_json::to_string(&report).unwrap();
         let parsed: AdapterReport = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.agent_name, "strand-14B");
+        assert_eq!(parsed.agent_name, "Qwen3.5-RustCoder");
         assert_eq!(parsed.tool_events.len(), 1);
         assert_eq!(parsed.turn_count, 3);
         assert!(!parsed.terminated_early);

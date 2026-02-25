@@ -41,9 +41,9 @@ use coordination::{
 /// Coder routing decision with confidence level.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CoderRoute {
-    /// strand-14B: deep Rust expertise, fast on single-file fixes
+    /// Qwen3.5-397B with Rust specialist system prompt
     RustCoder,
-    /// Qwen3-Coder-Next: 256K context, multi-file scaffolding
+    /// Qwen3.5-397B with general coder system prompt (multi-file scaffolding)
     GeneralCoder,
 }
 
@@ -66,10 +66,12 @@ fn query_kb_with_failsafe(kb: &dyn KnowledgeBase, role: &str, question: &str) ->
 /// Route to the appropriate coder based on error category distribution.
 ///
 /// Uses a weighted scoring system rather than a simple `any()` check:
-/// - Rust-specific categories (borrow checker, lifetimes, traits) score toward strand-14B
-/// - Structural categories (imports, syntax, macros) score toward Qwen3-Coder-Next
-/// - Mixed errors with majority Rust → strand-14B; majority structural → general
+/// - Rust-specific categories (borrow checker, lifetimes, traits) score toward RustCoder system prompt
+/// - Structural categories (imports, syntax, macros) score toward GeneralCoder system prompt
+/// - Mixed errors with majority Rust → RustCoder; majority structural → GeneralCoder
 /// - No errors (first iteration) → general coder for scaffolding
+///
+/// Both routes use Qwen3.5-397B on vasp-02 — differentiation is by system prompt only.
 pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
     if error_cats.is_empty() {
         // First iteration — use general coder for scaffolding/multi-file work
@@ -81,14 +83,14 @@ pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
 
     for cat in error_cats {
         match cat {
-            // Deep Rust expertise required — strand-14B excels here
+            // Deep Rust expertise required — Rust specialist prompt excels here
             ErrorCategory::BorrowChecker => rust_score += 3,
             ErrorCategory::Lifetime => rust_score += 3,
             ErrorCategory::TraitBound => rust_score += 2,
             ErrorCategory::Async => rust_score += 2,
             ErrorCategory::TypeMismatch => rust_score += 1,
 
-            // Structural/multi-file work — Qwen3-Coder-Next's 256K context helps
+            // Structural/multi-file work — general coder's 65K context helps
             ErrorCategory::ImportResolution => general_score += 3,
             ErrorCategory::Macro => general_score += 2,
             ErrorCategory::Syntax => general_score += 1,
@@ -1070,12 +1072,12 @@ pub async fn process_issue(
         // --- Route to agent based on current tier ---
         //
         // Hierarchy (cloud available):
-        //   Worker: local coders (strand-14B, Qwen3-Coder-Next)
+        //   Worker: local coders (Qwen3.5-Implementer on vasp-02)
         //   Council+Human: cloud-backed manager (Opus 4.6) with all local workers as tools
         //
         // Hierarchy (no cloud):
         //   Worker: local coders
-        //   Council+Human: local manager (OR1-Behemoth) with coders as tools
+        //   Council+Human: local manager (Qwen3.5-Architect on vasp-01) with coders as tools
         let agent_start = Instant::now();
         let (agent_future, adapter) = match tier {
             SwarmTier::Worker => {
@@ -1087,11 +1089,11 @@ pub async fn process_issue(
 
                 match route_to_coder(&recent_cats) {
                     CoderRoute::RustCoder => {
-                        info!(iteration, "Routing to rust_coder (strand-14B)");
+                        info!(iteration, "Routing to rust_coder (Qwen3.5-Implementer)");
                         metrics.record_coder_route("RustCoder");
-                        metrics.record_agent_metrics("strand-14B", 0, 0);
+                        metrics.record_agent_metrics("Qwen3.5-RustCoder", 0, 0);
                         let adapter = RuntimeAdapter::new(AdapterConfig {
-                            agent_name: "strand-14B".into(),
+                            agent_name: "Qwen3.5-RustCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             ..Default::default()
                         });
@@ -1115,11 +1117,11 @@ pub async fn process_issue(
                         (result, adapter)
                     }
                     CoderRoute::GeneralCoder => {
-                        info!(iteration, "Routing to general_coder (Qwen3-Coder-Next)");
+                        info!(iteration, "Routing to general_coder (Qwen3.5-Implementer)");
                         metrics.record_coder_route("GeneralCoder");
-                        metrics.record_agent_metrics("Qwen3-Coder-Next", 0, 0);
+                        metrics.record_agent_metrics("Qwen3.5-GeneralCoder", 0, 0);
                         let adapter = RuntimeAdapter::new(AdapterConfig {
-                            agent_name: "Qwen3-Coder-Next".into(),
+                            agent_name: "Qwen3.5-GeneralCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             ..Default::default()
                         });
@@ -1149,7 +1151,7 @@ pub async fn process_issue(
             SwarmTier::Council | SwarmTier::Human => {
                 info!(
                     iteration,
-                    "Routing to manager (cloud-backed or OR1 fallback)"
+                    "Routing to manager (cloud-backed or Qwen3.5-Architect fallback)"
                 );
                 metrics.record_agent_metrics("manager", 0, 0);
                 let adapter = RuntimeAdapter::new(AdapterConfig {

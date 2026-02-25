@@ -129,7 +129,7 @@ impl Tool for WriteFileTool {
         }
 
         // Heuristic: detect double-JSON-encoded content from local models.
-        // Qwen3-Coder-Next sometimes wraps the entire file in quotes with
+        // Qwen3.5 sometimes wraps the entire file in quotes with
         // escaped characters. After rig's JSON parse the content arrives as
         // a valid Rust string that starts/ends with `"` and contains escape
         // sequences like `\n`, `\t`, `\"`. Only unescape if escape sequences

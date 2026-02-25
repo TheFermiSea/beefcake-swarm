@@ -55,7 +55,7 @@ pub struct TaskClassification {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModelTier {
-    /// HydraCoder 30B-A3B MoE — simple Rust fixes, fast
+    /// Qwen3.5-397B Implementer on vasp-02 — coding, fixes
     Worker,
     /// Manager Council — complex tasks, architecture, review
     Council,
@@ -65,7 +65,7 @@ impl ModelTier {
     /// Get the model identifier
     pub fn model_id(&self) -> &'static str {
         match self {
-            Self::Worker => "HydraCoder-Q6_K",
+            Self::Worker => "Qwen3.5-397B-A17B",
             Self::Council => "manager-council",
         }
     }
@@ -73,8 +73,8 @@ impl ModelTier {
     /// Get expected tokens per second
     pub fn expected_speed(&self) -> u32 {
         match self {
-            Self::Worker => 40,
-            Self::Council => 10,
+            Self::Worker => 8,
+            Self::Council => 8,
         }
     }
 
@@ -759,11 +759,11 @@ impl DynamicRouter {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoderRoute {
-    /// Strand-Rust-Coder 14B — fast, idiomatic fixes.
+    /// Qwen3.5-397B with Rust specialist prompt (was strand-14B).
     Strand,
-    /// HydraCoder 31B MoE — specialized Rust patterns.
+    /// Qwen3.5-397B with general coding prompt (was HydraCoder).
     Hydra,
-    /// OR1-Behemoth 73B — deep reasoning for complex issues.
+    /// Qwen3.5-397B Architect — deep reasoning for complex issues.
     Architect,
 }
 
@@ -789,11 +789,11 @@ mod tests {
 
     #[test]
     fn test_model_tier_properties() {
-        assert_eq!(ModelTier::Worker.model_id(), "HydraCoder-Q6_K");
+        assert_eq!(ModelTier::Worker.model_id(), "Qwen3.5-397B-A17B");
         assert_eq!(ModelTier::Council.model_id(), "manager-council");
 
-        assert_eq!(ModelTier::Worker.expected_speed(), 40);
-        assert_eq!(ModelTier::Council.expected_speed(), 10);
+        assert_eq!(ModelTier::Worker.expected_speed(), 8);
+        assert_eq!(ModelTier::Council.expected_speed(), 8);
 
         assert!((ModelTier::Worker.default_temperature() - 0.3).abs() < f32::EPSILON);
         assert!((ModelTier::Council.default_temperature() - 0.5).abs() < f32::EPSILON);
@@ -867,7 +867,7 @@ mod tests {
     fn test_model_selection_defaults() {
         let worker = ModelSelection::new(ModelTier::Worker, "worker task");
         assert_eq!(worker.max_tokens, 2048);
-        assert_eq!(worker.model_id, "HydraCoder-Q6_K");
+        assert_eq!(worker.model_id, "Qwen3.5-397B-A17B");
 
         let council = ModelSelection::new(ModelTier::Council, "council task");
         assert_eq!(council.max_tokens, 4096);

@@ -1,10 +1,10 @@
 //! Agent builders for the Manager-Worker swarm.
 //!
 //! Hierarchy (when cloud available):
-//!   Cloud Manager (Opus 4.6) → Local Workers (OR1-Behemoth, strand-14B, Qwen3-Coder-Next)
+//!   Cloud Manager (Opus 4.6) → Local Workers (Qwen3.5-Architect on vasp-01, Qwen3.5-Implementer on vasp-02)
 //!
 //! Fallback (no cloud):
-//!   Local Manager (OR1-Behemoth) → Local Workers (strand-14B, Qwen3-Coder-Next)
+//!   Local Manager (Qwen3.5-Architect on vasp-01) → Local Workers (Qwen3.5-Implementer on vasp-02)
 
 pub mod adversary;
 pub mod cloud;
@@ -50,7 +50,7 @@ impl AgentFactory {
         self
     }
 
-    /// Build the Rust specialist coder (strand-14B on vasp-02).
+    /// Build the Rust specialist coder (Qwen3.5-397B on vasp-02, Rust system prompt).
     ///
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
@@ -64,7 +64,7 @@ impl AgentFactory {
         )
     }
 
-    /// Build the general coder (Qwen3-Coder-Next on vasp-02).
+    /// Build the general coder (Qwen3.5-397B on vasp-02, general coding system prompt).
     ///
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
@@ -78,7 +78,7 @@ impl AgentFactory {
         )
     }
 
-    /// Build the reasoning worker (OR1-Behemoth on vasp-01).
+    /// Build the reasoning worker (Qwen3.5-397B on vasp-01, Architect node).
     ///
     /// Tool-equipped agent for deep analysis and complex fixes.
     /// Used as a worker tool by the cloud manager.
@@ -93,7 +93,7 @@ impl AgentFactory {
         )
     }
 
-    /// Build the blind reviewer (strand-14B on vasp-02).
+    /// Build the blind reviewer (Qwen3.5-397B on vasp-02).
     pub fn build_reviewer(&self) -> OaiAgent {
         reviewer::build_reviewer(&self.clients.local, &self.config.fast_endpoint.model)
     }
@@ -141,11 +141,11 @@ impl AgentFactory {
     /// Build the Manager agent.
     ///
     /// When cloud is available: Cloud model (Opus 4.6) manages local workers
-    /// including OR1-Behemoth as a reasoning tool and planner/fixer specialists.
+    /// including Qwen3.5-Architect as a reasoning tool and planner/fixer specialists.
     /// Worker agents are registered with `proxy_` prefixed names to work around
     /// the CLIAPIProxy tool name prefixing behavior.
     ///
-    /// Fallback: OR1-Behemoth manages coders directly (no reasoning worker).
+    /// Fallback: Qwen3.5-Architect (vasp-01) manages coders directly (no reasoning worker).
     /// No proxy prefix needed — local models don't mangle tool names.
     pub fn build_manager(&self, wt_path: &Path) -> OaiAgent {
         if let Some(ref cloud_client) = self.clients.cloud {
@@ -215,7 +215,7 @@ impl AgentFactory {
         } else {
             info!(
                 model = %self.config.reasoning_endpoint.model,
-                "No cloud endpoint — building local manager (OR1-Behemoth)"
+                "No cloud endpoint — building local manager (Qwen3.5-Architect)"
             );
             // Local manager doesn't need proxy prefix
             let planner = self.build_planner(wt_path);

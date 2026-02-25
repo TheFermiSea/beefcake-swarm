@@ -31,7 +31,7 @@ fn reasoning_max_turns() -> usize {
         .unwrap_or(DEFAULT_REASONING_MAX_TURNS)
 }
 
-/// Build the Rust specialist coder (HydraCoder).
+/// Build the Rust specialist coder (Qwen3.5-Implementer).
 ///
 /// Tools: read_file, write_file, edit_file, run_command (no list_files).
 /// Used for borrow checker, lifetime, trait bound, and type mismatch errors.
@@ -70,7 +70,7 @@ pub fn build_rust_coder_named(
         .build()
 }
 
-/// Build the reasoning worker (OR1-Behemoth 72B).
+/// Build the reasoning worker (Qwen3.5-Architect).
 ///
 /// Tools: read_file, write_file, edit_file, list_files, run_command.
 /// Used by the cloud manager for deep analysis, repair plans, and complex fixes.
@@ -105,7 +105,7 @@ pub fn build_reasoning_worker_named(
         .build()
 }
 
-/// Build the general-purpose coder (Qwen3-Coder-Next).
+/// Build the general-purpose coder (Qwen3.5-Implementer).
 ///
 /// Tools: read_file, write_file, edit_file, list_files, run_command.
 /// Used for multi-file changes, scaffolding, and cross-cutting refactors.

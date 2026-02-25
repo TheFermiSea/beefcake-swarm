@@ -12,44 +12,55 @@ use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
 
-/// Inference tier for model selection
+/// Inference tier for model selection.
+///
+/// Both tiers run Qwen3.5-397B-A17B on independent single-node instances.
+/// Differentiation is by node role (architect vs implementer), not model.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InferenceTier {
-    /// HydraCoder worker on vasp-02
+    /// Qwen3.5-397B Implementer on vasp-02:8080 (4 slots @ 65K context)
+    Implementer,
+    /// Qwen3.5-397B Architect on vasp-01:8081 (2 slots @ 128K context)
+    Architect,
+    /// Legacy alias for Implementer (backward compat with existing configs)
+    #[serde(alias = "worker")]
     Worker,
-    /// Qwen3.5 distributed manager on vasp-01+vasp-03
+    /// Legacy alias for Architect (backward compat with existing configs)
+    #[serde(alias = "manager_local")]
     ManagerLocal,
 }
 
 impl InferenceTier {
     pub fn job_script(&self) -> &'static str {
-        match self {
-            Self::Worker => "run-worker.slurm",
-            Self::ManagerLocal => "run-qwen35-distributed.slurm",
-        }
+        // Both tiers use the same single-node parameterized script
+        "run-qwen35.slurm"
     }
 
     pub fn model_name(&self) -> &'static str {
-        match self {
-            Self::Worker => "HydraCoder",
-            Self::ManagerLocal => "Qwen3.5",
-        }
+        "Qwen3.5-397B-A17B"
     }
 
     pub fn expected_tok_per_sec(&self) -> (u32, u32) {
+        // Both instances: ~8.4 gen, ~21 prompt processing
+        (7, 10)
+    }
+
+    /// Canonical form (collapses legacy aliases).
+    pub fn canonical(&self) -> Self {
         match self {
-            Self::Worker => (30, 50),
-            Self::ManagerLocal => (5, 12),
+            Self::Worker | Self::Implementer => Self::Implementer,
+            Self::ManagerLocal | Self::Architect => Self::Architect,
         }
     }
 }
 
 impl std::fmt::Display for InferenceTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Worker => write!(f, "worker"),
-            Self::ManagerLocal => write!(f, "manager-local"),
+        match self.canonical() {
+            Self::Implementer => write!(f, "implementer"),
+            Self::Architect => write!(f, "architect"),
+            _ => unreachable!(),
         }
     }
 }
@@ -417,10 +428,21 @@ impl SlurmInferenceManager {
         let jobs = self.list_active_jobs()?;
 
         for job in jobs {
-            let tier = if job.name.contains("worker") || job.name.contains("hydra") {
-                InferenceTier::Worker
+            // Both Architect and Implementer use the same qwen35 job name.
+            // Differentiate by node: vasp-01 = Architect, vasp-02 = Implementer.
+            let tier = if let Some(ref nodes) = job.node_list {
+                if nodes.contains("vasp-01") {
+                    InferenceTier::Architect
+                } else if nodes.contains("vasp-02") {
+                    InferenceTier::Implementer
+                } else if job.name.contains("qwen35") || job.name.contains("manager") {
+                    // Fallback for pending jobs (no node assigned yet)
+                    InferenceTier::Architect
+                } else {
+                    continue;
+                }
             } else if job.name.contains("qwen35") || job.name.contains("manager") {
-                InferenceTier::ManagerLocal
+                InferenceTier::Architect
             } else {
                 continue; // Unknown job type
             };
@@ -609,9 +631,10 @@ impl SlurmInferenceManager {
         &mut self,
         tier: InferenceTier,
     ) -> Result<Option<EndpointInfo>, SlurmError> {
-        let pattern = match tier {
-            InferenceTier::Worker => "*-worker.json",
-            InferenceTier::ManagerLocal => "*-qwen35.json",
+        let pattern = match tier.canonical() {
+            InferenceTier::Implementer => "*-qwen35-impl.json",
+            InferenceTier::Architect => "*-qwen35.json",
+            _ => unreachable!(),
         };
 
         // List endpoint files
@@ -1263,8 +1286,11 @@ mod tests {
 
     #[test]
     fn test_inference_tier_display() {
-        assert_eq!(InferenceTier::Worker.to_string(), "worker");
-        assert_eq!(InferenceTier::ManagerLocal.to_string(), "manager-local");
+        assert_eq!(InferenceTier::Implementer.to_string(), "implementer");
+        assert_eq!(InferenceTier::Architect.to_string(), "architect");
+        // Legacy aliases resolve to canonical forms
+        assert_eq!(InferenceTier::Worker.to_string(), "implementer");
+        assert_eq!(InferenceTier::ManagerLocal.to_string(), "architect");
     }
 
     #[test]
@@ -1277,11 +1303,10 @@ mod tests {
 
     #[test]
     fn test_tier_job_script() {
-        assert_eq!(InferenceTier::Worker.job_script(), "run-worker.slurm");
-        assert_eq!(
-            InferenceTier::ManagerLocal.job_script(),
-            "run-qwen35-distributed.slurm"
-        );
+        assert_eq!(InferenceTier::Implementer.job_script(), "run-qwen35.slurm");
+        assert_eq!(InferenceTier::Architect.job_script(), "run-qwen35.slurm");
+        // Legacy aliases use same script
+        assert_eq!(InferenceTier::Worker.job_script(), "run-qwen35.slurm");
     }
 
     #[test]

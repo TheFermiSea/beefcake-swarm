@@ -3,10 +3,9 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Model Selection & Routing
-- **Rust Tasks:** Use the `/ask-local` command (wraps `or1-behemoth-q4_k_m.gguf`) for deep Rust analysis and generation.
-  - Example: `/ask-local "or1-behemoth-q4_k_m.gguf" "Explain the borrow checker error in src/lib.rs"`
-- **Code Gen:** Use the `/ask-local` command (wraps `Qwen3-Coder-Next`) for scaffolding and boilerplate.
-  - Example: `/ask-local "Qwen3-Coder-Next" "Generate a struct for User with fields..."`
+- **Rust/Code Tasks:** Use `/ask-local` with the Qwen3.5-397B instances for Rust analysis, code generation, and architecture.
+  - Architect (vasp-01): `/ask-local "Qwen3.5-397B-A17B" "Explain the borrow checker error in src/lib.rs"`
+  - Implementer (vasp-02): `/ask-local "Qwen3.5-397B-A17B" "Generate a struct for User with fields..."`
 - **General/Complex:** Use the default Claude model (Sonnet 3.5 / Opus).
 - **Research:** Always check **NotebookLM** first using `/ask-notebook` or `notebook_query`.
 
@@ -60,20 +59,20 @@ Key modules:
 
 ```
 Cloud Manager (Opus 4.6 via CLIAPIProxy, 10 iterations)
-    → delegates to local workers: OR1-Behemoth (reasoning), strand-14B (Rust), Qwen3-Coder-Next (general)
+    → delegates to local workers: Qwen3.5-397B Architect (vasp-01), Qwen3.5-397B Implementer (vasp-02)
     → runs verifier after each worker completes
     ↓ all budgets exhausted
 Human Intervention (blocking beads issue)
 ```
 
 Cloud models are the managers from iteration 1. Local models are workers.
-When cloud is unavailable, OR1-Behemoth serves as fallback local manager.
+When cloud is unavailable, Qwen3.5-397B Architect (vasp-01) serves as fallback local manager.
 
 ### Non-Workspace Directories
 
 - `flywheel/` — Forked from `Dicklesworthstone/agentic_coding_flywheel_setup`. TypeScript/Node. Mining prompts and task decomposition strategies; discarding Docker/cloud, adapting to SLURM/NFS.
 - `indexing/` — Python scripts for code indexing (CocoIndex for semantic search/RAG).
-- `inference/` — SLURM job scripts (`run-14b.slurm` serves strand-14B + Qwen3-Coder-Next on vasp-02, `run-72b-distributed.slurm` on vasp-01+03), systemd daemon, build/validate scripts.
+- `inference/` — SLURM job scripts (`run-qwen35.slurm` serves Qwen3.5-397B independently on vasp-01 and vasp-02), systemd daemon, build/validate scripts.
 - `infrastructure/` — Monitoring: GPU dashboard, HPC watchdog, ai-proxy setup.
 - `docs/` — Architecture docs, deployment guides, inference endpoint specs.
 
@@ -81,19 +80,21 @@ When cloud is unavailable, OR1-Behemoth serves as fallback local manager.
 
 | Tier | Endpoint | Model | Throughput |
 |------|----------|-------|------------|
-| Fast (14B) | http://vasp-02:8080 | strand-rust-coder-14b-q8_0 | ~53 tok/s |
-| Coder (80B MoE) | http://vasp-02:8080 | Qwen3-Coder-Next | ~5-15 tok/s |
-| Manager (397B MoE) | http://vasp-01:8081 | Qwen3.5-397B-A17B-UD-Q4_K_XL | ~5 tok/s gen, ~15 tok/s prompt |
+| Architect (397B MoE) | http://vasp-01:8081 | Qwen3.5-397B-A17B | ~8.4 tok/s gen, ~21 tok/s prompt |
+| Implementer (397B MoE) | http://vasp-02:8080 | Qwen3.5-397B-A17B | ~8.4 tok/s gen, ~21 tok/s prompt |
 
 Role specialization:
-- **strand-14B** = "Mechanic" — fast Rust-specific fixes, borrow checker cascades, type errors
-- **Qwen3-Coder-Next** = "Implementer" — general coding, multi-file changes, 256K context (MoE offload to CPU)
-- **Qwen3.5-397B** = "Manager/Architect" — complex reasoning, architecture decisions, 256K context (3-node distributed, MoE experts on CPU)
+- **Qwen3.5-397B Architect** (vasp-01) = "Manager/Planner" — 2 slots @ 128K context, architecture review, validation, work packet analysis. Validator runs here for natural blind review isolation from implementer.
+- **Qwen3.5-397B Implementer** (vasp-02) = "Coder" — 4 slots @ 65K context, code generation, multi-file changes, concurrent agent coding sessions (Agent Teams).
+- **vasp-03** = Free for DFT, embeddings, other workloads.
 
 Start inference:
 ```bash
-ssh root@10.0.0.5 "sbatch /cluster/shared/scripts/llama-cpp/run-14b.slurm"
-ssh root@10.0.0.5 "sbatch /cluster/shared/scripts/llama-cpp/run-qwen35-distributed.slurm"
+# Architect (vasp-01): 2 slots, 128K context
+ssh root@10.0.0.5 "sbatch --nodelist=vasp-01 --export=ALL,PORT=8081,PARALLEL_SLOTS=2,CTX_SIZE=131072,ENDPOINT_SUFFIX=qwen35,TIER_NAME=manager-local /cluster/shared/scripts/llama-cpp/run-qwen35.slurm"
+
+# Implementer (vasp-02): 4 slots, 65K context
+ssh root@10.0.0.5 "sbatch --nodelist=vasp-02 --export=ALL,PORT=8080,PARALLEL_SLOTS=4,CTX_SIZE=65536,ENDPOINT_SUFFIX=qwen35-impl,TIER_NAME=implementer /cluster/shared/scripts/llama-cpp/run-qwen35.slurm"
 ```
 
 ## External Tools (install separately)
@@ -206,9 +207,9 @@ Enabled via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`.
 5. Commit with conventional format and push branch
 
 ### Local Model Access (optional)
-Teammates can query local Rust-expert models via curl for a second opinion:
-- strand-14B (fast fixes): `curl http://vasp-02:8080/v1/chat/completions -d '{"model":"strand-rust-coder-14b-q8_0.gguf",...}'`
-- OR1-Behemoth (reasoning): `curl http://vasp-01:8081/v1/chat/completions -d '{"model":"or1-behemoth-q4_k_m.gguf",...}'`
+Teammates can query local Qwen3.5-397B instances via curl for a second opinion:
+- Architect (vasp-01): `curl http://vasp-01:8081/v1/chat/completions -d '{"model":"Qwen3.5-397B-A17B",...}'`
+- Implementer (vasp-02): `curl http://vasp-02:8080/v1/chat/completions -d '{"model":"Qwen3.5-397B-A17B",...}'`
 
 ### Branch Strategy
 Each teammate works on `swarm/<issue-id>`. Lead assigns non-overlapping issues.

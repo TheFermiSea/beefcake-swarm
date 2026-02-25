@@ -6,11 +6,11 @@ use std::path::PathBuf;
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
 pub enum Tier {
-    /// Fast 14B model on vasp-02 (~53 tok/s)
+    /// Qwen3.5-397B on vasp-02 — Rust specialist system prompt (~8.4 tok/s)
     Fast,
-    /// General coder model (Qwen3-Coder-Next) on vasp-02
+    /// Qwen3.5-397B on vasp-02 — general coder system prompt (~8.4 tok/s)
     Coder,
-    /// Reasoning 72B model on vasp-01+vasp-03 (~13 tok/s)
+    /// Qwen3.5-397B on vasp-01 — reasoning/manager/architect (~8.4 tok/s)
     Reasoning,
     /// Cloud models via CLIAPIProxy
     Cloud,
@@ -135,11 +135,11 @@ impl CloudFallbackMatrix {
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
-    /// HydraCoder (Rust specialist)
+    /// Qwen3.5-397B on vasp-02 (Rust specialist system prompt, 4 slots @ 65K)
     pub fast_endpoint: Endpoint,
-    /// Qwen3-Coder-Next (general coding, 256K context)
+    /// Qwen3.5-397B on vasp-02 (general coding system prompt, 4 slots @ 65K)
     pub coder_endpoint: Endpoint,
-    /// OR1-Behemoth 72B (reasoning/manager)
+    /// Qwen3.5-397B on vasp-01 (reasoning/manager/architect, 2 slots @ 128K)
     pub reasoning_endpoint: Endpoint,
     /// CLIAPIProxy cloud escalation (optional)
     pub cloud_endpoint: Option<CloudEndpoint>,
@@ -183,7 +183,7 @@ impl Default for SwarmConfig {
                 url: std::env::var("SWARM_FAST_URL")
                     .unwrap_or_else(|_| "http://vasp-02:8080/v1".into()),
                 model: std::env::var("SWARM_FAST_MODEL")
-                    .unwrap_or_else(|_| "HydraCoder.i1-Q4_K_M".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
                 tier: Tier::Fast,
                 api_key: std::env::var("SWARM_FAST_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
@@ -192,7 +192,7 @@ impl Default for SwarmConfig {
                 url: std::env::var("SWARM_CODER_URL")
                     .unwrap_or_else(|_| "http://vasp-02:8080/v1".into()),
                 model: std::env::var("SWARM_CODER_MODEL")
-                    .unwrap_or_else(|_| "Qwen3-Coder-Next-UD-Q4_K_XL.gguf".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
                 tier: Tier::Coder,
                 api_key: std::env::var("SWARM_CODER_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
@@ -201,7 +201,7 @@ impl Default for SwarmConfig {
                 url: std::env::var("SWARM_REASONING_URL")
                     .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
                 model: std::env::var("SWARM_REASONING_MODEL")
-                    .unwrap_or_else(|_| "or1-behemoth-q4_k_m.gguf".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
                 tier: Tier::Reasoning,
                 api_key: std::env::var("SWARM_REASONING_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
@@ -299,13 +299,13 @@ impl SwarmConfig {
 
 /// Pre-built rig CompletionsClients, deduplicated by endpoint URL.
 ///
-/// vasp-02:8080 serves both strand-14B and Qwen3-Coder-Next, so one
-/// client handles both — model selection happens via the model name in
-/// the request JSON.
+/// vasp-02:8080 (Implementer) serves both Fast and Coder tiers — same
+/// Qwen3.5-397B model, different system prompts per agent role.
+/// vasp-01:8081 (Architect) serves reasoning/manager/validator roles.
 pub struct ClientSet {
-    /// Client for vasp-02:8080 (serves Fast + Coder models)
+    /// Client for vasp-02:8080 (Implementer — Qwen3.5-397B, 4 slots @ 65K)
     pub local: openai::CompletionsClient,
-    /// Client for vasp-01:8081 (serves Reasoning model)
+    /// Client for vasp-01:8081 (Architect — Qwen3.5-397B, 2 slots @ 128K)
     pub reasoning: openai::CompletionsClient,
     /// Client for CLIAPIProxy (cloud models: Opus 4.6, G3-Pro, etc.)
     /// Used as the Manager tier when available.
@@ -469,6 +469,7 @@ mod tests {
         assert_eq!(config.max_retries, 10);
         assert!(config.fast_endpoint.url.contains("vasp-02"));
         assert!(config.reasoning_endpoint.url.contains("vasp-01"));
+        assert!(config.fast_endpoint.model.contains("Qwen3.5"));
         assert_eq!(config.fast_endpoint.api_key, "not-needed");
     }
 
