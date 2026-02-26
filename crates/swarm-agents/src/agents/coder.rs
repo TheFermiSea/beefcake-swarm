@@ -4,6 +4,7 @@ use std::path::Path;
 
 use rig::agent::Agent;
 use rig::client::CompletionClient;
+use rig::completion::message::ToolChoice;
 use rig::providers::openai;
 
 use crate::prompts;
@@ -76,6 +77,7 @@ pub fn build_rust_coder_named(
         .description("Rust specialist for borrow checker, lifetimes, trait bounds, type errors")
         .preamble(prompts::RUST_CODER_PREAMBLE)
         .temperature(worker_temperature())
+        .tool_choice(ToolChoice::Auto)
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::RustSpecialist,
@@ -111,6 +113,7 @@ pub fn build_reasoning_worker_named(
         .description("Deep reasoning specialist for complex Rust architecture and debugging")
         .preamble(prompts::REASONING_WORKER_PREAMBLE)
         .temperature(worker_temperature())
+        .tool_choice(ToolChoice::Auto)
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::General,
@@ -149,6 +152,7 @@ pub fn build_general_coder_named(
         .description("General coding agent for multi-file scaffolding and cross-cutting changes")
         .preamble(prompts::GENERAL_CODER_PREAMBLE)
         .temperature(worker_temperature())
+        .tool_choice(ToolChoice::Auto)
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::General,

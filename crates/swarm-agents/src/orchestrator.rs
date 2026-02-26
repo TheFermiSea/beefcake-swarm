@@ -1047,6 +1047,17 @@ pub async fn process_issue(
 
         let mut task_prompt = format_task_prompt(&packet);
 
+        // Kickstart prefix: nudge local models to call tools immediately.
+        // HydraCoder (30B MoE) and similar small models skip tool calls with
+        // long prompts, generating text analysis instead. A brief directive at
+        // the start biases the first token toward a tool call.
+        if tier == SwarmTier::Worker {
+            task_prompt = format!(
+                "[Start by calling read_file on the target file, then apply edits.]\n\n{}",
+                task_prompt
+            );
+        }
+
         // Inject verifier stderr into prompt when failure_signals are thin.
         // Fmt errors don't produce ParsedErrors, so the packet may lack error details.
         // The raw stderr contains the actual error output the model needs to see.
