@@ -362,8 +362,33 @@ impl Tool for EditFileTool {
         let new_lines = new_content.lines().count();
         let diff = new_lines as i64 - old_lines as i64;
         let sign = if diff >= 0 { "+" } else { "" };
+
+        // Include the actual written content in the response so the model
+        // knows the current file state for subsequent edits (prevents
+        // old_content drift when tool_choice=required forces multiple edits).
+        let written_preview = if new_file_content.len() <= 2000 {
+            new_file_content.clone()
+        } else {
+            // Find the replacement region and show context around it
+            let replacement_start = new_file_content
+                .find(new_content.lines().next().unwrap_or(""))
+                .unwrap_or(0);
+            let preview_start = new_file_content[..replacement_start]
+                .rfind('\n')
+                .map(|p| p + 1)
+                .unwrap_or(0);
+            let preview_end =
+                (replacement_start + new_content.len() + 200).min(new_file_content.len());
+            format!("...{}", &new_file_content[preview_start..preview_end])
+        };
+
         Ok(format!(
-            "Edited {}: replaced {old_lines} lines with {new_lines} lines ({sign}{diff})",
+            "Edited {}: replaced {old_lines} lines with {new_lines} lines ({sign}{diff})\n\
+             \n\
+             Current file content:\n\
+             ```\n\
+             {written_preview}\n\
+             ```",
             args.path
         ))
     }
