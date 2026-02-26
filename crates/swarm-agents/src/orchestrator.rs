@@ -255,7 +255,7 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
 /// - A directive to call read_file first
 ///
 /// The full verbose format (`format_task_prompt`) is for cloud/council models.
-pub fn format_compact_task_prompt(packet: &WorkPacket) -> String {
+pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String {
     let mut prompt = String::with_capacity(1500);
 
     prompt.push_str(&format!("# Task: {}\n\n", packet.objective));
@@ -330,23 +330,7 @@ pub fn format_compact_task_prompt(packet: &WorkPacket) -> String {
     // Inline the target file content when there's exactly one target file.
     // This saves a read_file turn (critical with max_turns=5).
     if target_files.len() == 1 {
-        let wt_path = packet
-            .file_contexts
-            .first()
-            .map(|fc| {
-                // Derive worktree root from the first file_context path
-                let full = &fc.file;
-                full.find("crates/")
-                    .or_else(|| full.find("coordination/"))
-                    .map(|idx| &full[..idx])
-                    .unwrap_or("")
-            })
-            .unwrap_or("");
-        let target_path = if wt_path.is_empty() {
-            target_files[0].to_string()
-        } else {
-            format!("{}{}", wt_path, target_files[0])
-        };
+        let target_path = wt_root.join(target_files[0]);
         if let Ok(content) = std::fs::read_to_string(&target_path) {
             let truncated = if content.len() > 4000 {
                 format!("{}...\n[truncated at 4000 chars]", &content[..4000])
@@ -1268,7 +1252,7 @@ pub async fn process_issue(
         // models (HydraCoder 30B MoE) suppress tool calls with long prompts.
         // Council/Human tiers get the full verbose format for cloud models.
         let mut task_prompt = if tier == SwarmTier::Worker {
-            format_compact_task_prompt(&packet)
+            format_compact_task_prompt(&packet, &wt_path)
         } else {
             format_task_prompt(&packet)
         };
@@ -1474,13 +1458,10 @@ pub async fn process_issue(
                     format!("Agent failed: {e}"),
                 );
                 // engine.decide() records the iteration internally — don't double-count
-<<<<<<< HEAD
                 info!(
                     iteration,
                     "Running verifier after agent failure to assess codebase state"
                 );
-                let verifier = Verifier::new(&wt_path, verifier_config.clone());
-=======
                 let current_verifier_config = if config.verifier_packages.is_empty() {
                     VerifierConfig {
                         packages: detect_changed_packages(&wt_path),
@@ -1490,7 +1471,6 @@ pub async fn process_issue(
                     verifier_config.clone()
                 };
                 let verifier = Verifier::new(&wt_path, current_verifier_config);
->>>>>>> origin/swarm/beefcake-swarm-19l
                 let report = verifier.run_pipeline().await;
                 let decision = engine.decide(&mut escalation, &report);
                 last_report = Some(report);

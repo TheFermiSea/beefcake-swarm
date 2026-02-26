@@ -233,30 +233,6 @@ async fn main() -> Result<()> {
             serde_json::from_str(&contents).context("Failed to parse issue JSON")?;
         let tracker = NoOpTracker;
         info!(id = %issue.id, title = %issue.title, "Beads-free mode: processing issue from file");
-<<<<<<< HEAD
-        orchestrator::process_issue(
-            &config,
-            &factory,
-            &worktree_bridge,
-            &issue,
-            &tracker,
-            kb_ref,
-        )
-        .await?;
-    } else if let Ok(target_id) = std::env::var("SWARM_ISSUE") {
-        // Branch 3: SWARM_ISSUE env var — fetch specific issue from beads
-        let beads = BeadsBridge::new();
-        let issue = match beads.show(&target_id) {
-            Ok(i) => i,
-            Err(e) => {
-                error!(target_id = %target_id, error = %e, "SWARM_ISSUE not found");
-                return Ok(());
-            }
-        };
-        info!(id = %issue.id, title = %issue.title, "SWARM_ISSUE: targeting specific issue");
-        orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref)
-            .await?;
-=======
         tokio::select! {
             result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref) => {
                 result?;

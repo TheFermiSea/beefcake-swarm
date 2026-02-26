@@ -153,7 +153,7 @@ install_agents() {
 # Step 0c2: Configure Agent CLIs (OpenCode, Factory Droid, Crush)
 #
 # All 30 proxy models organized by provider:
-#   Antigravity (12): Gemini-hosted Claude, Gemini 3 previews, GPT-OSS, Tab models
+#   Antigravity (15): Gemini-hosted Claude, Gemini 3/3.1 previews, GPT-OSS, Tab models
 #   Anthropic (8): Direct subscription Claude models
 #   Codex/OpenAI (9): GPT-5.x series
 #   Google (1): Gemini 2.5 Pro
@@ -183,24 +183,20 @@ configure_agents() {
           "name": "Claude Opus 4.6 Thinking",
           "limit": { "context": 200000, "output": 32768 }
         },
-        "gemini-claude-opus-4-5-thinking": {
-          "name": "Gemini Claude Opus 4.5 Thinking",
-          "limit": { "context": 200000, "output": 32768 }
+        "gemini-3.1-pro-high": {
+          "name": "Gemini 3.1 Pro High",
+          "limit": { "context": 2000000, "output": 65536 }
         },
-        "gemini-claude-sonnet-4-5-thinking": {
-          "name": "Gemini Claude Sonnet 4.5 Thinking",
-          "limit": { "context": 200000, "output": 32768 }
+        "gemini-3.1-pro-low": {
+          "name": "Gemini 3.1 Pro Low",
+          "limit": { "context": 2000000, "output": 65536 }
         },
-        "gemini-claude-sonnet-4-5": {
-          "name": "Gemini Claude Sonnet 4.5",
-          "limit": { "context": 200000, "output": 16384 }
+        "gemini-3.1-flash-image": {
+          "name": "Gemini 3.1 Flash Image",
+          "limit": { "context": 1000000, "output": 32768 }
         },
         "gemini-3-pro-preview": {
           "name": "Gemini 3 Pro Preview",
-          "limit": { "context": 2000000, "output": 65536 }
-        },
-        "gemini-3-pro-image-preview": {
-          "name": "Gemini 3 Pro Image Preview",
           "limit": { "context": 2000000, "output": 65536 }
         },
         "gemini-3-flash-preview": {
@@ -380,8 +376,9 @@ OCEOF
   "customModels": [
     { "model": "claude-opus-4-6-thinking", "displayName": "Claude Opus 4.6 Thinking (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
     { "model": "claude-sonnet-4-6", "displayName": "Claude Sonnet 4.6 (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-sonnet-4-5-thinking", "displayName": "Claude Sonnet 4.5 Thinking (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
-    { "model": "claude-sonnet-4-5", "displayName": "Claude Sonnet 4.5 (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gemini-3.1-pro-high", "displayName": "Gemini 3.1 Pro High (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
+    { "model": "gemini-3.1-pro-low", "displayName": "Gemini 3.1 Pro Low (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
+    { "model": "gemini-3.1-flash-image", "displayName": "Gemini 3.1 Flash Image (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
     { "model": "gemini-3-pro-high", "displayName": "Gemini 3 Pro High (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
     { "model": "gemini-3-pro-image", "displayName": "Gemini 3 Pro Image (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
     { "model": "gemini-3-flash", "displayName": "Gemini 3 Flash (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
@@ -401,7 +398,7 @@ OCEOF
     { "model": "claude-3-5-haiku-20241022", "displayName": "Claude 3.5 Haiku (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 4096 },
     { "model": "claude-opus-4.6", "displayName": "Claude Opus 4.6 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
     { "model": "claude-opus-4.5", "displayName": "Claude Opus 4.5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-opus-4.1", "displayName": "Claude Opus 4.1 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-sonnet-4.6", "displayName": "Claude Sonnet 4.6 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
     { "model": "claude-sonnet-4.5", "displayName": "Claude Sonnet 4.5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
     { "model": "claude-sonnet-4", "displayName": "Claude Sonnet 4 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
     { "model": "claude-haiku-4.5", "displayName": "Claude Haiku 4.5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
@@ -448,11 +445,10 @@ FDEOF
       "api_key": "rust-daq-proxy-key",
       "models": [
         { "name": "[Antigravity] Claude Opus 4.6 Thinking", "id": "claude-opus-4-6-thinking", "context_window": 200000, "default_max_tokens": 32768 },
-        { "name": "[Antigravity] Gemini Claude Opus 4.5 Thinking", "id": "gemini-claude-opus-4-5-thinking", "context_window": 200000, "default_max_tokens": 32768 },
-        { "name": "[Antigravity] Gemini Claude Sonnet 4.5 Thinking", "id": "gemini-claude-sonnet-4-5-thinking", "context_window": 200000, "default_max_tokens": 32768 },
-        { "name": "[Antigravity] Gemini Claude Sonnet 4.5", "id": "gemini-claude-sonnet-4-5", "context_window": 200000, "default_max_tokens": 16384 },
+        { "name": "[Antigravity] Gemini 3.1 Pro High", "id": "gemini-3.1-pro-high", "context_window": 2000000, "default_max_tokens": 65536 },
+        { "name": "[Antigravity] Gemini 3.1 Pro Low", "id": "gemini-3.1-pro-low", "context_window": 2000000, "default_max_tokens": 65536 },
+        { "name": "[Antigravity] Gemini 3.1 Flash Image", "id": "gemini-3.1-flash-image", "context_window": 1000000, "default_max_tokens": 32768 },
         { "name": "[Antigravity] Gemini 3 Pro Preview", "id": "gemini-3-pro-preview", "context_window": 2000000, "default_max_tokens": 65536 },
-        { "name": "[Antigravity] Gemini 3 Pro Image Preview", "id": "gemini-3-pro-image-preview", "context_window": 2000000, "default_max_tokens": 65536 },
         { "name": "[Antigravity] Gemini 3 Flash Preview", "id": "gemini-3-flash-preview", "context_window": 1000000, "default_max_tokens": 65536 },
         { "name": "[Antigravity] Gemini 2.5 Flash", "id": "gemini-2.5-flash", "context_window": 1000000, "default_max_tokens": 65536 },
         { "name": "[Antigravity] Gemini 2.5 Flash Lite", "id": "gemini-2.5-flash-lite", "context_window": 1000000, "default_max_tokens": 8192 },
