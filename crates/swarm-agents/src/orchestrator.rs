@@ -245,6 +245,92 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
     prompt
 }
 
+/// Format a compact task prompt for small local models (HydraCoder, etc).
+///
+/// Long structured prompts suppress tool-call generation in small MoE models.
+/// This format keeps the user message under ~1500 chars by including only:
+/// - The objective
+/// - Target file(s)
+/// - Error summary (retries only, truncated)
+/// - A directive to call read_file first
+///
+/// The full verbose format (`format_task_prompt`) is for cloud/council models.
+pub fn format_compact_task_prompt(packet: &WorkPacket) -> String {
+    let mut prompt = String::with_capacity(1500);
+
+    prompt.push_str(&format!("# Task: {}\n\n", packet.objective));
+
+    // Target files — prefer explicit scope, then extract from objective text,
+    // then fall back to first few file_contexts filenames.
+    let target_files: Vec<&str> = if !packet.files_touched.is_empty() {
+        packet.files_touched.iter().map(|s| s.as_str()).collect()
+    } else {
+        // Try to extract file paths from objective (e.g., "File: src/foo.rs")
+        let objective_files: Vec<&str> = packet
+            .objective
+            .split_whitespace()
+            .filter(|w| w.contains('/') && (w.ends_with(".rs") || w.ends_with(".toml")))
+            .collect();
+        if !objective_files.is_empty() {
+            objective_files
+        } else {
+            packet
+                .file_contexts
+                .iter()
+                .map(|fc| fc.file.as_str())
+                .take(3)
+                .collect()
+        }
+    };
+
+    if !target_files.is_empty() {
+        prompt.push_str("**Files to modify:**\n");
+        for f in &target_files {
+            prompt.push_str(&format!("- `{f}`\n"));
+        }
+        prompt.push('\n');
+    }
+
+    // On retries: include error summary (compact — category + message only)
+    if !packet.failure_signals.is_empty() {
+        prompt.push_str("**Errors to fix:**\n");
+        let mut error_chars = 0usize;
+        for signal in &packet.failure_signals {
+            let line = format!("- {}: {}\n", signal.category, signal.message);
+            error_chars += line.len();
+            if error_chars > 800 {
+                prompt.push_str("- (more errors truncated)\n");
+                break;
+            }
+            prompt.push_str(&line);
+        }
+        prompt.push('\n');
+    }
+
+    // Validator feedback (compact)
+    if !packet.validator_feedback.is_empty() {
+        prompt.push_str("**Reviewer feedback:**\n");
+        for fb in packet.validator_feedback.iter().take(3) {
+            prompt.push_str(&format!("- [{}] {}\n", fb.issue_type, fb.description));
+        }
+        prompt.push('\n');
+    }
+
+    // Directive — tells the model what to do first
+    if target_files.len() == 1 {
+        prompt.push_str(&format!(
+            "Start by calling read_file on `{}`, then apply your edits with edit_file.\n",
+            target_files[0]
+        ));
+    } else {
+        prompt.push_str(
+            "Start by calling read_file on the target file(s), then apply your edits with edit_file.\n",
+        );
+    }
+
+    prompt
+}
+
 /// Try to auto-fix trivial verifier failures without LLM delegation.
 ///
 /// Runs `cargo clippy --fix` for MachineApplicable suggestions and `cargo fmt`
@@ -1045,33 +1131,39 @@ pub async fn process_issue(
             "Packed context"
         );
 
-        let mut task_prompt = format_task_prompt(&packet);
-
-        // Kickstart prefix: nudge local models to call tools immediately.
-        // HydraCoder (30B MoE) and similar small models skip tool calls with
-        // long prompts, generating text analysis instead. A brief directive at
-        // the start biases the first token toward a tool call.
-        if tier == SwarmTier::Worker {
-            task_prompt = format!(
-                "[Start by calling read_file on the target file, then apply edits.]\n\n{}",
-                task_prompt
-            );
-        }
+        // Worker tier gets a compact prompt (<1500 chars) because small local
+        // models (HydraCoder 30B MoE) suppress tool calls with long prompts.
+        // Council/Human tiers get the full verbose format for cloud models.
+        let mut task_prompt = if tier == SwarmTier::Worker {
+            format_compact_task_prompt(&packet)
+        } else {
+            format_task_prompt(&packet)
+        };
 
         // Inject verifier stderr into prompt when failure_signals are thin.
         // Fmt errors don't produce ParsedErrors, so the packet may lack error details.
         // The raw stderr contains the actual error output the model needs to see.
+        // For Worker tier: only append truncated stderr to stay under ~2K chars total.
         if let Some(ref report) = last_report {
             if !report.all_green && packet.failure_signals.is_empty() {
-                task_prompt.push_str("\n## Verifier Output (raw)\n");
-                for gate in &report.gates {
+                task_prompt.push_str("\n**Verifier output:**\n```\n");
+                let mut stderr_chars = 0usize;
+                let stderr_budget = if tier == SwarmTier::Worker { 600 } else { usize::MAX };
+                'gates: for gate in &report.gates {
                     if let Some(stderr) = &gate.stderr_excerpt {
-                        task_prompt.push_str(&format!(
-                            "### {} gate ({})\n```\n{}\n```\n\n",
-                            gate.gate, gate.outcome, stderr
-                        ));
+                        for line in stderr.lines() {
+                            let line_len = line.len() + 1;
+                            if stderr_chars + line_len > stderr_budget {
+                                task_prompt.push_str("...(truncated)\n");
+                                break 'gates;
+                            }
+                            task_prompt.push_str(line);
+                            task_prompt.push('\n');
+                            stderr_chars += line_len;
+                        }
                     }
                 }
+                task_prompt.push_str("```\n");
             }
         }
 

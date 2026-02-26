@@ -19,14 +19,31 @@ pub struct ReadFileArgs {
 }
 
 /// Read a file from the worktree. Path must stay within the sandbox.
+///
+/// When `max_output_chars` is set, large files are truncated with a
+/// `[...N lines truncated...]` marker. This keeps tool results small enough
+/// for small models (HydraCoder 30B MoE) to stay in tool-calling mode on
+/// subsequent turns. Controlled by `SWARM_READ_FILE_MAX_CHARS` (default: 0 = unlimited).
 pub struct ReadFileTool {
     pub working_dir: PathBuf,
+    /// Maximum characters to return. 0 = unlimited.
+    pub max_output_chars: usize,
+}
+
+/// Default max chars for read_file output (env override: `SWARM_READ_FILE_MAX_CHARS`).
+/// 6000 chars ≈ 1500 tokens — keeps total context under HydraCoder's reliable zone.
+fn default_read_file_max_chars() -> usize {
+    std::env::var("SWARM_READ_FILE_MAX_CHARS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(6000)
 }
 
 impl ReadFileTool {
     pub fn new(working_dir: &Path) -> Self {
         Self {
             working_dir: working_dir.to_path_buf(),
+            max_output_chars: default_read_file_max_chars(),
         }
     }
 }
@@ -57,7 +74,32 @@ impl Tool for ReadFileTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let full_path = sandbox_check(&self.working_dir, &args.path)?;
         let content = std::fs::read_to_string(&full_path)?;
-        Ok(content)
+
+        // Truncate large files to keep context small for local models.
+        if self.max_output_chars > 0 && content.len() > self.max_output_chars {
+            let lines: Vec<&str> = content.lines().collect();
+            let total_lines = lines.len();
+            let mut truncated = String::with_capacity(self.max_output_chars + 100);
+            let mut chars = 0;
+            let mut included_lines = 0;
+            for line in &lines {
+                let line_len = line.len() + 1; // +1 for newline
+                if chars + line_len > self.max_output_chars {
+                    break;
+                }
+                truncated.push_str(line);
+                truncated.push('\n');
+                chars += line_len;
+                included_lines += 1;
+            }
+            let remaining = total_lines - included_lines;
+            truncated.push_str(&format!(
+                "\n[...{remaining} more lines truncated. Call read_file again with a different path or use edit_file on what you can see.]\n"
+            ));
+            Ok(truncated)
+        } else {
+            Ok(content)
+        }
     }
 }
 
