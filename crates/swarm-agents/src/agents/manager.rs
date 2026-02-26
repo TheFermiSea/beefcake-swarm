@@ -105,7 +105,7 @@ pub fn build_local_manager(
         .name("manager")
         .description("Orchestrator that decomposes tasks and delegates to specialized workers")
         .preamble(prompts::LOCAL_MANAGER_PREAMBLE)
-        .temperature(0.3)
+        .temperature(crate::agents::coder::worker_temperature())
         // Agent-as-Tool: specialists
         .tool(workers.planner)
         .tool(workers.fixer)

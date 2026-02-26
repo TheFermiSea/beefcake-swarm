@@ -15,6 +15,21 @@ pub type OaiAgent = Agent<openai::completion::CompletionModel>;
 const DEFAULT_WORKER_MAX_TURNS: usize = 15;
 const DEFAULT_REASONING_MAX_TURNS: usize = 20;
 
+/// Default temperature for worker agents.
+///
+/// HydraCoder (30B MoE) drops from 100% to ~40% tool-call reliability when
+/// temperature rises from 0.0 to 0.3 (empirically measured). Cloud models
+/// (Opus 4.6) handle higher temperatures fine, so this is overridable.
+const DEFAULT_WORKER_TEMPERATURE: f64 = 0.0;
+
+pub fn worker_temperature() -> f64 {
+    std::env::var("SWARM_WORKER_TEMPERATURE")
+        .ok()
+        .and_then(|v| v.parse::<f64>().ok())
+        .filter(|v| (0.0..=2.0).contains(v))
+        .unwrap_or(DEFAULT_WORKER_TEMPERATURE)
+}
+
 fn worker_max_turns() -> usize {
     std::env::var("SWARM_WORKER_MAX_TURNS")
         .ok()
@@ -60,7 +75,7 @@ pub fn build_rust_coder_named(
         .name(name)
         .description("Rust specialist for borrow checker, lifetimes, trait bounds, type errors")
         .preamble(prompts::RUST_CODER_PREAMBLE)
-        .temperature(0.2)
+        .temperature(worker_temperature())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::RustSpecialist,
@@ -95,7 +110,7 @@ pub fn build_reasoning_worker_named(
         .name(name)
         .description("Deep reasoning specialist for complex Rust architecture and debugging")
         .preamble(prompts::REASONING_WORKER_PREAMBLE)
-        .temperature(0.2)
+        .temperature(worker_temperature())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::General,
@@ -133,7 +148,7 @@ pub fn build_general_coder_named(
         .name(name)
         .description("General coding agent for multi-file scaffolding and cross-cutting changes")
         .preamble(prompts::GENERAL_CODER_PREAMBLE)
-        .temperature(0.3)
+        .temperature(worker_temperature())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::General,
