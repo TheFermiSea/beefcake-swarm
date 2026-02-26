@@ -1148,7 +1148,11 @@ pub async fn process_issue(
             if !report.all_green && packet.failure_signals.is_empty() {
                 task_prompt.push_str("\n**Verifier output:**\n```\n");
                 let mut stderr_chars = 0usize;
-                let stderr_budget = if tier == SwarmTier::Worker { 600 } else { usize::MAX };
+                let stderr_budget = if tier == SwarmTier::Worker {
+                    600
+                } else {
+                    usize::MAX
+                };
                 'gates: for gate in &report.gates {
                     if let Some(stderr) = &gate.stderr_excerpt {
                         for line in stderr.lines() {
