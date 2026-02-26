@@ -76,31 +76,29 @@ When cloud is unavailable, Qwen3.5-397B Architect (vasp-01) serves as fallback l
 - `infrastructure/` — Monitoring: GPU dashboard, HPC watchdog, ai-proxy setup.
 - `docs/` — Architecture docs, deployment guides, inference endpoint specs.
 
-## Inference Endpoints (must be running via SLURM)
+## Inference Endpoints
 
-| Tier | Proxy (Rig uses this) | Backend (llama-server) | Model | Throughput |
-|------|-----------------------|------------------------|-------|------------|
-| Architect (397B MoE) | http://vasp-01:8181 | http://vasp-01:8081 | Qwen3.5-397B-A17B | ~8.4 tok/s gen, ~21 tok/s prompt |
-| Implementer (397B MoE) | http://vasp-02:8180 | http://vasp-02:8080 | Qwen3.5-397B-A17B | ~8.4 tok/s gen, ~21 tok/s prompt |
+| Tier | Endpoint (Rig uses this) | Model | Throughput |
+|------|--------------------------|-------|------------|
+| All local tiers | http://vasp-02:8080/v1 | HydraCoder 30B-A3B MoE (Q4_K_M) | ~135 tok/s gen, ~289 tok/s prompt |
 
-**Chat proxy workaround**: Qwen3.5-397B at Q4_K_XL quantization generates immediate EOS for any
-instruction-following prompt via `/v1/chat/completions` (llama.cpp #19690, #19858). A lightweight
-Python proxy (`inference/chat-proxy/proxy.py`) translates chat completions → completions using
-document-continuation prompts. The proxy launches as a sidecar in the SLURM script. Remove when
-llama.cpp fixes the upstream bug (tracked: beefcake-7v67).
+**Current setup**: HydraCoder serves all local tiers (Fast, Coder, Reasoning) on vasp-02:8080.
+Native `/v1/chat/completions` support — no proxy needed. 4 parallel slots @ 32K context.
 
-Role specialization:
-- **Qwen3.5-397B Architect** (vasp-01) = "Manager/Planner" — 2 slots @ 128K context, architecture review, validation, work packet analysis. Validator runs here for natural blind review isolation from implementer.
-- **Qwen3.5-397B Implementer** (vasp-02) = "Coder" — 4 slots @ 65K context, code generation, multi-file changes, concurrent agent coding sessions (Agent Teams).
+**Qwen3.5-397B (deferred)**: Q4_K_M download in progress on vasp-02. Once available, will restore
+dual-node setup with Qwen3.5 Architect (vasp-01) and Implementer (vasp-02). The chat proxy
+(`inference/chat-proxy/proxy.py`) and FORCE_MMQ build are ready for when Qwen3.5 comes back online.
+Tracked: beefcake-noqp, beefcake-7v67.
+
+Role specialization (all via HydraCoder for now):
+- **vasp-02** = All roles (Implementer, Validator, Architect) — 4 slots @ 32K, HydraCoder 30B-A3B MoE
+- **vasp-01** = Offline (disk full, NFS issues) — will serve Qwen3.5-397B when restored
 - **vasp-03** = Free for DFT, embeddings, other workloads.
 
-Start inference:
+Start inference (manual, no SLURM — NFS unavailable):
 ```bash
-# Architect (vasp-01): 2 slots, 128K context, proxy on :8181
-ssh root@10.0.0.5 "sbatch --nodelist=vasp-01 --export=ALL,PORT=8081,PARALLEL_SLOTS=2,CTX_SIZE=131072,ENDPOINT_SUFFIX=qwen35,TIER_NAME=manager-local /cluster/shared/scripts/llama-cpp/run-qwen35.slurm"
-
-# Implementer (vasp-02): 4 slots, 65K context, proxy on :8180
-ssh root@10.0.0.5 "sbatch --nodelist=vasp-02 --export=ALL,PORT=8080,PARALLEL_SLOTS=4,CTX_SIZE=65536,ENDPOINT_SUFFIX=qwen35-impl,TIER_NAME=implementer /cluster/shared/scripts/llama-cpp/run-qwen35.slurm"
+# HydraCoder on vasp-02 (all tiers)
+ssh root@10.0.0.21 "nohup /tmp/start-hydracoder.sh > /tmp/hydracoder-server.log 2>&1 &"
 ```
 
 ## External Tools (install separately)
