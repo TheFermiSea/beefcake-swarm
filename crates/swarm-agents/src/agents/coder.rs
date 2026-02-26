@@ -13,7 +13,7 @@ use crate::tools::bundles::{self, WorkerRole};
 /// Type alias for agents built from OpenAI-compatible endpoints.
 pub type OaiAgent = Agent<openai::completion::CompletionModel>;
 
-const DEFAULT_WORKER_MAX_TURNS: usize = 15;
+const DEFAULT_WORKER_MAX_TURNS: usize = 8;
 const DEFAULT_REASONING_MAX_TURNS: usize = 20;
 
 /// Default temperature for worker agents.
@@ -47,6 +47,26 @@ fn reasoning_max_turns() -> usize {
         .unwrap_or(DEFAULT_REASONING_MAX_TURNS)
 }
 
+/// Tool choice for worker agents.
+///
+/// Default: `Required` — forces every turn to produce a tool call. This
+/// prevents HydraCoder (30B MoE) from dropping into text-analysis mode
+/// (6-10K chars of prose instead of calling edit_file). With `Required`,
+/// each turn is productive: read_file → edit_file → ... until max_turns.
+///
+/// Override with `SWARM_WORKER_TOOL_CHOICE=auto` to allow text-only responses.
+fn worker_tool_choice() -> ToolChoice {
+    match std::env::var("SWARM_WORKER_TOOL_CHOICE")
+        .unwrap_or_default()
+        .to_lowercase()
+        .as_str()
+    {
+        "auto" => ToolChoice::Auto,
+        "none" => ToolChoice::None,
+        _ => ToolChoice::Required,
+    }
+}
+
 /// Build the Rust specialist coder (Qwen3.5-Implementer).
 ///
 /// Tools: read_file, write_file, edit_file, run_command (no list_files).
@@ -77,7 +97,7 @@ pub fn build_rust_coder_named(
         .description("Rust specialist for borrow checker, lifetimes, trait bounds, type errors")
         .preamble(prompts::RUST_CODER_PREAMBLE)
         .temperature(worker_temperature())
-        .tool_choice(ToolChoice::Auto)
+        .tool_choice(worker_tool_choice())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::RustSpecialist,
@@ -113,7 +133,7 @@ pub fn build_reasoning_worker_named(
         .description("Deep reasoning specialist for complex Rust architecture and debugging")
         .preamble(prompts::REASONING_WORKER_PREAMBLE)
         .temperature(worker_temperature())
-        .tool_choice(ToolChoice::Auto)
+        .tool_choice(worker_tool_choice())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::General,
@@ -152,7 +172,7 @@ pub fn build_general_coder_named(
         .description("General coding agent for multi-file scaffolding and cross-cutting changes")
         .preamble(prompts::GENERAL_CODER_PREAMBLE)
         .temperature(worker_temperature())
-        .tool_choice(ToolChoice::Auto)
+        .tool_choice(worker_tool_choice())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::General,
