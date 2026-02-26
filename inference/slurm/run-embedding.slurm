@@ -73,7 +73,7 @@ cleanup() {
     rm -f "$ENDPOINT_FILE" 2>/dev/null || true
     echo "[$(date)] Graceful shutdown complete"
 }
-trap cleanup SIGTERM SIGINT
+trap cleanup EXIT
 
 # Check model exists
 if [[ ! -f "$MODEL" ]]; then

@@ -132,6 +132,7 @@ RPC_PIDS=()
 HEAD_PID=""
 MONITOR_PID=""
 SHUTTING_DOWN=false
+ENDPOINT_FILE=""
 
 cleanup() {
     # Prevent re-entry
@@ -171,7 +172,7 @@ cleanup() {
 
     echo "[$(date)] Graceful shutdown complete"
 }
-trap cleanup SIGTERM SIGINT
+trap cleanup EXIT
 
 ###############################################################################
 # Health Monitoring & Graceful Degradation
@@ -248,9 +249,9 @@ health_monitor() {
         # Check degradation threshold
         if [[ $alive_count -lt $MIN_WORKERS ]]; then
             echo "[$(date)] CRITICAL: Only $alive_count workers alive (minimum: $MIN_WORKERS)"
-            echo "[$(date)] Initiating graceful shutdown due to insufficient workers"
-            cleanup
-            exit 1
+            echo "[$(date)] Signaling parent (PID $$) for graceful shutdown"
+            kill -TERM $$ 2>/dev/null || true
+            return
         fi
     done
     echo "[$(date)] Health monitor stopped"
@@ -317,8 +318,9 @@ fi
 # Prefetch model to page cache on all nodes (parallel)
 # NOTE: No --mlock — model is ~214GB, too large to lock. vmtouch prefetch is sufficient.
 echo "[$(date)] Prefetching model to page cache on all nodes..."
+MODEL_DIR="$(dirname "$MODEL")"
 for node in "${NODES[@]}"; do
-    run_on_node "$node" "numactl --interleave=all sh -c 'vmtouch -vt \"$MODEL\" 2>/dev/null || cat \"$MODEL\" > /dev/null'" &
+    run_on_node "$node" "numactl --interleave=all sh -c 'vmtouch -vt \"$MODEL_DIR\"/*.gguf 2>/dev/null || cat \"$MODEL_DIR\"/*.gguf > /dev/null'" &
 done
 wait
 echo "[$(date)] Prefetch complete"

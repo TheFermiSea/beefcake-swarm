@@ -149,7 +149,7 @@ fi
 
 # Daemon mode
 log "AI Inference Daemon starting (interval: ${CHECK_INTERVAL}s)"
-log "Managing: fast+coder (vasp-02:8080) + reasoning (vasp-01,vasp-03:8081) + manager (all:8081, Qwen3.5-397B) + embed (vasp-02:8082, CPU-only)"
+log "Managing: fast+coder (vasp-02:8080) + reasoning OR manager (vasp-01,vasp-03:8081, mutually exclusive) + embed (vasp-02:8082, CPU-only)"
 log "VASP partitions monitored: $VASP_PARTITIONS"
 
 echo $$ > "$PID_FILE"
