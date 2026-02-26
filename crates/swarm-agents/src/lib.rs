@@ -7,6 +7,7 @@ pub mod dashboard;
 pub mod grammars;
 pub mod kb_refresh;
 pub mod knowledge_sync;
+pub mod modes;
 pub mod notebook_bridge;
 pub mod orchestrator;
 pub mod pipeline;
