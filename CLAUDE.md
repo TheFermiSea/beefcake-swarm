@@ -78,10 +78,16 @@ When cloud is unavailable, Qwen3.5-397B Architect (vasp-01) serves as fallback l
 
 ## Inference Endpoints (must be running via SLURM)
 
-| Tier | Endpoint | Model | Throughput |
-|------|----------|-------|------------|
-| Architect (397B MoE) | http://vasp-01:8081 | Qwen3.5-397B-A17B | ~8.4 tok/s gen, ~21 tok/s prompt |
-| Implementer (397B MoE) | http://vasp-02:8080 | Qwen3.5-397B-A17B | ~8.4 tok/s gen, ~21 tok/s prompt |
+| Tier | Proxy (Rig uses this) | Backend (llama-server) | Model | Throughput |
+|------|-----------------------|------------------------|-------|------------|
+| Architect (397B MoE) | http://vasp-01:8181 | http://vasp-01:8081 | Qwen3.5-397B-A17B | ~8.4 tok/s gen, ~21 tok/s prompt |
+| Implementer (397B MoE) | http://vasp-02:8180 | http://vasp-02:8080 | Qwen3.5-397B-A17B | ~8.4 tok/s gen, ~21 tok/s prompt |
+
+**Chat proxy workaround**: Qwen3.5-397B at Q4_K_XL quantization generates immediate EOS for any
+instruction-following prompt via `/v1/chat/completions` (llama.cpp #19690, #19858). A lightweight
+Python proxy (`inference/chat-proxy/proxy.py`) translates chat completions → completions using
+document-continuation prompts. The proxy launches as a sidecar in the SLURM script. Remove when
+llama.cpp fixes the upstream bug (tracked: beefcake-7v67).
 
 Role specialization:
 - **Qwen3.5-397B Architect** (vasp-01) = "Manager/Planner" — 2 slots @ 128K context, architecture review, validation, work packet analysis. Validator runs here for natural blind review isolation from implementer.
@@ -90,10 +96,10 @@ Role specialization:
 
 Start inference:
 ```bash
-# Architect (vasp-01): 2 slots, 128K context
+# Architect (vasp-01): 2 slots, 128K context, proxy on :8181
 ssh root@10.0.0.5 "sbatch --nodelist=vasp-01 --export=ALL,PORT=8081,PARALLEL_SLOTS=2,CTX_SIZE=131072,ENDPOINT_SUFFIX=qwen35,TIER_NAME=manager-local /cluster/shared/scripts/llama-cpp/run-qwen35.slurm"
 
-# Implementer (vasp-02): 4 slots, 65K context
+# Implementer (vasp-02): 4 slots, 65K context, proxy on :8180
 ssh root@10.0.0.5 "sbatch --nodelist=vasp-02 --export=ALL,PORT=8080,PARALLEL_SLOTS=4,CTX_SIZE=65536,ENDPOINT_SUFFIX=qwen35-impl,TIER_NAME=implementer /cluster/shared/scripts/llama-cpp/run-qwen35.slurm"
 ```
 

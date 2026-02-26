@@ -135,11 +135,11 @@ impl CloudFallbackMatrix {
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
-    /// Qwen3.5-397B on vasp-02 (Rust specialist system prompt, 4 slots @ 65K)
+    /// Qwen3.5-397B on vasp-02 via chat proxy :8180 (Rust specialist system prompt, 4 slots @ 65K)
     pub fast_endpoint: Endpoint,
-    /// Qwen3.5-397B on vasp-02 (general coding system prompt, 4 slots @ 65K)
+    /// Qwen3.5-397B on vasp-02 via chat proxy :8180 (general coding system prompt, 4 slots @ 65K)
     pub coder_endpoint: Endpoint,
-    /// Qwen3.5-397B on vasp-01 (reasoning/manager/architect, 2 slots @ 128K)
+    /// Qwen3.5-397B on vasp-01 via chat proxy :8181 (reasoning/manager/architect, 2 slots @ 128K)
     pub reasoning_endpoint: Endpoint,
     /// CLIAPIProxy cloud escalation (optional)
     pub cloud_endpoint: Option<CloudEndpoint>,
@@ -181,7 +181,7 @@ impl Default for SwarmConfig {
         Self {
             fast_endpoint: Endpoint {
                 url: std::env::var("SWARM_FAST_URL")
-                    .unwrap_or_else(|_| "http://vasp-02:8080/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-02:8180/v1".into()),
                 model: std::env::var("SWARM_FAST_MODEL")
                     .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
                 tier: Tier::Fast,
@@ -190,7 +190,7 @@ impl Default for SwarmConfig {
             },
             coder_endpoint: Endpoint {
                 url: std::env::var("SWARM_CODER_URL")
-                    .unwrap_or_else(|_| "http://vasp-02:8080/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-02:8180/v1".into()),
                 model: std::env::var("SWARM_CODER_MODEL")
                     .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
                 tier: Tier::Coder,
@@ -199,7 +199,7 @@ impl Default for SwarmConfig {
             },
             reasoning_endpoint: Endpoint {
                 url: std::env::var("SWARM_REASONING_URL")
-                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-01:8181/v1".into()),
                 model: std::env::var("SWARM_REASONING_MODEL")
                     .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
                 tier: Tier::Reasoning,
@@ -303,9 +303,9 @@ impl SwarmConfig {
 /// Qwen3.5-397B model, different system prompts per agent role.
 /// vasp-01:8081 (Architect) serves reasoning/manager/validator roles.
 pub struct ClientSet {
-    /// Client for vasp-02:8080 (Implementer — Qwen3.5-397B, 4 slots @ 65K)
+    /// Client for vasp-02:8180 via proxy (Implementer — Qwen3.5-397B, 4 slots @ 65K)
     pub local: openai::CompletionsClient,
-    /// Client for vasp-01:8081 (Architect — Qwen3.5-397B, 2 slots @ 128K)
+    /// Client for vasp-01:8181 via proxy (Architect — Qwen3.5-397B, 2 slots @ 128K)
     pub reasoning: openai::CompletionsClient,
     /// Client for CLIAPIProxy (cloud models: Opus 4.6, G3-Pro, etc.)
     /// Used as the Manager tier when available.
