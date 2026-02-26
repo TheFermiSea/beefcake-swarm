@@ -266,10 +266,21 @@ pub fn format_compact_task_prompt(packet: &WorkPacket) -> String {
         packet.files_touched.iter().map(|s| s.as_str()).collect()
     } else {
         // Try to extract file paths from objective (e.g., "File: src/foo.rs")
+        // Strip trailing punctuation (period, comma, etc.) before checking extension.
         let objective_files: Vec<&str> = packet
             .objective
             .split_whitespace()
-            .filter(|w| w.contains('/') && (w.ends_with(".rs") || w.ends_with(".toml")))
+            .filter(|w| {
+                let trimmed = w.trim_end_matches(|c: char| {
+                    c.is_ascii_punctuation() && c != '/' && c != '.' && c != '_' && c != '-'
+                });
+                trimmed.contains('/') && (trimmed.ends_with(".rs") || trimmed.ends_with(".toml"))
+            })
+            .map(|w| {
+                w.trim_end_matches(|c: char| {
+                    c.is_ascii_punctuation() && c != '/' && c != '.' && c != '_' && c != '-'
+                })
+            })
             .collect();
         if !objective_files.is_empty() {
             objective_files
@@ -316,12 +327,45 @@ pub fn format_compact_task_prompt(packet: &WorkPacket) -> String {
         prompt.push('\n');
     }
 
-    // Directive — tells the model what to do first
+    // Inline the target file content when there's exactly one target file.
+    // This saves a read_file turn (critical with max_turns=5).
     if target_files.len() == 1 {
-        prompt.push_str(&format!(
-            "Start by calling read_file on `{}`, then apply your edits with edit_file.\n",
-            target_files[0]
-        ));
+        let wt_path = packet
+            .file_contexts
+            .first()
+            .map(|fc| {
+                // Derive worktree root from the first file_context path
+                let full = &fc.file;
+                full.find("crates/")
+                    .or_else(|| full.find("coordination/"))
+                    .map(|idx| &full[..idx])
+                    .unwrap_or("")
+            })
+            .unwrap_or("");
+        let target_path = if wt_path.is_empty() {
+            target_files[0].to_string()
+        } else {
+            format!("{}{}", wt_path, target_files[0])
+        };
+        if let Ok(content) = std::fs::read_to_string(&target_path) {
+            let truncated = if content.len() > 4000 {
+                format!("{}...\n[truncated at 4000 chars]", &content[..4000])
+            } else {
+                content
+            };
+            prompt.push_str(&format!(
+                "**Current content of `{}`:**\n```\n{}\n```\n\n",
+                target_files[0], truncated
+            ));
+            prompt.push_str(
+                "Apply your edits directly with edit_file — the file content is above.\n",
+            );
+        } else {
+            prompt.push_str(&format!(
+                "Start by calling read_file on `{}`, then apply your edits with edit_file.\n",
+                target_files[0]
+            ));
+        }
     } else {
         prompt.push_str(
             "Start by calling read_file on the target file(s), then apply your edits with edit_file.\n",

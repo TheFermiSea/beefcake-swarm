@@ -235,8 +235,21 @@ async fn main() -> Result<()> {
             kb_ref,
         )
         .await?;
+    } else if let Ok(target_id) = std::env::var("SWARM_ISSUE") {
+        // Branch 3: SWARM_ISSUE env var — fetch specific issue from beads
+        let beads = BeadsBridge::new();
+        let issue = match beads.show(&target_id) {
+            Ok(i) => i,
+            Err(e) => {
+                error!(target_id = %target_id, error = %e, "SWARM_ISSUE not found");
+                return Ok(());
+            }
+        };
+        info!(id = %issue.id, title = %issue.title, "SWARM_ISSUE: targeting specific issue");
+        orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref)
+            .await?;
     } else {
-        // Branch 3: Default — pick from beads
+        // Branch 4: Default — pick from beads
         let beads = BeadsBridge::new();
         let issues = match beads.list_ready() {
             Ok(issues) => issues,
