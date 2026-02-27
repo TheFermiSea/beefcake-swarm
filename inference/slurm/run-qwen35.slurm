@@ -60,6 +60,13 @@
 
 set -euo pipefail
 
+# Initialize state variables early so cleanup() is safe under set -u
+# even if the script exits before reaching their normal assignment sites.
+ENDPOINT_FILE=""
+SERVER_PID=""
+PROXY_PID=""
+SHUTTING_DOWN=false
+
 # Configuration (all parameterized via env vars with sensible defaults)
 MODEL="${MODEL:-/scratch/ai/models/Qwen3.5-397B-A17B-GGUF/UD-Q4_K_XL/Qwen3.5-397B-A17B-UD-Q4_K_XL-00001-of-00006.gguf}"
 # Backend selection: "mainline" (default) or "ik" (ik_llama.cpp fork with --cpu-moe).
@@ -205,10 +212,6 @@ echo "[$(date)] Endpoint registered: $ENDPOINT_FILE"
 # Graceful Shutdown
 ###############################################################################
 
-SERVER_PID=""
-PROXY_PID=""
-SHUTTING_DOWN=false
-
 cleanup() {
     if $SHUTTING_DOWN; then
         return
@@ -281,16 +284,17 @@ SERVER_ARGS=(
 # GPU-dependent options (differ by backend)
 if [[ "$N_GPU_LAYERS" -gt 0 ]]; then
     SERVER_ARGS+=(
-        --flash-attn on
+        # V100 (SM70) lacks Flash Attention 2 tensor-core support — must be off.
+        --flash-attn off
     )
     if [[ "$LLAMA_BACKEND" == "ik" ]]; then
         # ik_llama.cpp: --cpu-moe keeps MoE expert weights on CPU, attention on GPU
         SERVER_ARGS+=( --cpu-moe )
-        echo "[$(date)] GPU layers: $N_GPU_LAYERS (ik_llama.cpp --cpu-moe, flash-attn on)"
+        echo "[$(date)] GPU layers: $N_GPU_LAYERS (ik_llama.cpp --cpu-moe, flash-attn off)"
     else
         # mainline: -ot flag offloads MoE expert FFN layers to CPU
         SERVER_ARGS+=( -ot ".ffn_.*_exps.=CPU" )
-        echo "[$(date)] GPU layers: $N_GPU_LAYERS (mainline, MoE experts offloaded to CPU, flash-attn on)"
+        echo "[$(date)] GPU layers: $N_GPU_LAYERS (mainline, MoE experts offloaded to CPU, flash-attn off)"
     fi
 else
     echo "[$(date)] CPU-only mode (N_GPU_LAYERS=0) — all computation on CPU"

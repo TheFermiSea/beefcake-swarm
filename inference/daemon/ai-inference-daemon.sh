@@ -133,10 +133,16 @@ check_and_start_all() {
 
     # Fast+coder tier (strand-14B + Qwen3-Coder-Next on vasp-02)
     check_tier "fast" || true
-    # Reasoning tier (OR1-Behemoth 72B on vasp-01+03)
-    check_tier "reasoning" || true
-    # Manager tier (Qwen3.5-397B MoE on all 3 nodes)
-    check_tier "manager" || true
+    # Reasoning and manager tiers both use port 8081 on vasp-01 — mutually exclusive.
+    # Prefer manager (Qwen3.5-397B MoE) when available; fall back to reasoning (OR1-Behemoth 72B).
+    if inference_job_exists "manager"; then
+        check_tier "manager" || true
+    elif inference_job_exists "reasoning"; then
+        check_tier "reasoning" || true
+    else
+        # Neither running — start manager (preferred tier on port 8081).
+        check_tier "manager" || true
+    fi
     # Embedding tier (nomic-embed-code CPU-only on vasp-02)
     check_tier "embed" || true
 }
