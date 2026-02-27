@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 use swarm_agents::agents::AgentFactory;
 use swarm_agents::beads_bridge::{BeadsBridge, BeadsIssue, IssueTracker, NoOpTracker};
 use swarm_agents::config::{check_endpoint_with_model, SwarmConfig};
+use swarm_agents::modes::SwarmMode;
 use swarm_agents::notebook_bridge::{KnowledgeBase, NotebookBridge};
 use swarm_agents::orchestrator;
 use swarm_agents::prompts;
@@ -48,6 +49,16 @@ struct CliArgs {
     /// Requires SWARM_CLOUD_URL to be configured.
     #[arg(long)]
     cloud_only: bool,
+
+    /// Orchestration mode for the new NS-2/3/4 mode runners.
+    ///
+    /// - `contextual`  — Iterative Drafting → Critiquing → Condensing FSM (NS-2)
+    /// - `deepthink`   — JoinSet fan-out across parallel strategy branches (NS-3)
+    /// - `agentic`     — LLM-driven unified-diff file editing loop (NS-4)
+    ///
+    /// When omitted the default implement→verify loop is used.
+    #[arg(long, value_enum)]
+    mode: Option<SwarmMode>,
 }
 
 #[tokio::main]
@@ -76,6 +87,7 @@ async fn main() -> Result<()> {
         cloud = config.cloud_endpoint.is_some(),
         max_retries = config.max_retries,
         prompt_version = prompts::PROMPT_VERSION,
+        mode = ?args.mode,
         "Swarm orchestrator starting"
     );
 
@@ -207,7 +219,7 @@ async fn main() -> Result<()> {
             labels: vec![],
         };
         let tracker = NoOpTracker;
-        info!(id = %issue.id, title = %issue.title, "Beads-free mode: processing CLI issue");
+        info!(id = %issue.id, title = %issue.title, mode = ?args.mode, "Beads-free mode: processing CLI issue");
         tokio::select! {
             result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref) => {
                 result?;

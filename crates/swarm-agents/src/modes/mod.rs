@@ -29,3 +29,19 @@ pub use types::{
     Artifact, CompactionSummary, CritiqueSeverity, CritiqueVerdict, ModeOutcome, Strategy,
     StrategyOutcome, StrategyResult, SynthesisResult,
 };
+
+// ── CLI / runtime mode selection ─────────────────────────────────────────────
+
+/// Orchestration mode requested via `--mode` CLI flag.
+///
+/// Each variant maps to one of the NS-2/3/4 `ModeRunner` implementations.
+/// When no mode is specified the classic implement→verify loop runs unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum SwarmMode {
+    /// Iterative Drafting → Critiquing → Condensing FSM (NS-2).
+    Contextual,
+    /// JoinSet fan-out across parallel strategy branches (NS-3).
+    Deepthink,
+    /// LLM-driven unified-diff file editing loop (NS-4).
+    Agentic,
+}
