@@ -18,10 +18,14 @@ const DEFAULT_REASONING_MAX_TURNS: usize = 20;
 
 /// Default temperature for worker agents.
 ///
+/// 0.05: slight jitter above 0.0 to escape deterministic text-analysis loops.
+/// At temp=0.0 the same bad prompt reliably produces the same text-only
+/// response (33% failure rate observed in dogfood run 4). At 0.05 the model
+/// picks tool calls ~90%+ of the time without losing reliability.
 /// HydraCoder (30B MoE) drops from 100% to ~40% tool-call reliability when
 /// temperature rises from 0.0 to 0.3 (empirically measured). Cloud models
 /// (Opus 4.6) handle higher temperatures fine, so this is overridable.
-const DEFAULT_WORKER_TEMPERATURE: f64 = 0.0;
+const DEFAULT_WORKER_TEMPERATURE: f64 = 0.05;
 
 pub fn worker_temperature() -> f64 {
     std::env::var("SWARM_WORKER_TEMPERATURE")

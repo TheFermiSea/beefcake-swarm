@@ -259,7 +259,10 @@ impl Tool for EditFileTool {
         // Try exact match first
         let occurrences = find_all(&content, &old_content);
 
-        let new_file_content = match occurrences.len() {
+        // `actual_replacement` is what was written at the match site.
+        // For exact matches this equals new_content; for fuzzy matches it is
+        // the reindented variant. Used for accurate line counts and preview.
+        let (new_file_content, actual_replacement): (String, String) = match occurrences.len() {
             0 => {
                 // Exact match failed — try fuzzy (whitespace-normalized) match
                 tracing::warn!(
@@ -284,7 +287,7 @@ impl Tool for EditFileTool {
                         result.push_str(&content[..start]);
                         result.push_str(&reindented);
                         result.push_str(&content[end..]);
-                        result
+                        (result, reindented)
                     }
                     None => {
                         // Provide helpful error: show what's in the file near where
@@ -315,7 +318,7 @@ impl Tool for EditFileTool {
                 result.push_str(&content[..start]);
                 result.push_str(&new_content);
                 result.push_str(&content[end..]);
-                result
+                (result, new_content.clone())
             }
             n if n > MAX_REPLACEMENTS => {
                 return Err(ToolError::Io(std::io::Error::new(
@@ -359,7 +362,9 @@ impl Tool for EditFileTool {
         std::fs::write(&full_path, &new_file_content)?;
 
         let old_lines = old_content.lines().count();
-        let new_lines = new_content.lines().count();
+        // Use actual_replacement (not new_content) for line counts — after a fuzzy
+        // match the reindented text may have different line counts than the raw input.
+        let new_lines = actual_replacement.lines().count();
         let diff = new_lines as i64 - old_lines as i64;
         let sign = if diff >= 0 { "+" } else { "" };
 
@@ -369,16 +374,17 @@ impl Tool for EditFileTool {
         let written_preview = if new_file_content.len() <= 2000 {
             new_file_content.clone()
         } else {
-            // Find the replacement region and show context around it
+            // Find the replacement region using actual_replacement (not new_content,
+            // which may differ after reindentation in fuzzy match path).
             let replacement_start = new_file_content
-                .find(new_content.lines().next().unwrap_or(""))
+                .find(actual_replacement.lines().next().unwrap_or(""))
                 .unwrap_or(0);
             let preview_start = new_file_content[..replacement_start]
                 .rfind('\n')
                 .map(|p| p + 1)
                 .unwrap_or(0);
             let preview_end =
-                (replacement_start + new_content.len() + 200).min(new_file_content.len());
+                (replacement_start + actual_replacement.len() + 200).min(new_file_content.len());
             format!("...{}", &new_file_content[preview_start..preview_end])
         };
 

@@ -23,9 +23,7 @@ async fn test_read_file_existing() {
 
     let tool = ReadFileTool::new(dir.path());
     let result = tool
-        .call(ReadFileArgs {
-            path: "hello.txt".into(),
-        })
+        .call(ReadFileArgs { path: "hello.txt".into(), start_line: None, end_line: None })
         .await;
 
     assert_eq!(result.unwrap(), "hello world");
@@ -36,9 +34,7 @@ async fn test_read_file_nonexistent() {
     let dir = tempfile::tempdir().unwrap();
     let tool = ReadFileTool::new(dir.path());
     let result = tool
-        .call(ReadFileArgs {
-            path: "nope.txt".into(),
-        })
+        .call(ReadFileArgs { path: "nope.txt".into(), start_line: None, end_line: None })
         .await;
     assert!(result.is_err());
 }
@@ -48,16 +44,81 @@ async fn test_read_file_sandbox_escape_blocked() {
     let dir = tempfile::tempdir().unwrap();
     let tool = ReadFileTool::new(dir.path());
     let result = tool
-        .call(ReadFileArgs {
-            path: "../../../etc/passwd".into(),
-        })
+        .call(ReadFileArgs { path: "../../../etc/passwd".into(), start_line: None, end_line: None })
         .await;
     assert!(result.is_err());
 }
 
-// ---------------------------------------------------------------------------
-// WriteFileTool
-// ---------------------------------------------------------------------------
+#[tokio::test]
+async fn test_read_file_line_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lines.txt");
+    fs::write(&file, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+    let tool = ReadFileTool::new(dir.path());
+
+    let result = tool
+        .call(ReadFileArgs { path: "lines.txt".into(), start_line: Some(2), end_line: Some(4) })
+        .await
+        .unwrap();
+
+    // Should contain lines 2-4 with line-number annotations
+    assert!(result.contains("line2"), "expected line2 in:\n{result}");
+    assert!(result.contains("line3"), "expected line3 in:\n{result}");
+    assert!(result.contains("line4"), "expected line4 in:\n{result}");
+    assert!(!result.contains("line1"), "line1 should not appear:\n{result}");
+    assert!(!result.contains("line5"), "line5 should not appear:\n{result}");
+    assert!(result.contains("[Lines 2-4 of 5 total]"), "header missing:\n{result}");
+}
+
+#[tokio::test]
+async fn test_read_file_start_line_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lines.txt");
+    fs::write(&file, "line1\nline2\nline3\n").unwrap();
+    let tool = ReadFileTool::new(dir.path());
+
+    let result = tool
+        .call(ReadFileArgs { path: "lines.txt".into(), start_line: Some(3), end_line: None })
+        .await
+        .unwrap();
+
+    assert!(result.contains("line3"), "expected line3:\n{result}");
+    assert!(!result.contains("line1"), "line1 should not appear:\n{result}");
+}
+
+#[tokio::test]
+async fn test_read_file_end_line_only() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lines.txt");
+    fs::write(&file, "line1\nline2\nline3\nline4\n").unwrap();
+    let tool = ReadFileTool::new(dir.path());
+
+    let result = tool
+        .call(ReadFileArgs { path: "lines.txt".into(), start_line: None, end_line: Some(2) })
+        .await
+        .unwrap();
+
+    assert!(result.contains("line1"), "expected line1:\n{result}");
+    assert!(result.contains("line2"), "expected line2:\n{result}");
+    assert!(!result.contains("line3"), "line3 should not appear:\n{result}");
+}
+
+#[tokio::test]
+async fn test_read_file_empty_range() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("lines.txt");
+    fs::write(&file, "line1\nline2\n").unwrap();
+    let tool = ReadFileTool::new(dir.path());
+
+    // start > end → empty range message
+    let result = tool
+        .call(ReadFileArgs { path: "lines.txt".into(), start_line: Some(5), end_line: Some(3) })
+        .await
+        .unwrap();
+    assert!(result.contains("Empty range"), "expected empty range msg:\n{result}");
+}
+
+
 
 #[tokio::test]
 async fn test_write_file_new() {

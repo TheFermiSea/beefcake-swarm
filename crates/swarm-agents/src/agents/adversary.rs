@@ -19,7 +19,7 @@ use crate::tools::bundles::{self, WorkerRole};
 
 use super::coder::OaiAgent;
 
-const DEFAULT_BREAKER_MAX_TURNS: usize = 8;
+const DEFAULT_BREAKER_MAX_TURNS: usize = 6;
 
 fn breaker_max_turns() -> usize {
     std::env::var("SWARM_BREAKER_MAX_TURNS")

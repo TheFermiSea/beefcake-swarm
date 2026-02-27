@@ -194,6 +194,8 @@ Only modify files relevant to your task.
 - **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
   replies with no file edits are INVALID. If you cannot make progress, add a \
   `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
+- **FIRST TURN**: Your very first response MUST be a tool call (read_file or edit_file). \
+  Do NOT write any text analysis before calling a tool. Call the tool immediately.
 - Always read the file BEFORE editing it.
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - One logical change at a time. Don't refactor unrelated code.
@@ -244,6 +246,8 @@ If you find a bug or missing test unrelated to your current task, create a track
 - **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
   replies with no file edits are INVALID. If you cannot make progress, add a \
   `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
+- **FIRST TURN**: Your very first response MUST be a tool call. Do NOT write text analysis \
+  before calling a tool.
 - Always read before editing. Use edit_file for targeted changes.
 - Update mod.rs / lib.rs when adding or removing modules.
 - After changes, verify compilation before reporting done.
@@ -330,6 +334,8 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
 - **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
   replies with no file edits are INVALID. If you cannot make progress, add a \
   `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
+- **FIRST TURN**: Your very first response MUST be a tool call. Do NOT write text analysis \
+  before calling a tool.
 - Always read files before editing them.
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - Consider full implications of changes across the codebase.
@@ -415,6 +421,8 @@ Only modify files specified in the plan you receive.
 ## Rules
 - **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
   replies with no file edits are INVALID.
+- **FIRST TURN**: Your very first response MUST be a tool call. Do NOT write text analysis \
+  before calling a tool.
 - **Follow the plan**: Implement the steps as specified. Do not deviate, skip steps, \
   or add extra changes not in the plan.
 - **Scope discipline**: Only modify files listed in the plan's `target_files`. \
