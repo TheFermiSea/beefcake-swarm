@@ -14,7 +14,7 @@ pub mod graph_rag;
 pub mod rule_pack;
 
 pub use ast_grep::{AstGrepConfig, AstGrepMatch, AstGrepQuery, AstGrepRunner};
-pub use graph_rag::{GraphRagConfig, GraphRagQuery, GraphRagResult, GraphRagRunner};
+pub use graph_rag::{GraphRagConfig, GraphRagEnvBridge, GraphRagQuery, GraphRagResult, GraphRagRunner};
 pub use rule_pack::{
     IngestionErrorKind, IngestionSummary, RuleIngestionError, RulePack, RulePackEntry,
     RulePackRegistry, RuleSeverity,
