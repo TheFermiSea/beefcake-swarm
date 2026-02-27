@@ -809,6 +809,23 @@ fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
 /// logs results but doesn't block on FAIL to avoid subjective LLM feedback loops.
 ///
 /// Validator models are configured via env vars:
+/// Build the reviewer prompt for a given diff.
+///
+/// Shared between cloud and local validation to prevent prompt drift.
+fn build_reviewer_prompt(diff_for_review: &str) -> String {
+    format!(
+        "You are reviewing a Rust code change from an autonomous coding agent. \
+         The change has already passed all deterministic gates (cargo fmt, clippy, \
+         cargo check, cargo test). Your job is to catch logic errors, edge cases, \
+         and design issues that the compiler cannot detect.\n\n\
+         Respond with STRICT JSON ONLY using schema: \
+         {{\"verdict\":\"pass|fail|needs_escalation\",\"confidence\":0.0-1.0,\
+         \"blocking_issues\":[...],\"suggested_next_action\":\"...\",\
+         \"touched_files\":[...]}}.\n\n\
+         ```diff\n{diff_for_review}\n```"
+    )
+}
+
 /// - `SWARM_VALIDATOR_MODEL_1` (default: `gemini-3-pro-preview`)
 /// - `SWARM_VALIDATOR_MODEL_2` (default: `claude-sonnet-4-5-20250929`)
 async fn cloud_validate(
@@ -862,17 +879,7 @@ async fn cloud_validate(
             .unwrap_or_else(|_| "claude-sonnet-4-5-20250929".into()),
     ];
 
-    let review_prompt = format!(
-        "You are reviewing a Rust code change from an autonomous coding agent. \
-         The change has already passed all deterministic gates (cargo fmt, clippy, \
-         cargo check, cargo test). Your job is to catch logic errors, edge cases, \
-         and design issues that the compiler cannot detect.\n\n\
-         Respond with STRICT JSON ONLY using schema: \
-         {{\"verdict\":\"pass|fail|needs_escalation\",\"confidence\":0.0-1.0,\
-         \"blocking_issues\":[...],\"suggested_next_action\":\"...\",\
-         \"touched_files\":[...]}}.\n\n\
-         ```diff\n{diff_for_review}\n```"
-    );
+    let review_prompt = build_reviewer_prompt(&diff_for_review);
     let validation_timeout = timeout_from_env(
         "SWARM_VALIDATION_TIMEOUT_SECS",
         DEFAULT_VALIDATION_TIMEOUT_SECS,
@@ -918,6 +925,218 @@ async fn cloud_validate(
     }
 
     results
+}
+
+/// Result of a local validator review (blocking gate).
+struct LocalValidationResult {
+    model: String,
+    passed: bool,
+    #[allow(dead_code)] // kept for diagnostics/future logging
+    schema_valid: bool,
+    feedback: String,
+    blocking_issues: Vec<String>,
+    suggested_next_action: String,
+    touched_files: Vec<String>,
+}
+
+/// Run local validation via the reviewer agent (vasp-02/HydraCoder).
+///
+/// Generates a diff, sends it to the reviewer, and parses the structured JSON response.
+/// - **Fail-open** on infrastructure errors (diff failure, timeout, LLM error) — deterministic gates already passed.
+/// - **Fail-closed** on invalid JSON schema — malformed reviewer output counts as failure.
+async fn local_validate(
+    reviewer: &crate::agents::coder::OaiAgent,
+    wt_path: &Path,
+    initial_commit: &str,
+    model_name: &str,
+) -> LocalValidationResult {
+    let validation_timeout = timeout_from_env("SWARM_LOCAL_VALIDATION_TIMEOUT_SECS", 60);
+
+    // Generate diff (async to avoid blocking the tokio runtime)
+    let diff = match tokio::process::Command::new("git")
+        .args(["diff", initial_commit, "HEAD"])
+        .current_dir(wt_path)
+        .output()
+        .await
+    {
+        Ok(output) if output.status.success() => {
+            String::from_utf8_lossy(&output.stdout).to_string()
+        }
+        Ok(output) => {
+            warn!(
+                "local_validate: git diff failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            // Fail-open: infra error
+            return LocalValidationResult {
+                model: model_name.to_string(),
+                passed: true,
+                schema_valid: true,
+                feedback: "git diff failed — fail-open".to_string(),
+                blocking_issues: vec![],
+                suggested_next_action: String::new(),
+                touched_files: vec![],
+            };
+        }
+        Err(e) => {
+            warn!("local_validate: Failed to run git diff: {e}");
+            return LocalValidationResult {
+                model: model_name.to_string(),
+                passed: true,
+                schema_valid: true,
+                feedback: format!("git diff error — fail-open: {e}"),
+                blocking_issues: vec![],
+                suggested_next_action: String::new(),
+                touched_files: vec![],
+            };
+        }
+    };
+
+    if diff.trim().is_empty() {
+        info!("local_validate: No diff to validate — pass");
+        return LocalValidationResult {
+            model: model_name.to_string(),
+            passed: true,
+            schema_valid: true,
+            feedback: "No diff".to_string(),
+            blocking_issues: vec![],
+            suggested_next_action: String::new(),
+            touched_files: vec![],
+        };
+    }
+
+    // Truncate large diffs (on a valid char boundary to avoid panics)
+    let max_diff_bytes = 32_000;
+    let diff_for_review = if diff.len() > max_diff_bytes {
+        let boundary = diff.floor_char_boundary(max_diff_bytes);
+        format!(
+            "{}\n\n... [truncated — {} total bytes, showing first {}]",
+            &diff[..boundary],
+            diff.len(),
+            boundary,
+        )
+    } else {
+        diff
+    };
+
+    let review_prompt = build_reviewer_prompt(&diff_for_review);
+
+    // Call reviewer with timeout and retry
+    match tokio::time::timeout(
+        validation_timeout,
+        prompt_with_retry(reviewer, &review_prompt, 2),
+    )
+    .await
+    {
+        Ok(Ok(response)) => {
+            let review = ReviewResult::parse(&response);
+            if !review.schema_valid {
+                // Fail-closed: bad JSON schema
+                warn!(
+                    model = model_name,
+                    "Local validation: invalid schema — fail-closed"
+                );
+                return LocalValidationResult {
+                    model: model_name.to_string(),
+                    passed: false,
+                    schema_valid: false,
+                    feedback: response,
+                    blocking_issues: review.blocking_issues,
+                    suggested_next_action: review.suggested_next_action,
+                    touched_files: review.touched_files,
+                };
+            }
+            let status = if review.passed { "PASS" } else { "FAIL" };
+            info!(model = model_name, status, "Local validation complete");
+            LocalValidationResult {
+                model: model_name.to_string(),
+                passed: review.passed,
+                schema_valid: true,
+                feedback: response,
+                blocking_issues: review.blocking_issues,
+                suggested_next_action: review.suggested_next_action,
+                touched_files: review.touched_files,
+            }
+        }
+        Ok(Err(e)) => {
+            // Fail-open: LLM error
+            warn!(model = model_name, error = %e, "Local validation LLM error — fail-open");
+            LocalValidationResult {
+                model: model_name.to_string(),
+                passed: true,
+                schema_valid: true,
+                feedback: format!("LLM error — fail-open: {e}"),
+                blocking_issues: vec![],
+                suggested_next_action: String::new(),
+                touched_files: vec![],
+            }
+        }
+        Err(_) => {
+            // Fail-open: timeout
+            warn!(
+                model = model_name,
+                timeout_secs = validation_timeout.as_secs(),
+                "Local validation timed out — fail-open"
+            );
+            LocalValidationResult {
+                model: model_name.to_string(),
+                passed: true,
+                schema_valid: true,
+                feedback: "Timed out — fail-open".to_string(),
+                blocking_issues: vec![],
+                suggested_next_action: String::new(),
+                touched_files: vec![],
+            }
+        }
+    }
+}
+
+/// Convert a local validation result into structured validator feedback entries.
+///
+/// Similar to `extract_validator_feedback` but operates on `LocalValidationResult`.
+fn extract_local_validator_feedback(result: &LocalValidationResult) -> Vec<ValidatorFeedback> {
+    if result.passed {
+        return vec![];
+    }
+
+    if result.blocking_issues.is_empty() {
+        // Unstructured feedback — wrap as a single entry
+        return vec![ValidatorFeedback {
+            file: None,
+            line_range: None,
+            issue_type: ValidatorIssueType::Other,
+            description: result
+                .feedback
+                .lines()
+                .take(5)
+                .collect::<Vec<_>>()
+                .join(" "),
+            suggested_fix: None,
+            source_model: Some(result.model.clone()),
+        }];
+    }
+
+    result
+        .blocking_issues
+        .iter()
+        .map(|issue| {
+            let issue_type = classify_issue(issue);
+            let file = result.touched_files.first().cloned();
+
+            ValidatorFeedback {
+                file,
+                line_range: None,
+                issue_type,
+                description: issue.clone(),
+                suggested_fix: if result.suggested_next_action.is_empty() {
+                    None
+                } else {
+                    Some(result.suggested_next_action.clone())
+                },
+                source_model: Some(result.model.clone()),
+            }
+        })
+        .collect()
 }
 
 /// Detect which Cargo packages have been modified in the worktree.
@@ -1106,12 +1325,17 @@ pub async fn process_issue(
     // --- Build agents scoped to this worktree ---
     let rust_coder = factory.build_rust_coder(&wt_path);
     let general_coder = factory.build_general_coder(&wt_path);
+    let reviewer = factory.build_reviewer();
     let manager = factory.build_manager(&wt_path);
 
     // --- Escalation state ---
     //
     // When worker_first is enabled, classify the task to determine starting tier.
     // Otherwise, default to Council (cloud-backed manager) from the beginning.
+    // --- Local validator config ---
+    let local_validator_enabled = bool_from_env("SWARM_LOCAL_VALIDATOR", true);
+    let max_validator_failures = u32_from_env("SWARM_MAX_VALIDATOR_FAILURES", 3);
+
     let council_budget_iterations = u32_from_env("SWARM_COUNCIL_MAX_ITERATIONS", 6);
     let council_budget_consultations = u32_from_env("SWARM_COUNCIL_MAX_CONSULTATIONS", 6);
     let initial_tier = if feature_flags.worker_first_enabled {
@@ -1141,6 +1365,7 @@ pub async fn process_issue(
     let mut last_report: Option<VerifierReport> = None;
     let mut last_validator_feedback: Vec<ValidatorFeedback> = Vec::new();
     let mut span_summary = SpanSummary::new();
+    let mut consecutive_validator_failures: u32 = 0;
 
     // Scope verifier to changed packages.
     // If explicit packages are configured (CLI --package or SWARM_VERIFIER_PACKAGES), use those.
@@ -1696,6 +1921,9 @@ pub async fn process_issue(
 
         // --- Regression detection: rollback if errors increased ---
         if !report.all_green {
+            // Reset validator failure counter — verifier itself failed, so
+            // prior validator feedback is stale.
+            consecutive_validator_failures = 0;
             if let Some(prev_count) = prev_error_count {
                 if error_count > prev_count {
                     warn!(
@@ -1776,8 +2004,69 @@ pub async fn process_issue(
                 }
             }
 
+            // --- Local validation (blocking gate) ---
+            // After deterministic gates pass, run the reviewer on vasp-02 as a blocking
+            // quality gate. This catches logic errors, edge cases, and design issues
+            // that the compiler cannot detect.
+            if local_validator_enabled {
+                if let Some(ref initial_commit) = session.state().initial_commit {
+                    info!(iteration, "Running local validation (blocking)");
+                    let local_result = local_validate(
+                        &reviewer,
+                        &wt_path,
+                        initial_commit,
+                        &config.fast_endpoint.model,
+                    )
+                    .await;
+
+                    metrics.record_local_validation(&local_result.model, local_result.passed);
+
+                    if local_result.passed {
+                        consecutive_validator_failures = 0;
+                        info!(
+                            iteration,
+                            model = %local_result.model,
+                            "Local validation: PASS"
+                        );
+                    } else {
+                        consecutive_validator_failures += 1;
+                        warn!(
+                            iteration,
+                            model = %local_result.model,
+                            consecutive_failures = consecutive_validator_failures,
+                            max_failures = max_validator_failures,
+                            "Local validation: FAIL (blocking)"
+                        );
+
+                        // Extract feedback for next iteration
+                        let feedback = extract_local_validator_feedback(&local_result);
+                        last_validator_feedback = feedback;
+
+                        if consecutive_validator_failures >= max_validator_failures {
+                            warn!(
+                                iteration,
+                                consecutive_failures = consecutive_validator_failures,
+                                "Local validator failure cap reached — accepting anyway"
+                            );
+                            consecutive_validator_failures = 0;
+                            // Fall through to acceptance
+                        } else {
+                            info!(
+                                iteration,
+                                feedback_count = last_validator_feedback.len(),
+                                "Local validation rejected — looping with feedback"
+                            );
+                            escalation.record_iteration(error_cats, error_count, false);
+                            last_report = Some(report);
+                            metrics.finish_iteration();
+                            continue;
+                        }
+                    }
+                }
+            }
+
             // Deterministic gates (fmt + clippy + check + test) are the source of truth.
-            // The reviewer is advisory — don't let subjective LLM feedback cause loops.
+            // The local reviewer gates acceptance; cloud reviewer is advisory.
             info!(
                 iteration,
                 "Verifier passed (all gates green) — checking acceptance"
@@ -3294,5 +3583,68 @@ mod tests {
             "model not found: gpt-99",
             "model not found: gpt-99"
         ));
+    }
+
+    // ========================================================================
+    // Local validator feedback extraction tests
+    // ========================================================================
+
+    #[test]
+    fn test_extract_local_validator_feedback_pass_returns_empty() {
+        let result = LocalValidationResult {
+            model: "test-model".into(),
+            passed: true,
+            schema_valid: true,
+            feedback: "looks good".into(),
+            blocking_issues: vec![],
+            suggested_next_action: String::new(),
+            touched_files: vec![],
+        };
+        let feedback = extract_local_validator_feedback(&result);
+        assert!(feedback.is_empty());
+    }
+
+    #[test]
+    fn test_extract_local_validator_feedback_fail_with_issues() {
+        let result = LocalValidationResult {
+            model: "HydraCoder".into(),
+            passed: false,
+            schema_valid: true,
+            feedback: "structured review".into(),
+            blocking_issues: vec![
+                "missing error handling in parse_config".into(),
+                "logic error in boundary check".into(),
+            ],
+            suggested_next_action: "fix and re-run".into(),
+            touched_files: vec!["src/config.rs".into()],
+        };
+        let feedback = extract_local_validator_feedback(&result);
+        assert_eq!(feedback.len(), 2);
+        assert_eq!(
+            feedback[0].issue_type,
+            ValidatorIssueType::MissingSafetyCheck
+        );
+        assert_eq!(feedback[1].issue_type, ValidatorIssueType::LogicError);
+        assert_eq!(feedback[0].file.as_deref(), Some("src/config.rs"));
+        assert_eq!(feedback[0].suggested_fix.as_deref(), Some("fix and re-run"));
+        assert_eq!(feedback[0].source_model.as_deref(), Some("HydraCoder"));
+    }
+
+    #[test]
+    fn test_extract_local_validator_feedback_malformed_wraps_as_single() {
+        let result = LocalValidationResult {
+            model: "test-model".into(),
+            passed: false,
+            schema_valid: false,
+            feedback: "PASS\nlooks okay\nbut it was malformed".into(),
+            blocking_issues: vec![],
+            suggested_next_action: String::new(),
+            touched_files: vec![],
+        };
+        let feedback = extract_local_validator_feedback(&result);
+        assert_eq!(feedback.len(), 1);
+        assert_eq!(feedback[0].issue_type, ValidatorIssueType::Other);
+        assert!(feedback[0].description.contains("PASS"));
+        assert!(feedback[0].description.contains("looks okay"));
     }
 }

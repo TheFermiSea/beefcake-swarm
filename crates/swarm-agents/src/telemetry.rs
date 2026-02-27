@@ -212,6 +212,8 @@ pub struct SessionMetrics {
     pub total_no_change_iterations: u32,
     pub no_change_rate: f64,
     pub cloud_validations: Vec<ValidationMetric>,
+    #[serde(default)]
+    pub local_validations: Vec<ValidationMetric>,
     pub iterations: Vec<IterationMetrics>,
     pub timestamp: String,
 }
@@ -235,6 +237,7 @@ pub struct MetricsCollector {
     current_iteration: Option<IterationBuilder>,
     iterations: Vec<IterationMetrics>,
     cloud_validations: Vec<ValidationMetric>,
+    local_validations: Vec<ValidationMetric>,
 }
 
 /// In-flight state for the current iteration.
@@ -268,6 +271,7 @@ impl MetricsCollector {
             current_iteration: None,
             iterations: Vec::new(),
             cloud_validations: Vec::new(),
+            local_validations: Vec::new(),
         }
     }
 
@@ -445,6 +449,14 @@ impl MetricsCollector {
         });
     }
 
+    /// Record local validation results.
+    pub fn record_local_validation(&mut self, model: &str, passed: bool) {
+        self.local_validations.push(ValidationMetric {
+            model: model.to_string(),
+            passed,
+        });
+    }
+
     /// Build a `LoopMetrics` snapshot from the current in-progress iteration.
     ///
     /// Returns `None` if no iteration is in progress.
@@ -485,6 +497,7 @@ impl MetricsCollector {
             total_no_change_iterations: no_change_count,
             no_change_rate,
             cloud_validations: self.cloud_validations,
+            local_validations: self.local_validations,
             iterations: self.iterations,
             timestamp: chrono::Utc::now().to_rfc3339(),
         }
@@ -1070,6 +1083,7 @@ mod tests {
             total_no_change_iterations: 0,
             no_change_rate: 0.0,
             cloud_validations: vec![],
+            local_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T00:00:00Z".into(),
         };
@@ -1100,6 +1114,7 @@ mod tests {
             total_no_change_iterations: 0,
             no_change_rate: 0.0,
             cloud_validations: vec![],
+            local_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T00:00:00Z".into(),
         };
@@ -1114,6 +1129,7 @@ mod tests {
             total_no_change_iterations: 1,
             no_change_rate: 1.0 / 3.0,
             cloud_validations: vec![],
+            local_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T01:00:00Z".into(),
         };
@@ -1150,6 +1166,7 @@ mod tests {
             total_no_change_iterations: 0,
             no_change_rate: 0.0,
             cloud_validations: vec![],
+            local_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T00:00:00Z".into(),
         };
@@ -1203,6 +1220,7 @@ mod tests {
             total_no_change_iterations: 0,
             no_change_rate: 0.0,
             cloud_validations: vec![],
+            local_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T01:00:00Z".into(),
         };
@@ -1368,6 +1386,7 @@ mod tests {
             total_no_change_iterations: 0,
             no_change_rate,
             cloud_validations: vec![],
+            local_validations: vec![],
             iterations: vec![],
             timestamp: "2026-01-01T00:00:00Z".into(),
         }
@@ -1694,6 +1713,7 @@ mod tests {
             total_no_change_iterations: 0,
             no_change_rate: 0.0,
             cloud_validations: vec![],
+            local_validations: vec![],
             iterations: vec![
                 IterationMetrics {
                     iteration: 1,
