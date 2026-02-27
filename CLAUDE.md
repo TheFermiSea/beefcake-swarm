@@ -80,52 +80,45 @@ When cloud is unavailable, Qwen3.5-397B Architect (vasp-01) serves as fallback l
 
 | Tier | Endpoint (Rig uses this) | Model | Throughput |
 |------|--------------------------|-------|------------|
-| All local tiers | http://vasp-03:8081/v1 | Qwen3.5-397B-A17B UD-Q4_K_XL | ~TBD (MoE, 14 GPU layers + CPU offload) |
-| Fallback | http://vasp-02:8080/v1 | HydraCoder 30B-A3B MoE (Q4_K_M) | ~135 tok/s gen |
+| All local tiers | http://vasp-02:8080/v1 | HydraCoder 30B-A3B MoE (Q4_K_M) | ~135 tok/s gen |
 
-**Current setup**: Qwen3.5-397B-A17B on vasp-03:8081.
-- Model: UD-Q4_K_XL (~206GB, 6 shards) at `/scratch/ai/models/Qwen3.5-397B-A17B-GGUF/UD-Q4_K_XL/`
-- 4 parallel slots, 8K context per slot (32K total KV cache)
-- 14 GPU layers on V100S (32GB), remaining in 249GB CPU RAM
-- Native build on Rocky 8.8/GCC 8.5/CUDA 12.6 (GLIBC 2.28 compatible) — no NFS dependency
-- Binary: `/usr/local/bin/llama-server-vasp03`
-- CUDA libs: `/usr/local/cuda/lib64` + HPC SDK at `/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/`
-- Tracked: beefcake-v9mb (integration), beefcake-noqp (chat fixes), beefcake-7v67 (quant testing)
+**Current setup**: HydraCoder on vasp-02:8080 (all tiers). 1 slot @ 32K context.
 
-**HydraCoder (fallback)**: Still running on vasp-02:8080 at 135 tok/s. Use as fallback if Qwen3.5 is unavailable.
+**Q4_K_M download (in progress)**: Qwen3.5-397B-A17B Q4_K_M from lmstudio-community (241GB, 7 shards).
+Shards 6+7 complete on vasp-02 at `/scratch/ai/models/lmstudio-Qwen3.5-397B-A17B-GGUF/`.
+Shards 1-5 downloading via wget (~197GB, ETA ~18-20hrs at 2.35MB/s).
+Monitor: `ssh root@10.0.0.21 tail -f /tmp/q4km-download.log`
+vasp-02 has 249GB free — sufficient. Once complete, build and serve with `--override-tensor exps=CPU`.
 
-Role specialization:
-- **vasp-03** = All roles (Implementer, Validator, Architect) — Qwen3.5-397B-A17B, 4 slots @ 8K
-- **vasp-02** = Fallback — HydraCoder 30B-A3B MoE, 1 slot @ 32K
-- **vasp-01** = Offline (disk full, NFS issues)
+**UD-Q4_K_XL (broken)**: Exists on vasp-01 and vasp-03 (206GB). Confirmed broken for instruction
+following — returns garbled output or immediate EOS regardless of prompt format. Do NOT use.
+Tracked: beefcake-7v67.
 
-Start inference (manual, no SLURM — NFS unavailable):
+**vasp-03 native llama.cpp build**: Rocky 8.8/GCC 8.5/CUDA 12.6 (GLIBC 2.28 compatible).
+Binary: `/usr/local/bin/llama-server-vasp03`. Startup: `/tmp/start-qwen35.sh`.
+Build script: `/tmp/build-qwen-llama.sh`. CUDA wrapper at `/usr/local/cuda/bin/nvcc`.
+
+Role specialization (planned, once Q4_K_M ready):
+- **vasp-02** = Primary — Qwen3.5-397B-A17B Q4_K_M, 4 slots @ 8K
+- **vasp-03** = RPC GPU worker (32GB V100S) for vasp-02, or standalone with UD-Q4_K_XL
+- **vasp-01** = Available (V100S + 256GB RAM), /scratch full (400GB)
+
+Start inference:
 ```bash
-# Qwen3.5-397B on vasp-03 (primary - all tiers)
-ssh root@10.0.0.22 "bash /tmp/start-qwen35.sh"
-# Check log:
-ssh root@10.0.0.22 "tail -f /tmp/qwen35-server.log"
-
-# HydraCoder on vasp-02 (fallback)
+# HydraCoder on vasp-02 (current, all tiers)
 ssh root@10.0.0.21 "nohup /tmp/start-hydracoder.sh > /tmp/hydracoder-server.log 2>&1 &"
 ```
 
-To switch swarm to Qwen3.5 endpoint (no code change needed — env vars):
+To switch swarm to Qwen3.5 endpoint once Q4_K_M is ready (no code change — env vars):
 ```bash
-export SWARM_FAST_URL=http://vasp-03:8081/v1
-export SWARM_CODER_URL=http://vasp-03:8081/v1
-export SWARM_REASONING_URL=http://vasp-03:8081/v1
+export SWARM_FAST_URL=http://vasp-02:8080/v1
+export SWARM_CODER_URL=http://vasp-02:8080/v1
+export SWARM_REASONING_URL=http://vasp-02:8080/v1
 export SWARM_FAST_MODEL=Qwen3.5-397B-A17B
 export SWARM_CODER_MODEL=Qwen3.5-397B-A17B
 export SWARM_REASONING_MODEL=Qwen3.5-397B-A17B
-# Also for modes/provider_config.rs:
-export SWARM_LOCAL_BASE_URL=http://vasp-03:8081/v1
+export SWARM_LOCAL_BASE_URL=http://vasp-02:8080/v1
 ```
-
-**Q4_K_M download (background)**: 7 shards from lmstudio-community, shards 6+7 complete on vasp-02 at
-`/scratch/ai/models/lmstudio-Qwen3.5-397B-A17B-GGUF/`. Shards 1-5 stalled (.tmp). vasp-02 has only
-103GB free — insufficient for full download (~220GB). Q4_K_XL is sufficient if instruction-following
-is confirmed with the new native build.
 
 ## External Tools (install separately)
 
@@ -189,11 +182,14 @@ nlm source add "<ID>" --file "doc.md"
 
 ## Cluster Access
 
-- slurm-ctl: `ssh root@10.0.0.5` (controller, NFS server)
-- vasp-01: `ssh root@10.0.0.20` (72B head, V100S)
-- vasp-02: `ssh root@10.0.0.21` (14B fast, V100S)
-- vasp-03: `ssh root@10.0.0.22` (72B RPC worker, V100S)
-- ai-proxy: `ssh brian@100.105.113.58` or `ssh root@100.105.113.58` (external gateway LXC)
+- slurm-ctl: `ssh root@10.0.0.5` (controller, NFS server — VM 500 on pve1)
+- vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, /scratch full — VM 600 on pve1)
+- vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, HydraCoder running — VM 601 on pve2)
+- vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM — VM 602 on pve3)
+- pve1: `ssh root@10.0.0.1` (Proxmox host, cluster gateway — DO NOT reboot)
+- pve2: `ssh root@10.0.0.2` (Proxmox host)
+- pve3: `ssh root@10.0.0.3` (Proxmox host)
+- ai-proxy: `ssh brian@100.105.113.58` or `ssh root@100.105.113.58` (LXC on pve3)
   - Codebases live under `/home/brian/code/` (beefcake-swarm, rust-daq)
   - Use `brian` user for code work; `root` for system admin only
   - GitHub auth: SSH key (`ai-proxy-lxc`) + `gh` CLI as TheFermiSea
@@ -220,6 +216,8 @@ nlm source add "<ID>" --file "doc.md"
 - `coordination/tests/` — Several integration tests reference `rust_cluster_mcp` as an unresolved crate (should be `coordination`). These tests won't compile until import paths are fixed.
 - `crates/swarm-agents/` — Has dead code warnings on structs/methods that are defined but not yet wired into the Phase 2 orchestrator loop.
 - `#![allow(dead_code)]` is enabled in coordination's `lib.rs` and `main.rs` due to rmcp macro-generated code triggering false positives.
+- `pve1 ZFS pool at 96%` — Deleted a 104GB stale `@restore` snapshot but pool is still 96% used. vasp-01's /scratch is 100% full (400GB). Consider cleaning old models (UD-Q4_K_XL, glm-4.7) from vasp-01.
+- `vasp-03 NFS` — /home, /cluster/shared still NFS-mounted from slurm-ctl. Set `HOME=/tmp CUDA_CACHE_PATH=/tmp/cuda-cache` before running anything that writes to $HOME.
 
 ## Agent Teams
 
