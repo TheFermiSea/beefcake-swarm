@@ -809,6 +809,23 @@ fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
 /// logs results but doesn't block on FAIL to avoid subjective LLM feedback loops.
 ///
 /// Validator models are configured via env vars:
+/// Build the reviewer prompt for a given diff.
+///
+/// Shared between cloud and local validation to prevent prompt drift.
+fn build_reviewer_prompt(diff_for_review: &str) -> String {
+    format!(
+        "You are reviewing a Rust code change from an autonomous coding agent. \
+         The change has already passed all deterministic gates (cargo fmt, clippy, \
+         cargo check, cargo test). Your job is to catch logic errors, edge cases, \
+         and design issues that the compiler cannot detect.\n\n\
+         Respond with STRICT JSON ONLY using schema: \
+         {{\"verdict\":\"pass|fail|needs_escalation\",\"confidence\":0.0-1.0,\
+         \"blocking_issues\":[...],\"suggested_next_action\":\"...\",\
+         \"touched_files\":[...]}}.\n\n\
+         ```diff\n{diff_for_review}\n```"
+    )
+}
+
 /// - `SWARM_VALIDATOR_MODEL_1` (default: `gemini-3-pro-preview`)
 /// - `SWARM_VALIDATOR_MODEL_2` (default: `claude-sonnet-4-5-20250929`)
 async fn cloud_validate(
@@ -862,17 +879,7 @@ async fn cloud_validate(
             .unwrap_or_else(|_| "claude-sonnet-4-5-20250929".into()),
     ];
 
-    let review_prompt = format!(
-        "You are reviewing a Rust code change from an autonomous coding agent. \
-         The change has already passed all deterministic gates (cargo fmt, clippy, \
-         cargo check, cargo test). Your job is to catch logic errors, edge cases, \
-         and design issues that the compiler cannot detect.\n\n\
-         Respond with STRICT JSON ONLY using schema: \
-         {{\"verdict\":\"pass|fail|needs_escalation\",\"confidence\":0.0-1.0,\
-         \"blocking_issues\":[...],\"suggested_next_action\":\"...\",\
-         \"touched_files\":[...]}}.\n\n\
-         ```diff\n{diff_for_review}\n```"
-    );
+    let review_prompt = build_reviewer_prompt(&diff_for_review);
     let validation_timeout = timeout_from_env(
         "SWARM_VALIDATION_TIMEOUT_SECS",
         DEFAULT_VALIDATION_TIMEOUT_SECS,
@@ -945,11 +952,12 @@ async fn local_validate(
 ) -> LocalValidationResult {
     let validation_timeout = timeout_from_env("SWARM_LOCAL_VALIDATION_TIMEOUT_SECS", 60);
 
-    // Generate diff
-    let diff = match std::process::Command::new("git")
+    // Generate diff (async to avoid blocking the tokio runtime)
+    let diff = match tokio::process::Command::new("git")
         .args(["diff", initial_commit, "HEAD"])
         .current_dir(wt_path)
         .output()
+        .await
     {
         Ok(output) if output.status.success() => {
             String::from_utf8_lossy(&output.stdout).to_string()
@@ -997,30 +1005,21 @@ async fn local_validate(
         };
     }
 
-    // Truncate large diffs
-    let max_diff_chars = 32_000;
-    let diff_for_review = if diff.len() > max_diff_chars {
+    // Truncate large diffs (on a valid char boundary to avoid panics)
+    let max_diff_bytes = 32_000;
+    let diff_for_review = if diff.len() > max_diff_bytes {
+        let boundary = diff.floor_char_boundary(max_diff_bytes);
         format!(
-            "{}\n\n... [truncated — {} total chars, showing first {}]",
-            &diff[..max_diff_chars],
+            "{}\n\n... [truncated — {} total bytes, showing first {}]",
+            &diff[..boundary],
             diff.len(),
-            max_diff_chars,
+            boundary,
         )
     } else {
         diff
     };
 
-    let review_prompt = format!(
-        "You are reviewing a Rust code change from an autonomous coding agent. \
-         The change has already passed all deterministic gates (cargo fmt, clippy, \
-         cargo check, cargo test). Your job is to catch logic errors, edge cases, \
-         and design issues that the compiler cannot detect.\n\n\
-         Respond with STRICT JSON ONLY using schema: \
-         {{\"verdict\":\"pass|fail|needs_escalation\",\"confidence\":0.0-1.0,\
-         \"blocking_issues\":[...],\"suggested_next_action\":\"...\",\
-         \"touched_files\":[...]}}.\n\n\
-         ```diff\n{diff_for_review}\n```"
-    );
+    let review_prompt = build_reviewer_prompt(&diff_for_review);
 
     // Call reviewer with timeout and retry
     match tokio::time::timeout(

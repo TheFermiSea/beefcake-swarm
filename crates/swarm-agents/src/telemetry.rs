@@ -212,6 +212,7 @@ pub struct SessionMetrics {
     pub total_no_change_iterations: u32,
     pub no_change_rate: f64,
     pub cloud_validations: Vec<ValidationMetric>,
+    #[serde(default)]
     pub local_validations: Vec<ValidationMetric>,
     pub iterations: Vec<IterationMetrics>,
     pub timestamp: String,
