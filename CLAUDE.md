@@ -78,35 +78,33 @@ When cloud is unavailable, Qwen3.5-397B Architect (vasp-01) serves as fallback l
 
 ## Inference Endpoints
 
-| Tier | Endpoint (Rig uses this) | Model | Throughput |
-|------|--------------------------|-------|------------|
-| All local tiers | http://vasp-02:8080/v1 | HydraCoder 30B-A3B MoE (Q4_K_M) | ~135 tok/s gen |
+| Tier | Endpoint (Rig uses this) | Model | Concurrency |
+|------|--------------------------|-------|-------------|
+| Fast / Architect | http://vasp-02:8080/v1 | HydraCoder 30B-A3B MoE (Q4_K_M) | 8 parallel @ 32K |
+| Coder / Implementer | http://vasp-01:8081/v1 | Qwen3-Coder-Next 80B-A3B MoE (UD-Q4_K_XL) | 6 parallel @ 32K |
 
-**Current setup**: HydraCoder on vasp-02:8080 (all tiers). 1 slot @ 32K context.
+**Current setup** (2026-02-27): Both nodes running. MoE experts on CPU, attention on GPU (V100S 32GB).
+- vasp-02:8080 — HydraCoder router mode, 8 slots. Start: `bash /tmp/start-hydracoder.sh`
+- vasp-01:8081 — Qwen3-Coder-Next, 6 slots. Start: `bash /tmp/start-coder-next.sh`
+  - Requires native binary: `/usr/local/bin/llama-server-vasp03` (copied from vasp-03)
+  - Libs at `/usr/local/lib/` (libggml-*, libllama, libmtmd — copied from vasp-03 build)
 
-**Q4_K_M download (in progress)**: Qwen3.5-397B-A17B Q4_K_M from lmstudio-community (241GB, 7 shards).
-Shards 6+7 complete on vasp-02 at `/scratch/ai/models/lmstudio-Qwen3.5-397B-A17B-GGUF/`.
-Shards 1-5 downloading via wget (~197GB, ETA ~18-20hrs at 2.35MB/s).
-Monitor: `ssh root@10.0.0.21 tail -f /tmp/q4km-download.log`
-vasp-02 has 249GB free — sufficient. Once complete, build and serve with `--override-tensor exps=CPU`.
+**Q4_K_M download (paused)**: Qwen3.5-397B-A17B Q4_K_M. Shards 6+7 complete on vasp-02.
+Paused at shards 1-5 (~197GB remaining) — slow internet on cluster nodes. Resume when better connection.
 
-**UD-Q4_K_XL (broken)**: Exists on vasp-01 and vasp-03 (206GB). Confirmed broken for instruction
-following — returns garbled output or immediate EOS regardless of prompt format. Do NOT use.
-Tracked: beefcake-7v67.
+**UD-Q4_K_XL (broken for Qwen3.5-397B only)**: 206GB exists on vasp-01 and vasp-03. Do NOT use for
+Qwen3.5-397B — returns garbled output. Qwen3-Coder-Next UD-Q4_K_XL (46GB, vasp-01) works fine.
 
-**vasp-03 native llama.cpp build**: Rocky 8.8/GCC 8.5/CUDA 12.6 (GLIBC 2.28 compatible).
-Binary: `/usr/local/bin/llama-server-vasp03`. Startup: `/tmp/start-qwen35.sh`.
-Build script: `/tmp/build-qwen-llama.sh`. CUDA wrapper at `/usr/local/cuda/bin/nvcc`.
-
-Role specialization (planned, once Q4_K_M ready):
-- **vasp-02** = Primary — Qwen3.5-397B-A17B Q4_K_M, 4 slots @ 8K
-- **vasp-03** = RPC GPU worker (32GB V100S) for vasp-02, or standalone with UD-Q4_K_XL
-- **vasp-01** = Available (V100S + 256GB RAM), /scratch full (400GB)
+**vasp-03 native llama.cpp build** (Rocky 8.8/GCC/CUDA 12.6, GLIBC 2.28):
+Binary: `/usr/local/bin/llama-server-vasp03`. Libs: `/scratch/build/llama.cpp-vasp03/bin/`.
+Build script: `/tmp/build-qwen-llama.sh`. Also deployed to vasp-01 via scp.
 
 Start inference:
 ```bash
-# HydraCoder on vasp-02 (current, all tiers)
-ssh root@10.0.0.21 "nohup /tmp/start-hydracoder.sh > /tmp/hydracoder-server.log 2>&1 &"
+# HydraCoder on vasp-02 (fast/architect tier, 8 parallel)
+ssh root@10.0.0.21 "bash /tmp/start-hydracoder.sh"
+# Qwen3-Coder-Next on vasp-01 (coder/implementer tier, 6 parallel)
+ssh root@10.0.0.20 "bash /tmp/start-coder-next.sh"
 ```
 
 To switch swarm to Qwen3.5 endpoint once Q4_K_M is ready (no code change — env vars):
