@@ -420,6 +420,7 @@ mod tests {
                 0.0
             },
             cloud_validations: vec![],
+            local_validations: vec![],
             iterations: iter_metrics,
             timestamp: timestamp.to_string(),
         }
