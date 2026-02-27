@@ -1,39 +1,53 @@
 #!/bin/bash
-#SBATCH --job-name=llama-72b
+#SBATCH --job-name=llama-qwen35
 #SBATCH --partition=gpu_ai
 #SBATCH --qos=ai_opportunistic
-#SBATCH --nodes=2
+#SBATCH --nodes=3
 #SBATCH --ntasks-per-node=1
-#SBATCH --nodelist=vasp-01,vasp-03
+#SBATCH --nodelist=vasp-01,vasp-02,vasp-03
 #SBATCH --gres=gpu:v100s:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=200G
+#SBATCH --cpus-per-task=36
+#SBATCH --mem=240G
 #SBATCH --time=24:00:00
 #SBATCH --requeue
 #SBATCH --signal=B:SIGTERM@30
-#SBATCH --output=/scratch/ai/logs/llama-72b-%j.log
-#SBATCH --error=/scratch/ai/logs/llama-72b-%j.err
+#SBATCH --output=/scratch/ai/logs/llama-qwen35-%j.log
+#SBATCH --error=/scratch/ai/logs/llama-qwen35-%j.err
 
 ###############################################################################
-# Distributed 72B Inference Server (OR1-Behemoth Q4_K_M)
+# Distributed Qwen3.5-397B-A17B Inference Server (Q4_K_XL MoE)
 #
-# Purpose: Complex architecture decisions, reasoning tasks
-# Throughput: 6-12 tok/s, 2-4s TTFT
-# Context: 128K tokens (q4_0 KV cache ~10GB + ~40GB model = ~50GB in 64GB VRAM)
+# Purpose: Local reasoning/manager model — replaces OR1-Behemoth.
+#   Serves as council Strategist + local manager fallback.
 #
-# Uses llama.cpp RPC with LAYER SPLIT across 2x V100S GPUs (64GB total).
-# 2+1 topology: vasp-01+vasp-03 for 72B, vasp-02 dedicated to 14B fast tier.
-# Layer split distributes whole layers equally (1,1 ratio) instead of tensor
-# slices, bypassing the head divisibility requirement (64 heads ÷ 2 for TP).
+# Model: Qwen3.5-397B-A17B-UD-Q4_K_XL (~214GB, 397B total / 17B active MoE)
+# Throughput: ~5 tok/s gen, ~15 tok/s prompt (single), ~6.3 agg gen (4 concurrent)
+# Context: 256K tokens native (no YaRN needed), 4 parallel slots default
 #
-# Optimizations applied:
-# - NUMA interleave: memory distributed across all 4 vNUMA nodes for bandwidth
-# - Matched batch sizes: ubatch=batch=512 reduces network round trips
-# - Memory locking: --mlock prevents model swap during long inference
-# - q4_0 KV cache: Reduces KV memory footprint in 64GB total VRAM
+# Uses llama.cpp RPC with LAYER SPLIT across 3x V100S GPUs (96GB total VRAM).
+# MoE expert FFN layers are offloaded to CPU (-ot ".ffn_.*_exps.=CPU").
 #
-# Note: llama.cpp RPC uses TCP sockets over IPoIB, not native InfiniBand RDMA
-# Note: vasp-01 is now dedicated to 72B (Qwen3-Coder-Next moved to vasp-02 router)
+# Memory budget (per node, 256GB RAM):
+#   Model weights: ~214GB / 3 ≈ 72GB (GPU layers + CPU MoE)
+#   KV cache: 4 slots × ~16GB q4_0 / 3 ≈ 22GB per node
+#   OS + headroom: ~16GB
+#   Total: ~110GB per node of 256GB — plenty of room for 6-8 slots
+#
+# CPU allocation (36 cores/node):
+#   MoE expert computation dominates — all 36 threads available
+#   --threads controls decode (generation) threads, --threads-batch controls prompt/batch
+#   Decode can saturate memory bandwidth with fewer threads than batch processing
+#
+# NUMA topology (4 vNUMA nodes per VM, matching host SNC):
+#   vNUMA 0-1: Physical Socket 0 (GPU-local), ~64GB each
+#   vNUMA 2-3: Physical Socket 1, ~64GB each
+#   Memory interleaved across all 4 NUMA nodes (numactl --interleave=all)
+#   for maximum aggregate bandwidth on CPU-bound MoE expert computation.
+#   GPU DMA routes through NUMA 0 regardless of interleave policy.
+#   --numa numactl tells llama.cpp to defer NUMA policy to external numactl.
+#
+# Scaling: Set PARALLEL_SLOTS=6 or PARALLEL_SLOTS=8 at launch time.
+#   8 slots: ~342GB total across 768GB RAM — fits with 400+ GB headroom.
 #
 # This job is preemptible - VASP jobs have priority.
 ###############################################################################
@@ -41,35 +55,67 @@
 set -euo pipefail
 
 # Configuration
-MODEL="${MODEL:-/scratch/ai/models/or1-behemoth-q4_k_m.gguf}"
+# Split GGUF: llama.cpp loads all shards when given the first shard path
+MODEL="${MODEL:-/scratch/ai/models/Qwen3.5-397B-A17B-GGUF/UD-Q4_K_XL/Qwen3.5-397B-A17B-UD-Q4_K_XL-00001-of-00006.gguf}"
 LLAMA_BIN="${LLAMA_BIN:-/cluster/shared/llama-cpp/bin}"
 CUDA_LIB="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/targets/x86_64-linux/lib"
 CUDA_COMPAT="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/compat"
-HEAD_PORT="${HEAD_PORT:-8081}"  # Port 8081 for reasoning tier (8080 = fast tier)
+HEAD_PORT="${HEAD_PORT:-8081}"  # Port 8081 for manager tier (replaces OR1-Behemoth)
 RPC_PORT="${RPC_PORT:-50052}"
-CTX_SIZE="${CTX_SIZE:-131072}"
-N_PREDICT="${N_PREDICT:--1}"  # -1 = unlimited (default). Reasoning models need full context for CoT.
-THREADS="${THREADS:-8}"
+PARALLEL_SLOTS="${PARALLEL_SLOTS:-4}"
+CTX_SIZE="${CTX_SIZE:-262144}"  # 256K native context per slot
+N_PREDICT="${N_PREDICT:--1}"    # -1 = unlimited (default). Reasoning models need full context for CoT.
+THREADS="${THREADS:-28}"             # Decode threads — fewer than max reduces memory bandwidth contention
+THREADS_BATCH="${THREADS_BATCH:-36}" # Batch/prompt threads — use all cores for prefill throughput
+BATCH_SIZE="${BATCH_SIZE:-2048}"
+UBATCH_SIZE="${UBATCH_SIZE:-512}"
 
 # Architectural configuration
-# FIX: Increased intervals to handle slow model loading on RPC workers
-HEALTH_CHECK_INTERVAL="${HEALTH_CHECK_INTERVAL:-120}" # seconds between health checks (was 60)
-MIN_WORKERS="${MIN_WORKERS:-1}"                        # minimum RPC workers for 2-GPU layer split (1 worker required)
-WORKER_START_TIMEOUT="${WORKER_START_TIMEOUT:-120}"    # seconds to wait for each worker (was 30)
+HEALTH_CHECK_INTERVAL="${HEALTH_CHECK_INTERVAL:-120}" # seconds between health checks
+MIN_WORKERS="${MIN_WORKERS:-2}"                        # minimum RPC workers for 3-GPU layer split
+WORKER_START_TIMEOUT="${WORKER_START_TIMEOUT:-180}"    # seconds to wait for each worker (model is large)
 
 # Ensure log directory exists
 mkdir -p /scratch/ai/logs
 
 # Log startup
 echo "=========================================="
-echo "llama-72b distributed inference starting"
+echo "llama-qwen35 distributed inference starting"
 echo "Job ID: ${SLURM_JOB_ID}"
 echo "Nodes: ${SLURM_NODELIST}"
 echo "Model: ${MODEL}"
 echo "Head Port: ${HEAD_PORT}"
 echo "RPC Port: ${RPC_PORT}"
-echo "Context Size: ${CTX_SIZE}"
+echo "Parallel Slots: ${PARALLEL_SLOTS}"
+echo "Context Size: ${CTX_SIZE} (per slot)"
+echo "Threads: ${THREADS}"
+echo "Threads (batch): ${THREADS_BATCH}"
+echo "Batch size: ${BATCH_SIZE}"
+echo "Ubatch size: ${UBATCH_SIZE}"
 echo "=========================================="
+
+###############################################################################
+# Memory Validation
+###############################################################################
+
+MODEL_SIZE_GB=214
+KV_PER_SLOT_GB=16  # q4_0 KV cache for 256K context
+OS_HEADROOM_GB=16
+NUM_NODES=3
+
+TOTAL_KV_GB=$((KV_PER_SLOT_GB * PARALLEL_SLOTS))
+TOTAL_MEMORY_GB=$((MODEL_SIZE_GB + TOTAL_KV_GB))
+PER_NODE_GB=$(( (TOTAL_MEMORY_GB + NUM_NODES - 1) / NUM_NODES + OS_HEADROOM_GB ))
+
+echo "[$(date)] Memory estimate: ${MODEL_SIZE_GB}GB model + ${TOTAL_KV_GB}GB KV (${PARALLEL_SLOTS} slots) = ${TOTAL_MEMORY_GB}GB total"
+echo "[$(date)] Per-node estimate: ~${PER_NODE_GB}GB (including ${OS_HEADROOM_GB}GB OS headroom)"
+
+if [[ $PER_NODE_GB -gt 240 ]]; then
+    echo "[$(date)] WARNING: Per-node memory estimate (${PER_NODE_GB}GB) exceeds allocation (240GB)"
+    echo "[$(date)] Reduce PARALLEL_SLOTS or increase --mem. Current: PARALLEL_SLOTS=${PARALLEL_SLOTS}"
+    echo "[$(date)] Formula: (${MODEL_SIZE_GB} + ${KV_PER_SLOT_GB} * SLOTS) / ${NUM_NODES} + ${OS_HEADROOM_GB}"
+    exit 1
+fi
 
 # Parse node list (SC2207-compliant array assignment)
 mapfile -t NODES < <(scontrol show hostnames "$SLURM_JOB_NODELIST")
@@ -86,6 +132,7 @@ RPC_PIDS=()
 HEAD_PID=""
 MONITOR_PID=""
 SHUTTING_DOWN=false
+ENDPOINT_FILE=""
 
 cleanup() {
     # Prevent re-entry
@@ -108,10 +155,11 @@ cleanup() {
         kill -TERM "$HEAD_PID" 2>/dev/null || true
     fi
 
-    # Signal srun-launched RPC workers (SLURM propagates to cgroup)
-    for pid in "${RPC_PIDS[@]}"; do
-        echo "[$(date)] Signaling srun worker (PID $pid)..."
-        kill -TERM "$pid" 2>/dev/null || true
+    # Kill SSH-launched RPC workers on remote nodes
+    for node in "${RPC_NODES[@]}"; do
+        echo "[$(date)] Killing rpc-server on $node..."
+        ssh -o ConnectTimeout=5 -o BatchMode=yes "$node" \
+            "pkill -f 'rpc-server.*--port $RPC_PORT'" 2>/dev/null || true
     done
 
     # Wait for all background processes to complete gracefully
@@ -124,7 +172,7 @@ cleanup() {
 
     echo "[$(date)] Graceful shutdown complete"
 }
-trap cleanup SIGTERM SIGINT
+trap cleanup EXIT
 
 ###############################################################################
 # Health Monitoring & Graceful Degradation
@@ -144,17 +192,15 @@ check_worker_port() {
     fi
 }
 
-# Check if a single RPC worker process is still running
+# Check if a single RPC worker process is still running on its remote node.
 # NOTE: TCP probe doesn't work after startup because llama.cpp RPC uses persistent connections.
 # Once the head node connects, the worker stops accepting new connections on the port.
-# Instead, we check if the srun process (tracked in RPC_PIDS) is still running.
+# With SSH-launched workers, we check the remote process via SSH.
 check_worker_health() {
     local node=$1
-    local idx=$2  # Index into RPC_PIDS array
-    local pid="${RPC_PIDS[$idx]:-}"
-
-    # Check if the srun process is still running
-    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+    local idx=$2  # unused but kept for API compat
+    if ssh -o ConnectTimeout=5 -o BatchMode=yes "$node" \
+        "pgrep -f 'rpc-server.*--port $RPC_PORT'" >/dev/null 2>&1; then
         return 0
     else
         return 1
@@ -203,9 +249,9 @@ health_monitor() {
         # Check degradation threshold
         if [[ $alive_count -lt $MIN_WORKERS ]]; then
             echo "[$(date)] CRITICAL: Only $alive_count workers alive (minimum: $MIN_WORKERS)"
-            echo "[$(date)] Initiating graceful shutdown due to insufficient workers"
-            cleanup
-            exit 1
+            echo "[$(date)] Signaling parent (PID $$) for graceful shutdown"
+            kill -TERM $$ 2>/dev/null || true
+            return
         fi
     done
     echo "[$(date)] Health monitor stopped"
@@ -253,13 +299,28 @@ if [[ ${#MISSING_NODES[@]} -gt 0 ]]; then
     echo "[$(date)] ERROR: Model missing on: ${MISSING_NODES[*]}"
     echo "Please ensure $MODEL exists on all nodes."
     echo "Model is stored on local /scratch (not NFS), so it must be copied to each node."
+    echo ""
+    echo "Download once and copy to other nodes:"
+    echo "  # Download to one node first (split GGUF, 6 shards):"
+    echo "  ssh root@10.0.0.20 'python3.11 -c \"from huggingface_hub import snapshot_download;"
+    echo "    snapshot_download(\\\"unsloth/Qwen3.5-397B-A17B-GGUF\\\","
+    echo "      local_dir=\\\"/scratch/ai/models/Qwen3.5-397B-A17B-GGUF\\\","
+    echo "      allow_patterns=[\\\"UD-Q4_K_XL/*\\\"])\"'"
+    echo ""
+    echo "  # Then copy to the other nodes:"
+    echo "  for dest in 10.0.0.21 10.0.0.22; do"
+    echo "    rsync -avP root@10.0.0.20:/scratch/ai/models/Qwen3.5-397B-A17B-GGUF/UD-Q4_K_XL/ \\"
+    echo "      root@\$dest:/scratch/ai/models/Qwen3.5-397B-A17B-GGUF/UD-Q4_K_XL/"
+    echo "  done"
     exit 1
 fi
 
-# Prefetch model on all nodes (parallel)
-echo "[$(date)] Prefetching model to page cache..."
+# Prefetch model to page cache on all nodes (parallel)
+# NOTE: No --mlock — model is ~214GB, too large to lock. vmtouch prefetch is sufficient.
+echo "[$(date)] Prefetching model to page cache on all nodes..."
+MODEL_DIR="$(dirname "$MODEL")"
 for node in "${NODES[@]}"; do
-    run_on_node "$node" "numactl --interleave=all sh -c 'vmtouch -vt \"$MODEL\" 2>/dev/null || cat \"$MODEL\" > /dev/null'" &
+    run_on_node "$node" "numactl --interleave=all sh -c 'vmtouch -vt \"$MODEL_DIR\"/*.gguf 2>/dev/null || cat \"$MODEL_DIR\"/*.gguf > /dev/null'" &
 done
 wait
 echo "[$(date)] Prefetch complete"
@@ -274,10 +335,11 @@ for node in "${RPC_NODES[@]}"; do
     fi
 done
 
-# Start RPC workers on non-head nodes using srun for proper SLURM lifecycle management
-# Architecture: Each srun step gets exclusive access to its allocated resources
+# Start RPC workers on non-head nodes using SSH for reliable remote launch.
+# srun steps within batch jobs can timeout on small clusters; SSH is more reliable
+# and the SLURM cgroup still contains the batch allocation for resource limits.
 
-# FIX: Write logs to shared storage so we can debug crashes
+# Write logs to shared storage for debugging
 SHARED_LOG_DIR="/cluster/shared/ai/logs/${SLURM_JOB_ID}"
 mkdir -p "$SHARED_LOG_DIR"
 
@@ -285,26 +347,21 @@ echo "[$(date)] Starting RPC workers..."
 for i in "${!RPC_NODES[@]}"; do
     node="${RPC_NODES[$i]}"
     step_log="${SHARED_LOG_DIR}/rpc-${node}.log"
-    echo "  Starting RPC step $i on $node:$RPC_PORT (Logs: $step_log)"
+    echo "  Starting RPC worker $i on $node:$RPC_PORT (Logs: $step_log)"
 
-    # srun flags for proper resource isolation:
-    # --exclusive: Don't share resources with other steps
-    # --gres=gpu:1: Bind exactly one GPU to this step
-    # --cpus-per-task: Inherit from job allocation
-    # --label: Prefix output with step ID for debugging
-    srun --nodes=1 \
-         --ntasks=1 \
-         --nodelist="$node" \
-         --exclusive \
-         --gres=gpu:v100s:1 \
-         --label \
-         --output="$step_log" \
-         --error="$step_log" \
-        bash -c "LD_LIBRARY_PATH='$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB' CUDA_LAUNCH_BLOCKING=0 numactl --interleave=all '$LLAMA_BIN/rpc-server' --host 0.0.0.0 --port '$RPC_PORT'" &
+    ssh -o ConnectTimeout=10 -o BatchMode=yes "$node" \
+        "LD_LIBRARY_PATH='$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB' \
+         CUDA_LAUNCH_BLOCKING=0 \
+         nohup numactl --interleave=all \
+         '$LLAMA_BIN/rpc-server' --host 0.0.0.0 --port '$RPC_PORT' \
+         > '$step_log' 2>&1 &
+         echo \$!" &
     RPC_PIDS+=($!)
     WORKER_STATUS[$node]="starting"
-    echo "    Step $i PID: ${RPC_PIDS[-1]}"
+    echo "    SSH launcher PID: ${RPC_PIDS[-1]}"
 done
+# Wait for SSH commands to complete (they return after launching nohup background process)
+sleep 5
 
 # Wait for RPC workers with timeout and validation
 # Uses TCP probe here because persistent connection hasn't been established yet
@@ -349,25 +406,28 @@ for node in "${RPC_NODES[@]}"; do
 done
 
 if [[ -z "$RPC_SERVERS" ]]; then
-    echo "[$(date)] WARNING: No RPC workers available - running in single-GPU mode"
-else
-    echo "[$(date)] RPC servers: $RPC_SERVERS"
+    echo "[$(date)] FATAL: No RPC workers available — cannot run distributed inference"
+    cleanup
+    exit 1
 fi
+echo "[$(date)] RPC servers: $RPC_SERVERS"
 
 # Register endpoint on shared filesystem (for service discovery)
 ENDPOINT_DIR="/cluster/shared/ai/endpoints"
-ENDPOINT_FILE="${ENDPOINT_DIR}/${SLURM_JOB_ID}-72b.json"
+ENDPOINT_FILE="${ENDPOINT_DIR}/${SLURM_JOB_ID}-qwen35.json"
 mkdir -p "${ENDPOINT_DIR}"
 cat > "$ENDPOINT_FILE" <<EOF
 {
     "job_id": "${SLURM_JOB_ID}",
-    "model": "OR1-Behemoth",
-    "tier": "reasoning",
+    "model": "Qwen3.5-397B-A17B",
+    "tier": "manager-local",
     "head_node": "${HEAD_NODE}",
     "rpc_workers": [$(printf '"%s",' "${RPC_NODES[@]}" | sed 's/,$//')],
     "host": "${HEAD_NODE}",
     "port": ${HEAD_PORT},
     "endpoint": "http://${HEAD_NODE}:${HEAD_PORT}/v1/chat/completions",
+    "parallel_slots": ${PARALLEL_SLOTS},
+    "context_per_slot": ${CTX_SIZE},
     "started_at": "$(date -Iseconds)"
 }
 EOF
@@ -380,49 +440,61 @@ echo "[$(date)] Health monitor started (PID $MONITOR_PID)"
 
 echo "[$(date)] Starting head node llama-server..."
 
-# Build server command (conditionally include --rpc if workers are available)
+# Build server command
 SERVER_ARGS=(
     --model "$MODEL"
+    --alias "Qwen3.5-397B-A17B"
     --host 0.0.0.0
     --port "$HEAD_PORT"
     --ctx-size "$CTX_SIZE"
     --n-predict "$N_PREDICT"
-    # YaRN RoPE scaling for extended context (base model trained at 32K)
-    # GGUF has context_length=40960 with no YaRN metadata, so we override both:
-    # 1. context_length → 131072 to prevent slot capping at 40960
-    # 2. rope-scaling yarn with orig-ctx 32768 for proper frequency interpolation
-    --override-kv "qwen3.context_length=int:131072"
-    --rope-scaling yarn
-    --yarn-orig-ctx 32768
+    # RPC layer split across 3 GPUs (equal distribution)
+    --rpc "$RPC_SERVERS"
     --split-mode layer
-    --tensor-split 1,1
-    --n-gpu-layers 80
+    --tensor-split 1,1,1
+    --n-gpu-layers 99
+    # MoE expert FFN offload to CPU — this is the key optimization for 397B MoE.
+    # Only the 17B active parameters (attention + routing) stay on GPU.
+    # Expert FFN layers (~196GB) run on CPU across all 3 nodes.
+    -ot ".ffn_.*_exps.=CPU"
+    # Parallel slots for concurrent sessions
+    --parallel "$PARALLEL_SLOTS"
+    # Threading for MoE CPU computation
     --threads "$THREADS"
+    --threads-batch "$THREADS_BATCH"
+    # Continuous batching for multi-slot throughput
     --cont-batching
-    --metrics
-    # Quantized KV cache (q4_0) - fits in VRAM with model across 64GB total
+    # Flash attention for memory efficiency
+    --flash-attn on
+    # Jinja2 chat template with model's native thinking support
+    --jinja
+    # KNOWN ISSUE (llama.cpp #19690): Qwen3.5's hybrid Mamba/attention architecture
+    # forces full prompt re-processing on every request. The recurrent (Mamba) state
+    # also causes premature EOS after <think> tokens in chat mode.
+    # When the upstream fix lands, thinking will work without config changes.
+    # WORKAROUND: Use /completion endpoint with plain text Q&A formatting for now.
+    # e.g. "Question: ...\nAnswer: " format produces coherent multi-sentence output.
+    # Quantized KV cache — q4_0 keeps 256K context manageable
     --cache-type-k q4_0
     --cache-type-v q4_0
-    # Batch sizes optimized for network round-trip efficiency
-    --batch-size 512
-    --ubatch-size 512
-    # Lock model in memory to prevent swapping during long inference
-    --mlock
-    # Single slot for maximum context per request
-    --parallel 1
-    # Increase timeout for large context operations
-    --timeout 600
+    # Batch sizes: tunable for MoE-on-CPU workload
+    --batch-size "$BATCH_SIZE"
+    --ubatch-size "$UBATCH_SIZE"
+    # NUMA: defer to external numactl policy (interleave)
+    --numa numactl
+    # Metrics endpoint for monitoring
+    --metrics
+    # Longer timeout for 256K context operations
+    --timeout 900
 )
 
-# Only add --rpc if we have alive workers
-if [[ -n "$RPC_SERVERS" ]]; then
-    SERVER_ARGS+=(--rpc "$RPC_SERVERS")
-fi
-
 # Run head node server with NUMA interleave for maximum aggregate memory bandwidth.
-# With 4 vNUMA nodes, interleave distributes model weight pages across all domains
-# for ~4x bandwidth vs single-node binding. GPU DMA routes through NUMA 0 regardless.
-echo "[$(date)] Launching with NUMA interleave (all nodes) for memory bandwidth"
+# MoE expert FFN layers (~196GB across 3 nodes) are CPU-bound — distributing pages
+# across all 4 NUMA domains gives ~4x the bandwidth vs binding to GPU-local node.
+# GPU DMA naturally routes through NUMA 0 regardless of interleave policy.
+# NOTE: No --mlock — model is ~214GB, too large to lock in memory.
+# vmtouch prefetch above ensures pages are in cache for fast startup.
+echo "[$(date)] Launching with NUMA interleave (all nodes) for MoE bandwidth"
 LD_LIBRARY_PATH="$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" \
 numactl --interleave=all \
     "$LLAMA_BIN/llama-server" \

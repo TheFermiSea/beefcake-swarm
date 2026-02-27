@@ -153,7 +153,7 @@ install_agents() {
 # Step 0c2: Configure Agent CLIs (OpenCode, Factory Droid, Crush)
 #
 # All 30 proxy models organized by provider:
-#   Antigravity (12): Gemini-hosted Claude, Gemini 3 previews, GPT-OSS, Tab models
+#   Antigravity (15): Gemini-hosted Claude, Gemini 3/3.1 previews, GPT-OSS, Tab models
 #   Anthropic (8): Direct subscription Claude models
 #   Codex/OpenAI (9): GPT-5.x series
 #   Google (1): Gemini 2.5 Pro
@@ -183,24 +183,20 @@ configure_agents() {
           "name": "Claude Opus 4.6 Thinking",
           "limit": { "context": 200000, "output": 32768 }
         },
-        "gemini-claude-opus-4-5-thinking": {
-          "name": "Gemini Claude Opus 4.5 Thinking",
-          "limit": { "context": 200000, "output": 32768 }
+        "gemini-3.1-pro-high": {
+          "name": "Gemini 3.1 Pro High",
+          "limit": { "context": 2000000, "output": 65536 }
         },
-        "gemini-claude-sonnet-4-5-thinking": {
-          "name": "Gemini Claude Sonnet 4.5 Thinking",
-          "limit": { "context": 200000, "output": 32768 }
+        "gemini-3.1-pro-low": {
+          "name": "Gemini 3.1 Pro Low",
+          "limit": { "context": 2000000, "output": 65536 }
         },
-        "gemini-claude-sonnet-4-5": {
-          "name": "Gemini Claude Sonnet 4.5",
-          "limit": { "context": 200000, "output": 16384 }
+        "gemini-3.1-flash-image": {
+          "name": "Gemini 3.1 Flash Image",
+          "limit": { "context": 1000000, "output": 32768 }
         },
         "gemini-3-pro-preview": {
           "name": "Gemini 3 Pro Preview",
-          "limit": { "context": 2000000, "output": 65536 }
-        },
-        "gemini-3-pro-image-preview": {
-          "name": "Gemini 3 Pro Image Preview",
           "limit": { "context": 2000000, "output": 65536 }
         },
         "gemini-3-flash-preview": {
@@ -378,51 +374,52 @@ OCEOF
 {
   "logoAnimation": "off",
   "customModels": [
-    { "model": "claude-opus-4-6-thinking", "displayName": "Claude Opus 4.6 Thinking (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
-    { "model": "claude-sonnet-4-6", "displayName": "Claude Sonnet 4.6 (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-sonnet-4-5-thinking", "displayName": "Claude Sonnet 4.5 Thinking (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
-    { "model": "claude-sonnet-4-5", "displayName": "Claude Sonnet 4.5 (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gemini-3-pro-high", "displayName": "Gemini 3 Pro High (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
-    { "model": "gemini-3-pro-image", "displayName": "Gemini 3 Pro Image (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
-    { "model": "gemini-3-flash", "displayName": "Gemini 3 Flash (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
-    { "model": "gemini-2.5-flash", "displayName": "Gemini 2.5 Flash (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gemini-2.5-flash-lite", "displayName": "Gemini 2.5 Flash Lite (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
-    { "model": "gpt-oss-120b-medium", "displayName": "GPT-OSS 120B Medium (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "tab_flash_lite_preview", "displayName": "Tab Flash Lite Preview (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
-    { "model": "tab_jump_flash_lite_preview", "displayName": "Tab Jump Flash Lite Preview (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
-    { "model": "claude-opus-4-6", "displayName": "Claude Opus 4.6 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
-    { "model": "claude-opus-4-5-20251101", "displayName": "Claude Opus 4.5 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-opus-4-1-20250805", "displayName": "Claude Opus 4.1 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-opus-4-20250514", "displayName": "Claude Opus 4 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-sonnet-4-5-20250929", "displayName": "Claude Sonnet 4.5 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-sonnet-4-20250514", "displayName": "Claude Sonnet 4 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-haiku-4-5-20251001", "displayName": "Claude Haiku 4.5 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
-    { "model": "claude-3-7-sonnet-20250219", "displayName": "Claude 3.7 Sonnet (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
-    { "model": "claude-3-5-haiku-20241022", "displayName": "Claude 3.5 Haiku (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 4096 },
-    { "model": "claude-opus-4.6", "displayName": "Claude Opus 4.6 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
-    { "model": "claude-opus-4.5", "displayName": "Claude Opus 4.5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-opus-4.1", "displayName": "Claude Opus 4.1 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-sonnet-4.5", "displayName": "Claude Sonnet 4.5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-sonnet-4", "displayName": "Claude Sonnet 4 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "claude-haiku-4.5", "displayName": "Claude Haiku 4.5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
-    { "model": "gpt-5.2-codex", "displayName": "GPT-5.2 Codex (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gpt-5.2", "displayName": "GPT-5.2 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gpt-5.1-codex-max", "displayName": "GPT-5.1 Codex Max (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gpt-5.1-codex", "displayName": "GPT-5.1 Codex (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gpt-5.1-codex-mini", "displayName": "GPT-5.1 Codex Mini (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
-    { "model": "gpt-5.1", "displayName": "GPT-5.1 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gpt-5-codex", "displayName": "GPT-5 Codex (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gpt-5", "displayName": "GPT-5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gpt-5-mini", "displayName": "GPT-5 Mini (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
-    { "model": "gpt-4.1", "displayName": "GPT-4.1 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "grok-code-fast-1", "displayName": "Grok Code Fast 1 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "oswe-vscode-prime", "displayName": "OSWE VSCode Prime (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gemini-3-pro-preview", "displayName": "Gemini 3 Pro Preview (Google)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
-    { "model": "gemini-3-flash-preview", "displayName": "Gemini 3 Flash Preview (Google)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
-    { "model": "gemini-2.5-pro", "displayName": "Gemini 2.5 Pro (Google)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
-    { "model": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex (OpenAI)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gpt-5.3-codex-spark", "displayName": "GPT-5.3 Codex Spark (OpenAI)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
-    { "model": "gpt-5-codex-mini", "displayName": "GPT-5 Codex Mini (OpenAI)", "baseUrl": "http://localhost:8317/v1", "apiKey": "dummy-not-used", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-opus-4-6-thinking", "displayName": "Claude Opus 4.6 Thinking (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "claude-sonnet-4-6", "displayName": "Claude Sonnet 4.6 (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gemini-3.1-pro-high", "displayName": "Gemini 3.1 Pro High (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
+    { "model": "gemini-3.1-pro-low", "displayName": "Gemini 3.1 Pro Low (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
+    { "model": "gemini-3.1-flash-image", "displayName": "Gemini 3.1 Flash Image (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "gemini-3-pro-high", "displayName": "Gemini 3 Pro High (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
+    { "model": "gemini-3-pro-image", "displayName": "Gemini 3 Pro Image (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "gemini-3-flash", "displayName": "Gemini 3 Flash (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "gemini-2.5-flash", "displayName": "Gemini 2.5 Flash (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gemini-2.5-flash-lite", "displayName": "Gemini 2.5 Flash Lite (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "gpt-oss-120b-medium", "displayName": "GPT-OSS 120B Medium (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "tab_flash_lite_preview", "displayName": "Tab Flash Lite Preview (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "tab_jump_flash_lite_preview", "displayName": "Tab Jump Flash Lite Preview (Antigravity)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "claude-opus-4-6", "displayName": "Claude Opus 4.6 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "claude-opus-4-5-20251101", "displayName": "Claude Opus 4.5 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-opus-4-1-20250805", "displayName": "Claude Opus 4.1 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-opus-4-20250514", "displayName": "Claude Opus 4 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-sonnet-4-5-20250929", "displayName": "Claude Sonnet 4.5 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-sonnet-4-20250514", "displayName": "Claude Sonnet 4 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-haiku-4-5-20251001", "displayName": "Claude Haiku 4.5 (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "claude-3-7-sonnet-20250219", "displayName": "Claude 3.7 Sonnet (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "claude-3-5-haiku-20241022", "displayName": "Claude 3.5 Haiku (Anthropic)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 4096 },
+    { "model": "claude-opus-4.6", "displayName": "Claude Opus 4.6 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "claude-opus-4.5", "displayName": "Claude Opus 4.5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-sonnet-4.6", "displayName": "Claude Sonnet 4.6 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-sonnet-4.5", "displayName": "Claude Sonnet 4.5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-sonnet-4", "displayName": "Claude Sonnet 4 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "claude-haiku-4.5", "displayName": "Claude Haiku 4.5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "gpt-5.2-codex", "displayName": "GPT-5.2 Codex (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5.2", "displayName": "GPT-5.2 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5.1-codex-max", "displayName": "GPT-5.1 Codex Max (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5.1-codex", "displayName": "GPT-5.1 Codex (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5.1-codex-mini", "displayName": "GPT-5.1 Codex Mini (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "gpt-5.1", "displayName": "GPT-5.1 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5-codex", "displayName": "GPT-5 Codex (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5", "displayName": "GPT-5 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5-mini", "displayName": "GPT-5 Mini (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
+    { "model": "gpt-4.1", "displayName": "GPT-4.1 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "grok-code-fast-1", "displayName": "Grok Code Fast 1 (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "oswe-vscode-prime", "displayName": "OSWE VSCode Prime (Copilot)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gemini-3-pro-preview", "displayName": "Gemini 3 Pro Preview (Google)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
+    { "model": "gemini-3-flash-preview", "displayName": "Gemini 3 Flash Preview (Google)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 32768 },
+    { "model": "gemini-2.5-pro", "displayName": "Gemini 2.5 Pro (Google)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 65536 },
+    { "model": "gpt-5.3-codex", "displayName": "GPT-5.3 Codex (OpenAI)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5.3-codex-spark", "displayName": "GPT-5.3 Codex Spark (OpenAI)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
+    { "model": "gpt-5-codex-mini", "displayName": "GPT-5 Codex Mini (OpenAI)", "baseUrl": "http://localhost:8317/v1", "apiKey": "rust-daq-proxy-key", "provider": "generic-chat-completion-api", "maxOutputTokens": 16384 },
     { "model": "or1-behemoth-q4_k_m", "displayName": "Beefcake 72B (Local)", "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8081/v1", "apiKey": "not-needed", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 },
     { "model": "strand-rust-coder-14b-q8_0", "displayName": "Beefcake 14B (Local)", "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1", "apiKey": "not-needed", "provider": "generic-chat-completion-api", "maxOutputTokens": 4096 },
     { "model": "Qwen3-Coder-Next-UD-Q4_K_XL.gguf", "displayName": "Qwen3 Coder Next 80B (Local)", "baseUrl": "http://slurm-ctl.tailc46cd0.ts.net:8080/v1", "apiKey": "not-needed", "provider": "generic-chat-completion-api", "maxOutputTokens": 8192 }
@@ -448,11 +445,10 @@ FDEOF
       "api_key": "rust-daq-proxy-key",
       "models": [
         { "name": "[Antigravity] Claude Opus 4.6 Thinking", "id": "claude-opus-4-6-thinking", "context_window": 200000, "default_max_tokens": 32768 },
-        { "name": "[Antigravity] Gemini Claude Opus 4.5 Thinking", "id": "gemini-claude-opus-4-5-thinking", "context_window": 200000, "default_max_tokens": 32768 },
-        { "name": "[Antigravity] Gemini Claude Sonnet 4.5 Thinking", "id": "gemini-claude-sonnet-4-5-thinking", "context_window": 200000, "default_max_tokens": 32768 },
-        { "name": "[Antigravity] Gemini Claude Sonnet 4.5", "id": "gemini-claude-sonnet-4-5", "context_window": 200000, "default_max_tokens": 16384 },
+        { "name": "[Antigravity] Gemini 3.1 Pro High", "id": "gemini-3.1-pro-high", "context_window": 2000000, "default_max_tokens": 65536 },
+        { "name": "[Antigravity] Gemini 3.1 Pro Low", "id": "gemini-3.1-pro-low", "context_window": 2000000, "default_max_tokens": 65536 },
+        { "name": "[Antigravity] Gemini 3.1 Flash Image", "id": "gemini-3.1-flash-image", "context_window": 1000000, "default_max_tokens": 32768 },
         { "name": "[Antigravity] Gemini 3 Pro Preview", "id": "gemini-3-pro-preview", "context_window": 2000000, "default_max_tokens": 65536 },
-        { "name": "[Antigravity] Gemini 3 Pro Image Preview", "id": "gemini-3-pro-image-preview", "context_window": 2000000, "default_max_tokens": 65536 },
         { "name": "[Antigravity] Gemini 3 Flash Preview", "id": "gemini-3-flash-preview", "context_window": 1000000, "default_max_tokens": 65536 },
         { "name": "[Antigravity] Gemini 2.5 Flash", "id": "gemini-2.5-flash", "context_window": 1000000, "default_max_tokens": 65536 },
         { "name": "[Antigravity] Gemini 2.5 Flash Lite", "id": "gemini-2.5-flash-lite", "context_window": 1000000, "default_max_tokens": 8192 },

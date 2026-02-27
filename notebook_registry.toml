@@ -24,20 +24,8 @@ role = "codebase"
 auto_query = false
 auto_update = false
 
-[notebooks.research]
-id = "b8d9e091-8be8-4af4-8301-89052b04a04e"
-role = "research"
-auto_query = false
-auto_update = false
-
 [notebooks.security]
 id = "1a2ccd75-02ab-4172-b539-b1dfd69685c9"
 role = "security"
-auto_query = false
-auto_update = false
-
-[notebooks.visuals]
-id = "4d2a4adf-b51f-41ab-b239-417049abb0ec"
-role = "visuals"
 auto_query = false
 auto_update = false

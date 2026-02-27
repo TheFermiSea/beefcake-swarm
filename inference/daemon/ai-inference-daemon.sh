@@ -5,9 +5,11 @@
 # TEMPORARY: This daemon auto-starts llama.cpp inference when VASP queue is idle.
 # It should be REMOVED when MCP integration is complete (beefcake2-40om, y51x).
 #
-# Manages inference tiers (2+1 GPU split):
+# Manages inference tiers:
 #   - Fast+Coder (14B + Qwen3-Coder-Next router mode) on vasp-02 (:8080)
 #   - Reasoning (72B Q4_K_M distributed) on vasp-01 + vasp-03 (:8081)
+#   - Manager (Qwen3.5-397B MoE distributed) on all 3 nodes (:8081)
+#   - Embedding (nomic-embed-code CPU-only) on vasp-02 (:8082)
 #
 # Tracked in: beads issue beefcake2-j9c3
 #
@@ -45,6 +47,8 @@ inference_job_exists() {
     case $tier in
         fast)      job_name="llama-14b" ;;
         reasoning) job_name="llama-72b" ;;
+        manager)   job_name="llama-qwen35" ;;
+        embed)     job_name="llama-embed" ;;
         *)         return 1 ;;
     esac
     squeue -n "$job_name" -h -t RUNNING,PENDING 2>/dev/null | grep -q .
@@ -57,6 +61,8 @@ inference_endpoint_healthy() {
     case $tier in
         fast)      pattern="*-14b.json" ;;
         reasoning) pattern="*-72b.json" ;;
+        manager)   pattern="*-qwen35.json" ;;
+        embed)     pattern="*-embed.json" ;;
         *)         return 1 ;;
     esac
 
@@ -77,6 +83,8 @@ submit_inference_job() {
     case $tier in
         fast)      script="run-14b.slurm" ;;
         reasoning) script="run-72b-distributed.slurm" ;;
+        manager)   script="run-qwen35-distributed.slurm" ;;
+        embed)     script="run-embedding.slurm" ;;
         *)         log "ERROR: Unknown tier: $tier"; return 1 ;;
     esac
 
@@ -125,8 +133,18 @@ check_and_start_all() {
 
     # Fast+coder tier (strand-14B + Qwen3-Coder-Next on vasp-02)
     check_tier "fast" || true
-    # Reasoning tier (OR1-Behemoth 72B on vasp-01+03)
-    check_tier "reasoning" || true
+    # Reasoning and manager tiers both use port 8081 on vasp-01 — mutually exclusive.
+    # Prefer manager (Qwen3.5-397B MoE) when available; fall back to reasoning (OR1-Behemoth 72B).
+    if inference_job_exists "manager"; then
+        check_tier "manager" || true
+    elif inference_job_exists "reasoning"; then
+        check_tier "reasoning" || true
+    else
+        # Neither running — start manager (preferred tier on port 8081).
+        check_tier "manager" || true
+    fi
+    # Embedding tier (nomic-embed-code CPU-only on vasp-02)
+    check_tier "embed" || true
 }
 
 # Single check mode
@@ -137,7 +155,7 @@ fi
 
 # Daemon mode
 log "AI Inference Daemon starting (interval: ${CHECK_INTERVAL}s)"
-log "Managing: fast+coder (vasp-02:8080, strand-14B + Qwen3-Coder-Next) + reasoning (vasp-01,vasp-03:8081)"
+log "Managing: fast+coder (vasp-02:8080) + reasoning OR manager (vasp-01,vasp-03:8081, mutually exclusive) + embed (vasp-02:8082, CPU-only)"
 log "VASP partitions monitored: $VASP_PARTITIONS"
 
 echo $$ > "$PID_FILE"

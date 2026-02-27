@@ -16,17 +16,40 @@ use super::{sandbox_check, ToolError};
 pub struct ReadFileArgs {
     /// Relative path within the workspace.
     pub path: String,
+    /// First line to read (1-indexed, inclusive). Optional.
+    /// When provided with `end_line`, only that line range is returned.
+    pub start_line: Option<u32>,
+    /// Last line to read (1-indexed, inclusive). Optional.
+    /// When provided with `start_line`, only that line range is returned.
+    pub end_line: Option<u32>,
 }
 
 /// Read a file from the worktree. Path must stay within the sandbox.
+///
+/// When `max_output_chars` is set, large files are truncated with a
+/// `[...N lines truncated...]` marker. This keeps tool results small enough
+/// for small models (HydraCoder 30B MoE) to stay in tool-calling mode on
+/// subsequent turns. Controlled by `SWARM_READ_FILE_MAX_CHARS` (default: 0 = unlimited).
 pub struct ReadFileTool {
     pub working_dir: PathBuf,
+    /// Maximum characters to return. 0 = unlimited.
+    pub max_output_chars: usize,
+}
+
+/// Default max chars for read_file output (env override: `SWARM_READ_FILE_MAX_CHARS`).
+/// 6000 chars ≈ 1500 tokens — keeps total context under HydraCoder's reliable zone.
+fn default_read_file_max_chars() -> usize {
+    std::env::var("SWARM_READ_FILE_MAX_CHARS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(6000)
 }
 
 impl ReadFileTool {
     pub fn new(working_dir: &Path) -> Self {
         Self {
             working_dir: working_dir.to_path_buf(),
+            max_output_chars: default_read_file_max_chars(),
         }
     }
 }
@@ -40,13 +63,23 @@ impl Tool for ReadFileTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "read_file".into(),
-            description: "Read the contents of a file in the workspace.".into(),
+            description: "Read the contents of a file in the workspace. \
+                          Use start_line/end_line to read a specific range when the file is large."
+                .into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "path": {
                         "type": "string",
                         "description": "Relative path to the file within the workspace"
+                    },
+                    "start_line": {
+                        "type": "integer",
+                        "description": "First line to read (1-indexed, inclusive). Omit to start from line 1."
+                    },
+                    "end_line": {
+                        "type": "integer",
+                        "description": "Last line to read (1-indexed, inclusive). Omit to read to end of file."
                     }
                 },
                 "required": ["path"]
@@ -57,7 +90,62 @@ impl Tool for ReadFileTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let full_path = sandbox_check(&self.working_dir, &args.path)?;
         let content = std::fs::read_to_string(&full_path)?;
-        Ok(content)
+
+        // Apply line-range slicing when requested.
+        let content = if args.start_line.is_some() || args.end_line.is_some() {
+            let lines: Vec<&str> = content.lines().collect();
+            let total = lines.len();
+            // Convert 1-indexed user input to 0-indexed bounds, clamped to file size.
+            let start = args.start_line.map(|n| (n as usize).saturating_sub(1)).unwrap_or(0).min(total);
+            let end = args.end_line.map(|n| (n as usize).min(total)).unwrap_or(total);
+            if start >= end {
+                return Ok(format!(
+                    "[Empty range: start_line={} end_line={} total_lines={total}]",
+                    start + 1,
+                    end
+                ));
+            }
+            // Annotate with line numbers so the model knows where it is in the file.
+            let annotated: String = lines[start..end]
+                .iter()
+                .enumerate()
+                .map(|(i, line)| format!("{:>5}: {}", start + i + 1, line))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "[Lines {}-{} of {total} total]\n{annotated}",
+                start + 1,
+                end
+            )
+        } else {
+            content
+        };
+
+        // Truncate large files to keep context small for local models.
+        if self.max_output_chars > 0 && content.len() > self.max_output_chars {
+            let lines: Vec<&str> = content.lines().collect();
+            let total_lines = lines.len();
+            let mut truncated = String::with_capacity(self.max_output_chars + 100);
+            let mut chars = 0;
+            let mut included_lines = 0;
+            for line in &lines {
+                let line_len = line.len() + 1; // +1 for newline
+                if chars + line_len > self.max_output_chars {
+                    break;
+                }
+                truncated.push_str(line);
+                truncated.push('\n');
+                chars += line_len;
+                included_lines += 1;
+            }
+            let remaining = total_lines - included_lines;
+            truncated.push_str(&format!(
+                "\n[...{remaining} more lines truncated. Use start_line/end_line to read a specific range.]\n"
+            ));
+            Ok(truncated)
+        } else {
+            Ok(content)
+        }
     }
 }
 
@@ -129,7 +217,7 @@ impl Tool for WriteFileTool {
         }
 
         // Heuristic: detect double-JSON-encoded content from local models.
-        // Qwen3-Coder-Next sometimes wraps the entire file in quotes with
+        // Qwen3.5 sometimes wraps the entire file in quotes with
         // escaped characters. After rig's JSON parse the content arrives as
         // a valid Rust string that starts/ends with `"` and contains escape
         // sequences like `\n`, `\t`, `\"`. Only unescape if escape sequences

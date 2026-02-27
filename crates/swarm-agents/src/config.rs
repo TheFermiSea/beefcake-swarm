@@ -6,11 +6,11 @@ use std::path::PathBuf;
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
 pub enum Tier {
-    /// Fast 14B model on vasp-02 (~53 tok/s)
+    /// HydraCoder 30B-A3B MoE on vasp-02 — Rust specialist (~135 tok/s)
     Fast,
-    /// General coder model (Qwen3-Coder-Next) on vasp-02
+    /// HydraCoder 30B-A3B MoE on vasp-02 — general coder (~135 tok/s)
     Coder,
-    /// Reasoning 72B model on vasp-01+vasp-03 (~13 tok/s)
+    /// HydraCoder 30B-A3B MoE on vasp-02 — reasoning/review (~135 tok/s)
     Reasoning,
     /// Cloud models via CLIAPIProxy
     Cloud,
@@ -135,11 +135,11 @@ impl CloudFallbackMatrix {
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
-    /// HydraCoder (Rust specialist)
+    /// HydraCoder on vasp-02 :8080 (Rust specialist system prompt, 4 slots @ 32K, ~135 tok/s)
     pub fast_endpoint: Endpoint,
-    /// Qwen3-Coder-Next (general coding, 256K context)
+    /// HydraCoder on vasp-02 :8080 (general coding system prompt, 4 slots @ 32K, ~135 tok/s)
     pub coder_endpoint: Endpoint,
-    /// OR1-Behemoth 72B (reasoning/manager)
+    /// HydraCoder on vasp-02 :8080 (reasoning/review, 4 slots @ 32K, ~135 tok/s)
     pub reasoning_endpoint: Endpoint,
     /// CLIAPIProxy cloud escalation (optional)
     pub cloud_endpoint: Option<CloudEndpoint>,
@@ -192,16 +192,16 @@ impl Default for SwarmConfig {
                 url: std::env::var("SWARM_CODER_URL")
                     .unwrap_or_else(|_| "http://vasp-02:8080/v1".into()),
                 model: std::env::var("SWARM_CODER_MODEL")
-                    .unwrap_or_else(|_| "Qwen3-Coder-Next-UD-Q4_K_XL.gguf".into()),
+                    .unwrap_or_else(|_| "HydraCoder.i1-Q4_K_M".into()),
                 tier: Tier::Coder,
                 api_key: std::env::var("SWARM_CODER_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
             },
             reasoning_endpoint: Endpoint {
                 url: std::env::var("SWARM_REASONING_URL")
-                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-02:8080/v1".into()),
                 model: std::env::var("SWARM_REASONING_MODEL")
-                    .unwrap_or_else(|_| "or1-behemoth-q4_k_m.gguf".into()),
+                    .unwrap_or_else(|_| "HydraCoder.i1-Q4_K_M".into()),
                 tier: Tier::Reasoning,
                 api_key: std::env::var("SWARM_REASONING_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
@@ -299,13 +299,12 @@ impl SwarmConfig {
 
 /// Pre-built rig CompletionsClients, deduplicated by endpoint URL.
 ///
-/// vasp-02:8080 serves both strand-14B and Qwen3-Coder-Next, so one
-/// client handles both — model selection happens via the model name in
-/// the request JSON.
+/// vasp-02:8080 serves all local tiers with HydraCoder 30B-A3B MoE.
+/// All tiers use the same endpoint — different system prompts per agent role.
 pub struct ClientSet {
-    /// Client for vasp-02:8080 (serves Fast + Coder models)
+    /// Client for vasp-02:8080 (HydraCoder, 4 slots @ 32K, ~135 tok/s)
     pub local: openai::CompletionsClient,
-    /// Client for vasp-01:8081 (serves Reasoning model)
+    /// Client for vasp-02:8080 (HydraCoder, same endpoint as local)
     pub reasoning: openai::CompletionsClient,
     /// Client for CLIAPIProxy (cloud models: Opus 4.6, G3-Pro, etc.)
     /// Used as the Manager tier when available.
@@ -468,7 +467,8 @@ mod tests {
         let config = SwarmConfig::default();
         assert_eq!(config.max_retries, 10);
         assert!(config.fast_endpoint.url.contains("vasp-02"));
-        assert!(config.reasoning_endpoint.url.contains("vasp-01"));
+        assert!(config.reasoning_endpoint.url.contains("vasp-02"));
+        assert!(config.fast_endpoint.model.contains("HydraCoder"));
         assert_eq!(config.fast_endpoint.api_key, "not-needed");
     }
 

@@ -41,9 +41,9 @@ use coordination::{
 /// Coder routing decision with confidence level.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CoderRoute {
-    /// strand-14B: deep Rust expertise, fast on single-file fixes
+    /// Qwen3.5-397B with Rust specialist system prompt
     RustCoder,
-    /// Qwen3-Coder-Next: 256K context, multi-file scaffolding
+    /// Qwen3.5-397B with general coder system prompt (multi-file scaffolding)
     GeneralCoder,
 }
 
@@ -66,10 +66,12 @@ fn query_kb_with_failsafe(kb: &dyn KnowledgeBase, role: &str, question: &str) ->
 /// Route to the appropriate coder based on error category distribution.
 ///
 /// Uses a weighted scoring system rather than a simple `any()` check:
-/// - Rust-specific categories (borrow checker, lifetimes, traits) score toward strand-14B
-/// - Structural categories (imports, syntax, macros) score toward Qwen3-Coder-Next
-/// - Mixed errors with majority Rust → strand-14B; majority structural → general
+/// - Rust-specific categories (borrow checker, lifetimes, traits) score toward RustCoder system prompt
+/// - Structural categories (imports, syntax, macros) score toward GeneralCoder system prompt
+/// - Mixed errors with majority Rust → RustCoder; majority structural → GeneralCoder
 /// - No errors (first iteration) → general coder for scaffolding
+///
+/// Both routes use Qwen3.5-397B on vasp-02 — differentiation is by system prompt only.
 pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
     if error_cats.is_empty() {
         // First iteration — use general coder for scaffolding/multi-file work
@@ -81,14 +83,14 @@ pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
 
     for cat in error_cats {
         match cat {
-            // Deep Rust expertise required — strand-14B excels here
+            // Deep Rust expertise required — Rust specialist prompt excels here
             ErrorCategory::BorrowChecker => rust_score += 3,
             ErrorCategory::Lifetime => rust_score += 3,
             ErrorCategory::TraitBound => rust_score += 2,
             ErrorCategory::Async => rust_score += 2,
             ErrorCategory::TypeMismatch => rust_score += 1,
 
-            // Structural/multi-file work — Qwen3-Coder-Next's 256K context helps
+            // Structural/multi-file work — general coder's 65K context helps
             ErrorCategory::ImportResolution => general_score += 3,
             ErrorCategory::Macro => general_score += 2,
             ErrorCategory::Syntax => general_score += 1,
@@ -239,6 +241,120 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
         "**Max patch size:** {} LOC\n",
         packet.max_patch_loc
     ));
+
+    prompt
+}
+
+/// Format a compact task prompt for small local models (HydraCoder, etc).
+///
+/// Long structured prompts suppress tool-call generation in small MoE models.
+/// This format keeps the user message under ~1500 chars by including only:
+/// - The objective
+/// - Target file(s)
+/// - Error summary (retries only, truncated)
+/// - A directive to call read_file first
+///
+/// The full verbose format (`format_task_prompt`) is for cloud/council models.
+pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String {
+    let mut prompt = String::with_capacity(1500);
+
+    prompt.push_str(&format!("# Task: {}\n\n", packet.objective));
+
+    // Target files — prefer explicit scope, then extract from objective text,
+    // then fall back to first few file_contexts filenames.
+    let target_files: Vec<&str> = if !packet.files_touched.is_empty() {
+        packet.files_touched.iter().map(|s| s.as_str()).collect()
+    } else {
+        // Try to extract file paths from objective (e.g., "File: src/foo.rs")
+        // Strip trailing punctuation (period, comma, etc.) before checking extension.
+        let objective_files: Vec<&str> = packet
+            .objective
+            .split_whitespace()
+            .filter(|w| {
+                let trimmed = w.trim_end_matches(|c: char| {
+                    c.is_ascii_punctuation() && c != '/' && c != '.' && c != '_' && c != '-'
+                });
+                trimmed.contains('/') && (trimmed.ends_with(".rs") || trimmed.ends_with(".toml"))
+            })
+            .map(|w| {
+                w.trim_end_matches(|c: char| {
+                    c.is_ascii_punctuation() && c != '/' && c != '.' && c != '_' && c != '-'
+                })
+            })
+            .collect();
+        if !objective_files.is_empty() {
+            objective_files
+        } else {
+            packet
+                .file_contexts
+                .iter()
+                .map(|fc| fc.file.as_str())
+                .take(3)
+                .collect()
+        }
+    };
+
+    if !target_files.is_empty() {
+        prompt.push_str("**Files to modify:**\n");
+        for f in &target_files {
+            prompt.push_str(&format!("- `{f}`\n"));
+        }
+        prompt.push('\n');
+    }
+
+    // On retries: include error summary (compact — category + message only)
+    if !packet.failure_signals.is_empty() {
+        prompt.push_str("**Errors to fix:**\n");
+        let mut error_chars = 0usize;
+        for signal in &packet.failure_signals {
+            let line = format!("- {}: {}\n", signal.category, signal.message);
+            error_chars += line.len();
+            if error_chars > 800 {
+                prompt.push_str("- (more errors truncated)\n");
+                break;
+            }
+            prompt.push_str(&line);
+        }
+        prompt.push('\n');
+    }
+
+    // Validator feedback (compact)
+    if !packet.validator_feedback.is_empty() {
+        prompt.push_str("**Reviewer feedback:**\n");
+        for fb in packet.validator_feedback.iter().take(3) {
+            prompt.push_str(&format!("- [{}] {}\n", fb.issue_type, fb.description));
+        }
+        prompt.push('\n');
+    }
+
+    // Inline the target file content when there's exactly one target file.
+    // This saves a read_file turn (critical with max_turns=5).
+    if target_files.len() == 1 {
+        let target_path = wt_root.join(target_files[0]);
+        if let Ok(content) = std::fs::read_to_string(&target_path) {
+            let truncated = if content.len() > 4000 {
+                format!("{}...\n[truncated at 4000 chars]", &content[..4000])
+            } else {
+                content
+            };
+            prompt.push_str(&format!(
+                "**Current content of `{}`:**\n```\n{}\n```\n\n",
+                target_files[0], truncated
+            ));
+            prompt.push_str(
+                "Apply your edits directly with edit_file — the file content is above.\n",
+            );
+        } else {
+            prompt.push_str(&format!(
+                "Start by calling read_file on `{}`, then apply your edits with edit_file.\n",
+                target_files[0]
+            ));
+        }
+    } else {
+        prompt.push_str(
+            "Start by calling read_file on the target file(s), then apply your edits with edit_file.\n",
+        );
+    }
 
     prompt
 }
@@ -804,6 +920,90 @@ async fn cloud_validate(
     results
 }
 
+/// Detect which Cargo packages have been modified in the worktree.
+///
+/// Combines committed changes (git diff main..HEAD) and working-tree
+/// changes (git status --porcelain) to produce a deduplicated list of
+/// package names. Falls back to an empty Vec (= full workspace) on any error.
+fn detect_changed_packages(wt_path: &Path) -> Vec<String> {
+    let mut changed_files: std::collections::HashSet<std::path::PathBuf> = Default::default();
+
+    // Committed changes since branching from main
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["diff", "--name-only", "main"])
+        .current_dir(wt_path)
+        .output()
+    {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            if !line.trim().is_empty() {
+                changed_files.insert(wt_path.join(line.trim()));
+            }
+        }
+    }
+
+    // Uncommitted working-tree changes (staged + unstaged)
+    if let Ok(out) = std::process::Command::new("git")
+        .args(["status", "--porcelain"])
+        .current_dir(wt_path)
+        .output()
+    {
+        for line in String::from_utf8_lossy(&out.stdout).lines() {
+            // porcelain format: "XY filename" — filename starts at column 3
+            if line.len() > 3 {
+                let path = line[3..].trim();
+                if !path.is_empty() {
+                    changed_files.insert(wt_path.join(path));
+                }
+            }
+        }
+    }
+
+    let mut packages: std::collections::HashSet<String> = Default::default();
+    for file_path in &changed_files {
+        if let Some(pkg) = find_package_name(file_path) {
+            packages.insert(pkg);
+        }
+    }
+
+    let result: Vec<String> = packages.into_iter().collect();
+    if result.is_empty() {
+        tracing::debug!("detect_changed_packages: no changes detected, targeting full workspace");
+    } else {
+        tracing::debug!(packages = ?result, "detect_changed_packages: scoping verifier to changed packages");
+    }
+    result
+}
+
+/// Walk up from `file_path` to find the nearest `Cargo.toml` and return the package `name`.
+fn find_package_name(file_path: &Path) -> Option<String> {
+    let mut dir = file_path.parent()?;
+    loop {
+        let cargo_toml = dir.join("Cargo.toml");
+        if cargo_toml.exists() {
+            if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
+                let mut in_package = false;
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed == "[package]" {
+                        in_package = true;
+                    } else if trimmed.starts_with('[') {
+                        in_package = false;
+                    } else if in_package && trimmed.starts_with("name") {
+                        if let Some(name) = trimmed.split('"').nth(1) {
+                            return Some(name.to_string());
+                        }
+                    }
+                }
+            }
+        }
+        match dir.parent() {
+            Some(parent) if parent != dir => dir = parent,
+            _ => break,
+        }
+    }
+    None
+}
+
 /// Process a single issue through the implement → verify → review → escalate loop.
 ///
 /// Integrates coordination's harness for:
@@ -942,11 +1142,16 @@ pub async fn process_issue(
     let mut last_validator_feedback: Vec<ValidatorFeedback> = Vec::new();
     let mut span_summary = SpanSummary::new();
 
-    // Scope verifier to configured packages.
-    // When empty, targets the entire workspace (useful for external repos).
-    // When set (e.g., ["swarm-agents"]), limits clippy/check/test to those packages.
+    // Scope verifier to changed packages.
+    // If explicit packages are configured (CLI --package or SWARM_VERIFIER_PACKAGES), use those.
+    // Otherwise, detect from git-changed files to avoid missing breakage in other crates.
+    let initial_packages = if config.verifier_packages.is_empty() {
+        detect_changed_packages(&wt_path)
+    } else {
+        config.verifier_packages.clone()
+    };
     let verifier_config = VerifierConfig {
-        packages: config.verifier_packages.clone(),
+        packages: initial_packages,
         check_clippy: !bool_from_env("SWARM_SKIP_CLIPPY", false),
         check_test: !bool_from_env("SWARM_SKIP_TESTS", false),
         ..VerifierConfig::default()
@@ -1043,22 +1248,43 @@ pub async fn process_issue(
             "Packed context"
         );
 
-        let mut task_prompt = format_task_prompt(&packet);
+        // Worker tier gets a compact prompt (<1500 chars) because small local
+        // models (HydraCoder 30B MoE) suppress tool calls with long prompts.
+        // Council/Human tiers get the full verbose format for cloud models.
+        let mut task_prompt = if tier == SwarmTier::Worker {
+            format_compact_task_prompt(&packet, &wt_path)
+        } else {
+            format_task_prompt(&packet)
+        };
 
         // Inject verifier stderr into prompt when failure_signals are thin.
         // Fmt errors don't produce ParsedErrors, so the packet may lack error details.
         // The raw stderr contains the actual error output the model needs to see.
+        // For Worker tier: only append truncated stderr to stay under ~2K chars total.
         if let Some(ref report) = last_report {
             if !report.all_green && packet.failure_signals.is_empty() {
-                task_prompt.push_str("\n## Verifier Output (raw)\n");
-                for gate in &report.gates {
+                task_prompt.push_str("\n**Verifier output:**\n```\n");
+                let mut stderr_chars = 0usize;
+                let stderr_budget = if tier == SwarmTier::Worker {
+                    600
+                } else {
+                    usize::MAX
+                };
+                'gates: for gate in &report.gates {
                     if let Some(stderr) = &gate.stderr_excerpt {
-                        task_prompt.push_str(&format!(
-                            "### {} gate ({})\n```\n{}\n```\n\n",
-                            gate.gate, gate.outcome, stderr
-                        ));
+                        for line in stderr.lines() {
+                            let line_len = line.len() + 1;
+                            if stderr_chars + line_len > stderr_budget {
+                                task_prompt.push_str("...(truncated)\n");
+                                break 'gates;
+                            }
+                            task_prompt.push_str(line);
+                            task_prompt.push('\n');
+                            stderr_chars += line_len;
+                        }
                     }
                 }
+                task_prompt.push_str("```\n");
             }
         }
 
@@ -1070,12 +1296,12 @@ pub async fn process_issue(
         // --- Route to agent based on current tier ---
         //
         // Hierarchy (cloud available):
-        //   Worker: local coders (strand-14B, Qwen3-Coder-Next)
+        //   Worker: local coders (Qwen3.5-Implementer on vasp-02)
         //   Council+Human: cloud-backed manager (Opus 4.6) with all local workers as tools
         //
         // Hierarchy (no cloud):
         //   Worker: local coders
-        //   Council+Human: local manager (OR1-Behemoth) with coders as tools
+        //   Council+Human: local manager (Qwen3.5-Architect on vasp-01) with coders as tools
         let agent_start = Instant::now();
         let (agent_future, adapter) = match tier {
             SwarmTier::Worker => {
@@ -1087,11 +1313,11 @@ pub async fn process_issue(
 
                 match route_to_coder(&recent_cats) {
                     CoderRoute::RustCoder => {
-                        info!(iteration, "Routing to rust_coder (strand-14B)");
+                        info!(iteration, "Routing to rust_coder (Qwen3.5-Implementer)");
                         metrics.record_coder_route("RustCoder");
-                        metrics.record_agent_metrics("strand-14B", 0, 0);
+                        metrics.record_agent_metrics("Qwen3.5-RustCoder", 0, 0);
                         let adapter = RuntimeAdapter::new(AdapterConfig {
-                            agent_name: "strand-14B".into(),
+                            agent_name: "Qwen3.5-RustCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             ..Default::default()
                         });
@@ -1115,11 +1341,11 @@ pub async fn process_issue(
                         (result, adapter)
                     }
                     CoderRoute::GeneralCoder => {
-                        info!(iteration, "Routing to general_coder (Qwen3-Coder-Next)");
+                        info!(iteration, "Routing to general_coder (Qwen3.5-Implementer)");
                         metrics.record_coder_route("GeneralCoder");
-                        metrics.record_agent_metrics("Qwen3-Coder-Next", 0, 0);
+                        metrics.record_agent_metrics("Qwen3.5-GeneralCoder", 0, 0);
                         let adapter = RuntimeAdapter::new(AdapterConfig {
-                            agent_name: "Qwen3-Coder-Next".into(),
+                            agent_name: "Qwen3.5-GeneralCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             ..Default::default()
                         });
@@ -1149,7 +1375,7 @@ pub async fn process_issue(
             SwarmTier::Council | SwarmTier::Human => {
                 info!(
                     iteration,
-                    "Routing to manager (cloud-backed or OR1 fallback)"
+                    "Routing to manager (cloud-backed or Qwen3.5-Architect fallback)"
                 );
                 metrics.record_agent_metrics("manager", 0, 0);
                 let adapter = RuntimeAdapter::new(AdapterConfig {
@@ -1236,7 +1462,15 @@ pub async fn process_issue(
                     iteration,
                     "Running verifier after agent failure to assess codebase state"
                 );
-                let verifier = Verifier::new(&wt_path, verifier_config.clone());
+                let current_verifier_config = if config.verifier_packages.is_empty() {
+                    VerifierConfig {
+                        packages: detect_changed_packages(&wt_path),
+                        ..verifier_config.clone()
+                    }
+                } else {
+                    verifier_config.clone()
+                };
+                let verifier = Verifier::new(&wt_path, current_verifier_config);
                 let report = verifier.run_pipeline().await;
                 let decision = engine.decide(&mut escalation, &report);
                 last_report = Some(report);
@@ -1362,7 +1596,15 @@ pub async fn process_issue(
             }
 
             // engine.decide() records the iteration internally — don't double-count
-            let verifier = Verifier::new(&wt_path, verifier_config.clone());
+            let current_verifier_config = if config.verifier_packages.is_empty() {
+                VerifierConfig {
+                    packages: detect_changed_packages(&wt_path),
+                    ..verifier_config.clone()
+                }
+            } else {
+                verifier_config.clone()
+            };
+            let verifier = Verifier::new(&wt_path, current_verifier_config);
             let report = verifier.run_pipeline().await;
             let decision = engine.decide(&mut escalation, &report);
             last_report = Some(report);
@@ -1399,7 +1641,15 @@ pub async fn process_issue(
 
         // --- Verifier: run deterministic quality gates ---
         let verifier_start = std::time::Instant::now();
-        let verifier = Verifier::new(&wt_path, verifier_config.clone());
+        let current_verifier_config = if config.verifier_packages.is_empty() {
+            VerifierConfig {
+                packages: detect_changed_packages(&wt_path),
+                ..verifier_config.clone()
+            }
+        } else {
+            verifier_config.clone()
+        };
+        let verifier = Verifier::new(&wt_path, current_verifier_config);
         let mut report = verifier.run_pipeline().await;
         let verifier_elapsed = verifier_start.elapsed();
         metrics.record_verifier_time(verifier_elapsed);

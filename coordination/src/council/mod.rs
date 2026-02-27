@@ -2,6 +2,16 @@
 //!
 //! Provides abstraction for escalating complex problems to peer manager models
 //! (Gemini 3 Pro, Claude Opus 4.5, Qwen3.5) using concurrent queries and delegation.
+//!
+//! # Design Note: Intentional LLM calls
+//!
+//! The `coordination/` crate is deterministic by design — no LLM calls in routing,
+//! escalation, feedback, verifier, or ensemble modules.
+//!
+//! `council/` is the **sole intentional exception**: it is the cloud AI escalation
+//! adapter, whose entire purpose is to delegate to external model providers when
+//! local tiers are exhausted. Network I/O here is load-bearing, not accidental.
+//! All other modules in `coordination/` remain LLM-free.
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
@@ -486,7 +496,7 @@ Given an escalated coding problem, provide:
         );
 
         let request_body = serde_json::json!({
-            "model": "Qwen3.5-397B-A17B-UD-Q4_K_XL.gguf",
+            "model": "Qwen3.5-397B-A17B",
             "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}

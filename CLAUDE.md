@@ -3,10 +3,9 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Model Selection & Routing
-- **Rust Tasks:** Use the `/ask-local` command (wraps `or1-behemoth-q4_k_m.gguf`) for deep Rust analysis and generation.
-  - Example: `/ask-local "or1-behemoth-q4_k_m.gguf" "Explain the borrow checker error in src/lib.rs"`
-- **Code Gen:** Use the `/ask-local` command (wraps `Qwen3-Coder-Next`) for scaffolding and boilerplate.
-  - Example: `/ask-local "Qwen3-Coder-Next" "Generate a struct for User with fields..."`
+- **Rust/Code Tasks:** Use `/ask-local` with the Qwen3.5-397B instances for Rust analysis, code generation, and architecture.
+  - Architect (vasp-01): `/ask-local "Qwen3.5-397B-A17B" "Explain the borrow checker error in src/lib.rs"`
+  - Implementer (vasp-02): `/ask-local "Qwen3.5-397B-A17B" "Generate a struct for User with fields..."`
 - **General/Complex:** Use the default Claude model (Sonnet 3.5 / Opus).
 - **Research:** Always check **NotebookLM** first using `/ask-notebook` or `notebook_query`.
 
@@ -60,40 +59,65 @@ Key modules:
 
 ```
 Cloud Manager (Opus 4.6 via CLIAPIProxy, 10 iterations)
-    → delegates to local workers: OR1-Behemoth (reasoning), strand-14B (Rust), Qwen3-Coder-Next (general)
+    → delegates to local workers: Qwen3.5-397B Architect (vasp-01), Qwen3.5-397B Implementer (vasp-02)
     → runs verifier after each worker completes
     ↓ all budgets exhausted
 Human Intervention (blocking beads issue)
 ```
 
 Cloud models are the managers from iteration 1. Local models are workers.
-When cloud is unavailable, OR1-Behemoth serves as fallback local manager.
+When cloud is unavailable, Qwen3.5-397B Architect (vasp-01) serves as fallback local manager.
 
 ### Non-Workspace Directories
 
 - `flywheel/` — Forked from `Dicklesworthstone/agentic_coding_flywheel_setup`. TypeScript/Node. Mining prompts and task decomposition strategies; discarding Docker/cloud, adapting to SLURM/NFS.
 - `indexing/` — Python scripts for code indexing (CocoIndex for semantic search/RAG).
-- `inference/` — SLURM job scripts (`run-14b.slurm` serves strand-14B + Qwen3-Coder-Next on vasp-02, `run-72b-distributed.slurm` on vasp-01+03), systemd daemon, build/validate scripts.
+- `inference/` — SLURM job scripts (`run-qwen35.slurm` serves Qwen3.5-397B independently on vasp-01 and vasp-02), systemd daemon, build/validate scripts.
 - `infrastructure/` — Monitoring: GPU dashboard, HPC watchdog, ai-proxy setup.
 - `docs/` — Architecture docs, deployment guides, inference endpoint specs.
 
-## Inference Endpoints (must be running via SLURM)
+## Inference Endpoints
 
-| Tier | Endpoint | Model | Throughput |
-|------|----------|-------|------------|
-| Fast (14B) | http://vasp-02:8080 | strand-rust-coder-14b-q8_0 | ~53 tok/s |
-| Coder (80B MoE) | http://vasp-02:8080 | Qwen3-Coder-Next | ~5-15 tok/s |
-| Reasoning (72B) | http://vasp-01:8081 | or1-behemoth-q4_k_m | ~13 tok/s |
+| Tier | Endpoint (Rig uses this) | Model | Throughput |
+|------|--------------------------|-------|------------|
+| All local tiers | http://vasp-02:8080/v1 | HydraCoder 30B-A3B MoE (Q4_K_M) | ~135 tok/s gen |
 
-Role specialization:
-- **strand-14B** = "Mechanic" — fast Rust-specific fixes, borrow checker cascades, type errors
-- **Qwen3-Coder-Next** = "Implementer" — general coding, multi-file changes, 256K context (MoE offload to CPU)
-- **OR1-Behemoth** = "Architect" — complex reasoning, architecture decisions
+**Current setup**: HydraCoder on vasp-02:8080 (all tiers). 1 slot @ 32K context.
+
+**Q4_K_M download (in progress)**: Qwen3.5-397B-A17B Q4_K_M from lmstudio-community (241GB, 7 shards).
+Shards 6+7 complete on vasp-02 at `/scratch/ai/models/lmstudio-Qwen3.5-397B-A17B-GGUF/`.
+Shards 1-5 downloading via wget (~197GB, ETA ~18-20hrs at 2.35MB/s).
+Monitor: `ssh root@10.0.0.21 tail -f /tmp/q4km-download.log`
+vasp-02 has 249GB free — sufficient. Once complete, build and serve with `--override-tensor exps=CPU`.
+
+**UD-Q4_K_XL (broken)**: Exists on vasp-01 and vasp-03 (206GB). Confirmed broken for instruction
+following — returns garbled output or immediate EOS regardless of prompt format. Do NOT use.
+Tracked: beefcake-7v67.
+
+**vasp-03 native llama.cpp build**: Rocky 8.8/GCC 8.5/CUDA 12.6 (GLIBC 2.28 compatible).
+Binary: `/usr/local/bin/llama-server-vasp03`. Startup: `/tmp/start-qwen35.sh`.
+Build script: `/tmp/build-qwen-llama.sh`. CUDA wrapper at `/usr/local/cuda/bin/nvcc`.
+
+Role specialization (planned, once Q4_K_M ready):
+- **vasp-02** = Primary — Qwen3.5-397B-A17B Q4_K_M, 4 slots @ 8K
+- **vasp-03** = RPC GPU worker (32GB V100S) for vasp-02, or standalone with UD-Q4_K_XL
+- **vasp-01** = Available (V100S + 256GB RAM), /scratch full (400GB)
 
 Start inference:
 ```bash
-ssh root@10.0.0.5 "sbatch /cluster/shared/scripts/llama-cpp/run-14b.slurm"
-ssh root@10.0.0.5 "sbatch /cluster/shared/scripts/llama-cpp/run-72b-distributed.slurm"
+# HydraCoder on vasp-02 (current, all tiers)
+ssh root@10.0.0.21 "nohup /tmp/start-hydracoder.sh > /tmp/hydracoder-server.log 2>&1 &"
+```
+
+To switch swarm to Qwen3.5 endpoint once Q4_K_M is ready (no code change — env vars):
+```bash
+export SWARM_FAST_URL=http://vasp-02:8080/v1
+export SWARM_CODER_URL=http://vasp-02:8080/v1
+export SWARM_REASONING_URL=http://vasp-02:8080/v1
+export SWARM_FAST_MODEL=Qwen3.5-397B-A17B
+export SWARM_CODER_MODEL=Qwen3.5-397B-A17B
+export SWARM_REASONING_MODEL=Qwen3.5-397B-A17B
+export SWARM_LOCAL_BASE_URL=http://vasp-02:8080/v1
 ```
 
 ## External Tools (install separately)
@@ -158,11 +182,14 @@ nlm source add "<ID>" --file "doc.md"
 
 ## Cluster Access
 
-- slurm-ctl: `ssh root@10.0.0.5` (controller, NFS server)
-- vasp-01: `ssh root@10.0.0.20` (72B head, V100S)
-- vasp-02: `ssh root@10.0.0.21` (14B fast, V100S)
-- vasp-03: `ssh root@10.0.0.22` (72B RPC worker, V100S)
-- ai-proxy: `ssh brian@100.105.113.58` or `ssh root@100.105.113.58` (external gateway LXC)
+- slurm-ctl: `ssh root@10.0.0.5` (controller, NFS server — VM 500 on pve1)
+- vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, /scratch full — VM 600 on pve1)
+- vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, HydraCoder running — VM 601 on pve2)
+- vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM — VM 602 on pve3)
+- pve1: `ssh root@10.0.0.1` (Proxmox host, cluster gateway — DO NOT reboot)
+- pve2: `ssh root@10.0.0.2` (Proxmox host)
+- pve3: `ssh root@10.0.0.3` (Proxmox host)
+- ai-proxy: `ssh brian@100.105.113.58` or `ssh root@100.105.113.58` (LXC on pve3)
   - Codebases live under `/home/brian/code/` (beefcake-swarm, rust-daq)
   - Use `brian` user for code work; `root` for system admin only
   - GitHub auth: SSH key (`ai-proxy-lxc`) + `gh` CLI as TheFermiSea
@@ -189,6 +216,8 @@ nlm source add "<ID>" --file "doc.md"
 - `coordination/tests/` — Several integration tests reference `rust_cluster_mcp` as an unresolved crate (should be `coordination`). These tests won't compile until import paths are fixed.
 - `crates/swarm-agents/` — Has dead code warnings on structs/methods that are defined but not yet wired into the Phase 2 orchestrator loop.
 - `#![allow(dead_code)]` is enabled in coordination's `lib.rs` and `main.rs` due to rmcp macro-generated code triggering false positives.
+- `pve1 ZFS pool at 96%` — Deleted a 104GB stale `@restore` snapshot but pool is still 96% used. vasp-01's /scratch is 100% full (400GB). Consider cleaning old models (UD-Q4_K_XL, glm-4.7) from vasp-01.
+- `vasp-03 NFS` — /home, /cluster/shared still NFS-mounted from slurm-ctl. Set `HOME=/tmp CUDA_CACHE_PATH=/tmp/cuda-cache` before running anything that writes to $HOME.
 
 ## Agent Teams
 
@@ -206,9 +235,9 @@ Enabled via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`.
 5. Commit with conventional format and push branch
 
 ### Local Model Access (optional)
-Teammates can query local Rust-expert models via curl for a second opinion:
-- strand-14B (fast fixes): `curl http://vasp-02:8080/v1/chat/completions -d '{"model":"strand-rust-coder-14b-q8_0.gguf",...}'`
-- OR1-Behemoth (reasoning): `curl http://vasp-01:8081/v1/chat/completions -d '{"model":"or1-behemoth-q4_k_m.gguf",...}'`
+Teammates can query local Qwen3.5-397B instances via curl for a second opinion:
+- Architect (vasp-01): `curl http://vasp-01:8081/v1/chat/completions -d '{"model":"Qwen3.5-397B-A17B",...}'`
+- Implementer (vasp-02): `curl http://vasp-02:8080/v1/chat/completions -d '{"model":"Qwen3.5-397B-A17B",...}'`
 
 ### Branch Strategy
 Each teammate works on `swarm/<issue-id>`. Lead assigns non-overlapping issues.

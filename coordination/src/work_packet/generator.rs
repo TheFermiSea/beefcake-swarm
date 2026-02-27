@@ -600,6 +600,19 @@ pub async fn parse_stream(input: &str) -> Result<(), Error> {
         assert_eq!(fns.len(), 2);
     }
 
+    fn git_test_config(wd: &std::path::Path) {
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(wd)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(wd)
+            .output()
+            .unwrap();
+    }
+
     #[test]
     fn test_git_branch_returns_branch_name() {
         let dir = tempfile::tempdir().unwrap();
@@ -611,6 +624,7 @@ pub async fn parse_stream(input: &str) -> Result<(), Error> {
             .current_dir(wd)
             .output()
             .unwrap();
+        git_test_config(wd);
         Command::new("git")
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(wd)
@@ -633,6 +647,7 @@ pub async fn parse_stream(input: &str) -> Result<(), Error> {
             .current_dir(wd)
             .output()
             .unwrap();
+        git_test_config(wd);
         Command::new("git")
             .args(["commit", "--allow-empty", "-m", "first"])
             .current_dir(wd)
@@ -683,6 +698,7 @@ pub async fn parse_stream(input: &str) -> Result<(), Error> {
             .current_dir(wd)
             .output()
             .unwrap();
+        git_test_config(wd);
         Command::new("git")
             .args(["commit", "--allow-empty", "-m", "init"])
             .current_dir(wd)

@@ -8,6 +8,7 @@ use tracing::{error, info, warn};
 use swarm_agents::agents::AgentFactory;
 use swarm_agents::beads_bridge::{BeadsBridge, BeadsIssue, IssueTracker, NoOpTracker};
 use swarm_agents::config::{check_endpoint_with_model, SwarmConfig};
+use swarm_agents::modes::SwarmMode;
 use swarm_agents::notebook_bridge::{KnowledgeBase, NotebookBridge};
 use swarm_agents::orchestrator;
 use swarm_agents::prompts;
@@ -48,6 +49,16 @@ struct CliArgs {
     /// Requires SWARM_CLOUD_URL to be configured.
     #[arg(long)]
     cloud_only: bool,
+
+    /// Orchestration mode for the new NS-2/3/4 mode runners.
+    ///
+    /// - `contextual`  — Iterative Drafting → Critiquing → Condensing FSM (NS-2)
+    /// - `deepthink`   — JoinSet fan-out across parallel strategy branches (NS-3)
+    /// - `agentic`     — LLM-driven unified-diff file editing loop (NS-4)
+    ///
+    /// When omitted the default implement→verify loop is used.
+    #[arg(long, value_enum)]
+    mode: Option<SwarmMode>,
 }
 
 #[tokio::main]
@@ -76,6 +87,7 @@ async fn main() -> Result<()> {
         cloud = config.cloud_endpoint.is_some(),
         max_retries = config.max_retries,
         prompt_version = prompts::PROMPT_VERSION,
+        mode = ?args.mode,
         "Swarm orchestrator starting"
     );
 
@@ -204,18 +216,26 @@ async fn main() -> Result<()> {
             status: "open".to_string(),
             priority: Some(1),
             issue_type: Some("task".to_string()),
+            labels: vec![],
         };
         let tracker = NoOpTracker;
-        info!(id = %issue.id, title = %issue.title, "Beads-free mode: processing CLI issue");
-        orchestrator::process_issue(
-            &config,
-            &factory,
-            &worktree_bridge,
-            &issue,
-            &tracker,
-            kb_ref,
-        )
-        .await?;
+        info!(id = %issue.id, title = %issue.title, mode = ?args.mode, "Beads-free mode: processing CLI issue");
+        tokio::select! {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref) => {
+                result?;
+            }
+            _ = shutdown_signal() => {
+                warn!(id = %issue.id, "Shutdown signal received — cleaning up worktree");
+                if let Err(e) = worktree_bridge.cleanup(&issue.id) {
+                    error!(id = %issue.id, "Cleanup failed: {e}");
+                }
+                let _ = std::process::Command::new("bd")
+                    .args(["update", &issue.id, "--status=open"])
+                    .status();
+                info!(id = %issue.id, "Graceful shutdown complete");
+                return Ok(());
+            }
+        }
     } else if let Some(ref issue_path) = args.issue_file {
         // Branch 2: --issue-file provided → deserialize from JSON
         let contents = std::fs::read_to_string(issue_path).context(format!(
@@ -226,17 +246,52 @@ async fn main() -> Result<()> {
             serde_json::from_str(&contents).context("Failed to parse issue JSON")?;
         let tracker = NoOpTracker;
         info!(id = %issue.id, title = %issue.title, "Beads-free mode: processing issue from file");
-        orchestrator::process_issue(
-            &config,
-            &factory,
-            &worktree_bridge,
-            &issue,
-            &tracker,
-            kb_ref,
-        )
-        .await?;
+        tokio::select! {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref) => {
+                result?;
+            }
+            _ = shutdown_signal() => {
+                warn!(id = %issue.id, "Shutdown signal received — cleaning up worktree");
+                if let Err(e) = worktree_bridge.cleanup(&issue.id) {
+                    error!(id = %issue.id, "Cleanup failed: {e}");
+                }
+                // Branch 2 uses NoOpTracker, but we try a best-effort bd update in case it was a real bead
+                let _ = std::process::Command::new("bd")
+                    .args(["update", &issue.id, "--status=open"])
+                    .status();
+                info!(id = %issue.id, "Graceful shutdown complete");
+                return Ok(());
+            }
+        }
+    } else if let Ok(target_id) = std::env::var("SWARM_ISSUE") {
+        // Branch 3: SWARM_ISSUE env var — fetch specific issue from beads
+        let beads = BeadsBridge::new();
+        let issue = match beads.show(&target_id) {
+            Ok(i) => i,
+            Err(e) => {
+                error!(target_id = %target_id, error = %e, "SWARM_ISSUE not found");
+                return Ok(());
+            }
+        };
+        info!(id = %issue.id, title = %issue.title, "SWARM_ISSUE: targeting specific issue");
+        tokio::select! {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref) => {
+                result?;
+            }
+            _ = shutdown_signal() => {
+                warn!(id = %issue.id, "Shutdown signal received — cleaning up worktree");
+                if let Err(e) = worktree_bridge.cleanup(&issue.id) {
+                    error!(id = %issue.id, "Cleanup failed: {e}");
+                }
+                if let Err(e) = beads.update_status(&issue.id, "open") {
+                    error!(id = %issue.id, "Failed to reset issue status: {e}");
+                }
+                info!(id = %issue.id, "Graceful shutdown complete");
+                return Ok(());
+            }
+        }
     } else {
-        // Branch 3: Default — pick from beads
+        // Branch 4: Default — pick from beads
         let beads = BeadsBridge::new();
         let issues = match beads.list_ready() {
             Ok(issues) => issues,
@@ -252,9 +307,10 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        // Sort by priority (lowest number = highest priority)
+        // Sort by priority (lowest = highest priority), then swarm_complexity (simpler first).
+        // Dogfooding showed additive tasks succeed; modification tasks fail more often.
         let mut sorted = issues;
-        sorted.sort_by_key(|i| i.priority.unwrap_or(4));
+        sorted.sort_by_key(|i| (i.priority.unwrap_or(4), i.swarm_complexity_rank()));
 
         // Try to claim each issue in priority order (prevents race with other instances)
         let mut claimed_issue = None;
@@ -287,9 +343,40 @@ async fn main() -> Result<()> {
             }
         };
 
-        orchestrator::process_issue(&config, &factory, &worktree_bridge, issue, &beads, kb_ref)
-            .await?;
+        tokio::select! {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, issue, &beads, kb_ref) => {
+                result?;
+            }
+            _ = shutdown_signal() => {
+                warn!(id = %issue.id, "Shutdown signal received — cleaning up worktree");
+                if let Err(e) = worktree_bridge.cleanup(&issue.id) {
+                    error!(id = %issue.id, "Cleanup failed: {e}");
+                }
+                if let Err(e) = beads.update_status(&issue.id, "open") {
+                    error!(id = %issue.id, "Failed to reset issue status: {e}");
+                }
+                info!(id = %issue.id, "Graceful shutdown complete");
+                return Ok(());
+            }
+        }
     }
 
     Ok(())
+}
+
+async fn shutdown_signal() {
+    use tokio::signal;
+    #[cfg(unix)]
+    {
+        let mut sigterm = signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler");
+        tokio::select! {
+            _ = signal::ctrl_c() => {}
+            _ = sigterm.recv() => {}
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = signal::ctrl_c().await;
+    }
 }

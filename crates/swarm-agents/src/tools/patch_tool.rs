@@ -53,6 +53,63 @@ fn normalize_whitespace(s: &str) -> String {
         .join("\n")
 }
 
+/// Count the leading whitespace width of a line (tabs count as 4 spaces).
+fn indent_width(line: &str) -> usize {
+    line.chars()
+        .take_while(|c| c.is_whitespace())
+        .map(|c| if c == '\t' { 4 } else { 1 })
+        .sum()
+}
+
+/// Find the minimum indentation width among non-empty lines.
+fn min_indent(text: &str) -> usize {
+    text.lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(indent_width)
+        .min()
+        .unwrap_or(0)
+}
+
+/// Re-indent `new_content` so its base indentation matches `original_region`.
+///
+/// When a fuzzy (whitespace-normalized) match is used, the model's `new_content`
+/// typically has stripped or wrong indentation. This function shifts all lines
+/// so the minimum indent matches the original region.
+fn reindent_to_match(original_region: &str, new_content: &str) -> String {
+    let orig_min = min_indent(original_region);
+    let new_min = min_indent(new_content);
+
+    if orig_min == new_min {
+        return new_content.to_string();
+    }
+
+    let mut result = String::with_capacity(new_content.len() + 128);
+    for (i, line) in new_content.lines().enumerate() {
+        if i > 0 {
+            result.push('\n');
+        }
+        if line.trim().is_empty() {
+            // Preserve blank lines as-is
+            continue;
+        }
+        let current = indent_width(line);
+        let adjusted = if orig_min > new_min {
+            current + (orig_min - new_min)
+        } else {
+            current.saturating_sub(new_min - orig_min)
+        };
+        for _ in 0..adjusted {
+            result.push(' ');
+        }
+        result.push_str(line.trim_start());
+    }
+    // Preserve trailing newline from original if present
+    if new_content.ends_with('\n') {
+        result.push('\n');
+    }
+    result
+}
+
 /// Find all occurrences of `needle` in `haystack`, returning their byte offsets.
 fn find_all(haystack: &str, needle: &str) -> Vec<usize> {
     let mut offsets = Vec::new();
@@ -202,7 +259,10 @@ impl Tool for EditFileTool {
         // Try exact match first
         let occurrences = find_all(&content, &old_content);
 
-        let new_file_content = match occurrences.len() {
+        // `actual_replacement` is what was written at the match site.
+        // For exact matches this equals new_content; for fuzzy matches it is
+        // the reindented variant. Used for accurate line counts and preview.
+        let (new_file_content, actual_replacement): (String, String) = match occurrences.len() {
             0 => {
                 // Exact match failed — try fuzzy (whitespace-normalized) match
                 tracing::warn!(
@@ -211,13 +271,23 @@ impl Tool for EditFileTool {
                 );
                 match fuzzy_find_unique(&content, &old_content) {
                     Some((start, end)) => {
-                        let mut result = String::with_capacity(
-                            content.len() - (end - start) + new_content.len(),
+                        // Re-indent new_content to match the original region's
+                        // indentation. Local models often strip indentation when
+                        // generating edits from truncated file reads.
+                        let original_region = &content[start..end];
+                        let reindented = reindent_to_match(original_region, &new_content);
+                        tracing::info!(
+                            path = %args.path,
+                            orig_indent = min_indent(original_region),
+                            new_indent = min_indent(&new_content),
+                            "edit_file: fuzzy match with reindentation"
                         );
+                        let mut result =
+                            String::with_capacity(content.len() - (end - start) + reindented.len());
                         result.push_str(&content[..start]);
-                        result.push_str(&new_content);
+                        result.push_str(&reindented);
                         result.push_str(&content[end..]);
-                        result
+                        (result, reindented)
                     }
                     None => {
                         // Provide helpful error: show what's in the file near where
@@ -248,7 +318,7 @@ impl Tool for EditFileTool {
                 result.push_str(&content[..start]);
                 result.push_str(&new_content);
                 result.push_str(&content[end..]);
-                result
+                (result, new_content.clone())
             }
             n if n > MAX_REPLACEMENTS => {
                 return Err(ToolError::Io(std::io::Error::new(
@@ -263,6 +333,22 @@ impl Tool for EditFileTool {
             _ => unreachable!(),
         };
 
+        // No-op detection: reject edits that don't actually change the file.
+        // Common with local models whose old_content/new_content differ only in
+        // whitespace — fuzzy match finds the location but the replacement is
+        // byte-identical to the original region.
+        if new_file_content == content {
+            return Err(ToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "edit_file: no-op edit — replacement is identical to current \
+                     content in {}. Re-read the file and verify your change \
+                     is different from the existing code.",
+                    args.path
+                ),
+            )));
+        }
+
         // Blast-radius guard: warn if the edit shrinks the file by more than 50%
         if new_file_content.len() < content.len() / 2 {
             tracing::warn!(
@@ -276,11 +362,39 @@ impl Tool for EditFileTool {
         std::fs::write(&full_path, &new_file_content)?;
 
         let old_lines = old_content.lines().count();
-        let new_lines = new_content.lines().count();
+        // Use actual_replacement (not new_content) for line counts — after a fuzzy
+        // match the reindented text may have different line counts than the raw input.
+        let new_lines = actual_replacement.lines().count();
         let diff = new_lines as i64 - old_lines as i64;
         let sign = if diff >= 0 { "+" } else { "" };
+
+        // Include the actual written content in the response so the model
+        // knows the current file state for subsequent edits (prevents
+        // old_content drift when tool_choice=required forces multiple edits).
+        let written_preview = if new_file_content.len() <= 2000 {
+            new_file_content.clone()
+        } else {
+            // Find the replacement region using actual_replacement (not new_content,
+            // which may differ after reindentation in fuzzy match path).
+            let replacement_start = new_file_content
+                .find(actual_replacement.lines().next().unwrap_or(""))
+                .unwrap_or(0);
+            let preview_start = new_file_content[..replacement_start]
+                .rfind('\n')
+                .map(|p| p + 1)
+                .unwrap_or(0);
+            let preview_end =
+                (replacement_start + actual_replacement.len() + 200).min(new_file_content.len());
+            format!("...{}", &new_file_content[preview_start..preview_end])
+        };
+
         Ok(format!(
-            "Edited {}: replaced {old_lines} lines with {new_lines} lines ({sign}{diff})",
+            "Edited {}: replaced {old_lines} lines with {new_lines} lines ({sign}{diff})\n\
+             \n\
+             Current file content:\n\
+             ```\n\
+             {written_preview}\n\
+             ```",
             args.path
         ))
     }
@@ -370,6 +484,61 @@ mod tests {
         let needle = "fn a() {}";
         let result = fuzzy_find_unique(content, needle);
         assert!(result.is_none());
+    }
+
+    // --- indent_width ---
+
+    #[test]
+    fn test_indent_width_spaces() {
+        assert_eq!(indent_width("    hello"), 4);
+    }
+
+    #[test]
+    fn test_indent_width_tab() {
+        assert_eq!(indent_width("\thello"), 4);
+    }
+
+    #[test]
+    fn test_indent_width_none() {
+        assert_eq!(indent_width("hello"), 0);
+    }
+
+    // --- min_indent ---
+
+    #[test]
+    fn test_min_indent_skips_blank_lines() {
+        let text = "    fn foo() {\n\n        bar();\n    }";
+        assert_eq!(min_indent(text), 4);
+    }
+
+    // --- reindent_to_match ---
+
+    #[test]
+    fn test_reindent_to_match_adds_indent() {
+        let original = "    fn foo() {\n        bar();\n    }";
+        let new_content = "fn foo() {\n    bar();\n    baz();\n}";
+        let result = reindent_to_match(original, new_content);
+        assert!(result.starts_with("    fn foo()"));
+        assert!(result.contains("        bar();"));
+        assert!(result.contains("        baz();"));
+        assert!(result.contains("    }"));
+    }
+
+    #[test]
+    fn test_reindent_to_match_same_indent_unchanged() {
+        let original = "    fn foo() {}";
+        let new_content = "    fn bar() {}";
+        let result = reindent_to_match(original, new_content);
+        assert_eq!(result, "    fn bar() {}");
+    }
+
+    #[test]
+    fn test_reindent_to_match_removes_excess_indent() {
+        let original = "fn main() {}";
+        let new_content = "    fn main() {\n        hello();\n    }";
+        let result = reindent_to_match(original, new_content);
+        assert!(result.starts_with("fn main()"));
+        assert!(result.contains("    hello();"));
     }
 
     // --- unescape_if_double_encoded ---

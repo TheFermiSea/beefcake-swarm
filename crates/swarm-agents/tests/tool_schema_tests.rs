@@ -216,6 +216,14 @@ async fn test_read_file_schema_snapshot() {
             "path": {
                 "type": "string",
                 "description": "Relative path to the file within the workspace"
+            },
+            "start_line": {
+                "type": "integer",
+                "description": "First line to read (1-indexed, inclusive). Omit to start from line 1."
+            },
+            "end_line": {
+                "type": "integer",
+                "description": "Last line to read (1-indexed, inclusive). Omit to read to end of file."
             }
         },
         "required": ["path"]
