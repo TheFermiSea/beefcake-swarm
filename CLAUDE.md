@@ -80,26 +80,52 @@ When cloud is unavailable, Qwen3.5-397B Architect (vasp-01) serves as fallback l
 
 | Tier | Endpoint (Rig uses this) | Model | Throughput |
 |------|--------------------------|-------|------------|
-| All local tiers | http://vasp-02:8080/v1 | HydraCoder 30B-A3B MoE (Q4_K_M) | ~135 tok/s gen, ~289 tok/s prompt |
+| All local tiers | http://vasp-03:8081/v1 | Qwen3.5-397B-A17B UD-Q4_K_XL | ~TBD (MoE, 14 GPU layers + CPU offload) |
+| Fallback | http://vasp-02:8080/v1 | HydraCoder 30B-A3B MoE (Q4_K_M) | ~135 tok/s gen |
 
-**Current setup**: HydraCoder serves all local tiers (Fast, Coder, Reasoning) on vasp-02:8080.
-Native `/v1/chat/completions` support — no proxy needed. 4 parallel slots @ 32K context.
+**Current setup**: Qwen3.5-397B-A17B on vasp-03:8081.
+- Model: UD-Q4_K_XL (~206GB, 6 shards) at `/scratch/ai/models/Qwen3.5-397B-A17B-GGUF/UD-Q4_K_XL/`
+- 4 parallel slots, 8K context per slot (32K total KV cache)
+- 14 GPU layers on V100S (32GB), remaining in 249GB CPU RAM
+- Native build on Rocky 8.8/GCC 8.5/CUDA 12.6 (GLIBC 2.28 compatible) — no NFS dependency
+- Binary: `/usr/local/bin/llama-server-vasp03`
+- CUDA libs: `/usr/local/cuda/lib64` + HPC SDK at `/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/`
+- Tracked: beefcake-v9mb (integration), beefcake-noqp (chat fixes), beefcake-7v67 (quant testing)
 
-**Qwen3.5-397B (deferred)**: Q4_K_M download in progress on vasp-02. Once available, will restore
-dual-node setup with Qwen3.5 Architect (vasp-01) and Implementer (vasp-02). The chat proxy
-(`inference/chat-proxy/proxy.py`) and FORCE_MMQ build are ready for when Qwen3.5 comes back online.
-Tracked: beefcake-noqp, beefcake-7v67.
+**HydraCoder (fallback)**: Still running on vasp-02:8080 at 135 tok/s. Use as fallback if Qwen3.5 is unavailable.
 
-Role specialization (all via HydraCoder for now):
-- **vasp-02** = All roles (Implementer, Validator, Architect) — 4 slots @ 32K, HydraCoder 30B-A3B MoE
-- **vasp-01** = Offline (disk full, NFS issues) — will serve Qwen3.5-397B when restored
-- **vasp-03** = Free for DFT, embeddings, other workloads.
+Role specialization:
+- **vasp-03** = All roles (Implementer, Validator, Architect) — Qwen3.5-397B-A17B, 4 slots @ 8K
+- **vasp-02** = Fallback — HydraCoder 30B-A3B MoE, 1 slot @ 32K
+- **vasp-01** = Offline (disk full, NFS issues)
 
 Start inference (manual, no SLURM — NFS unavailable):
 ```bash
-# HydraCoder on vasp-02 (all tiers)
+# Qwen3.5-397B on vasp-03 (primary - all tiers)
+ssh root@10.0.0.22 "bash /tmp/start-qwen35.sh"
+# Check log:
+ssh root@10.0.0.22 "tail -f /tmp/qwen35-server.log"
+
+# HydraCoder on vasp-02 (fallback)
 ssh root@10.0.0.21 "nohup /tmp/start-hydracoder.sh > /tmp/hydracoder-server.log 2>&1 &"
 ```
+
+To switch swarm to Qwen3.5 endpoint (no code change needed — env vars):
+```bash
+export SWARM_FAST_URL=http://vasp-03:8081/v1
+export SWARM_CODER_URL=http://vasp-03:8081/v1
+export SWARM_REASONING_URL=http://vasp-03:8081/v1
+export SWARM_FAST_MODEL=Qwen3.5-397B-A17B
+export SWARM_CODER_MODEL=Qwen3.5-397B-A17B
+export SWARM_REASONING_MODEL=Qwen3.5-397B-A17B
+# Also for modes/provider_config.rs:
+export SWARM_LOCAL_BASE_URL=http://vasp-03:8081/v1
+```
+
+**Q4_K_M download (background)**: 7 shards from lmstudio-community, shards 6+7 complete on vasp-02 at
+`/scratch/ai/models/lmstudio-Qwen3.5-397B-A17B-GGUF/`. Shards 1-5 stalled (.tmp). vasp-02 has only
+103GB free — insufficient for full download (~220GB). Q4_K_XL is sufficient if instruction-following
+is confirmed with the new native build.
 
 ## External Tools (install separately)
 
