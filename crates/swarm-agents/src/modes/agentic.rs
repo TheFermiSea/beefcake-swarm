@@ -42,10 +42,7 @@ enum AgenticState {
         started: Instant,
     },
     /// Agent finished normally.
-    Done {
-        summary: String,
-        iterations: u32,
-    },
+    Done { summary: String, iterations: u32 },
 }
 
 // ── AgenticRunner ─────────────────────────────────────────────────────────────
@@ -132,7 +129,9 @@ impl ModeRunner for AgenticRunner {
         _ctx: &ModeContext,
         request: &ModeRequest,
     ) -> Result<(), OrchestrationError> {
-        self.config.validate().map_err(OrchestrationError::Configuration)?;
+        self.config
+            .validate()
+            .map_err(OrchestrationError::Configuration)?;
         self.history.clear();
         self.state = AgenticState::Editing {
             task_prompt: request.task.clone(),
@@ -155,10 +154,16 @@ impl ModeRunner for AgenticRunner {
         }
 
         let (task_prompt, iteration, started) = match &self.state {
-            AgenticState::Editing { task_prompt, iteration, started } => {
-                (task_prompt.clone(), *iteration, *started)
-            }
-            AgenticState::Done { summary, iterations, .. } => {
+            AgenticState::Editing {
+                task_prompt,
+                iteration,
+                started,
+            } => (task_prompt.clone(), *iteration, *started),
+            AgenticState::Done {
+                summary,
+                iterations,
+                ..
+            } => {
                 return Ok(StepResult::Done(ModeOutcome::Success {
                     artifact: Artifact::new(summary.clone()),
                     iterations: *iterations,
@@ -215,9 +220,8 @@ impl ModeRunner for AgenticRunner {
                     Ok(StepResult::Continue(()))
                 }
                 Err(e) => {
-                    let msg = format!(
-                        "Tool parse error: {e}. Please re-emit a valid JSON diff block."
-                    );
+                    let msg =
+                        format!("Tool parse error: {e}. Please re-emit a valid JSON diff block.");
                     warn!(%e, "failed to parse apply_diff JSON");
                     self.push_user(msg);
                     self.state = AgenticState::Editing {

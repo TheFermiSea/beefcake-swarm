@@ -26,7 +26,11 @@ fn make_request(task: &str) -> ModeRequest {
 
 #[test]
 fn swarm_mode_variants_exist() {
-    let modes = [SwarmMode::Contextual, SwarmMode::Deepthink, SwarmMode::Agentic];
+    let modes = [
+        SwarmMode::Contextual,
+        SwarmMode::Deepthink,
+        SwarmMode::Agentic,
+    ];
     assert_eq!(modes.len(), 3);
 }
 
@@ -134,7 +138,10 @@ struct FailStepRunner {
 
 impl FailStepRunner {
     fn new(fail_on: u32) -> Self {
-        Self { fail_on, current: 0 }
+        Self {
+            fail_on,
+            current: 0,
+        }
     }
 }
 
@@ -211,8 +218,13 @@ async fn orchestrator_enforces_max_iterations() {
     let mut runner = InfiniteRunner;
     let outcome = orch.run(&mut runner, make_request("loop forever")).await;
     match outcome {
-        ModeOutcome::Failure { reason, iterations, .. } => {
-            assert!(reason.contains("max iterations"), "unexpected reason: {reason}");
+        ModeOutcome::Failure {
+            reason, iterations, ..
+        } => {
+            assert!(
+                reason.contains("max iterations"),
+                "unexpected reason: {reason}"
+            );
             assert_eq!(iterations, 3);
         }
         other => panic!("expected Failure, got {other:?}"),
@@ -227,9 +239,17 @@ async fn orchestrator_surfaces_prepare_error() {
     let mut runner = FailPrepareRunner;
     let outcome = orch.run(&mut runner, make_request("task")).await;
     match outcome {
-        ModeOutcome::Failure { reason, iterations, .. } => {
-            assert!(reason.contains("missing required config"), "unexpected: {reason}");
-            assert_eq!(iterations, 0, "no iterations should run after prepare fails");
+        ModeOutcome::Failure {
+            reason, iterations, ..
+        } => {
+            assert!(
+                reason.contains("missing required config"),
+                "unexpected: {reason}"
+            );
+            assert_eq!(
+                iterations, 0,
+                "no iterations should run after prepare fails"
+            );
         }
         other => panic!("expected Failure, got {other:?}"),
     }

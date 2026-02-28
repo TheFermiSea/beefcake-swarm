@@ -98,9 +98,10 @@ impl DeepthinkRunner {
     ) -> Result<Vec<Strategy>, OrchestrationError> {
         debug!("generating {} strategies", self.num_strategies);
 
-        let client = self.config.local_client().map_err(|e| {
-            OrchestrationError::Configuration(format!("client build failed: {e}"))
-        })?;
+        let client = self
+            .config
+            .local_client()
+            .map_err(|e| OrchestrationError::Configuration(format!("client build failed: {e}")))?;
 
         let agent = client
             .agent(&self.config.models.strategy)
@@ -164,7 +165,11 @@ impl DeepthinkRunner {
         while let Some(res) = join_set.join_next().await {
             match res {
                 Ok(outcome) => {
-                    let status = if outcome.is_success() { "success" } else { "failure" };
+                    let status = if outcome.is_success() {
+                        "success"
+                    } else {
+                        "failure"
+                    };
                     debug!(strategy = %outcome.strategy.label, status, elapsed_ms = outcome.elapsed.as_millis());
                     outcomes.push(outcome);
                 }
@@ -200,9 +205,10 @@ impl DeepthinkRunner {
             "synthesising from successful strategies"
         );
 
-        let client = self.config.local_client().map_err(|e| {
-            OrchestrationError::Configuration(format!("client build failed: {e}"))
-        })?;
+        let client = self
+            .config
+            .local_client()
+            .map_err(|e| OrchestrationError::Configuration(format!("client build failed: {e}")))?;
 
         let agent = client
             .agent(&self.config.models.judge)
@@ -252,7 +258,9 @@ impl ModeRunner for DeepthinkRunner {
         _ctx: &ModeContext,
         request: &ModeRequest,
     ) -> Result<(), OrchestrationError> {
-        self.config.validate().map_err(OrchestrationError::Configuration)?;
+        self.config
+            .validate()
+            .map_err(OrchestrationError::Configuration)?;
         self.phase = DeepthinkPhase::GeneratingStrategies {
             problem: request.task.clone(),
         };
@@ -274,13 +282,19 @@ impl ModeRunner for DeepthinkRunner {
                 match self.generate_strategies(&problem).await {
                     Ok(strategies) => {
                         info!(count = strategies.len(), "strategies generated");
-                        DeepthinkPhase::ExecutingStrategies { problem, strategies }
+                        DeepthinkPhase::ExecutingStrategies {
+                            problem,
+                            strategies,
+                        }
                     }
                     Err(e) => DeepthinkPhase::Failed(e.to_string()),
                 }
             }
 
-            DeepthinkPhase::ExecutingStrategies { problem, strategies } => {
+            DeepthinkPhase::ExecutingStrategies {
+                problem,
+                strategies,
+            } => {
                 let outcomes = self.execute_strategies(&problem, strategies).await;
                 DeepthinkPhase::Synthesising { problem, outcomes }
             }
@@ -316,9 +330,7 @@ impl ModeRunner for DeepthinkRunner {
 
         // Check if the new phase is already terminal.
         match &self.phase {
-            DeepthinkPhase::Complete(_) | DeepthinkPhase::Failed(_) => {
-                Ok(StepResult::Continue(()))
-            }
+            DeepthinkPhase::Complete(_) | DeepthinkPhase::Failed(_) => Ok(StepResult::Continue(())),
             _ => Ok(StepResult::Continue(())),
         }
     }

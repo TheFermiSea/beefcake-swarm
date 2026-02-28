@@ -3,6 +3,7 @@
 //! Consumes VerifierReports and EscalationState to produce EscalationDecisions.
 //! All decisions are deterministic — no LLM calls in this module.
 
+use crate::escalation::friction::{FrictionDetector, FrictionKind, FrictionSeverity};
 use crate::escalation::state::{EscalationReason, EscalationState, SwarmTier};
 use crate::feedback::error_parser::ErrorCategory;
 use crate::verifier::report::VerifierReport;
@@ -189,6 +190,46 @@ impl EscalationEngine {
             };
         }
 
+        // Friction detection: catch oscillating/plateauing errors that bypass T1's
+        // consecutive-repeat requirement.
+        // Guards: (1) require >= 4 iterations for reliable pattern detection,
+        //         (2) suppress when error count is strictly decreasing — this
+        //             avoids false positives on legitimate cascading error
+        //             resolution (A→B→A with dropping counts).
+        //   Note: we check error *count* decrease, not `progress_made`, because
+        //   `progress_made` treats category changes as progress — but oscillation
+        //   by definition changes categories every iteration.
+        let error_count_decreasing = {
+            let h = &state.iteration_history;
+            h.len() >= 2 && h[h.len() - 1].error_count < h[h.len() - 2].error_count
+        };
+        let friction_signals = FrictionDetector::detect(state, report);
+        if state.total_iterations >= 4 && !error_count_decreasing {
+            if let Some(signal) = friction_signals.iter().find(|s| {
+                s.severity >= FrictionSeverity::Medium
+                    && matches!(
+                        s.kind,
+                        FrictionKind::ErrorOscillation { .. }
+                            | FrictionKind::ErrorCountPlateau { .. }
+                            | FrictionKind::CategoryChurn { .. }
+                    )
+            }) {
+                let reason = EscalationReason::FrictionDetected {
+                    description: signal.description.clone(),
+                };
+                state.record_escalation(SwarmTier::Council, reason.clone());
+                return EscalationDecision {
+                    target_tier: SwarmTier::Council,
+                    escalated: true,
+                    reason: format!("Friction detected: {}", reason),
+                    resolved: false,
+                    stuck: false,
+                    needs_review: false,
+                    action: SuggestedAction::RepairPlan,
+                };
+            }
+        }
+
         // Trigger T1: Same error category repeated >= threshold
         if let Some((category, count)) = state.most_repeated_category() {
             if count >= self.config.repeat_threshold {
@@ -284,7 +325,7 @@ impl EscalationEngine {
     fn decide_at_council(
         &self,
         state: &mut EscalationState,
-        _report: &VerifierReport,
+        report: &VerifierReport,
     ) -> EscalationDecision {
         // Trigger T0: Consecutive no-change iterations
         if state.consecutive_no_change >= self.config.no_change_threshold {
@@ -302,6 +343,35 @@ impl EscalationEngine {
                 needs_review: false,
                 action: SuggestedAction::FlagForHuman {
                     reason: format!("Issue {} stuck: {}", state.bead_id, reason),
+                },
+            };
+        }
+
+        // Friction detection: high-severity friction at Council → flag for human
+        let friction_signals = FrictionDetector::detect(state, report);
+        if friction_signals
+            .iter()
+            .any(|s| s.severity == FrictionSeverity::High)
+        {
+            state.stuck = true;
+            let desc = friction_signals
+                .iter()
+                .filter(|s| s.severity == FrictionSeverity::High)
+                .map(|s| s.description.as_str())
+                .collect::<Vec<_>>()
+                .join("; ");
+            return EscalationDecision {
+                target_tier: SwarmTier::Human,
+                escalated: true,
+                reason: format!("High friction at Council: {}", desc),
+                resolved: false,
+                stuck: true,
+                needs_review: false,
+                action: SuggestedAction::FlagForHuman {
+                    reason: format!(
+                        "Issue {} stuck: high-severity friction: {}",
+                        state.bead_id, desc
+                    ),
                 },
             };
         }

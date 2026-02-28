@@ -294,6 +294,20 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
         }
     };
 
+    // Guard against empty target_files — fall back to common entry points
+    // to prevent prompt starvation on architectural tasks.
+    let target_files = if target_files.is_empty() {
+        ["src/lib.rs", "src/main.rs"]
+            .iter()
+            .copied()
+            .filter(|p| wt_root.join(p).exists())
+            .chain(std::iter::once("Cargo.toml"))
+            .take(2)
+            .collect()
+    } else {
+        target_files
+    };
+
     if !target_files.is_empty() {
         prompt.push_str("**Files to modify:**\n");
         for f in &target_files {
@@ -1473,6 +1487,22 @@ pub async fn process_issue(
             "Packed context"
         );
 
+        // Sparse context: escalate Worker→Council to avoid prompt starvation.
+        let tier = if tier == SwarmTier::Worker
+            && packet.file_contexts.is_empty()
+            && packet.files_touched.is_empty()
+            && packet.failure_signals.is_empty()
+        {
+            warn!(
+                iteration,
+                "Sparse context — escalating Worker→Council for initial analysis"
+            );
+            escalation.current_tier = SwarmTier::Council;
+            SwarmTier::Council
+        } else {
+            tier
+        };
+
         // Worker tier gets a compact prompt (<1500 chars) because small local
         // models (HydraCoder 30B MoE) suppress tool calls with long prompts.
         // Council/Human tiers get the full verbose format for cloud models.
@@ -1847,17 +1877,20 @@ pub async fn process_issue(
                 break;
             }
             if matches!(tier, SwarmTier::Council | SwarmTier::Human) {
+                let next = decision.target_tier;
                 warn!(
                     iteration,
-                    "No-change council response; forcing next iteration through Worker tier"
+                    ?next,
+                    "No-change council response; engine routes to {next:?}"
                 );
+                escalation.current_tier = next;
             } else {
                 warn!(
                     iteration,
-                    "No-change worker response; keeping next iteration on Worker tier"
+                    "No-change worker response; keeping on Worker tier"
                 );
+                escalation.current_tier = SwarmTier::Worker;
             }
-            escalation.current_tier = SwarmTier::Worker;
             continue;
         }
 
@@ -1957,9 +1990,24 @@ pub async fn process_issue(
                     }
                     metrics.record_regression(rolled_back);
                     if rolled_back {
-                        // Worktree is now at the pre-worker state — the current `report`
-                        // reflects the regressed (post-worker) state. Continue to the next
-                        // iteration so the verifier re-runs against the rolled-back code.
+                        // Re-run verifier against rolled-back code so last_report
+                        // reflects the pre-regression error state, not the regressed state.
+                        let rb_verifier_config = if config.verifier_packages.is_empty() {
+                            VerifierConfig {
+                                packages: detect_changed_packages(&wt_path),
+                                ..verifier_config.clone()
+                            }
+                        } else {
+                            verifier_config.clone()
+                        };
+                        let rb_verifier = Verifier::new(&wt_path, rb_verifier_config);
+                        let rb_report = rb_verifier.run_pipeline().await;
+                        info!(
+                            iteration,
+                            rollback_errors = rb_report.failure_signals.len(),
+                            "Verifier re-run after rollback"
+                        );
+                        last_report = Some(rb_report);
                         metrics.finish_iteration();
                         continue;
                     }

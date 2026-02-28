@@ -72,9 +72,10 @@ impl RigSummarizer {
 #[async_trait]
 impl SummarizerAgent for RigSummarizer {
     async fn summarise(&self, history_text: &str) -> Result<String, OrchestrationError> {
-        let client = self.config.local_client().map_err(|e| {
-            OrchestrationError::Configuration(format!("client build failed: {e}"))
-        })?;
+        let client = self
+            .config
+            .local_client()
+            .map_err(|e| OrchestrationError::Configuration(format!("client build failed: {e}")))?;
 
         let agent = client
             .agent(&self.config.models.compactor)
@@ -219,12 +220,7 @@ impl MemoryManager {
         let tokens_summary = self.estimator.estimate(&summary_text);
 
         // Rebuild history: summary prefix + tail.
-        let tail: Vec<Message> = self
-            .history
-            .iter()
-            .skip(compact_count)
-            .cloned()
-            .collect();
+        let tail: Vec<Message> = self.history.iter().skip(compact_count).cloned().collect();
 
         self.history.clear();
         self.estimated_tokens = 0;
@@ -340,7 +336,10 @@ mod tests {
     #[async_trait]
     impl SummarizerAgent for EchoSummarizer {
         async fn summarise(&self, history_text: &str) -> Result<String, OrchestrationError> {
-            Ok(format!("SUMMARY: {}", &history_text[..history_text.len().min(40)]))
+            Ok(format!(
+                "SUMMARY: {}",
+                &history_text[..history_text.len().min(40)]
+            ))
         }
     }
 

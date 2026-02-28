@@ -175,3 +175,26 @@ fn test_worker_budget_then_council_budget_stuck() {
         d.action
     );
 }
+
+#[test]
+fn test_oscillation_triggers_engine_escalation() {
+    // T1 disabled (threshold 100) — only friction should trigger escalation.
+    let engine = EscalationEngine::with_config(stuck_config());
+    let mut state = EscalationState::new("osc-engine");
+    // 4 iterations: alternating categories with flat error count → oscillation
+    // detected. Error count stays at 2 so the progress guard doesn't suppress.
+    for _ in 0..2 {
+        state.record_iteration(vec![ErrorCategory::Lifetime], 2, false);
+        state.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false);
+    }
+    // Report with 2 errors to keep count flat (2→2, not 2→1).
+    let report = failing_report(vec![ErrorCategory::Lifetime, ErrorCategory::Lifetime]);
+    let d = engine.decide(&mut state, &report);
+    assert!(d.escalated, "Oscillation should trigger escalation");
+    assert_eq!(d.target_tier, SwarmTier::Council);
+    assert!(
+        d.reason.contains("friction") || d.reason.contains("Friction"),
+        "Reason should mention friction, got: {}",
+        d.reason
+    );
+}

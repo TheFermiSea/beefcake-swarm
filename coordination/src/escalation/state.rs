@@ -157,6 +157,8 @@ pub enum EscalationReason {
     Explicit { reason: String },
     /// Consecutive no-change iterations exceeded threshold
     ConsecutiveNoChange { count: u32, threshold: u32 },
+    /// Friction detector triggered (oscillation, plateau, churn)
+    FrictionDetected { description: String },
 }
 
 impl std::fmt::Display for EscalationReason {
@@ -184,6 +186,9 @@ impl std::fmt::Display for EscalationReason {
                     "{} consecutive no-change iterations (threshold: {})",
                     count, threshold
                 )
+            }
+            Self::FrictionDetected { description } => {
+                write!(f, "friction: {}", description)
             }
         }
     }

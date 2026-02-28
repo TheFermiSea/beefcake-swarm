@@ -450,10 +450,7 @@ impl GraphRagRunner {
             "top_k": self.config.max_results,
         });
 
-        let client = match reqwest::Client::builder()
-            .timeout(timeout)
-            .build()
-        {
+        let client = match reqwest::Client::builder().timeout(timeout).build() {
             Ok(c) => c,
             Err(e) => {
                 return GraphRagResult::err(
@@ -510,14 +507,18 @@ impl GraphRagRunner {
 /// Handles two response shapes:
 /// - `{"nodes": [...], "edges": [...]}` (structured)  
 /// - `[{...}, ...]` (flat array of nodes, no edges)
-fn parse_graphrag_response(
-    raw: &serde_json::Value,
-) -> (Vec<GraphNode>, Vec<GraphEdge>) {
+fn parse_graphrag_response(raw: &serde_json::Value) -> (Vec<GraphNode>, Vec<GraphEdge>) {
     let empty = vec![];
 
     let (node_arr, edge_arr) = if let Some(obj) = raw.as_object() {
-        let nodes = obj.get("nodes").and_then(|v| v.as_array()).unwrap_or(&empty);
-        let edges = obj.get("edges").and_then(|v| v.as_array()).unwrap_or(&empty);
+        let nodes = obj
+            .get("nodes")
+            .and_then(|v| v.as_array())
+            .unwrap_or(&empty);
+        let edges = obj
+            .get("edges")
+            .and_then(|v| v.as_array())
+            .unwrap_or(&empty);
         (nodes.clone(), edges.clone())
     } else if let Some(arr) = raw.as_array() {
         (arr.clone(), vec![])

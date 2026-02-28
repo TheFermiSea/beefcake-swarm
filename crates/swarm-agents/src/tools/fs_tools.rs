@@ -96,8 +96,15 @@ impl Tool for ReadFileTool {
             let lines: Vec<&str> = content.lines().collect();
             let total = lines.len();
             // Convert 1-indexed user input to 0-indexed bounds, clamped to file size.
-            let start = args.start_line.map(|n| (n as usize).saturating_sub(1)).unwrap_or(0).min(total);
-            let end = args.end_line.map(|n| (n as usize).min(total)).unwrap_or(total);
+            let start = args
+                .start_line
+                .map(|n| (n as usize).saturating_sub(1))
+                .unwrap_or(0)
+                .min(total);
+            let end = args
+                .end_line
+                .map(|n| (n as usize).min(total))
+                .unwrap_or(total);
             if start >= end {
                 return Ok(format!(
                     "[Empty range: start_line={} end_line={} total_lines={total}]",

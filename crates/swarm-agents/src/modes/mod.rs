@@ -11,8 +11,8 @@
 //! | `provider_config` | NS-1.5| Provider/model runtime configuration             |
 //! | `runner`        | NS-1.2  | ModeRunner trait and ModeOrchestrator driver     |
 
-pub mod apply_diff;
 pub mod agentic;
+pub mod apply_diff;
 pub mod contextual;
 pub mod deepthink;
 pub mod errors;

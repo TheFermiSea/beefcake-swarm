@@ -56,10 +56,7 @@ use crate::modes::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ContextualState {
     /// Generator agent is producing / refining an artifact.
-    Drafting {
-        task_prompt: String,
-        iteration: u32,
-    },
+    Drafting { task_prompt: String, iteration: u32 },
     /// Critique agent is evaluating the latest artifact.
     Critiquing {
         task_prompt: String,
@@ -128,8 +125,7 @@ impl ContextualRunner {
     }
 
     fn should_compact(&self) -> bool {
-        self.total_estimated_tokens()
-            >= self.config.compaction.trigger_threshold_tokens()
+        self.total_estimated_tokens() >= self.config.compaction.trigger_threshold_tokens()
             && self.history.len() >= self.config.compaction.min_messages_before_compaction
     }
 
@@ -239,10 +235,7 @@ impl ContextualRunner {
             .temperature(self.config.critic_temperature)
             .build();
 
-        let critique_prompt = format!(
-            "Review this code:\n\n```rust\n{}\n```",
-            artifact.content
-        );
+        let critique_prompt = format!("Review this code:\n\n```rust\n{}\n```", artifact.content);
         let history = self.history_vec();
         let critique_raw = agent
             .chat(&critique_prompt, history)
@@ -373,7 +366,9 @@ impl ModeRunner for ContextualRunner {
         _ctx: &ModeContext,
         request: &ModeRequest,
     ) -> Result<(), OrchestrationError> {
-        self.config.validate().map_err(OrchestrationError::Configuration)?;
+        self.config
+            .validate()
+            .map_err(OrchestrationError::Configuration)?;
         self.history.clear();
         self.estimated_tokens = 0;
         self.state = ContextualState::Drafting {
@@ -397,11 +392,17 @@ impl ModeRunner for ContextualRunner {
 
         let current = self.state.clone();
         let next = match current {
-            ContextualState::Drafting { task_prompt, iteration } => {
-                self.step_drafting(task_prompt, iteration).await?
-            }
-            ContextualState::Critiquing { task_prompt, artifact, iteration } => {
-                self.step_critiquing(task_prompt, artifact, iteration).await?
+            ContextualState::Drafting {
+                task_prompt,
+                iteration,
+            } => self.step_drafting(task_prompt, iteration).await?,
+            ContextualState::Critiquing {
+                task_prompt,
+                artifact,
+                iteration,
+            } => {
+                self.step_critiquing(task_prompt, artifact, iteration)
+                    .await?
             }
             ContextualState::Condensing {
                 resume_task_prompt,
@@ -411,14 +412,21 @@ impl ModeRunner for ContextualRunner {
                 self.step_condensing(resume_task_prompt, resume_iteration, compression_reason)
                     .await?
             }
-            ContextualState::Done { artifact, total_iterations } => {
+            ContextualState::Done {
+                artifact,
+                total_iterations,
+            } => {
                 return Ok(StepResult::Done(ModeOutcome::Success {
                     artifact,
                     iterations: total_iterations,
                     total_tokens: Some(self.estimated_tokens),
                 }));
             }
-            ContextualState::Error { reason: _, last_iteration, partial_artifact: _ } => {
+            ContextualState::Error {
+                reason: _,
+                last_iteration,
+                partial_artifact: _,
+            } => {
                 return Ok(StepResult::Failed(OrchestrationError::MaxIterations(
                     last_iteration,
                 )));
