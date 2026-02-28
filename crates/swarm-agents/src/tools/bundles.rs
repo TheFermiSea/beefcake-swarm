@@ -7,7 +7,7 @@
 //!
 //! - **Worker (Rust specialist)**: read, write, edit, run_command (no list_files)
 //! - **Worker (General/Reasoning)**: read, write, edit, list_files, run_command
-//! - **Manager (deterministic tools)**: verifier, read, write, edit, list_files
+//! - **Manager (deterministic tools)**: verifier, read, list_files
 //! - **Manager (knowledge base)**: query_notebook (optional addon)
 
 use std::path::Path;
@@ -92,7 +92,8 @@ pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dy
 
 /// Build the deterministic tool bundle for a manager agent.
 ///
-/// Includes verifier, read, write, edit, list_files.
+/// Includes verifier, read, list_files. Managers delegate code changes
+/// to workers — they should never write/edit files directly.
 /// When `proxy` is true, tools are wrapped with `proxy_` prefix.
 pub fn manager_tools(
     wt_path: &Path,
@@ -105,16 +106,12 @@ pub fn manager_tools(
                 RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()),
             )),
             Box::new(ProxyReadFile(ReadFileTool::new(wt_path))),
-            Box::new(ProxyWriteFile(WriteFileTool::new(wt_path))),
-            Box::new(ProxyEditFile(EditFileTool::new(wt_path))),
             Box::new(ProxyListFiles(ListFilesTool::new(wt_path))),
         ]
     } else {
         vec![
             Box::new(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec())),
             Box::new(ReadFileTool::new(wt_path)),
-            Box::new(WriteFileTool::new(wt_path)),
-            Box::new(EditFileTool::new(wt_path)),
             Box::new(ListFilesTool::new(wt_path)),
         ]
     }
@@ -189,10 +186,29 @@ mod tests {
     }
 
     #[test]
-    fn test_manager_tools_has_5_tools() {
+    fn test_manager_tools_has_3_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], false);
-        assert_eq!(tools.len(), 5, "Manager should have 5 deterministic tools");
+        assert_eq!(
+            tools.len(),
+            3,
+            "Manager should have 3 tools (verifier, read, list)"
+        );
+    }
+
+    #[test]
+    fn test_manager_no_write_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        for proxy in [false, true] {
+            let tools = manager_tools(dir.path(), &[], proxy);
+            let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
+            assert!(
+                !names
+                    .iter()
+                    .any(|n| n.contains("write") || n.contains("edit")),
+                "Manager (proxy={proxy}) should not have write/edit tools, got: {names:?}"
+            );
+        }
     }
 
     #[test]
