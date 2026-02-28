@@ -1373,6 +1373,17 @@ pub async fn process_issue(
         };
         tier_from_env("SWARM_INITIAL_TIER", default_tier)
     };
+    // Clamp: Council requires cloud endpoint. Without cloud, the local manager
+    // can't delegate to workers effectively. Honor explicit env override.
+    let initial_tier = if initial_tier == SwarmTier::Council
+        && config.cloud_endpoint.is_none()
+        && std::env::var("SWARM_INITIAL_TIER").is_err()
+    {
+        warn!("Council tier requires cloud endpoint; falling back to Worker");
+        SwarmTier::Worker
+    } else {
+        initial_tier
+    };
     info!(
         ?initial_tier,
         cloud_available = config.cloud_endpoint.is_some(),

@@ -199,14 +199,16 @@ mod tests {
     #[test]
     fn test_manager_no_write_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = manager_tools(dir.path(), &[], false);
-        let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
-        assert!(
-            !names
-                .iter()
-                .any(|n| n.contains("write") || n.contains("edit")),
-            "Manager should not have write/edit tools, got: {names:?}"
-        );
+        for proxy in [false, true] {
+            let tools = manager_tools(dir.path(), &[], proxy);
+            let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
+            assert!(
+                !names
+                    .iter()
+                    .any(|n| n.contains("write") || n.contains("edit")),
+                "Manager (proxy={proxy}) should not have write/edit tools, got: {names:?}"
+            );
+        }
     }
 
     #[test]
