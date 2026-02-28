@@ -162,11 +162,7 @@ impl ModeOrchestrator {
     }
 
     /// Execute a mode run to completion (or budget exhaustion / cancellation).
-    pub async fn run(
-        &self,
-        runner: &mut dyn ModeRunner,
-        request: ModeRequest,
-    ) -> ModeOutcome {
+    pub async fn run(&self, runner: &mut dyn ModeRunner, request: ModeRequest) -> ModeOutcome {
         let label = request.label.clone();
         let ctx = ModeContext::new(self.config.clone(), label.as_str());
 
@@ -189,16 +185,9 @@ impl ModeOrchestrator {
         let outcome = loop {
             // Budget check
             if iterations >= self.config.max_iterations {
-                tracing::warn!(
-                    mode = runner.name(),
-                    iterations,
-                    "max iterations reached"
-                );
+                tracing::warn!(mode = runner.name(), iterations, "max iterations reached");
                 break ModeOutcome::Failure {
-                    reason: format!(
-                        "max iterations ({}) exceeded",
-                        self.config.max_iterations
-                    ),
+                    reason: format!("max iterations ({}) exceeded", self.config.max_iterations),
                     iterations,
                     partial_artifact: None,
                 };
@@ -221,11 +210,7 @@ impl ModeOrchestrator {
                     // keep looping
                 }
                 Ok(StepResult::Done(outcome)) => {
-                    tracing::info!(
-                        mode = runner.name(),
-                        iterations,
-                        "mode run succeeded"
-                    );
+                    tracing::info!(mode = runner.name(), iterations, "mode run succeeded");
                     break outcome;
                 }
                 Ok(StepResult::Failed(e)) => {
@@ -289,10 +274,7 @@ mod tests {
             Ok(())
         }
 
-        async fn step(
-            &mut self,
-            _ctx: &ModeContext,
-        ) -> Result<StepResult<()>, OrchestrationError> {
+        async fn step(&mut self, _ctx: &ModeContext) -> Result<StepResult<()>, OrchestrationError> {
             self.steps_taken += 1;
             if self.steps_taken >= self.steps_until_done {
                 Ok(StepResult::Done(ModeOutcome::Success {
@@ -322,10 +304,7 @@ mod tests {
             Ok(())
         }
 
-        async fn step(
-            &mut self,
-            _ctx: &ModeContext,
-        ) -> Result<StepResult<()>, OrchestrationError> {
+        async fn step(&mut self, _ctx: &ModeContext) -> Result<StepResult<()>, OrchestrationError> {
             Ok(StepResult::Failed(OrchestrationError::MaxIterations(0)))
         }
     }
@@ -337,9 +316,7 @@ mod tests {
             steps_taken: 0,
         };
         let orch = ModeOrchestrator::with_defaults();
-        let outcome = orch
-            .run(&mut runner, ModeRequest::new("test task"))
-            .await;
+        let outcome = orch.run(&mut runner, ModeRequest::new("test task")).await;
         assert!(outcome.is_success());
         assert_eq!(outcome.iterations(), 3);
     }
@@ -354,9 +331,7 @@ mod tests {
             steps_taken: 0,
         };
         let orch = ModeOrchestrator::new(cfg);
-        let outcome = orch
-            .run(&mut runner, ModeRequest::new("test task"))
-            .await;
+        let outcome = orch.run(&mut runner, ModeRequest::new("test task")).await;
         assert!(!outcome.is_success());
     }
 
@@ -364,9 +339,7 @@ mod tests {
     async fn orchestrator_propagates_failure() {
         let mut runner = AlwaysFailRunner;
         let orch = ModeOrchestrator::with_defaults();
-        let outcome = orch
-            .run(&mut runner, ModeRequest::new("test task"))
-            .await;
+        let outcome = orch.run(&mut runner, ModeRequest::new("test task")).await;
         assert!(!outcome.is_success());
     }
 }

@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "5.6.0";
+pub const PROMPT_VERSION: &str = "5.7.0";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -94,6 +94,14 @@ after you return — your job is done the moment the verifier passes.
 - The orchestrator handles git commits and issue status. Do NOT instruct workers to commit.
 - Minimize unnecessary tool calls — read files strategically, not exhaustively.
 - **Do NOT re-verify or re-delegate after the verifier passes. Stop and return.**
+
+## Cross-Crate Scope Discipline
+When fixes span multiple workspace crates (e.g. `coordination/` and `crates/`), \
+delegate ONE CRATE AT A TIME:
+- Fix the provider crate first (where the type/trait is defined), verify, then fix consumers.
+- Each delegation: at most 5 files. For larger changes, split into sequential delegations.
+- Run proxy_run_verifier between each crate's delegation.
+- Never ask a single worker to modify files in two different workspace crates.
 ";
 
 /// Local-only manager preamble (Qwen3.5-Architect fallback).
@@ -159,6 +167,14 @@ after you return — do NOT continue iterating.
 - Be specific: include file paths, line numbers, and exact error messages.
 - The orchestrator handles git commits and issue status. Do NOT instruct workers to commit.
 - **Do NOT re-verify or re-delegate after the verifier passes. Stop and return.**
+
+## Cross-Crate Scope Discipline
+When fixes span multiple workspace crates (e.g. `coordination/` and `crates/`), \
+delegate ONE CRATE AT A TIME:
+- Fix the provider crate first (where the type/trait is defined), verify, then fix consumers.
+- Each delegation: at most 5 files. For larger changes, split into sequential delegations.
+- Run run_verifier between each crate's delegation.
+- Never ask a single worker to modify files in two different workspace crates.
 ";
 
 /// Rust specialist coder preamble (Qwen3.5-Implementer).

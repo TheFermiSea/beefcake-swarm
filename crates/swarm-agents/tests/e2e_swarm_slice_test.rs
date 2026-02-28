@@ -109,7 +109,10 @@ fn make_config_and_factory() -> (SwarmConfig, AgentFactory) {
 async fn test_short_title_issue_is_rejected_without_claim() {
     let repo_dir = tempfile::tempdir().unwrap();
     let wt_base = tempfile::tempdir().unwrap();
-    create_broken_rust_project(repo_dir.path(), "pub fn add(a: i32, b: i32) -> i32 { a + b }\n");
+    create_broken_rust_project(
+        repo_dir.path(),
+        "pub fn add(a: i32, b: i32) -> i32 { a + b }\n",
+    );
 
     let (config, factory) = make_config_and_factory();
     let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
@@ -130,7 +133,10 @@ async fn test_short_title_issue_is_rejected_without_claim() {
         .await
         .expect("process_issue should not return Err for a short title");
 
-    assert!(!result, "short-title issue should return false (not completed)");
+    assert!(
+        !result,
+        "short-title issue should return false (not completed)"
+    );
     assert!(
         beads.was_never_claimed("e2e-short"),
         "short-title issue should NOT be claimed — leave it for human triage"
@@ -172,8 +178,8 @@ async fn test_e2e_bug_fix_slice() {
         labels: vec![],
     };
 
-    let result = orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None)
-        .await;
+    let result =
+        orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None).await;
 
     match &result {
         Ok(success) => eprintln!("bug-fix slice: success={success}"),
@@ -213,8 +219,8 @@ async fn test_e2e_feature_addition_slice() {
         labels: vec![],
     };
 
-    let result = orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None)
-        .await;
+    let result =
+        orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None).await;
 
     match &result {
         Ok(success) => eprintln!("feature slice: success={success}"),
@@ -254,8 +260,8 @@ async fn test_e2e_refactor_slice() {
         labels: vec![],
     };
 
-    let result = orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None)
-        .await;
+    let result =
+        orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None).await;
 
     match &result {
         Ok(success) => eprintln!("refactor slice: success={success}"),

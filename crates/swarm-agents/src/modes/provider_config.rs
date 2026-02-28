@@ -72,10 +72,8 @@ impl Default for ModeModelConfig {
                 .unwrap_or_else(|_| DEFAULT_LOCAL_MODEL.to_string()),
             strategy: env::var(ENV_STRATEGY_MODEL)
                 .unwrap_or_else(|_| DEFAULT_LOCAL_MODEL.to_string()),
-            worker: env::var(ENV_WORKER_MODEL)
-                .unwrap_or_else(|_| DEFAULT_LOCAL_MODEL.to_string()),
-            judge: env::var(ENV_JUDGE_MODEL)
-                .unwrap_or_else(|_| DEFAULT_LOCAL_MODEL.to_string()),
+            worker: env::var(ENV_WORKER_MODEL).unwrap_or_else(|_| DEFAULT_LOCAL_MODEL.to_string()),
+            judge: env::var(ENV_JUDGE_MODEL).unwrap_or_else(|_| DEFAULT_LOCAL_MODEL.to_string()),
             compactor: env::var(ENV_COMPACTOR_MODEL)
                 .unwrap_or_else(|_| DEFAULT_LOCAL_MODEL.to_string()),
         }

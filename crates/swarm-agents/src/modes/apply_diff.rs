@@ -107,10 +107,7 @@ impl ApplyDiffTool {
         let candidate = self.working_dir.join(rel_path);
 
         // Canonicalize the working_dir.
-        let canon_base = self
-            .working_dir
-            .canonicalize()
-            .map_err(|e| DiffError::Io(e))?;
+        let canon_base = self.working_dir.canonicalize().map_err(DiffError::Io)?;
 
         // For the candidate, if the file doesn't exist yet we can only check
         // that its parent is within the workspace.
@@ -118,7 +115,7 @@ impl ApplyDiffTool {
             candidate.canonicalize()?
         } else {
             let parent = candidate.parent().unwrap_or(&candidate);
-            let canon_parent = parent.canonicalize().map_err(|e| DiffError::Io(e))?;
+            let canon_parent = parent.canonicalize().map_err(DiffError::Io)?;
             if !canon_parent.starts_with(&canon_base) {
                 return Err(DiffError::PathTraversal(format!(
                     "path '{}' escapes workspace '{}'",
@@ -186,7 +183,11 @@ impl Tool for ApplyDiffTool {
         };
 
         match apply_unified_diff(&original, &args.diff) {
-            Ok(PatchResult { patched, hunks_applied, lines_changed }) => {
+            Ok(PatchResult {
+                patched,
+                hunks_applied,
+                lines_changed,
+            }) => {
                 // Ensure parent directory exists for new files.
                 if let Some(parent) = abs_path.parent() {
                     std::fs::create_dir_all(parent).map_err(DiffError::Io)?;
@@ -194,10 +195,7 @@ impl Tool for ApplyDiffTool {
                 std::fs::write(&abs_path, &patched).map_err(DiffError::Io)?;
                 Ok(ApplyDiffResult {
                     success: true,
-                    message: format!(
-                        "Applied {hunks_applied} hunk(s) to {}",
-                        args.path
-                    ),
+                    message: format!("Applied {hunks_applied} hunk(s) to {}", args.path),
                     hunks_applied,
                     lines_changed,
                 })
@@ -325,10 +323,8 @@ fn parse_hunks(diff: &str) -> Result<Vec<Hunk>, DiffError> {
             if let Some(h) = current.take() {
                 hunks.push(h);
             }
-            let (orig_start, orig_count, new_count) =
-                parse_hunk_header(line).map_err(|e| {
-                    DiffError::ParseError(format!("line {}: {}", lineno + 1, e))
-                })?;
+            let (orig_start, orig_count, new_count) = parse_hunk_header(line)
+                .map_err(|e| DiffError::ParseError(format!("line {}: {}", lineno + 1, e)))?;
             current = Some(Hunk {
                 orig_start,
                 _orig_count: orig_count,
