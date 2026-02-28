@@ -1364,8 +1364,21 @@ pub async fn process_issue(
         );
         recommendation.tier
     } else {
-        tier_from_env("SWARM_INITIAL_TIER", SwarmTier::Council)
+        // Without cloud, default to Worker — local models write code directly.
+        // With cloud, default to Council — cloud models handle delegation.
+        let default_tier = if config.cloud_endpoint.is_some() {
+            SwarmTier::Council
+        } else {
+            SwarmTier::Worker
+        };
+        tier_from_env("SWARM_INITIAL_TIER", default_tier)
     };
+    info!(
+        ?initial_tier,
+        cloud_available = config.cloud_endpoint.is_some(),
+        worker_first = feature_flags.worker_first_enabled,
+        "Initial tier selected"
+    );
     let engine = EscalationEngine::new();
     let mut escalation = EscalationState::new(&issue.id)
         .with_initial_tier(initial_tier)
