@@ -107,10 +107,7 @@ impl ApplyDiffTool {
         let candidate = self.working_dir.join(rel_path);
 
         // Canonicalize the working_dir.
-        let canon_base = self
-            .working_dir
-            .canonicalize()
-            .map_err(|e| DiffError::Io(e))?;
+        let canon_base = self.working_dir.canonicalize().map_err(DiffError::Io)?;
 
         // For the candidate, if the file doesn't exist yet we can only check
         // that its parent is within the workspace.
