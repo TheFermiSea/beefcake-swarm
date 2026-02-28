@@ -27,6 +27,7 @@ use crate::telemetry::{self, MetricsCollector, TelemetryReader};
 use crate::worktree_bridge::WorktreeBridge;
 use coordination::benchmark::slo::{self, AlertSeverity};
 use coordination::benchmark::OrchestrationMetrics;
+use coordination::escalation::state::EscalationReason;
 use coordination::escalation::worker_first::classify_initial_tier;
 use coordination::feedback::ErrorCategory;
 use coordination::otel::{self, SpanSummary};
@@ -302,7 +303,7 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
             .copied()
             .filter(|p| wt_root.join(p).exists())
             .chain(std::iter::once("Cargo.toml"))
-            .take(2)
+            .take(3)
             .collect()
     } else {
         target_files
@@ -1497,7 +1498,13 @@ pub async fn process_issue(
                 iteration,
                 "Sparse context — escalating Worker→Council for initial analysis"
             );
-            escalation.current_tier = SwarmTier::Council;
+            escalation.record_escalation(
+                SwarmTier::Council,
+                EscalationReason::Explicit {
+                    reason: "sparse context: no file_contexts/files_touched/failure_signals"
+                        .to_string(),
+                },
+            );
             SwarmTier::Council
         } else {
             tier
@@ -1876,21 +1883,17 @@ pub async fn process_issue(
                 );
                 break;
             }
-            if matches!(tier, SwarmTier::Council | SwarmTier::Human) {
-                let next = decision.target_tier;
+            let next = decision.target_tier;
+            if decision.escalated || matches!(tier, SwarmTier::Council | SwarmTier::Human) {
                 warn!(
                     iteration,
                     ?next,
-                    "No-change council response; engine routes to {next:?}"
+                    "No-change response; engine routes to {next:?}"
                 );
-                escalation.current_tier = next;
             } else {
-                warn!(
-                    iteration,
-                    "No-change worker response; keeping on Worker tier"
-                );
-                escalation.current_tier = SwarmTier::Worker;
+                warn!(iteration, ?next, "No-change response; staying on {next:?}");
             }
+            escalation.current_tier = next;
             continue;
         }
 

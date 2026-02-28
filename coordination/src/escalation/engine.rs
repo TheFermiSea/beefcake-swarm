@@ -347,16 +347,29 @@ impl EscalationEngine {
             };
         }
 
-        // Friction detection: high-severity friction at Council → flag for human
+        // Friction detection: high-severity *stuck-pattern* friction at Council → flag for human.
+        // Filter to oscillation/plateau/churn/rapid-escalation only — exclude
+        // HighComplexityDominance which can fire on a single iteration and
+        // would prematurely mark the issue as stuck.
         let friction_signals = FrictionDetector::detect(state, report);
-        if friction_signals
+        let high_stuck_friction: Vec<&_> = friction_signals
             .iter()
-            .any(|s| s.severity == FrictionSeverity::High)
-        {
+            .filter(|s| {
+                s.severity == FrictionSeverity::High
+                    && matches!(
+                        s.kind,
+                        FrictionKind::ErrorOscillation { .. }
+                            | FrictionKind::ErrorCountPlateau { .. }
+                            | FrictionKind::CategoryChurn { .. }
+                            | FrictionKind::RapidEscalation { .. }
+                    )
+            })
+            .collect();
+        if !high_stuck_friction.is_empty() {
             state.stuck = true;
-            let desc = friction_signals
+            let desc = high_stuck_friction
                 .iter()
-                .filter(|s| s.severity == FrictionSeverity::High)
+                .copied()
                 .map(|s| s.description.as_str())
                 .collect::<Vec<_>>()
                 .join("; ");

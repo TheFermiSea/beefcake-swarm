@@ -115,7 +115,7 @@ impl ApplyDiffTool {
             candidate.canonicalize()?
         } else {
             let parent = candidate.parent().unwrap_or(&candidate);
-            let canon_parent = parent.canonicalize().map_err(|e| DiffError::Io(e))?;
+            let canon_parent = parent.canonicalize().map_err(DiffError::Io)?;
             if !canon_parent.starts_with(&canon_base) {
                 return Err(DiffError::PathTraversal(format!(
                     "path '{}' escapes workspace '{}'",
