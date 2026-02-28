@@ -325,7 +325,6 @@ impl ContextualRunner {
                 match m {
                     Message::User { .. } => format!("User: {text}"),
                     Message::Assistant { .. } => format!("Assistant: {text}"),
-                    _ => String::new(),
                 }
             })
             .collect::<Vec<_>>()
@@ -419,13 +418,10 @@ impl ModeRunner for ContextualRunner {
                     total_tokens: Some(self.estimated_tokens),
                 }));
             }
-            ContextualState::Error { reason, last_iteration, partial_artifact } => {
+            ContextualState::Error { reason: _, last_iteration, partial_artifact: _ } => {
                 return Ok(StepResult::Failed(OrchestrationError::MaxIterations(
                     last_iteration,
                 )));
-                // Note: partial_artifact is carried in the ModeOutcome by the orchestrator
-                // via the reason string; a richer flow would surface it separately.
-                let _ = (reason, partial_artifact);
             }
         };
 
@@ -479,7 +475,6 @@ pub(crate) fn extract_message_text(msg: &Message) -> String {
             })
             .collect::<Vec<_>>()
             .join(""),
-        _ => String::new(),
     }
 }
 

@@ -304,7 +304,6 @@ fn message_text(msg: &Message) -> String {
             })
             .collect::<Vec<_>>()
             .join(""),
-        _ => String::new(),
     }
 }
 
@@ -318,7 +317,6 @@ fn serialise_messages(msgs: &[&Message]) -> String {
                 match m {
                     Message::User { .. } => format!("User: {text}"),
                     Message::Assistant { .. } => format!("Assistant: {text}"),
-                    _ => String::new(),
                 }
             }
         })

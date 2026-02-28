@@ -218,7 +218,7 @@ impl Tool for ApplyDiffTool {
 // ── Unified diff parser / applier ─────────────────────────────────────────────
 
 #[derive(Debug)]
-struct PatchResult {
+pub(crate) struct PatchResult {
     patched: String,
     hunks_applied: usize,
     lines_changed: i64,
@@ -228,7 +228,7 @@ struct PatchResult {
 ///
 /// Supports standard `@@ -L,N +L,N @@` hunks.
 /// Does NOT require the `--- a/` / `+++ b/` header lines.
-pub fn apply_unified_diff(original: &str, diff: &str) -> Result<PatchResult, DiffError> {
+pub(crate) fn apply_unified_diff(original: &str, diff: &str) -> Result<PatchResult, DiffError> {
     let hunks = parse_hunks(diff)?;
 
     if hunks.is_empty() {
@@ -309,8 +309,8 @@ pub fn apply_unified_diff(original: &str, diff: &str) -> Result<PatchResult, Dif
 #[derive(Debug)]
 struct Hunk {
     orig_start: usize,
-    orig_count: usize,
-    new_count: usize,
+    _orig_count: usize,
+    _new_count: usize,
     /// Lines with their diff prefix: ' ' (context), '-' (remove), '+' (add).
     lines: Vec<(char, String)>,
 }
@@ -331,8 +331,8 @@ fn parse_hunks(diff: &str) -> Result<Vec<Hunk>, DiffError> {
                 })?;
             current = Some(Hunk {
                 orig_start,
-                orig_count,
-                new_count,
+                _orig_count: orig_count,
+                _new_count: new_count,
                 lines: Vec::new(),
             });
         } else if line.starts_with("---") || line.starts_with("+++") {
