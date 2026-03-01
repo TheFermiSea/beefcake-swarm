@@ -1512,11 +1512,16 @@ pub async fn process_issue(
             "Packed context"
         );
 
-        // Sparse context: escalate Worker→Council to avoid prompt starvation.
+        // Sparse context: escalate Worker→Council only when cloud is available.
+        // Without cloud, Council routes to a local manager that can read/verify
+        // but can't write code — creating a catch-22 where the manager explores
+        // endlessly without producing changes. Keep Worker tier and let the
+        // increased turn budget (10) give the model more exploration room.
         let tier = if tier == SwarmTier::Worker
             && packet.file_contexts.is_empty()
             && packet.files_touched.is_empty()
             && packet.failure_signals.is_empty()
+            && config.cloud_endpoint.is_some()
         {
             warn!(
                 iteration,
@@ -1531,6 +1536,16 @@ pub async fn process_issue(
             );
             SwarmTier::Council
         } else {
+            if tier == SwarmTier::Worker
+                && packet.file_contexts.is_empty()
+                && packet.files_touched.is_empty()
+                && packet.failure_signals.is_empty()
+            {
+                warn!(
+                    iteration,
+                    "Sparse context but no cloud — keeping Worker tier (local manager can't write code)"
+                );
+            }
             tier
         };
 
