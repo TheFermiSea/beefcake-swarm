@@ -13,6 +13,7 @@ pub mod notebook_tool;
 pub mod patch_tool;
 pub mod proxy_wrappers;
 pub mod search_code_tool;
+pub mod shared;
 pub mod verifier_tool;
 
 use std::path::{Path, PathBuf};

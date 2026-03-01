@@ -297,14 +297,18 @@ impl SwarmConfig {
     }
 }
 
-/// Pre-built rig CompletionsClients, deduplicated by endpoint URL.
+/// Pre-built rig CompletionsClients for the three-node inference cluster.
 ///
-/// vasp-02:8080 serves all local tiers with HydraCoder 30B-A3B MoE.
-/// All tiers use the same endpoint — different system prompts per agent role.
+/// Each tier maps to a different node/model:
+/// - `local`     -> vasp-03:8080 (HydraCoder 30B, fast tier)
+/// - `coder`     -> vasp-01:8081 (Qwen3-Coder-Next 80B, code generation)
+/// - `reasoning` -> vasp-02:8081 (Qwen3.5-397B, deep analysis)
 pub struct ClientSet {
-    /// Client for vasp-02:8080 (HydraCoder, 4 slots @ 32K, ~135 tok/s)
+    /// Client for vasp-03:8080 (HydraCoder -- fast tier: analysis, routing, review)
     pub local: openai::CompletionsClient,
-    /// Client for vasp-02:8080 (HydraCoder, same endpoint as local)
+    /// Client for vasp-01:8081 (Qwen3-Coder-Next -- coder tier: general code generation)
+    pub coder: openai::CompletionsClient,
+    /// Client for vasp-02:8081 (Qwen3.5-397B -- reasoning tier: deep analysis, planning)
     pub reasoning: openai::CompletionsClient,
     /// Client for CLIAPIProxy (cloud models: Opus 4.6, G3-Pro, etc.)
     /// Used as the Manager tier when available.
@@ -324,12 +328,17 @@ impl ClientSet {
                 .base_url(&cloud_ep.url)
                 .build()
                 .context("Failed to build cloud client")?;
-            // Clone the client for local and reasoning slots
+            // Build identical clients for local, coder, and reasoning slots
             let local = openai::CompletionsClient::builder()
                 .api_key(&cloud_ep.api_key)
                 .base_url(&cloud_ep.url)
                 .build()
                 .context("Failed to build cloud-as-local client")?;
+            let coder = openai::CompletionsClient::builder()
+                .api_key(&cloud_ep.api_key)
+                .base_url(&cloud_ep.url)
+                .build()
+                .context("Failed to build cloud-as-coder client")?;
             let reasoning = openai::CompletionsClient::builder()
                 .api_key(&cloud_ep.api_key)
                 .base_url(&cloud_ep.url)
@@ -337,6 +346,7 @@ impl ClientSet {
                 .context("Failed to build cloud-as-reasoning client")?;
             return Ok(Self {
                 local,
+                coder,
                 reasoning,
                 cloud: Some(cloud),
             });
@@ -346,13 +356,19 @@ impl ClientSet {
             .api_key(&config.fast_endpoint.api_key)
             .base_url(&config.fast_endpoint.url)
             .build()
-            .context("Failed to build local client (vasp-02)")?;
+            .context("Failed to build local/fast client (vasp-03)")?;
+
+        let coder = openai::CompletionsClient::builder()
+            .api_key(&config.coder_endpoint.api_key)
+            .base_url(&config.coder_endpoint.url)
+            .build()
+            .context("Failed to build coder client (vasp-01)")?;
 
         let reasoning = openai::CompletionsClient::builder()
             .api_key(&config.reasoning_endpoint.api_key)
             .base_url(&config.reasoning_endpoint.url)
             .build()
-            .context("Failed to build reasoning client (vasp-01)")?;
+            .context("Failed to build reasoning client (vasp-02)")?;
 
         let cloud = config
             .cloud_endpoint
@@ -368,6 +384,7 @@ impl ClientSet {
 
         Ok(Self {
             local,
+            coder,
             reasoning,
             cloud,
         })

@@ -21,6 +21,7 @@ use tracing::info;
 
 use crate::config::{ClientSet, SwarmConfig};
 use crate::notebook_bridge::KnowledgeBase;
+use crate::tools::shared::ToolFactory;
 use coder::OaiAgent;
 
 /// Factory that builds all agents from a `SwarmConfig`.
@@ -32,6 +33,12 @@ pub struct AgentFactory {
     pub config: SwarmConfig,
     /// Shared knowledge base for the notebook tool (None if unavailable).
     pub notebook_bridge: Option<Arc<dyn KnowledgeBase>>,
+    /// Centralized tool construction factory, scoped to a worktree.
+    ///
+    /// When set, agent builders can use this instead of calling
+    /// `bundles::worker_tools()` / `bundles::manager_tools()` directly.
+    /// Initialize via [`AgentFactory::with_worktree`].
+    pub tool_factory: Option<ToolFactory>,
 }
 
 impl AgentFactory {
@@ -41,12 +48,51 @@ impl AgentFactory {
             clients,
             config: config.clone(),
             notebook_bridge: None,
+            tool_factory: None,
         })
     }
 
     /// Set the knowledge base for the notebook tool.
+    ///
+    /// If a [`ToolFactory`] was already initialized via [`with_worktree`],
+    /// it is rebuilt to include the new knowledge base.
     pub fn with_notebook_bridge(mut self, kb: Arc<dyn KnowledgeBase>) -> Self {
         self.notebook_bridge = Some(kb);
+        // Rebuild tool factory with the updated KB if one already exists.
+        if let Some(ref existing) = self.tool_factory {
+            self.tool_factory = Some(ToolFactory::new(
+                existing.wt_path(),
+                existing.is_proxy(),
+                self.config.verifier_packages.clone(),
+                self.notebook_bridge.clone(),
+            ));
+        }
+        self
+    }
+
+    /// Initialize the centralized tool factory for a given worktree path.
+    ///
+    /// Once set, the `tool_factory` field is available for callers that want
+    /// centralized, Clone-able tool construction instead of calling
+    /// `bundles::worker_tools()` / `bundles::manager_tools()` directly.
+    ///
+    /// Existing agent builder methods (e.g., `build_rust_coder`) continue to
+    /// work unchanged via `bundles` -- this is an additive capability.
+    ///
+    /// # Proxy mode
+    ///
+    /// Uses `cloud_only` to set the proxy flag, matching all public agent
+    /// builder methods (`build_rust_coder`, `build_general_coder`, etc.).
+    /// The cloud manager's sub-workers are built separately with explicit
+    /// `proxy=true` inside [`build_manager`] — `tool_factory` is not used
+    /// for those.
+    pub fn with_worktree(mut self, wt_path: &Path) -> Self {
+        self.tool_factory = Some(ToolFactory::new(
+            wt_path,
+            self.config.cloud_only,
+            self.config.verifier_packages.clone(),
+            self.notebook_bridge.clone(),
+        ));
         self
     }
 
@@ -64,13 +110,13 @@ impl AgentFactory {
         )
     }
 
-    /// Build the general coder (Qwen3.5-397B on vasp-02, general coding system prompt).
+    /// Build the general coder (Qwen3-Coder-Next on vasp-01, general coding system prompt).
     ///
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
     pub fn build_general_coder(&self, wt_path: &Path) -> OaiAgent {
         coder::build_general_coder_named(
-            &self.clients.local,
+            &self.clients.coder,
             &self.config.coder_endpoint.model,
             wt_path,
             "general_coder",
@@ -178,7 +224,7 @@ impl AgentFactory {
                 true,
             );
             let general_coder = coder::build_general_coder_named(
-                &self.clients.local,
+                &self.clients.coder,
                 &self.config.coder_endpoint.model,
                 wt_path,
                 "proxy_general_coder",
