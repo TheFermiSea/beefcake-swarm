@@ -28,9 +28,10 @@ const ALLOWED_COMMANDS: &[&str] = &[
 /// Characters that indicate command chaining or injection intent.
 /// Since we execute directly (no shell), these aren't technically dangerous,
 /// but they signal the LLM is trying to chain commands, which we block.
-/// Note: `(`, `)`, `$` are NOT included — they're common in regex patterns
-/// like `rg '(foo|bar)'` and are harmless without a shell.
-const DANGEROUS_METACHARACTERS: &[char] = &[';', '|', '&', '`', '\n', '\r'];
+/// Note: `|` (pipe), `(`, `)`, `$` are NOT included — pipe is harmless
+/// without a shell (we use Command::new, not sh -c) and LLMs commonly
+/// try `rg pattern | head -20` which we handle by passing args directly.
+const DANGEROUS_METACHARACTERS: &[char] = &[';', '&', '`', '\n', '\r'];
 
 /// Default timeout for command execution.
 const DEFAULT_TIMEOUT_SECS: u64 = 120;
