@@ -107,36 +107,41 @@ impl ToolFactory {
 mod tests {
     use super::*;
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
     #[test]
-    fn test_factory_worker_rust_specialist() {
+    fn test_factory_worker_rust_specialist() -> TestResult {
         // Rust specialist: read_file, write_file, edit_file, run_command (no list_files).
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let tools = factory.worker_tools(WorkerRole::RustSpecialist);
         assert_eq!(tools.len(), 4, "Rust specialist should have 4 tools");
+        Ok(())
     }
 
     #[test]
-    fn test_factory_worker_general() {
+    fn test_factory_worker_general() -> TestResult {
         // General: read_file, write_file, edit_file, run_command, list_files.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let tools = factory.worker_tools(WorkerRole::General);
         assert_eq!(tools.len(), 5, "General worker should have 5 tools");
+        Ok(())
     }
 
     #[test]
-    fn test_factory_worker_planner() {
+    fn test_factory_worker_planner() -> TestResult {
         // Planner (read-only): read_file, list_files, run_command.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let tools = factory.worker_tools(WorkerRole::Planner);
         assert_eq!(tools.len(), 3, "Planner should have 3 tools");
+        Ok(())
     }
 
     #[test]
-    fn test_factory_proxy_mode() {
-        let dir = tempfile::tempdir().unwrap();
+    fn test_factory_proxy_mode() -> TestResult {
+        let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), true, vec![], None);
         assert!(factory.is_proxy());
         let tools = factory.worker_tools(WorkerRole::General);
@@ -147,46 +152,50 @@ mod tests {
                 tool.name()
             );
         }
+        Ok(())
     }
 
     #[test]
-    fn test_factory_manager_tools() {
+    fn test_factory_manager_tools() -> TestResult {
         // Manager (deterministic): run_verifier, read_file, list_files.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec!["test-pkg".to_string()], None);
         let tools = factory.manager_tools();
         assert_eq!(tools.len(), 3, "Manager should have 3 tools");
+        Ok(())
     }
 
     #[test]
-    fn test_factory_notebook_tools_none() {
-        let dir = tempfile::tempdir().unwrap();
+    fn test_factory_notebook_tools_none() -> TestResult {
+        let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let tools = factory.notebook_tools();
         assert!(tools.is_empty(), "No KB should produce empty tool vec");
+        Ok(())
     }
 
     #[test]
-    fn test_factory_notebook_tools_with_kb() {
+    fn test_factory_notebook_tools_with_kb() -> TestResult {
         use crate::notebook_bridge::NoOpKnowledgeBase;
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir()?;
         let kb: Arc<dyn KnowledgeBase> = Arc::new(NoOpKnowledgeBase);
         let factory = ToolFactory::new(dir.path(), false, vec![], Some(kb));
         let tools = factory.notebook_tools();
         assert_eq!(tools.len(), 1);
         assert_eq!(tools[0].name(), "query_notebook");
+        Ok(())
     }
 
     #[test]
-    fn test_factory_is_clone() {
-        let dir = tempfile::tempdir().unwrap();
+    fn test_factory_is_clone() -> TestResult {
+        let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let factory2 = factory.clone();
-        // Both produce the same tool counts
         assert_eq!(
             factory.worker_tools(WorkerRole::General).len(),
             factory2.worker_tools(WorkerRole::General).len()
         );
+        Ok(())
     }
 
     #[test]
@@ -197,16 +206,17 @@ mod tests {
     }
 
     #[test]
-    fn test_factory_wt_path() {
-        let dir = tempfile::tempdir().unwrap();
+    fn test_factory_wt_path() -> TestResult {
+        let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         assert_eq!(factory.wt_path(), dir.path());
+        Ok(())
     }
 
     #[test]
-    fn test_factory_matches_direct_bundles() {
+    fn test_factory_matches_direct_bundles() -> TestResult {
         // Verify factory produces identical tool sets to direct bundle calls.
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec!["pkg".to_string()], None);
 
         let mut direct_names: Vec<String> =
@@ -236,5 +246,6 @@ mod tests {
             direct_mgr_names, factory_mgr_names,
             "Manager tool names must match"
         );
+        Ok(())
     }
 }

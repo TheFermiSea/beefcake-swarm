@@ -46,7 +46,7 @@ const ENV_COMPACTOR_MODEL: &str = "SWARM_COMPACTOR_MODEL";
 const ENV_LOCAL_BASE_URL: &str = "SWARM_LOCAL_BASE_URL";
 const ENV_LOCAL_API_KEY: &str = "SWARM_LOCAL_API_KEY";
 
-/// Per-role model assignment.  All roles default to the local HydraCoder endpoint.
+/// Per-role model assignment.  All roles default to the local Qwen3.5-397B endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModeModelConfig {
     /// Generator agent — produces code artifacts.

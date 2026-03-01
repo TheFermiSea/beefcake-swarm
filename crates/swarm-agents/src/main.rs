@@ -157,6 +157,7 @@ async fn main() -> Result<()> {
         if !local_ok && !coder_ok && !reasoning_ok {
             if config.cloud_endpoint.is_some() {
                 warn!("Local endpoints down — will attempt cloud-only mode");
+                config.cloud_only = true;
             } else {
                 error!("All endpoints unreachable and no cloud configured — exiting");
                 anyhow::bail!("No inference endpoints available");
