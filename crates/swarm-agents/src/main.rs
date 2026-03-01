@@ -119,29 +119,42 @@ async fn main() -> Result<()> {
             Some(&config.fast_endpoint.model),
         )
         .await;
+        let coder_ok = check_endpoint_with_model(
+            &config.coder_endpoint.url,
+            Some(&config.coder_endpoint.api_key),
+            Some(&config.coder_endpoint.model),
+        )
+        .await;
         let reasoning_ok = check_endpoint_with_model(
             &config.reasoning_endpoint.url,
             Some(&config.reasoning_endpoint.api_key),
             Some(&config.reasoning_endpoint.model),
         )
         .await;
-        info!(local_ok, reasoning_ok, "Endpoint health check");
+        info!(local_ok, coder_ok, reasoning_ok, "Endpoint health check");
         if !local_ok {
             warn!(
                 url = %config.fast_endpoint.url,
                 model = %config.fast_endpoint.model,
-                "Fast endpoint not ready. Start inference: sbatch run-14b.slurm"
+                "Fast endpoint not ready (vasp-03). Start: bash /tmp/start-hydracoder.sh"
+            );
+        }
+        if !coder_ok {
+            warn!(
+                url = %config.coder_endpoint.url,
+                model = %config.coder_endpoint.model,
+                "Coder endpoint not ready (vasp-01). Start: bash /tmp/start-coder-next.sh"
             );
         }
         if !reasoning_ok {
             warn!(
                 url = %config.reasoning_endpoint.url,
                 model = %config.reasoning_endpoint.model,
-                "Reasoning endpoint not ready. Start inference: sbatch run-72b-distributed.slurm"
+                "Reasoning endpoint not ready (vasp-02). Start: bash /tmp/start-qwen35-q4km.sh"
             );
         }
 
-        if !local_ok && !reasoning_ok {
+        if !local_ok && !coder_ok && !reasoning_ok {
             if config.cloud_endpoint.is_some() {
                 warn!("Local endpoints down — will attempt cloud-only mode");
             } else {

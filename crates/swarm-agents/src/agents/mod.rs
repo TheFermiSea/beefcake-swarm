@@ -110,13 +110,13 @@ impl AgentFactory {
         )
     }
 
-    /// Build the general coder (Qwen3.5-397B on vasp-02, general coding system prompt).
+    /// Build the general coder (Qwen3-Coder-Next on vasp-01, general coding system prompt).
     ///
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
     pub fn build_general_coder(&self, wt_path: &Path) -> OaiAgent {
         coder::build_general_coder_named(
-            &self.clients.local,
+            &self.clients.coder,
             &self.config.coder_endpoint.model,
             wt_path,
             "general_coder",
@@ -224,7 +224,7 @@ impl AgentFactory {
                 true,
             );
             let general_coder = coder::build_general_coder_named(
-                &self.clients.local,
+                &self.clients.coder,
                 &self.config.coder_endpoint.model,
                 wt_path,
                 "proxy_general_coder",

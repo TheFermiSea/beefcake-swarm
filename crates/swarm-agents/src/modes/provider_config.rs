@@ -8,27 +8,27 @@
 //!
 //! 1. Environment variable overrides (e.g. `SWARM_GENERATOR_MODEL`)
 //! 2. Values in this struct
-//! 3. Built-in defaults (HydraCoder on vasp-02:8080)
+//! 3. Built-in defaults (Qwen3.5-397B on vasp-02:8081)
 //!
 //! ## Model roles
 //!
-//! | Role       | Used by                | Default                    |
-//! |------------|------------------------|----------------------------|
-//! | generator  | Contextual, Agentic    | HydraCoder 30B on vasp-02  |
-//! | critique   | Contextual             | HydraCoder 30B on vasp-02  |
-//! | strategy   | Deepthink phase 1      | HydraCoder 30B on vasp-02  |
-//! | worker     | Deepthink phase 2      | HydraCoder 30B on vasp-02  |
-//! | judge      | Deepthink phase 3      | HydraCoder 30B on vasp-02  |
-//! | compactor  | Memory manager         | HydraCoder 30B on vasp-02  |
+//! | Role       | Used by                | Default                       |
+//! |------------|------------------------|-------------------------------|
+//! | generator  | Contextual, Agentic    | Qwen3.5-397B on vasp-02:8081  |
+//! | critique   | Contextual             | Qwen3.5-397B on vasp-02:8081  |
+//! | strategy   | Deepthink phase 1      | Qwen3.5-397B on vasp-02:8081  |
+//! | worker     | Deepthink phase 2      | Qwen3.5-397B on vasp-02:8081  |
+//! | judge      | Deepthink phase 3      | Qwen3.5-397B on vasp-02:8081  |
+//! | compactor  | Memory manager         | Qwen3.5-397B on vasp-02:8081  |
 
 use std::env;
 
 use serde::{Deserialize, Serialize};
 
-/// Default local inference base URL (HydraCoder on vasp-02).
-const DEFAULT_LOCAL_BASE_URL: &str = "http://vasp-02:8080/v1";
-/// Default model alias served by HydraCoder (all tiers until Qwen3.5 is back).
-const DEFAULT_LOCAL_MODEL: &str = "hydracoder";
+/// Default local inference base URL (Qwen3.5-397B on vasp-02).
+const DEFAULT_LOCAL_BASE_URL: &str = "http://vasp-02:8081/v1";
+/// Default model alias (Qwen3.5-397B-A17B — primary reasoning model).
+const DEFAULT_LOCAL_MODEL: &str = "Qwen3.5-397B-A17B";
 /// Maximum number of parallel worker slots on vasp-02.
 const DEFAULT_MAX_PARALLEL_WORKERS: usize = 4;
 /// Default context window size (tokens) for compaction trigger.

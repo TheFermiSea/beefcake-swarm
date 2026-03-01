@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export RUST_LOG="${RUST_LOG:-info}"
-# Worker tier: HydraCoder on vasp-02
-export SWARM_WORKER_URL="${SWARM_WORKER_URL:-http://vasp-02:8080/v1}"
-export SWARM_WORKER_MODEL="${SWARM_WORKER_MODEL:-HydraCoder-Q6_K.gguf}"
-# Local manager: Qwen3.5 distributed on vasp-01+vasp-03
-export SWARM_LOCAL_MANAGER_URL="${SWARM_LOCAL_MANAGER_URL:-http://vasp-01:8081/v1}"
-export SWARM_LOCAL_MANAGER_MODEL="${SWARM_LOCAL_MANAGER_MODEL:-Qwen3.5-397B-A17B-UD-Q4_K_XL.gguf}"
+# Fast tier: HydraCoder 30B on vasp-03
+export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-03:8080/v1}"
+export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-HydraCoder.i1-Q4_K_M}"
+# Coder tier: Qwen3-Coder-Next 80B on vasp-01
+export SWARM_CODER_URL="${SWARM_CODER_URL:-http://vasp-01:8081/v1}"
+export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3-Coder-Next}"
+# Reasoning tier: Qwen3.5-397B on vasp-02
+export SWARM_REASONING_URL="${SWARM_REASONING_URL:-http://vasp-02:8081/v1}"
+export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-Qwen3.5-397B-A17B}"
 # Cloud manager via proxy
 export SWARM_CLOUD_URL="${SWARM_CLOUD_URL:-http://10.0.0.5:8317/v1}"
 : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
