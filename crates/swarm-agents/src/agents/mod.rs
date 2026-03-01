@@ -21,6 +21,7 @@ use tracing::info;
 
 use crate::config::{ClientSet, SwarmConfig};
 use crate::notebook_bridge::KnowledgeBase;
+use crate::tools::shared::ToolFactory;
 use coder::OaiAgent;
 
 /// Factory that builds all agents from a `SwarmConfig`.
@@ -32,6 +33,12 @@ pub struct AgentFactory {
     pub config: SwarmConfig,
     /// Shared knowledge base for the notebook tool (None if unavailable).
     pub notebook_bridge: Option<Arc<dyn KnowledgeBase>>,
+    /// Centralized tool construction factory, scoped to a worktree.
+    ///
+    /// When set, agent builders can use this instead of calling
+    /// `bundles::worker_tools()` / `bundles::manager_tools()` directly.
+    /// Initialize via [`AgentFactory::with_worktree`].
+    pub tool_factory: Option<ToolFactory>,
 }
 
 impl AgentFactory {
@@ -41,12 +48,31 @@ impl AgentFactory {
             clients,
             config: config.clone(),
             notebook_bridge: None,
+            tool_factory: None,
         })
     }
 
     /// Set the knowledge base for the notebook tool.
     pub fn with_notebook_bridge(mut self, kb: Arc<dyn KnowledgeBase>) -> Self {
         self.notebook_bridge = Some(kb);
+        self
+    }
+
+    /// Initialize the centralized tool factory for a given worktree path.
+    ///
+    /// Once set, the `tool_factory` field is available for callers that want
+    /// centralized, Clone-able tool construction instead of calling
+    /// `bundles::worker_tools()` / `bundles::manager_tools()` directly.
+    ///
+    /// Existing agent builder methods (e.g., `build_rust_coder`) continue to
+    /// work unchanged via `bundles` -- this is an additive capability.
+    pub fn with_worktree(mut self, wt_path: &Path) -> Self {
+        self.tool_factory = Some(ToolFactory::new(
+            wt_path,
+            self.config.cloud_only,
+            self.config.verifier_packages.clone(),
+            self.notebook_bridge.clone(),
+        ));
         self
     }
 

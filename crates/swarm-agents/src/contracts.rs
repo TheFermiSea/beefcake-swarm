@@ -18,13 +18,14 @@
 //! }
 //! ```
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::agents::reviewer::ReviewResult;
 use crate::pipeline::ImplementationPlan;
 
 /// Status of the specialist's objective.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ObjectiveStatus {
     /// Specialist completed its objective fully.
@@ -49,7 +50,7 @@ impl std::fmt::Display for ObjectiveStatus {
 }
 
 /// A risk identified by a specialist.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Risk {
     pub severity: RiskSeverity,
     pub description: String,
@@ -57,7 +58,7 @@ pub struct Risk {
 }
 
 /// Risk severity level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskSeverity {
     Low,
@@ -66,14 +67,14 @@ pub enum RiskSeverity {
 }
 
 /// A required followup action.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct Followup {
     pub action: String,
     pub target: FollowupTarget,
 }
 
 /// Which specialist should handle a followup.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum FollowupTarget {
     Planner,

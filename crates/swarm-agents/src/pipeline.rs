@@ -14,6 +14,7 @@
 //! in validated schemas or discard on failure).
 
 use coordination::{ContextPacker, EscalationState, SwarmTier, VerifierReport, WorkPacket};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
@@ -38,7 +39,7 @@ pub struct PreflightContext {
 }
 
 /// A validated implementation plan from the plan generation stage.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct ImplementationPlan {
     /// High-level approach description.
     pub approach: String,
@@ -51,7 +52,7 @@ pub struct ImplementationPlan {
 }
 
 /// A single step in an implementation plan.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct PlanStep {
     /// What to do.
     pub description: String,
@@ -60,7 +61,7 @@ pub struct PlanStep {
 }
 
 /// Risk assessment for a plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum PlanRisk {
     Low,

@@ -2,7 +2,8 @@
 
 use rig::client::CompletionClient;
 use rig::providers::openai;
-use serde::Deserialize;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 
 use crate::prompts;
 
@@ -42,7 +43,7 @@ pub fn build_reviewer_named(
     builder.build()
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
 enum ReviewVerdict {
     Pass,
@@ -50,7 +51,7 @@ enum ReviewVerdict {
     NeedsEscalation,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 struct StructuredReview {
     verdict: ReviewVerdict,
     confidence: f32,
@@ -60,6 +61,7 @@ struct StructuredReview {
 }
 
 /// Parse a reviewer response into pass/fail + feedback.
+#[derive(Debug, Serialize, Deserialize, JsonSchema)]
 pub struct ReviewResult {
     pub passed: bool,
     pub schema_valid: bool,
