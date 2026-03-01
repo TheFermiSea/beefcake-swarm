@@ -53,8 +53,20 @@ impl AgentFactory {
     }
 
     /// Set the knowledge base for the notebook tool.
+    ///
+    /// If a [`ToolFactory`] was already initialized via [`with_worktree`],
+    /// it is rebuilt to include the new knowledge base.
     pub fn with_notebook_bridge(mut self, kb: Arc<dyn KnowledgeBase>) -> Self {
         self.notebook_bridge = Some(kb);
+        // Rebuild tool factory with the updated KB if one already exists.
+        if let Some(ref existing) = self.tool_factory {
+            self.tool_factory = Some(ToolFactory::new(
+                existing.wt_path(),
+                existing.is_proxy(),
+                self.config.verifier_packages.clone(),
+                self.notebook_bridge.clone(),
+            ));
+        }
         self
     }
 
@@ -66,6 +78,14 @@ impl AgentFactory {
     ///
     /// Existing agent builder methods (e.g., `build_rust_coder`) continue to
     /// work unchanged via `bundles` -- this is an additive capability.
+    ///
+    /// # Proxy mode
+    ///
+    /// Uses `cloud_only` to set the proxy flag, matching all public agent
+    /// builder methods (`build_rust_coder`, `build_general_coder`, etc.).
+    /// The cloud manager's sub-workers are built separately with explicit
+    /// `proxy=true` inside [`build_manager`] — `tool_factory` is not used
+    /// for those.
     pub fn with_worktree(mut self, wt_path: &Path) -> Self {
         self.tool_factory = Some(ToolFactory::new(
             wt_path,

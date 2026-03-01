@@ -13,6 +13,7 @@
 //! # Example
 //!
 //! ```ignore
+//! let wt_path = Path::new("/tmp/worktree");
 //! let factory = ToolFactory::new(wt_path, false, vec![], None);
 //!
 //! // Each agent gets its own tool set from the same factory
@@ -108,6 +109,7 @@ mod tests {
 
     #[test]
     fn test_factory_worker_rust_specialist() {
+        // Rust specialist: read_file, write_file, edit_file, run_command (no list_files).
         let dir = tempfile::tempdir().unwrap();
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let tools = factory.worker_tools(WorkerRole::RustSpecialist);
@@ -116,6 +118,7 @@ mod tests {
 
     #[test]
     fn test_factory_worker_general() {
+        // General: read_file, write_file, edit_file, run_command, list_files.
         let dir = tempfile::tempdir().unwrap();
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let tools = factory.worker_tools(WorkerRole::General);
@@ -124,6 +127,7 @@ mod tests {
 
     #[test]
     fn test_factory_worker_planner() {
+        // Planner (read-only): read_file, list_files, run_command.
         let dir = tempfile::tempdir().unwrap();
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let tools = factory.worker_tools(WorkerRole::Planner);
@@ -147,6 +151,7 @@ mod tests {
 
     #[test]
     fn test_factory_manager_tools() {
+        // Manager (deterministic): run_verifier, read_file, list_files.
         let dir = tempfile::tempdir().unwrap();
         let factory = ToolFactory::new(dir.path(), false, vec!["test-pkg".to_string()], None);
         let tools = factory.manager_tools();
@@ -186,8 +191,9 @@ mod tests {
 
     #[test]
     fn test_factory_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<ToolFactory>();
+        use rig::wasm_compat::{WasmCompatSend, WasmCompatSync};
+        fn assert_wasm_compat<T: WasmCompatSend + WasmCompatSync>() {}
+        assert_wasm_compat::<ToolFactory>();
     }
 
     #[test]
@@ -199,16 +205,36 @@ mod tests {
 
     #[test]
     fn test_factory_matches_direct_bundles() {
-        // Verify factory produces identical tool counts to direct bundle calls
+        // Verify factory produces identical tool sets to direct bundle calls.
         let dir = tempfile::tempdir().unwrap();
         let factory = ToolFactory::new(dir.path(), false, vec!["pkg".to_string()], None);
 
-        let direct_worker = bundles::worker_tools(dir.path(), WorkerRole::RustSpecialist, false);
-        let factory_worker = factory.worker_tools(WorkerRole::RustSpecialist);
-        assert_eq!(direct_worker.len(), factory_worker.len());
+        let mut direct_names: Vec<String> =
+            bundles::worker_tools(dir.path(), WorkerRole::RustSpecialist, false)
+                .iter()
+                .map(|t| t.name())
+                .collect();
+        let mut factory_names: Vec<String> = factory
+            .worker_tools(WorkerRole::RustSpecialist)
+            .iter()
+            .map(|t| t.name())
+            .collect();
+        direct_names.sort();
+        factory_names.sort();
+        assert_eq!(direct_names, factory_names, "Worker tool names must match");
 
-        let direct_mgr = bundles::manager_tools(dir.path(), &["pkg".to_string()], false);
-        let factory_mgr = factory.manager_tools();
-        assert_eq!(direct_mgr.len(), factory_mgr.len());
+        let mut direct_mgr_names: Vec<String> =
+            bundles::manager_tools(dir.path(), &["pkg".to_string()], false)
+                .iter()
+                .map(|t| t.name())
+                .collect();
+        let mut factory_mgr_names: Vec<String> =
+            factory.manager_tools().iter().map(|t| t.name()).collect();
+        direct_mgr_names.sort();
+        factory_mgr_names.sort();
+        assert_eq!(
+            direct_mgr_names, factory_mgr_names,
+            "Manager tool names must match"
+        );
     }
 }
