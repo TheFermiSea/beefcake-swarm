@@ -30,8 +30,7 @@ static ENUM_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^pub\s+enum\s+(\w+)").unwrap());
 static FN_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*pub\s+(?:async\s+)?fn\s+(\w+)").unwrap());
-static IMPL_PATTERN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"(?m)^impl(?:<[^>]*>)?\s+(\w+)").unwrap());
+
 
 /// Work Packet Generator
 pub struct WorkPacketGenerator {

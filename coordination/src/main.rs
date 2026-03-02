@@ -12,16 +12,17 @@
 //!
 //! ```bash
 //! # Standard MCP mode
-//! rust-cluster-mcp
+//! coordination
 //!
 //! # With harness tools enabled
-//! rust-cluster-mcp --harness
+//! coordination --harness
 //!
 //! # Custom configuration
-//! HARNESS_MAX_ITERATIONS=30 HARNESS_FEATURES_PATH=./features.json rust-cluster-mcp --harness
+//! HARNESS_MAX_ITERATIONS=30 HARNESS_FEATURES_PATH=./features.json coordination --harness
 //! ```
 
-// Suppress false positive dead_code warnings from #[tool_router] macro and serde deserialization
+// rmcp #[tool_router] macro generates code that constructs request structs and accesses
+// server fields; the compiler cannot see through proc-macro expansion and flags them as unused.
 #![allow(dead_code)]
 
 pub mod benchmark;
@@ -1482,7 +1483,7 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("rust_cluster_mcp=info".parse().unwrap()),
+                .add_directive("coordination=info".parse().unwrap()),
         )
         .with_writer(std::io::stderr)
         .init();

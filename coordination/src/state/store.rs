@@ -117,6 +117,7 @@ impl StateStore {
     }
 
     /// Delete a value from a column family
+    #[allow(dead_code)] // CRUD completeness; not yet called by ensemble/harness
     fn delete(&self, cf_name: &str, key: &str) -> StoreResult<()> {
         let db = self.db.read().map_err(|_| StoreError::LockPoisoned)?;
         let cf = db

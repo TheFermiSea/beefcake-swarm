@@ -1,4 +1,4 @@
-//! Rust Cluster MCP Library
+//! Coordination Library
 //!
 //! This library provides:
 //! - MCP tools for delegating to local Rust-expert LLMs
@@ -33,20 +33,17 @@
 //!
 //! ```bash
 //! # Run in normal MCP mode
-//! rust-cluster-mcp
+//! coordination
 //!
 //! # Run with harness tools enabled
-//! rust-cluster-mcp --harness
+//! coordination --harness
 //!
 //! # Run with ensemble coordination enabled
-//! rust-cluster-mcp --ensemble --state-path ./ensemble-state
+//! coordination --ensemble --state-path ./ensemble-state
 //!
 //! # Run with both harness and ensemble
-//! rust-cluster-mcp --harness --ensemble
+//! coordination --harness --ensemble
 //! ```
-
-#![allow(dead_code)]
-#![allow(clippy::uninlined_format_args)]
 
 pub mod agent_profile;
 pub mod analytics;

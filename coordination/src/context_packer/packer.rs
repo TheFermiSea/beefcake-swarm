@@ -43,6 +43,7 @@ struct SpanWindow {
     start_line: usize,
     end_line: usize,
     category: ErrorCategory,
+    #[allow(dead_code)] // populated but not yet consumed in merge output
     message: String,
 }
 

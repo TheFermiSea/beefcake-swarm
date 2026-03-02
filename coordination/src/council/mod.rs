@@ -564,6 +564,7 @@ pub struct ManagerCouncil {
     librarian: Option<Box<dyn CouncilMember>>,
     architect: Option<Box<dyn CouncilMember>>,
     strategist: Option<Box<dyn CouncilMember>>,
+    #[allow(dead_code)] // stored at construction; consulted in future adaptive routing
     config: CouncilConfig,
 }
 

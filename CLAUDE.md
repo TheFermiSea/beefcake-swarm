@@ -211,9 +211,7 @@ nlm source add "<ID>" --file "doc.md"
 
 ## Known Issues
 
-- `coordination/tests/` — Several integration tests reference `rust_cluster_mcp` as an unresolved crate (should be `coordination`). These tests won't compile until import paths are fixed.
-- `crates/swarm-agents/` — Has dead code warnings on structs/methods that are defined but not yet wired into the Phase 2 orchestrator loop.
-- `#![allow(dead_code)]` is enabled in coordination's `lib.rs` and `main.rs` due to rmcp macro-generated code triggering false positives.
+- `#![allow(dead_code)]` is enabled in `coordination/src/main.rs` due to rmcp `#[tool_router]` macro-generated code triggering false positives (request structs are constructed by the macro but invisible to rustc dead-code analysis). This is intentional and minimal.
 - `pve1 ZFS pool at 96%` — Deleted a 104GB stale `@restore` snapshot but pool is still 96% used. vasp-01's /scratch is 100% full (400GB). Consider cleaning old models (UD-Q4_K_XL, glm-4.7) from vasp-01.
 - `vasp-03 NFS` — /home, /cluster/shared still NFS-mounted from slurm-ctl. Set `HOME=/tmp CUDA_CACHE_PATH=/tmp/cuda-cache` before running anything that writes to $HOME.
 

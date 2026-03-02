@@ -1008,6 +1008,7 @@ impl SlurmInferenceManager {
     /// A job is "stale for submission" if we should submit a new job.
     /// This is different from discovery - we don't want to submit duplicates
     /// for Pending or Completing jobs.
+    #[allow(dead_code)] // SLURM submission logic wired in future phase
     fn job_state_stale_for_submission(state: &JobState) -> bool {
         !matches!(
             state,

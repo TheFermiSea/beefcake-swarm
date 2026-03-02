@@ -830,10 +830,6 @@ impl Verifier {
         }
     }
 
-    /// Add skipped gates to the report
-    fn skip_remaining(&self, report: &mut VerifierReport, gates: &[&str]) {
-        self.skip_remaining_with(report, gates, &self.config);
-    }
 
     /// Add skipped gates to the report using an external config (for adaptive mode).
     fn skip_remaining_with(
