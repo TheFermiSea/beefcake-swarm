@@ -675,12 +675,32 @@ pub async fn parse_stream(input: &str) -> Result<(), Error> {
             .output()
             .unwrap();
 
+        // Temporarily clear CI env vars so git_branch() exercises the
+        // name-rev / detached@ fallback paths instead of short-circuiting
+        // via GITHUB_HEAD_REF (set process-wide on GitHub Actions PR builds).
+        let saved_ci_vars: Vec<(String, Option<String>)> =
+            ["CI_COMMIT_REF_NAME", "GITHUB_HEAD_REF", "BRANCH_NAME"]
+                .iter()
+                .map(|k| (k.to_string(), std::env::var(k).ok()))
+                .collect();
+        for (k, _) in &saved_ci_vars {
+            std::env::remove_var(k);
+        }
+
         let gen = WorkPacketGenerator::new(wd.to_path_buf());
         let branch = gen.git_branch().unwrap();
 
+        // Restore env vars before any assertions (so failures don't leak state).
+        for (k, v) in &saved_ci_vars {
+            match v {
+                Some(val) => std::env::set_var(k, val),
+                None => std::env::remove_var(k),
+            }
+        }
+
         // Should not be the literal "HEAD"
         assert_ne!(branch, "HEAD");
-        // Should either resolve via name-rev or fall back to detached@<sha>
+        // Without CI env vars, should resolve via name-rev or detached@<sha>
         assert!(
             branch.contains("main") || branch.starts_with("detached@"),
             "Expected name-rev or detached@sha, got: {branch}"
