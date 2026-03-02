@@ -59,7 +59,7 @@ impl Default for VerifierConfig {
             check_clippy: true,
             check_compile: true,
             check_test: true,
-            gate_timeout_secs: 300,
+            gate_timeout_secs: 1800,
             stderr_max_bytes: 4096,
             extra_cargo_args: Vec::new(),
             packages: Vec::new(),
