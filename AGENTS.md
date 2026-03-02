@@ -38,185 +38,124 @@ bd sync               # Sync with git
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
 
-
 ---
 
+## Code Conventions
 
-# Building with Rig
+### Commits
+Use **conventional commits**: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.
 
-Rig is a Rust library for building LLM-powered applications with a provider-agnostic API.
-All patterns use the builder pattern and async/await via tokio.
+Branch naming: `feat/<description>`, `fix/<description>`, or `swarm/<issue-id>` for automated work.
 
-## Quick Start
-
-```rust
-use rig::completion::Prompt;
-use rig::providers::openai;
-
-#[tokio::main]
-async fn main() -> Result<(), anyhow::Error> {
-    let client = openai::Client::from_env();
-
-    let agent = client
-        .agent(openai::GPT_4O)
-        .preamble("You are a helpful assistant.")
-        .build();
-
-    let response = agent.prompt("Hello!").await?;
-    println!("{}", response);
-    Ok(())
-}
+### Quality Gates (must pass before merge)
+```bash
+cargo fmt --all -- --check                 # Formatting
+cargo clippy --workspace -- -D warnings    # Linting (warnings = errors)
+cargo check --workspace                    # Compilation
+cargo test -p coordination                 # Unit tests (coordination)
+cargo test -p swarm-agents                 # Unit tests (swarm-agents)
 ```
 
-## Core Patterns
+### Rust Style
+- Use `thiserror` for error types — never `Result<(), String>`
+- Use `?` operator — avoid `.unwrap()` (use `.expect("reason")` only in tests)
+- `WasmCompatSend` / `WasmCompatSync` for trait bounds (Rig convention)
+- Targeted `#[allow(dead_code)]` with reason, not blanket suppression
+- Prefer `tracing::info!`/`debug!` over `println!` for runtime logging
 
-### 1. Simple Agent
-```rust
-let agent = client.agent(openai::GPT_4O)
-    .preamble("System prompt")
-    .temperature(0.7)
-    .max_tokens(2000)
-    .build();
+## Testing Strategy
 
-let response = agent.prompt("Your question").await?;
+### Running Tests
+```bash
+cargo test -p coordination                    # All coordination tests
+cargo test -p coordination -- test_name       # Single test
+cargo test -p swarm-agents                    # Swarm orchestrator tests
+cargo test --workspace                        # Everything (slow)
 ```
 
-### 2. Agent with Tools
-Define a tool by implementing the `Tool` trait, then attach it:
-```rust
-let agent = client.agent(openai::GPT_4O)
-    .preamble("You can use tools.")
-    .tool(MyTool)
-    .build();
-```
-See `references/tools.md` for the full `Tool` trait signature.
+### What to Test
+- State machines: test each transition, edge cases, error paths
+- Verifier: test with real rustc output snippets (see `verifier/tests/`)
+- Config: test env var parsing with `#[serial]` for isolation (tests mutate env)
+- Tools: test JSON schema generation and parameter validation
 
-### 3. RAG (Retrieval-Augmented Generation)
-```rust
-let embedding_model = client.embedding_model(openai::TEXT_EMBEDDING_ADA_002);
-let index = vector_store.index(embedding_model);
+### Known Test Patterns
+- Tests that modify env vars use `serial_test::serial` to prevent races
+- Config tests restore original values in cleanup (see `config.rs` tests)
+- Integration tests may need inference endpoints running — skip in CI with `#[ignore]`
 
-let agent = client.agent(openai::GPT_4O)
-    .preamble("Answer using the provided context.")
-    .dynamic_context(5, index)  // top-5 similar docs per query
-    .build();
-```
-See `references/rag.md` for vector store setup and the `Embed` derive macro.
+## Operational Patterns
 
-### 4. Streaming
-```rust
-use futures::StreamExt;
-use rig::streaming::StreamedAssistantContent;
-use rig::agent::prompt_request::streaming::MultiTurnStreamItem;
+### Debug Logging
+```bash
+# Production (default)
+RUST_LOG=info
 
-let mut stream = agent.stream_prompt("Tell me a story").await?;
-
-while let Some(chunk) = stream.next().await {
-    match chunk? {
-        MultiTurnStreamItem::StreamAssistantItem(
-            StreamedAssistantContent::Text(text)
-        ) => print!("{}", text.text),
-        MultiTurnStreamItem::FinalResponse(resp) => {
-            println!("\n{}", resp.response());
-        }
-        _ => {}
-    }
-}
+# Debug with HTTP noise suppressed
+RUST_LOG=debug,hyper=info,reqwest=info,h2=info,rustls=info,tower=info
 ```
 
-### 5. Structured Extraction
-```rust
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+### Monitoring the Dogfood Loop
+```bash
+# Live loop output
+tail -f ~/dogfood-debug-*.log
 
-#[derive(Deserialize, Serialize, JsonSchema)]
-struct Person {
-    pub name: Option<String>,
-    pub age: Option<u8>,
-}
+# Per-run log
+tail -f ~/code/beefcake-swarm/logs/dogfood/run-N-<issue>-*.log
 
-let extractor = client.extractor::<Person>(openai::GPT_4O).build();
-let person = extractor.extract("John is 30 years old.").await?;
+# Tool call distribution (requires RUST_LOG=debug)
+grep -o 'gen_ai.tool.name[^"]*"[^"]*"' logs/dogfood/run-*.log | sort | uniq -c | sort -rn
+
+# Check endpoint health
+curl -s http://vasp-03:8080/v1/models | python3 -m json.tool  # fast
+curl -s http://vasp-01:8081/v1/models | python3 -m json.tool  # coder
+curl -s http://vasp-02:8081/v1/models | python3 -m json.tool  # reasoning
 ```
 
-### 6. Chat with History
-```rust
-use rig::completion::Chat;
+### Swarm Behavior Insights
+- Cloud manager does heavy read-first exploration (~70% reads) before writing
+- Worker delegation uses `proxy_` prefixed tools (e.g., `proxy_rust_coder`, `proxy_reasoning_worker`)
+- `MaxTurnError` on a worker is expected — manager retries with a different worker
+- Verifier runs after each iteration, not just at the end
 
-let history = vec![
-    Message::from("Hi, I'm Alice."),
-    // ...previous messages
-];
-let response = agent.chat("What's my name?", history).await?;
+## Swarm Architecture Quick Reference
+
+```
+┌─────────────────────────────────────────────────┐
+│  Cloud Manager (Claude Sonnet 4.6)              │
+│  via CLIAPIProxy on ai-proxy:8317               │
+│  ─────────────────────────────────              │
+│  Plans work, delegates to local workers,        │
+│  reads/analyzes code, runs verifier             │
+├─────────────────────────────────────────────────┤
+│  Local Workers (proxy_ prefixed tools)          │
+│  ┌──────────────┬───────────────┬─────────────┐ │
+│  │ HydraCoder   │ Qwen3-Coder  │ Qwen3.5-397B│ │
+│  │ 30B (vasp-03)│ 80B (vasp-01)│ (vasp-02)   │ │
+│  │ Fast analysis│ Code gen      │ Reasoning   │ │
+│  └──────────────┴───────────────┴─────────────┘ │
+├─────────────────────────────────────────────────┤
+│  Verifier (deterministic quality gates)         │
+│  cargo fmt → clippy → cargo check → cargo test  │
+└─────────────────────────────────────────────────┘
 ```
 
-## Agent Builder Methods
+## Common Gotchas
 
-| Method | Description |
-|--------|-------------|
-| `.preamble(str)` | Set system prompt |
-| `.context(str)` | Add static context document |
-| `.dynamic_context(n, index)` | Add RAG with top-n retrieval |
-| `.tool(impl Tool)` | Attach a callable tool |
-| `.tools(Vec<Box<dyn ToolDyn>>)` | Attach multiple tools |
-| `.temperature(f64)` | Set temperature (0.0-1.0) |
-| `.max_tokens(u64)` | Set max output tokens |
-| `.additional_params(json!{...})` | Provider-specific params |
-| `.tool_choice(ToolChoice)` | Control tool usage |
-| `.build()` | Build the agent |
+| Gotcha | Solution |
+|--------|----------|
+| CLIAPIProxy reports `owned_by=antigravity` | Set `SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0` |
+| `run-swarm.sh` eats CLI args | Fixed in PR #21 — `--` separator added |
+| Stale worktree blocks new run | `rm -rf /tmp/beefcake-wt/<id> && git worktree prune` |
+| `SWARM_CLOUD_URL` wrong on ai-proxy | Use `http://localhost:8317/v1`, not `http://10.0.0.5:8317/v1` |
+| Tests fail with env var races | Use `#[serial]` from `serial_test` crate |
+| Rig `default_max_turns` not enforced | Only wall-clock timeout works with `.prompt()` |
+| `nlm` not found on ai-proxy | Expected — swarm runs without NotebookLM on ai-proxy |
 
-## Available Providers
+## Rig Framework Reference
 
-Create a client with `ProviderName::Client::from_env()` or `ProviderName::Client::new("key")`.
-
-| Provider | Module | Example Model Constant |
-|----------|--------|----------------------|
-| OpenAI | `openai` | `GPT_4O`, `GPT_4O_MINI` |
-| Anthropic | `anthropic` | `CLAUDE_4_OPUS`, `CLAUDE_4_SONNET` |
-| Cohere | `cohere` | `COMMAND_R_PLUS` |
-| Mistral | `mistral` | `MISTRAL_LARGE` |
-| Gemini | `gemini` | model string |
-| Groq | `groq` | model string |
-| Ollama | `ollama` | model string |
-| DeepSeek | `deepseek` | model string |
-| xAI | `xai` | model string |
-| Together | `together` | model string |
-| Perplexity | `perplexity` | model string |
-| OpenRouter | `openrouter` | model string |
-| HuggingFace | `huggingface` | model string |
-| Azure | `azure` | deployment string |
-| Hyperbolic | `hyperbolic` | model string |
-| Galadriel | `galadriel` | model string |
-| Moonshot | `moonshot` | model string |
-| Mira | `mira` | model string |
-| Voyage AI | `voyageai` | embeddings only |
-
-## Vector Store Crates
-
-| Backend | Crate |
-|---------|-------|
-| In-memory | `rig-core` (built-in) |
-| MongoDB | `rig-mongodb` |
-| LanceDB | `rig-lancedb` |
-| Qdrant | `rig-qdrant` |
-| SQLite | `rig-sqlite` |
-| Neo4j | `rig-neo4j` |
-| Milvus | `rig-milvus` |
-| SurrealDB | `rig-surrealdb` |
-
-## Key Rules
-
-- All async code runs on tokio.
-- Use `WasmCompatSend` / `WasmCompatSync` instead of raw `Send` / `Sync` for WASM compatibility.
-- Use proper error types with `thiserror` — never `Result<(), String>`.
-- Avoid `.unwrap()` — use `?` operator.
-
-## Further Reference
-
-Detailed API documentation (available when installed via Claude Code skills):
-- **tools** — Tool trait, ToolDefinition, ToolEmbedding, attachment patterns
-- **rag** — Vector stores, Embed derive, EmbeddingsBuilder, search requests
-- **providers** — Provider-specific initialization, model constants, env vars
-- **patterns** — Multi-agent, hooks, streaming details, chaining, extraction
-
-For the full reference, see the Rig examples at `rig-core/examples/` or https://docs.rig.rs
+For Rig API documentation (agents, tools, providers, streaming), use the skill:
+```
+/rig
+```
+Or the full reference at https://docs.rig.rs

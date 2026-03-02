@@ -3,10 +3,11 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Model Selection & Routing
-- **Rust/Code Tasks:** Use `/ask-local` with the Qwen3.5-397B instances for Rust analysis, code generation, and architecture.
-  - Architect (vasp-01): `/ask-local "Qwen3.5-397B-A17B" "Explain the borrow checker error in src/lib.rs"`
-  - Implementer (vasp-02): `/ask-local "Qwen3.5-397B-A17B" "Generate a struct for User with fields..."`
-- **General/Complex:** Use the default Claude model (Sonnet 3.5 / Opus).
+- **Rust/Code Tasks:** Local models via the swarm orchestrator or `/ask-local`:
+  - Fast/Analysis: HydraCoder 30B on vasp-03 (`/ask-local "HydraCoder.i1-Q4_K_M" "..."`)
+  - Code Generation: Qwen3-Coder-Next 80B on vasp-01
+  - Reasoning/Planning: Qwen3.5-397B on vasp-02
+- **General/Complex:** Claude Opus 4.6 / Sonnet 4.6 (default).
 - **Research:** Always check **NotebookLM** first using `/ask-notebook` or `notebook_query`.
 
 ## Build & Test Commands
@@ -47,75 +48,167 @@ Key modules:
 - `events/` — Pub/sub event bus for ensemble session tracking and replay.
 - `state/` — RocksDB-backed persistent store for ensemble sessions, tasks, votes.
 
-**`crates/swarm-agents/`** — Rig-based orchestrator for the 2-agent loop. Currently Phase 1 (beads connectivity). The planned MVP loop:
-1. Pick highest-priority beads issue
-2. Create Gastown worktree
-3. Implementer (72B) writes code
-4. Verifier (deterministic gates)
-5. Validator (14B, blind review — no implementer context)
-6. Pass → merge + close issue; Fail → update notes, loop
+**`crates/swarm-agents/`** — Rig-based orchestrator (Phase 2: cloud manager + local workers). The active loop:
+1. Pick highest-priority beads issue (or CLI `--issue`)
+2. Create Gastown worktree in `/tmp/beefcake-wt/<issue-id>`
+3. Cloud manager (Claude Sonnet 4.6 via CLIAPIProxy) plans and delegates
+4. Local workers (HydraCoder, Qwen3-Coder-Next, Qwen3.5-397B) execute code changes
+5. Verifier (deterministic quality gates) after each iteration
+6. Pass → merge + close issue; Fail → retry up to `SWARM_MAX_RETRIES`
 
 ### Escalation Ladder
 
 ```
-Cloud Manager (Opus 4.6 via CLIAPIProxy, 10 iterations)
-    → delegates to local workers: Qwen3.5-397B Architect (vasp-01), Qwen3.5-397B Implementer (vasp-02)
+Cloud Manager (Claude Sonnet 4.6 via CLIAPIProxy, max 10 iterations)
+    → delegates to local workers:
+        HydraCoder 30B (vasp-03, fast analysis/routing)
+        Qwen3-Coder-Next 80B (vasp-01, code generation)
+        Qwen3.5-397B (vasp-02, reasoning/planning)
     → runs verifier after each worker completes
     ↓ all budgets exhausted
 Human Intervention (blocking beads issue)
 ```
 
-Cloud models are the managers from iteration 1. Local models are workers.
-When cloud is unavailable, Qwen3.5-397B Architect (vasp-01) serves as fallback local manager.
+Cloud models are managers from iteration 1. Local models are workers.
+When cloud is unavailable, falls back to worker-first mode (local models only).
 
 ### Non-Workspace Directories
 
 - `flywheel/` — Forked from `Dicklesworthstone/agentic_coding_flywheel_setup`. TypeScript/Node. Mining prompts and task decomposition strategies; discarding Docker/cloud, adapting to SLURM/NFS.
 - `indexing/` — Python scripts for code indexing (CocoIndex for semantic search/RAG).
-- `inference/` — SLURM job scripts (`run-qwen35.slurm` serves Qwen3.5-397B independently on vasp-01 and vasp-02), systemd daemon, build/validate scripts.
-- `infrastructure/` — Monitoring: GPU dashboard, HPC watchdog, ai-proxy setup.
+- `inference/` — SLURM job scripts, systemd daemon, build/validate scripts.
+- `infrastructure/` — Monitoring: GPU dashboard, HPC watchdog, ai-proxy setup, cloud-proxy.service (socat relay).
 - `docs/` — Architecture docs, deployment guides, inference endpoint specs.
 
 ## Inference Endpoints
 
-| Tier | Endpoint (Rig uses this) | Model | Concurrency |
-|------|--------------------------|-------|-------------|
-| Fast / Architect | http://vasp-02:8080/v1 | HydraCoder 30B-A3B MoE (Q4_K_M) | 8 parallel @ 32K |
-| Coder / Implementer | http://vasp-01:8081/v1 | Qwen3-Coder-Next 80B-A3B MoE (UD-Q4_K_XL) | 6 parallel @ 32K |
+| Tier | Endpoint | Model | Node | Concurrency |
+|------|----------|-------|------|-------------|
+| Fast | http://vasp-03:8080/v1 | HydraCoder 30B-A3B MoE (Q4_K_M) | vasp-03 | 8 parallel @ 32K |
+| Coder | http://vasp-01:8081/v1 | Qwen3-Coder-Next 80B-A3B MoE (UD-Q4_K_XL) | vasp-01 | 6 parallel @ 32K |
+| Reasoning | http://vasp-02:8081/v1 | Qwen3.5-397B-A17B (Q4_K_M) | vasp-02 | 2 parallel @ 64K |
+| Cloud | http://10.0.0.5:8317/v1 | Claude Sonnet 4.6 (via CLIAPIProxy) | ai-proxy → slurm-ctl relay | 1 |
 
-**Current setup** (2026-02-27): Both nodes running. MoE experts on CPU, attention on GPU (V100S 32GB).
-- vasp-02:8080 — HydraCoder router mode, 8 slots. Start: `bash /tmp/start-hydracoder.sh`
-- vasp-01:8081 — Qwen3-Coder-Next, 6 slots. Start: `bash /tmp/start-coder-next.sh`
-  - Requires native binary: `/usr/local/bin/llama-server-vasp03` (copied from vasp-03)
-  - Libs at `/usr/local/lib/` (libggml-*, libllama, libmtmd — copied from vasp-03 build)
+All local models use MoE architecture: experts on CPU, attention on GPU (V100S 32GB).
 
-**Q4_K_M download (paused)**: Qwen3.5-397B-A17B Q4_K_M. Shards 6+7 complete on vasp-02.
-Paused at shards 1-5 (~197GB remaining) — slow internet on cluster nodes. Resume when better connection.
-
-**UD-Q4_K_XL (broken for Qwen3.5-397B only)**: 206GB exists on vasp-01 and vasp-03. Do NOT use for
-Qwen3.5-397B — returns garbled output. Qwen3-Coder-Next UD-Q4_K_XL (46GB, vasp-01) works fine.
-
-**vasp-03 native llama.cpp build** (Rocky 8.8/GCC/CUDA 12.6, GLIBC 2.28):
-Binary: `/usr/local/bin/llama-server-vasp03`. Libs: `/scratch/build/llama.cpp-vasp03/bin/`.
-Build script: `/tmp/build-qwen-llama.sh`. Also deployed to vasp-01 via scp.
-
-Start inference:
+**Start inference:**
 ```bash
-# HydraCoder on vasp-02 (fast/architect tier, 8 parallel)
-ssh root@10.0.0.21 "bash /tmp/start-hydracoder.sh"
-# Qwen3-Coder-Next on vasp-01 (coder/implementer tier, 6 parallel)
-ssh root@10.0.0.20 "bash /tmp/start-coder-next.sh"
+ssh root@10.0.0.22 "bash /tmp/start-hydracoder.sh"    # HydraCoder on vasp-03
+ssh root@10.0.0.20 "bash /tmp/start-coder-next.sh"    # Qwen3-Coder-Next on vasp-01
+ssh root@10.0.0.21 "bash /tmp/start-qwen35-q4km.sh"   # Qwen3.5-397B on vasp-02
 ```
 
-To switch swarm to Qwen3.5 endpoint once Q4_K_M is ready (no code change — env vars):
+**Cloud proxy chain:** CLIAPIProxy runs on ai-proxy (localhost:8317). Compute nodes reach it via socat relay on slurm-ctl (10.0.0.5:8317 → 100.105.113.58:8317). See `infrastructure/cloud-proxy.service`.
+
+**UD-Q4_K_XL (broken for Qwen3.5-397B only)**: 206GB exists on vasp-01. Do NOT use — returns garbled output. Qwen3-Coder-Next UD-Q4_K_XL (46GB, vasp-01) works fine.
+
+**llama.cpp build:** b8179 (ecbcb7e), native on vasp-03 (Rocky 8.8/GCC 13/CUDA 12.6). Binary: `/usr/local/bin/llama-server-vasp03`, deployed to all 3 nodes.
+
+## Swarm Environment Variables
+
+Set by `scripts/run-swarm.sh` (overrides config.rs defaults). See `crates/swarm-agents/src/config.rs` for all options.
+
+### Tier Endpoints
+
+| Variable | run-swarm.sh Default | config.rs Default |
+|----------|---------------------|-------------------|
+| `SWARM_FAST_URL` | `http://vasp-03:8080/v1` | `http://vasp-02:8080/v1` |
+| `SWARM_FAST_MODEL` | `HydraCoder.i1-Q4_K_M` | `HydraCoder.i1-Q4_K_M` |
+| `SWARM_CODER_URL` | `http://vasp-01:8081/v1` | `http://vasp-02:8080/v1` |
+| `SWARM_CODER_MODEL` | `Qwen3-Coder-Next` | `HydraCoder.i1-Q4_K_M` |
+| `SWARM_REASONING_URL` | `http://vasp-02:8081/v1` | `http://vasp-02:8080/v1` |
+| `SWARM_REASONING_MODEL` | `Qwen3.5-397B-A17B` | `HydraCoder.i1-Q4_K_M` |
+
+### Cloud Endpoint
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `SWARM_CLOUD_URL` | *(none)* | Required for cloud manager mode |
+| `SWARM_CLOUD_API_KEY` | *(none)* | Required if cloud URL set |
+| `SWARM_CLOUD_MODEL` | `claude-sonnet-4-6` (script) / `claude-opus-4-6-thinking` (config.rs) | Primary cloud model |
+| `SWARM_CLOUD_FALLBACK_MODELS` | `claude-opus-4-6-thinking, claude-sonnet-4-5-20250929, gemini-2.5-flash` | Comma-separated fallback matrix |
+| `SWARM_REQUIRE_ANTHROPIC_OWNERSHIP` | `1` | Set to `0` for CLIAPIProxy (reports `owned_by=antigravity`) |
+| `SWARM_CLOUD_PREFLIGHT` | `1` | Probe cloud endpoint before starting |
+
+### Behavior
+
+| Variable | Default | Notes |
+|----------|---------|-------|
+| `SWARM_MAX_RETRIES` | `10` | Max iterations per issue |
+| `SWARM_CLOUD_MAX_RETRIES` | `3` | Cloud-specific retry limit |
+| `SWARM_MAX_NO_CHANGE` | `3` | Circuit breaker for stuck iterations |
+| `SWARM_CLOUD_ONLY` | `false` | Route all work through cloud (skip local) |
+| `SWARM_VERIFIER_PACKAGES` | *(empty)* | Comma-separated; empty = entire workspace |
+| `SWARM_MIN_OBJECTIVE_LEN` | `10` | Minimum issue title length |
+| `SWARM_BEADS_BIN` | `bd` | Beads CLI binary name |
+| `RUST_LOG` | `info` | Log level (see Debug & Monitoring) |
+
+## Dogfood Operations
+
+### Single Run (proof-of-life)
 ```bash
-export SWARM_FAST_URL=http://vasp-02:8080/v1
-export SWARM_CODER_URL=http://vasp-02:8080/v1
-export SWARM_REASONING_URL=http://vasp-02:8080/v1
-export SWARM_FAST_MODEL=Qwen3.5-397B-A17B
-export SWARM_CODER_MODEL=Qwen3.5-397B-A17B
-export SWARM_REASONING_MODEL=Qwen3.5-397B-A17B
-export SWARM_LOCAL_BASE_URL=http://vasp-02:8080/v1
+ssh brian@100.105.113.58 "cd ~/code/beefcake-swarm && \
+  SWARM_CLOUD_API_KEY=rust-daq-proxy-key \
+  SWARM_CLOUD_URL=http://localhost:8317/v1 \
+  SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0 \
+  timeout 120 bash scripts/run-swarm.sh --issue test-probe --objective 'Reply with OK'"
+```
+
+### Continuous Loop
+```bash
+ssh brian@100.105.113.58 "cd ~/code/beefcake-swarm && \
+  nohup bash -c 'export SWARM_CLOUD_API_KEY=rust-daq-proxy-key \
+    SWARM_CLOUD_URL=http://localhost:8317/v1 \
+    SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0 \
+    RUST_LOG=debug,hyper=info,reqwest=info,h2=info,rustls=info,tower=info && \
+  ./scripts/dogfood-loop.sh --issue-list \"<space-separated-ids>\" --cooldown 120' \
+  > ~/dogfood-debug-\$(date +%Y%m%d-%H%M).log 2>&1 &"
+```
+
+**dogfood-loop.sh options:**
+- `--issue-list "id1 id2 ..."` — issues to process in order
+- `--cooldown N` — seconds between runs (default: 60)
+- `DOGFOOD_MAX_RUNS=0` — 0 = unlimited
+- `DOGFOOD_LOG_DIR=./logs/dogfood` — per-run log directory
+
+**Worktrees:** Created at `/tmp/beefcake-wt/<issue-id>`. Clean stale worktrees:
+```bash
+rm -rf /tmp/beefcake-wt/<issue-id> && git worktree prune
+```
+
+## Debug & Monitoring
+
+### RUST_LOG Pattern
+```bash
+# Production (default)
+RUST_LOG=info
+
+# Debug with HTTP noise suppressed
+RUST_LOG=debug,hyper=info,reqwest=info,h2=info,rustls=info,tower=info
+```
+
+### Monitoring Commands
+```bash
+# Live loop output
+tail -f ~/dogfood-debug-*.log
+
+# Per-run log
+tail -f ~/code/beefcake-swarm/logs/dogfood/run-N-<issue>-*.log
+
+# Tool call distribution (requires RUST_LOG=debug)
+grep -o 'gen_ai.tool.name[^"]*"[^"]*"' logs/dogfood/run-*.log | sort | uniq -c | sort -rn
+
+# Check endpoint health
+curl -s http://vasp-03:8080/v1/models | python3 -m json.tool  # fast
+curl -s http://vasp-01:8081/v1/models | python3 -m json.tool  # coder
+curl -s http://vasp-02:8081/v1/models | python3 -m json.tool  # reasoning
+```
+
+### Healthy Startup Log
+```
+INFO swarm_agents: Endpoint health check local_ok=true coder_ok=true reasoning_ok=true
+INFO swarm_agents: Beads-free mode: processing CLI issue id=<issue>
+INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed workers model=claude-sonnet-4-6
 ```
 
 ## External Tools (install separately)
@@ -163,7 +256,7 @@ nlm source add "<ID>" --file "doc.md"
 
 **Environment:** `SWARM_NLM_BIN` overrides the `nlm` binary name (default: `"nlm"`).
 
-## Environment Variables
+## Environment Variables (Coordination)
 
 **Coordination MCP:**
 - `ROUTER_URL` — LLM endpoint (default: `http://10.0.0.31:8000/v1/chat/completions`)
@@ -181,9 +274,9 @@ nlm source add "<ID>" --file "doc.md"
 ## Cluster Access
 
 - slurm-ctl: `ssh root@10.0.0.5` (controller, NFS server — VM 500 on pve1)
-- vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, /scratch full — VM 600 on pve1)
-- vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, HydraCoder running — VM 601 on pve2)
-- vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM — VM 602 on pve3)
+- vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, Qwen3-Coder-Next running — VM 600 on pve1)
+- vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, Qwen3.5-397B running — VM 601 on pve2)
+- vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM, HydraCoder running — VM 602 on pve3)
 - pve1: `ssh root@10.0.0.1` (Proxmox host, cluster gateway — DO NOT reboot)
 - pve2: `ssh root@10.0.0.2` (Proxmox host)
 - pve3: `ssh root@10.0.0.3` (Proxmox host)
@@ -191,6 +284,7 @@ nlm source add "<ID>" --file "doc.md"
   - Codebases live under `/home/brian/code/` (beefcake-swarm, rust-daq)
   - Use `brian` user for code work; `root` for system admin only
   - GitHub auth: SSH key (`ai-proxy-lxc`) + `gh` CLI as TheFermiSea
+  - CLIAPIProxy on port 8317, API key: `rust-daq-proxy-key`
 
 ## SLURM Rules
 
@@ -211,8 +305,9 @@ nlm source add "<ID>" --file "doc.md"
 
 ## Known Issues
 
-- `#![allow(dead_code)]` is enabled in `coordination/src/main.rs` due to rmcp `#[tool_router]` macro-generated code triggering false positives (request structs are constructed by the macro but invisible to rustc dead-code analysis). This is intentional and minimal.
-- `pve1 ZFS pool at 96%` — Deleted a 104GB stale `@restore` snapshot but pool is still 96% used. vasp-01's /scratch is 100% full (400GB). Consider cleaning old models (UD-Q4_K_XL, glm-4.7) from vasp-01.
+- `#![allow(dead_code)]` in `coordination/src/main.rs` — rmcp `#[tool_router]` macro triggers false positives. Targeted `#[allow]` used elsewhere after refactor (PR #20).
+- `CLIAPIProxy ownership check` — Reports `owned_by=antigravity` for all models. Set `SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0` to prevent silent downgrade to fallback model.
+- `vasp-01 /scratch full` — 400GB full. Consider cleaning old models (UD-Q4_K_XL 206GB, glm-4.7 18GB).
 - `vasp-03 NFS` — /home, /cluster/shared still NFS-mounted from slurm-ctl. Set `HOME=/tmp CUDA_CACHE_PATH=/tmp/cuda-cache` before running anything that writes to $HOME.
 
 ## Agent Teams
@@ -221,7 +316,7 @@ Enabled via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`.
 
 ### Team Structure
 - **Lead (Opus 4.6)**: Picks beads issues, assigns to teammates, reviews results
-- **Teammates (Sonnet 4.5)**: Each works on one beads issue on a separate branch
+- **Teammates (Sonnet 4.6)**: Each works on one beads issue on a separate branch
 
 ### Teammate Workflow
 1. Claim issue: `bd update <id> --status in_progress`
@@ -230,10 +325,13 @@ Enabled via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`.
 4. Quality gates auto-run on task completion (fmt, clippy, check, test)
 5. Commit with conventional format and push branch
 
-### Local Model Access (optional)
-Teammates can query local Qwen3.5-397B instances via curl for a second opinion:
-- Architect (vasp-01): `curl http://vasp-01:8081/v1/chat/completions -d '{"model":"Qwen3.5-397B-A17B",...}'`
-- Implementer (vasp-02): `curl http://vasp-02:8080/v1/chat/completions -d '{"model":"Qwen3.5-397B-A17B",...}'`
+### Dogfood on ai-proxy
+The swarm runs on ai-proxy (`brian@100.105.113.58`). Required env vars in `~/.bashrc`:
+```bash
+export SWARM_CLOUD_API_KEY="rust-daq-proxy-key"
+export SWARM_CLOUD_URL="http://localhost:8317/v1"
+export SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0
+```
 
 ### Branch Strategy
 Each teammate works on `swarm/<issue-id>`. Lead assigns non-overlapping issues.
