@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use reqwest::header::{HeaderMap, HeaderValue};
 use rig::providers::openai;
 use serde::Deserialize;
 use std::path::PathBuf;
@@ -26,11 +27,28 @@ pub struct Endpoint {
 }
 
 /// Cloud escalation endpoint (CLIAPIProxy on ai-proxy).
+///
+/// CLIAPIProxy v6.8+ authenticates via `x-api-key` header (not `Authorization: Bearer`).
+/// The Rig OpenAI client sends Bearer by default, so we inject `x-api-key` via
+/// `.http_headers()` — the proxy prioritizes `x-api-key` and ignores the Bearer token.
 #[derive(Debug, Clone, Deserialize)]
 pub struct CloudEndpoint {
     pub url: String,
     pub api_key: String,
     pub model: String,
+}
+
+/// Build a [`HeaderMap`] with the `x-api-key` header for CLIAPIProxy authentication.
+///
+/// CLIAPIProxy v6.8+ requires `x-api-key` instead of `Authorization: Bearer` for
+/// static API key auth. This header map is injected into Rig's OpenAI client via
+/// `.http_headers()`, coexisting with the Bearer token that Rig adds automatically.
+fn cloud_headers(api_key: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    if let Ok(val) = HeaderValue::from_str(api_key) {
+        headers.insert("x-api-key", val);
+    }
+    headers
 }
 
 /// A single entry in the cloud model fallback matrix.
@@ -323,25 +341,30 @@ impl ClientSet {
                 .cloud_endpoint
                 .as_ref()
                 .context("cloud_only requires cloud_endpoint to be configured")?;
+            let headers = cloud_headers(&cloud_ep.api_key);
             let cloud = openai::CompletionsClient::builder()
                 .api_key(&cloud_ep.api_key)
                 .base_url(&cloud_ep.url)
+                .http_headers(headers.clone())
                 .build()
                 .context("Failed to build cloud client")?;
             // Build identical clients for local, coder, and reasoning slots
             let local = openai::CompletionsClient::builder()
                 .api_key(&cloud_ep.api_key)
                 .base_url(&cloud_ep.url)
+                .http_headers(headers.clone())
                 .build()
                 .context("Failed to build cloud-as-local client")?;
             let coder = openai::CompletionsClient::builder()
                 .api_key(&cloud_ep.api_key)
                 .base_url(&cloud_ep.url)
+                .http_headers(headers.clone())
                 .build()
                 .context("Failed to build cloud-as-coder client")?;
             let reasoning = openai::CompletionsClient::builder()
                 .api_key(&cloud_ep.api_key)
                 .base_url(&cloud_ep.url)
+                .http_headers(headers)
                 .build()
                 .context("Failed to build cloud-as-reasoning client")?;
             return Ok(Self {
@@ -377,6 +400,7 @@ impl ClientSet {
                 openai::CompletionsClient::builder()
                     .api_key(&ep.api_key)
                     .base_url(&ep.url)
+                    .http_headers(cloud_headers(&ep.api_key))
                     .build()
             })
             .transpose()
@@ -397,7 +421,9 @@ impl ClientSet {
 /// the response. Returns `true` only if the endpoint responds and the model check
 /// passes.
 ///
-/// If `api_key` is provided (and not `"not-needed"`), sends a Bearer auth header.
+/// If `api_key` is provided (and not `"not-needed"`), sends both `x-api-key` and
+/// `Authorization: Bearer` headers. CLIAPIProxy v6.8+ requires `x-api-key`; local
+/// llama-server endpoints accept either or ignore auth entirely.
 pub async fn check_endpoint(url: &str, api_key: Option<&str>) -> bool {
     check_endpoint_with_model(url, api_key, None).await
 }
@@ -416,7 +442,7 @@ pub async fn check_endpoint_with_model(
 
     if let Some(key) = api_key {
         if key != "not-needed" {
-            req = req.bearer_auth(key);
+            req = req.bearer_auth(key).header("x-api-key", key);
         }
     }
 
