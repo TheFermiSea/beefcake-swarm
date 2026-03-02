@@ -52,4 +52,4 @@ if [[ "${SWARM_CLOUD_PREFLIGHT:-1}" == "1" ]]; then
   rm -f "$probe_req" "$probe_resp"
 fi
 export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
-exec cargo run -p swarm-agents "$@"
+exec cargo run -p swarm-agents -- "$@"
