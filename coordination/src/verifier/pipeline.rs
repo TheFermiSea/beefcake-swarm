@@ -830,7 +830,6 @@ impl Verifier {
         }
     }
 
-
     /// Add skipped gates to the report using an external config (for adaptive mode).
     fn skip_remaining_with(
         &self,
