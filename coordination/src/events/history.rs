@@ -304,16 +304,7 @@ impl ReplayBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::state::{ModelId, StateStore};
-    use tempfile::tempdir;
-
-    fn test_history() -> (EventHistory, tempfile::TempDir) {
-        let dir = tempdir().unwrap();
-        let store = StateStore::open(dir.path().join("test.db"))
-            .unwrap()
-            .shared();
-        (EventHistory::new(store), dir)
-    }
+    use crate::state::ModelId;
 
     #[test]
     fn test_event_stats() {
