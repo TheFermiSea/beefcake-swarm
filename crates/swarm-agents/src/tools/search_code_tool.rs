@@ -71,18 +71,20 @@ impl Tool for SearchCodeTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let max = args.max_results.unwrap_or(DEFAULT_MAX_RESULTS);
         let working_dir = self.working_dir.clone();
-        let working_dir_for_closure = working_dir.clone();
         let pattern = args.pattern.clone();
         let glob = args.glob.clone();
 
-        let result = tokio::task::spawn_blocking(move || {
-            let mut cmd = std::process::Command::new("rg");
-            cmd.arg("--json").arg(&pattern);
-            if let Some(ref g) = glob {
-                cmd.arg("--glob").arg(g);
+        let result = tokio::task::spawn_blocking({
+            let dir = working_dir.clone();
+            move || {
+                let mut cmd = std::process::Command::new("rg");
+                cmd.arg("--json").arg(&pattern);
+                if let Some(ref g) = glob {
+                    cmd.arg("--glob").arg(g);
+                }
+                cmd.current_dir(&dir);
+                cmd.output().map_err(ToolError::Io)
             }
-            cmd.current_dir(&working_dir_for_closure);
-            cmd.output().map_err(ToolError::Io)
         });
 
         let output =

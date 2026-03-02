@@ -544,6 +544,15 @@ impl WorkPacketGenerator {
 mod tests {
     use super::*;
 
+    /// Mutex to serialize tests that read or write process-global env vars.
+    /// `std::env::set_var`/`remove_var` are not thread-safe; tests that touch
+    /// CI env vars (CI_COMMIT_REF_NAME, GITHUB_HEAD_REF, BRANCH_NAME) must
+    /// hold this lock for their entire duration.
+    static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
+    fn env_lock() -> std::sync::MutexGuard<'static, ()> {
+        ENV_LOCK.get_or_init(|| std::sync::Mutex::new(())).lock().unwrap()
+    }
+
     #[test]
     fn test_symbol_extraction_regex() {
         let content = r#"
@@ -678,6 +687,9 @@ pub async fn parse_stream(input: &str) -> Result<(), Error> {
         // Temporarily clear CI env vars so git_branch() exercises the
         // name-rev / detached@ fallback paths instead of short-circuiting
         // via GITHUB_HEAD_REF (set process-wide on GitHub Actions PR builds).
+        // Hold the env lock for the full critical section to prevent races with
+        // other tests that also read these vars (env mutation is not thread-safe).
+        let _env_guard = env_lock();
         let saved_ci_vars: Vec<(String, Option<String>)> =
             ["CI_COMMIT_REF_NAME", "GITHUB_HEAD_REF", "BRANCH_NAME"]
                 .iter()
@@ -743,10 +755,9 @@ pub async fn parse_stream(input: &str) -> Result<(), Error> {
             .output()
             .unwrap();
 
-        // Set a CI env var — but note this test is fragile because env vars are
-        // process-global, so we only verify the branch is not "HEAD"
-        // (The env var path is tested implicitly; the key assertion is
-        //  that detached HEAD never leaks as the literal string "HEAD".)
+        // Hold the env lock so this test doesn't race with other tests that
+        // clear/restore CI env vars (e.g. test_git_branch_detached_head_fallback).
+        let _env_guard = env_lock();
         let gen = WorkPacketGenerator::new(wd.to_path_buf());
         let branch = gen.git_branch().unwrap();
         assert_ne!(
