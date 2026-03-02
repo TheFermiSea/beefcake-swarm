@@ -152,8 +152,20 @@ impl Tool for SearchCodeTool {
 mod tests {
     use super::*;
 
+    /// Check if ripgrep (`rg`) is available on the system.
+    fn rg_available() -> bool {
+        std::process::Command::new("rg")
+            .arg("--version")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+
     #[tokio::test]
     async fn test_search_fn_main() {
+        if !rg_available() {
+            eprintln!("SKIP: ripgrep (rg) not installed — skipping search_code test");
+            return;
+        }
         let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .parent()
             .unwrap()
