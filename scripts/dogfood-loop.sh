@@ -1,19 +1,25 @@
 #!/usr/bin/env bash
-# dogfood-loop.sh — Repeatedly run swarm-agents to work through beads issues.
+# dogfood-loop.sh — Run swarm-agents on beads issues, optionally in parallel.
 #
 # Usage:
 #   ./scripts/dogfood-loop.sh                    # Pick from bd ready (default)
 #   ./scripts/dogfood-loop.sh --max-runs 5       # Stop after 5 runs
 #   ./scripts/dogfood-loop.sh --cooldown 120     # 2-minute cooldown between runs
+#   ./scripts/dogfood-loop.sh --parallel 3       # Run up to 3 issues concurrently
 #   ./scripts/dogfood-loop.sh --issue-list "beefcake-w70b.3.5.1 beefcake-w70b.6.4.2"
 #                                                # Work specific issues in order
+#
+# Parallel mode launches N issues simultaneously, each in its own worktree.
+# Issues are distributed across cluster nodes (vasp-01/02/03) via the
+# round-robin of Qwen3.5-397B endpoints configured in run-swarm.sh.
 #
 # Environment:
 #   SWARM_CLOUD_API_KEY    Required (passed through to run-swarm.sh)
 #   DOGFOOD_LOG_DIR        Log directory (default: ./logs/dogfood)
 #   DOGFOOD_MAX_RUNS       Max iterations (default: unlimited)
-#   DOGFOOD_COOLDOWN       Seconds between runs (default: 60)
+#   DOGFOOD_COOLDOWN       Seconds between batches (default: 60)
 #   DOGFOOD_ISSUE_LIST     Space-separated issue IDs to work in order
+#   DOGFOOD_PARALLEL       Concurrent issue limit (default: 1)
 #
 set -euo pipefail
 
@@ -25,6 +31,7 @@ MAX_RUNS="${DOGFOOD_MAX_RUNS:-0}"       # 0 = unlimited
 COOLDOWN="${DOGFOOD_COOLDOWN:-60}"
 LOG_DIR="${DOGFOOD_LOG_DIR:-${REPO_ROOT}/logs/dogfood}"
 ISSUE_LIST="${DOGFOOD_ISSUE_LIST:-}"
+PARALLEL="${DOGFOOD_PARALLEL:-1}"
 
 # CLI overrides
 while [[ $# -gt 0 ]]; do
@@ -33,6 +40,7 @@ while [[ $# -gt 0 ]]; do
     --cooldown)    COOLDOWN="$2"; shift 2 ;;
     --log-dir)     LOG_DIR="$2"; shift 2 ;;
     --issue-list)  ISSUE_LIST="$2"; shift 2 ;;
+    --parallel)    PARALLEL="$2"; shift 2 ;;
     *)             echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -62,6 +70,7 @@ log "Dogfood loop starting"
 log "  Repo:     $REPO_ROOT"
 log "  Logs:     $LOG_DIR"
 log "  Cooldown: ${COOLDOWN}s"
+log "  Parallel: $PARALLEL"
 log "  Max runs: $([ "$MAX_RUNS" -eq 0 ] && echo 'unlimited' || echo "$MAX_RUNS")"
 
 if [[ -n "$ISSUE_LIST" ]]; then
@@ -81,84 +90,171 @@ if ! command -v bd &>/dev/null; then
   echo "WARNING: bd not found. Swarm will use NoOpTracker." >&2
 fi
 
-# --- Main loop ---
-trap 'log "Interrupted. Runs=$RUN_COUNT Success=$SUCCESS_COUNT Fail=$FAIL_COUNT"; exit 130' INT TERM
+# --- Run a single issue (called from parallel dispatch) ---
+run_issue() {
+  local run_num="$1" issue_id="$2"
+  local run_log="${LOG_DIR}/run-${run_num}-${issue_id}-$(date +%Y%m%d-%H%M%S).log"
+  local issue_title issue_args=()
+  local run_start run_end elapsed exit_code
 
-while true; do
-  RUN_COUNT=$((RUN_COUNT + 1))
+  # Fetch title from beads for the objective
+  issue_title=$(bd show "$issue_id" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('title',''))" 2>/dev/null || echo "Issue $issue_id")
+  issue_args=(--issue "$issue_id" --objective "$issue_title")
 
-  # Check max runs
-  if [[ "$MAX_RUNS" -gt 0 && "$RUN_COUNT" -gt "$MAX_RUNS" ]]; then
-    log "Reached max runs ($MAX_RUNS). Stopping."
-    break
-  fi
+  log "  [run $run_num] Starting issue=$issue_id log=$run_log"
 
-  # Determine which issue to work
-  ISSUE_ARGS=()
-  ISSUE_ID="auto"
-  if [[ ${#ISSUES[@]} -gt 0 ]]; then
-    IDX=$((RUN_COUNT - 1))
-    if [[ $IDX -ge ${#ISSUES[@]} ]]; then
-      log "All ${#ISSUES[@]} issues processed. Stopping."
-      break
-    fi
-    ISSUE_ID="${ISSUES[$IDX]}"
-    # Fetch title from beads for the objective
-    ISSUE_TITLE=$(bd show "$ISSUE_ID" 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('title',''))" 2>/dev/null || echo "Issue $ISSUE_ID")
-    ISSUE_ARGS=(--issue "$ISSUE_ID" --objective "$ISSUE_TITLE")
-  fi
-
-  RUN_LOG="${LOG_DIR}/run-${RUN_COUNT}-${ISSUE_ID}-$(date +%Y%m%d-%H%M%S).log"
-  log "=== Run $RUN_COUNT: issue=$ISSUE_ID ==="
-  log "  Log: $RUN_LOG"
-
-  RUN_START=$(date +%s)
+  run_start=$(date +%s)
   set +e
   (
     cd "$REPO_ROOT"
-    bash scripts/run-swarm.sh "${ISSUE_ARGS[@]}" 2>&1
-  ) > "$RUN_LOG" 2>&1
-  EXIT_CODE=$?
+    bash scripts/run-swarm.sh "${issue_args[@]}" 2>&1
+  ) > "$run_log" 2>&1
+  exit_code=$?
   set -e
-  RUN_END=$(date +%s)
-  ELAPSED=$((RUN_END - RUN_START))
+  run_end=$(date +%s)
+  elapsed=$((run_end - run_start))
 
-  if [[ $EXIT_CODE -eq 0 ]]; then
-    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
-    log "  Result: SUCCESS (${ELAPSED}s)"
+  if [[ $exit_code -eq 0 ]]; then
+    log "  [run $run_num] SUCCESS issue=$issue_id (${elapsed}s)"
   else
-    FAIL_COUNT=$((FAIL_COUNT + 1))
-    log "  Result: FAILED exit=$EXIT_CODE (${ELAPSED}s)"
-    # Show last 5 lines of log for quick diagnosis
-    log "  Tail:"
-    tail -5 "$RUN_LOG" | while IFS= read -r line; do
+    log "  [run $run_num] FAILED  issue=$issue_id exit=$exit_code (${elapsed}s)"
+    tail -3 "$run_log" | while IFS= read -r line; do
       log "    $line"
     done
   fi
 
-  record_run "$RUN_COUNT" "$ISSUE_ID" "$EXIT_CODE" "$ELAPSED" "$RUN_LOG"
+  record_run "$run_num" "$issue_id" "$exit_code" "$elapsed" "$run_log"
+  return $exit_code
+}
 
-  # Check if there are more issues to work (auto mode)
-  if [[ ${#ISSUES[@]} -eq 0 ]]; then
-    READY_COUNT=$(bd ready 2>/dev/null | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
-    if [[ "$READY_COUNT" -eq 0 ]]; then
-      log "No more ready issues. Stopping."
+# --- Main loop ---
+# Track child PIDs for the trap handler
+CHILD_PIDS=()
+
+cleanup() {
+  log "Interrupted. Killing ${#CHILD_PIDS[@]} child processes..."
+  for pid in "${CHILD_PIDS[@]}"; do
+    kill "$pid" 2>/dev/null || true
+  done
+  wait 2>/dev/null || true
+  log "Runs=$RUN_COUNT Success=$SUCCESS_COUNT Fail=$FAIL_COUNT"
+  exit 130
+}
+trap cleanup INT TERM
+
+if [[ "$PARALLEL" -le 1 ]]; then
+  # --- Serial mode (original behavior) ---
+  while true; do
+    RUN_COUNT=$((RUN_COUNT + 1))
+
+    if [[ "$MAX_RUNS" -gt 0 && "$RUN_COUNT" -gt "$MAX_RUNS" ]]; then
+      log "Reached max runs ($MAX_RUNS). Stopping."
       break
     fi
-    log "  $READY_COUNT issues remaining in bd ready"
+
+    ISSUE_ID="auto"
+    if [[ ${#ISSUES[@]} -gt 0 ]]; then
+      IDX=$((RUN_COUNT - 1))
+      if [[ $IDX -ge ${#ISSUES[@]} ]]; then
+        log "All ${#ISSUES[@]} issues processed. Stopping."
+        break
+      fi
+      ISSUE_ID="${ISSUES[$IDX]}"
+    fi
+
+    log "=== Run $RUN_COUNT: issue=$ISSUE_ID ==="
+    if run_issue "$RUN_COUNT" "$ISSUE_ID"; then
+      SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+    else
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+    fi
+
+    # Check if more work exists
+    if [[ ${#ISSUES[@]} -eq 0 ]]; then
+      READY_COUNT=$(bd ready 2>/dev/null | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+      if [[ "$READY_COUNT" -eq 0 ]]; then
+        log "No more ready issues. Stopping."
+        break
+      fi
+      log "  $READY_COUNT issues remaining in bd ready"
+    fi
+
+    # Cooldown (unless done)
+    if [[ "$MAX_RUNS" -gt 0 && "$RUN_COUNT" -ge "$MAX_RUNS" ]]; then break; fi
+    if [[ ${#ISSUES[@]} -gt 0 && $RUN_COUNT -ge ${#ISSUES[@]} ]]; then break; fi
+
+    log "  Cooling down ${COOLDOWN}s..."
+    sleep "$COOLDOWN"
+  done
+else
+  # --- Parallel mode ---
+  log "=== Parallel mode: up to $PARALLEL concurrent issues ==="
+
+  # Build the issue queue
+  if [[ ${#ISSUES[@]} -eq 0 ]]; then
+    # Auto mode: fetch ready issues from beads
+    mapfile -t ISSUES < <(bd ready 2>/dev/null | python3 -c "
+import json, sys
+issues = json.load(sys.stdin)
+for i in issues:
+    print(i.get('id', ''))
+" 2>/dev/null || true)
+    if [[ ${#ISSUES[@]} -eq 0 ]]; then
+      log "No ready issues found. Stopping."
+      exit 0
+    fi
+    log "  Found ${#ISSUES[@]} ready issues: ${ISSUES[*]}"
   fi
 
-  # Cooldown (unless this is the last run)
-  if [[ "$MAX_RUNS" -gt 0 && "$RUN_COUNT" -ge "$MAX_RUNS" ]]; then
-    break
-  fi
-  if [[ ${#ISSUES[@]} -gt 0 && $RUN_COUNT -ge ${#ISSUES[@]} ]]; then
-    break
+  # Apply max-runs limit to the queue
+  if [[ "$MAX_RUNS" -gt 0 && "$MAX_RUNS" -lt "${#ISSUES[@]}" ]]; then
+    ISSUES=("${ISSUES[@]:0:$MAX_RUNS}")
+    log "  Trimmed to $MAX_RUNS issues per --max-runs"
   fi
 
-  log "  Cooling down ${COOLDOWN}s..."
-  sleep "$COOLDOWN"
-done
+  # Launch issues in batches of $PARALLEL
+  IDX=0
+  while [[ $IDX -lt ${#ISSUES[@]} ]]; do
+    BATCH_SIZE=$PARALLEL
+    REMAINING=$(( ${#ISSUES[@]} - IDX ))
+    if [[ $BATCH_SIZE -gt $REMAINING ]]; then
+      BATCH_SIZE=$REMAINING
+    fi
+
+    log "=== Batch starting: ${BATCH_SIZE} issues (${IDX}..$(( IDX + BATCH_SIZE - 1 )) of ${#ISSUES[@]}) ==="
+
+    CHILD_PIDS=()
+    BATCH_ISSUES=()
+    for (( i=0; i<BATCH_SIZE; i++ )); do
+      ISSUE_IDX=$((IDX + i))
+      ISSUE_ID="${ISSUES[$ISSUE_IDX]}"
+      RUN_COUNT=$((RUN_COUNT + 1))
+      BATCH_ISSUES+=("$ISSUE_ID")
+      run_issue "$RUN_COUNT" "$ISSUE_ID" &
+      CHILD_PIDS+=($!)
+    done
+
+    # Wait for all in this batch
+    for (( i=0; i<${#CHILD_PIDS[@]}; i++ )); do
+      pid="${CHILD_PIDS[$i]}"
+      issue="${BATCH_ISSUES[$i]}"
+      if wait "$pid" 2>/dev/null; then
+        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+      else
+        FAIL_COUNT=$((FAIL_COUNT + 1))
+      fi
+    done
+    CHILD_PIDS=()
+
+    IDX=$((IDX + BATCH_SIZE))
+
+    # Cooldown between batches (unless done)
+    if [[ $IDX -lt ${#ISSUES[@]} ]]; then
+      log "  Batch complete. Cooling down ${COOLDOWN}s..."
+      sleep "$COOLDOWN"
+    fi
+  done
+fi
 
 # --- Summary ---
 TOTAL_ELAPSED=$(( $(date +%s) - DOGFOOD_START ))
