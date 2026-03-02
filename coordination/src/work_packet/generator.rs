@@ -31,7 +31,6 @@ static ENUM_PATTERN: LazyLock<Regex> =
 static FN_PATTERN: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"(?m)^\s*pub\s+(?:async\s+)?fn\s+(\w+)").unwrap());
 
-
 /// Work Packet Generator
 pub struct WorkPacketGenerator {
     /// Crate root directory
@@ -549,7 +548,10 @@ mod tests {
     /// hold this lock for their entire duration.
     static ENV_LOCK: std::sync::OnceLock<std::sync::Mutex<()>> = std::sync::OnceLock::new();
     fn env_lock() -> std::sync::MutexGuard<'static, ()> {
-        ENV_LOCK.get_or_init(|| std::sync::Mutex::new(())).lock().unwrap()
+        ENV_LOCK
+            .get_or_init(|| std::sync::Mutex::new(()))
+            .lock()
+            .unwrap()
     }
 
     #[test]
