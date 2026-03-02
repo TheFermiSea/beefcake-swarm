@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export RUST_LOG="${RUST_LOG:-info}"
-# Fast tier: HydraCoder 30B on vasp-03
-export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-03:8080/v1}"
-export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-HydraCoder.i1-Q4_K_M}"
-# Coder tier: Qwen3-Coder-Next 80B on vasp-01
+# All three tiers use Qwen3.5-397B-A17B (Q4_K_M, --parallel 2 each, 6 total slots)
+# Fast tier: Qwen3.5-397B on vasp-03
+export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-03:8081/v1}"
+export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3.5-397B-A17B}"
+# Coder tier: Qwen3.5-397B on vasp-01
 export SWARM_CODER_URL="${SWARM_CODER_URL:-http://vasp-01:8081/v1}"
-export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3-Coder-Next}"
+export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-397B-A17B}"
 # Reasoning tier: Qwen3.5-397B on vasp-02
 export SWARM_REASONING_URL="${SWARM_REASONING_URL:-http://vasp-02:8081/v1}"
 export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-Qwen3.5-397B-A17B}"

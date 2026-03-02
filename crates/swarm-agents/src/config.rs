@@ -7,11 +7,11 @@ use std::path::PathBuf;
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
 pub enum Tier {
-    /// HydraCoder 30B-A3B MoE on vasp-02 — Rust specialist (~135 tok/s)
+    /// Qwen3.5-397B on vasp-03 — fast/scout tier (~6 tok/s, 2 parallel)
     Fast,
-    /// HydraCoder 30B-A3B MoE on vasp-02 — general coder (~135 tok/s)
+    /// Qwen3.5-397B on vasp-01 — coder tier (~6 tok/s, 2 parallel)
     Coder,
-    /// HydraCoder 30B-A3B MoE on vasp-02 — reasoning/review (~135 tok/s)
+    /// Qwen3.5-397B on vasp-02 — reasoning/review (~6 tok/s, 2 parallel)
     Reasoning,
     /// Cloud models via CLIAPIProxy
     Cloud,
@@ -153,11 +153,11 @@ impl CloudFallbackMatrix {
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
-    /// HydraCoder on vasp-02 :8080 (Rust specialist system prompt, 4 slots @ 32K, ~135 tok/s)
+    /// Qwen3.5-397B on vasp-03 :8081 (fast/scout, 2 slots @ 64K, ~6 tok/s)
     pub fast_endpoint: Endpoint,
-    /// HydraCoder on vasp-02 :8080 (general coding system prompt, 4 slots @ 32K, ~135 tok/s)
+    /// Qwen3.5-397B on vasp-01 :8081 (coder, 2 slots @ 64K, ~6 tok/s)
     pub coder_endpoint: Endpoint,
-    /// HydraCoder on vasp-02 :8080 (reasoning/review, 4 slots @ 32K, ~135 tok/s)
+    /// Qwen3.5-397B on vasp-02 :8081 (reasoning, 2 slots @ 64K, ~6 tok/s)
     pub reasoning_endpoint: Endpoint,
     /// CLIAPIProxy cloud escalation (optional)
     pub cloud_endpoint: Option<CloudEndpoint>,
@@ -199,27 +199,27 @@ impl Default for SwarmConfig {
         Self {
             fast_endpoint: Endpoint {
                 url: std::env::var("SWARM_FAST_URL")
-                    .unwrap_or_else(|_| "http://vasp-02:8080/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-03:8081/v1".into()),
                 model: std::env::var("SWARM_FAST_MODEL")
-                    .unwrap_or_else(|_| "HydraCoder.i1-Q4_K_M".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
                 tier: Tier::Fast,
                 api_key: std::env::var("SWARM_FAST_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
             },
             coder_endpoint: Endpoint {
                 url: std::env::var("SWARM_CODER_URL")
-                    .unwrap_or_else(|_| "http://vasp-02:8080/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
                 model: std::env::var("SWARM_CODER_MODEL")
-                    .unwrap_or_else(|_| "HydraCoder.i1-Q4_K_M".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
                 tier: Tier::Coder,
                 api_key: std::env::var("SWARM_CODER_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
             },
             reasoning_endpoint: Endpoint {
                 url: std::env::var("SWARM_REASONING_URL")
-                    .unwrap_or_else(|_| "http://vasp-02:8080/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-02:8081/v1".into()),
                 model: std::env::var("SWARM_REASONING_MODEL")
-                    .unwrap_or_else(|_| "HydraCoder.i1-Q4_K_M".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
                 tier: Tier::Reasoning,
                 api_key: std::env::var("SWARM_REASONING_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),

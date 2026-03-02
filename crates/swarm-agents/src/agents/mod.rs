@@ -1,10 +1,15 @@
 //! Agent builders for the Manager-Worker swarm.
 //!
+//! All three compute nodes run Qwen3.5-397B-A17B (Q4_K_M, --parallel 2, 6 total slots):
+//!   vasp-03:8081 — fast/scout tier
+//!   vasp-01:8081 — coder tier
+//!   vasp-02:8081 — reasoning tier
+//!
 //! Hierarchy (when cloud available):
-//!   Cloud Manager (Opus 4.6) → Local Workers (Qwen3.5-Architect on vasp-01, Qwen3.5-Implementer on vasp-02)
+//!   Cloud Manager (Opus 4.6) → Local Workers (Qwen3.5-397B on all 3 nodes)
 //!
 //! Fallback (no cloud):
-//!   Local Manager (Qwen3.5-Architect on vasp-01) → Local Workers (Qwen3.5-Implementer on vasp-02)
+//!   Local Manager (Qwen3.5-397B on vasp-02) → Local Workers (Qwen3.5-397B on vasp-01/03)
 
 pub mod adversary;
 pub mod cloud;
