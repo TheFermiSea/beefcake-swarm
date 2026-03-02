@@ -43,11 +43,13 @@ bd sync               # Sync with git
 ## Code Conventions
 
 ### Commits
+
 Use **conventional commits**: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`.
 
 Branch naming: `feat/<description>`, `fix/<description>`, or `swarm/<issue-id>` for automated work.
 
 ### Quality Gates (must pass before merge)
+
 ```bash
 cargo fmt --all -- --check                 # Formatting
 cargo clippy --workspace -- -D warnings    # Linting (warnings = errors)
@@ -57,6 +59,7 @@ cargo test -p swarm-agents                 # Unit tests (swarm-agents)
 ```
 
 ### Rust Style
+
 - Use `thiserror` for error types — never `Result<(), String>`
 - Use `?` operator — avoid `.unwrap()` (use `.expect("reason")` only in tests)
 - `WasmCompatSend` / `WasmCompatSync` for trait bounds (Rig convention)
@@ -66,6 +69,7 @@ cargo test -p swarm-agents                 # Unit tests (swarm-agents)
 ## Testing Strategy
 
 ### Running Tests
+
 ```bash
 cargo test -p coordination                    # All coordination tests
 cargo test -p coordination -- test_name       # Single test
@@ -74,19 +78,22 @@ cargo test --workspace                        # Everything (slow)
 ```
 
 ### What to Test
+
 - State machines: test each transition, edge cases, error paths
-- Verifier: test with real rustc output snippets (see `verifier/tests/`)
-- Config: test env var parsing with `#[serial]` for isolation (tests mutate env)
+- Verifier: test with real rustc output snippets (see `mod tests` in `coordination/src/verifier/pipeline.rs`, `normalized.rs`, etc.)
+- Config: test env var parsing; run with `--test-threads=1` for isolation (tests mutate env)
 - Tools: test JSON schema generation and parameter validation
 
 ### Known Test Patterns
-- Tests that modify env vars use `serial_test::serial` to prevent races
-- Config tests restore original values in cleanup (see `config.rs` tests)
+
+- Tests that modify env vars should run serially via `cargo test -- --test-threads=1`
+- Config tests directly call `set_var`/`remove_var` (no restore — rely on serial execution)
 - Integration tests may need inference endpoints running — skip in CI with `#[ignore]`
 
 ## Operational Patterns
 
 ### Debug Logging
+
 ```bash
 # Production (default)
 RUST_LOG=info
@@ -96,6 +103,7 @@ RUST_LOG=debug,hyper=info,reqwest=info,h2=info,rustls=info,tower=info
 ```
 
 ### Monitoring the Dogfood Loop
+
 ```bash
 # Live loop output
 tail -f ~/dogfood-debug-*.log
@@ -113,6 +121,7 @@ curl -s http://vasp-02:8081/v1/models | python3 -m json.tool  # reasoning
 ```
 
 ### Swarm Behavior Insights
+
 - Cloud manager does heavy read-first exploration (~70% reads) before writing
 - Worker delegation uses `proxy_` prefixed tools (e.g., `proxy_rust_coder`, `proxy_reasoning_worker`)
 - `MaxTurnError` on a worker is expected — manager retries with a different worker
@@ -120,7 +129,7 @@ curl -s http://vasp-02:8081/v1/models | python3 -m json.tool  # reasoning
 
 ## Swarm Architecture Quick Reference
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │  Cloud Manager (Claude Sonnet 4.6)              │
 │  via CLIAPIProxy on ai-proxy:8317               │
@@ -148,14 +157,16 @@ curl -s http://vasp-02:8081/v1/models | python3 -m json.tool  # reasoning
 | `run-swarm.sh` eats CLI args | Fixed in PR #21 — `--` separator added |
 | Stale worktree blocks new run | `rm -rf /tmp/beefcake-wt/<id> && git worktree prune` |
 | `SWARM_CLOUD_URL` wrong on ai-proxy | Use `http://localhost:8317/v1`, not `http://10.0.0.5:8317/v1` |
-| Tests fail with env var races | Use `#[serial]` from `serial_test` crate |
+| Tests fail with env var races | Run with `cargo test -- --test-threads=1` |
 | Rig `default_max_turns` not enforced | Only wall-clock timeout works with `.prompt()` |
 | `nlm` not found on ai-proxy | Expected — swarm runs without NotebookLM on ai-proxy |
 
 ## Rig Framework Reference
 
 For Rig API documentation (agents, tools, providers, streaming), use the skill:
-```
+
+```bash
 /rig
 ```
+
 Or the full reference at https://docs.rig.rs

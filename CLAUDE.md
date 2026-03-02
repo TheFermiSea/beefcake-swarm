@@ -3,6 +3,7 @@
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## Model Selection & Routing
+
 - **Rust/Code Tasks:** Local models via the swarm orchestrator or `/ask-local`:
   - Fast/Analysis: HydraCoder 30B on vasp-03 (`/ask-local "HydraCoder.i1-Q4_K_M" "..."`)
   - Code Generation: Qwen3-Coder-Next 80B on vasp-01
@@ -58,7 +59,7 @@ Key modules:
 
 ### Escalation Ladder
 
-```
+```text
 Cloud Manager (Claude Sonnet 4.6 via CLIAPIProxy, max 10 iterations)
     → delegates to local workers:
         HydraCoder 30B (vasp-03, fast analysis/routing)
@@ -92,6 +93,7 @@ When cloud is unavailable, falls back to worker-first mode (local models only).
 All local models use MoE architecture: experts on CPU, attention on GPU (V100S 32GB).
 
 **Start inference:**
+
 ```bash
 ssh root@10.0.0.22 "bash /tmp/start-hydracoder.sh"    # HydraCoder on vasp-03
 ssh root@10.0.0.20 "bash /tmp/start-coder-next.sh"    # Qwen3-Coder-Next on vasp-01
@@ -123,10 +125,10 @@ Set by `scripts/run-swarm.sh` (overrides config.rs defaults). See `crates/swarm-
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `SWARM_CLOUD_URL` | *(none)* | Required for cloud manager mode |
+| `SWARM_CLOUD_URL` | `http://10.0.0.5:8317/v1` (script) / *(none)* (config.rs) | Required for cloud manager mode |
 | `SWARM_CLOUD_API_KEY` | *(none)* | Required if cloud URL set |
 | `SWARM_CLOUD_MODEL` | `claude-sonnet-4-6` (script) / `claude-opus-4-6-thinking` (config.rs) | Primary cloud model |
-| `SWARM_CLOUD_FALLBACK_MODELS` | `claude-opus-4-6-thinking, claude-sonnet-4-5-20250929, gemini-2.5-flash` | Comma-separated fallback matrix |
+| `SWARM_CLOUD_FALLBACK_MODEL` (script) / `SWARM_CLOUD_FALLBACK_MODELS` (config.rs) | `claude-opus-4-6-thinking, claude-sonnet-4-5-20250929, gemini-2.5-flash` | Comma-separated fallback matrix; note singular vs plural env var name |
 | `SWARM_REQUIRE_ANTHROPIC_OWNERSHIP` | `1` | Set to `0` for CLIAPIProxy (reports `owned_by=antigravity`) |
 | `SWARM_CLOUD_PREFLIGHT` | `1` | Probe cloud endpoint before starting |
 
@@ -146,18 +148,20 @@ Set by `scripts/run-swarm.sh` (overrides config.rs defaults). See `crates/swarm-
 ## Dogfood Operations
 
 ### Single Run (proof-of-life)
+
 ```bash
 ssh brian@100.105.113.58 "cd ~/code/beefcake-swarm && \
-  SWARM_CLOUD_API_KEY=rust-daq-proxy-key \
+  SWARM_CLOUD_API_KEY=\$SWARM_CLOUD_API_KEY \
   SWARM_CLOUD_URL=http://localhost:8317/v1 \
   SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0 \
   timeout 120 bash scripts/run-swarm.sh --issue test-probe --objective 'Reply with OK'"
 ```
 
 ### Continuous Loop
+
 ```bash
 ssh brian@100.105.113.58 "cd ~/code/beefcake-swarm && \
-  nohup bash -c 'export SWARM_CLOUD_API_KEY=rust-daq-proxy-key \
+  nohup bash -c 'export SWARM_CLOUD_API_KEY=\$SWARM_CLOUD_API_KEY \
     SWARM_CLOUD_URL=http://localhost:8317/v1 \
     SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0 \
     RUST_LOG=debug,hyper=info,reqwest=info,h2=info,rustls=info,tower=info && \
@@ -171,7 +175,10 @@ ssh brian@100.105.113.58 "cd ~/code/beefcake-swarm && \
 - `DOGFOOD_MAX_RUNS=0` — 0 = unlimited
 - `DOGFOOD_LOG_DIR=./logs/dogfood` — per-run log directory
 
+**API key:** `SWARM_CLOUD_API_KEY` must be set in the environment or `~/.bashrc` on ai-proxy. Never hardcode credentials in commands or documentation.
+
 **Worktrees:** Created at `/tmp/beefcake-wt/<issue-id>`. Clean stale worktrees:
+
 ```bash
 rm -rf /tmp/beefcake-wt/<issue-id> && git worktree prune
 ```
@@ -179,6 +186,7 @@ rm -rf /tmp/beefcake-wt/<issue-id> && git worktree prune
 ## Debug & Monitoring
 
 ### RUST_LOG Pattern
+
 ```bash
 # Production (default)
 RUST_LOG=info
@@ -188,6 +196,7 @@ RUST_LOG=debug,hyper=info,reqwest=info,h2=info,rustls=info,tower=info
 ```
 
 ### Monitoring Commands
+
 ```bash
 # Live loop output
 tail -f ~/dogfood-debug-*.log
@@ -205,7 +214,8 @@ curl -s http://vasp-02:8081/v1/models | python3 -m json.tool  # reasoning
 ```
 
 ### Healthy Startup Log
-```
+
+```text
 INFO swarm_agents: Endpoint health check local_ok=true coder_ok=true reasoning_ok=true
 INFO swarm_agents: Beads-free mode: processing CLI issue id=<issue>
 INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed workers model=claude-sonnet-4-6
@@ -234,6 +244,7 @@ The swarm uses NotebookLM as an external RAG layer for institutional memory. Com
 | `visuals` | beefcake-swarm: Visuals | No | Dependency graphs, architecture diagrams |
 
 **Query commands:**
+
 ```bash
 nlm query notebook "<ID>" "What is the escalation ladder?"
 nlm source add "<ID>" --file "doc.md"
@@ -284,7 +295,7 @@ nlm source add "<ID>" --file "doc.md"
   - Codebases live under `/home/brian/code/` (beefcake-swarm, rust-daq)
   - Use `brian` user for code work; `root` for system admin only
   - GitHub auth: SSH key (`ai-proxy-lxc`) + `gh` CLI as TheFermiSea
-  - CLIAPIProxy on port 8317, API key: `rust-daq-proxy-key`
+  - CLIAPIProxy on port 8317; API key set via `SWARM_CLOUD_API_KEY` env var
 
 ## SLURM Rules
 
@@ -292,7 +303,7 @@ nlm source add "<ID>" --file "doc.md"
 
 ## NFS Layout
 
-```
+```text
 /cluster/shared/
 ├── llama-cpp/bin/        # Inference binaries
 ├── scripts/llama-cpp/    # SLURM job scripts
@@ -315,10 +326,12 @@ nlm source add "<ID>" --file "doc.md"
 Enabled via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`.
 
 ### Team Structure
+
 - **Lead (Opus 4.6)**: Picks beads issues, assigns to teammates, reviews results
 - **Teammates (Sonnet 4.6)**: Each works on one beads issue on a separate branch
 
 ### Teammate Workflow
+
 1. Claim issue: `bd update <id> --status in_progress`
 2. Create branch: `git checkout -b swarm/<issue-id>`
 3. Implement the fix/feature
@@ -326,12 +339,15 @@ Enabled via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`.
 5. Commit with conventional format and push branch
 
 ### Dogfood on ai-proxy
+
 The swarm runs on ai-proxy (`brian@100.105.113.58`). Required env vars in `~/.bashrc`:
+
 ```bash
-export SWARM_CLOUD_API_KEY="rust-daq-proxy-key"
+export SWARM_CLOUD_API_KEY="<your-api-key>"
 export SWARM_CLOUD_URL="http://localhost:8317/v1"
 export SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0
 ```
 
 ### Branch Strategy
+
 Each teammate works on `swarm/<issue-id>`. Lead assigns non-overlapping issues.
