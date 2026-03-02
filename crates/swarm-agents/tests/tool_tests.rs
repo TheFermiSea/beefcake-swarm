@@ -592,16 +592,25 @@ async fn test_run_command_allows_pipe() {
 }
 
 #[tokio::test]
-async fn test_run_command_rejects_ampersand() {
+async fn test_run_command_allows_ampersand() {
+    // Since we execute directly (no shell), `&` is harmless — `2>&1` is just
+    // a literal arg, and `&&` is not interpreted without sh -c.
     let dir = tempfile::tempdir().unwrap();
     let tool = RunCommandTool::new(dir.path());
 
     let result = tool
         .call(RunCommandArgs {
-            command: "cargo test && rm -rf /".into(),
+            command: "ls -la 2>&1".into(),
         })
         .await;
-    assert!(result.is_err());
+    // Should not be rejected by metachar filter. The `2>&1` is passed as a
+    // literal arg to ls (no shell), so the result is Ok with some output.
+    match &result {
+        Err(ToolError::CommandNotAllowed { .. }) => {
+            panic!("should not reject ampersand in arguments")
+        }
+        _ => {} // Any other result is fine
+    }
 }
 
 #[tokio::test]

@@ -28,16 +28,19 @@ const ALLOWED_COMMANDS: &[&str] = &[
 /// Characters that indicate command chaining or injection intent.
 /// Since we execute directly (no shell), these aren't technically dangerous,
 /// but they signal the LLM is trying to chain commands, which we block.
-/// Note: `|` (pipe), `(`, `)`, `$` are NOT included — pipe is harmless
-/// without a shell (we use Command::new, not sh -c) and LLMs commonly
-/// try `rg pattern | head -20` which we handle by passing args directly.
-const DANGEROUS_METACHARACTERS: &[char] = &[';', '&', '`', '\n', '\r'];
+/// Note: `|`, `&`, `(`, `)`, `$` are NOT included — without a shell
+/// (we use Command::new, not sh -c) these are passed as literal args.
+/// LLMs commonly try `cargo check 2>&1 | head -20`; `&` in `2>&1` is
+/// harmless without a shell and blocking it wastes worker turns.
+const DANGEROUS_METACHARACTERS: &[char] = &[';', '`', '\n', '\r'];
 
 /// Default timeout for command execution.
-const DEFAULT_TIMEOUT_SECS: u64 = 120;
+/// Set high to accommodate fresh worktree builds (RocksDB C++ compilation
+/// takes 10-15 min on ai-proxy).
+const DEFAULT_TIMEOUT_SECS: u64 = 1800;
 
 /// Timeout for cargo test specifically.
-const TEST_TIMEOUT_SECS: u64 = 300;
+const TEST_TIMEOUT_SECS: u64 = 1800;
 
 #[derive(Deserialize)]
 pub struct RunCommandArgs {
