@@ -5,6 +5,7 @@ pub mod cluster_health;
 pub mod config;
 pub mod contracts;
 pub mod dashboard;
+pub mod driver;
 pub mod grammars;
 pub mod kb_refresh;
 pub mod knowledge_sync;
