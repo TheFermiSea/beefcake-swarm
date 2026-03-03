@@ -1590,7 +1590,7 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
     otel::record_process_result(
         &ctx.process_span,
         ctx.success,
-        session_metrics.total_iterations as u32,
+        session_metrics.total_iterations,
         ctx.process_start.elapsed().as_millis() as u64,
     );
 
