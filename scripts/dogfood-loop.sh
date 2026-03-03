@@ -47,6 +47,21 @@ done
 
 mkdir -p "$LOG_DIR"
 
+# ── sccache: shared C/C++ compilation cache ──
+# Eliminates redundant proc-macro and native dep builds across worktrees.
+# Install: cargo install sccache
+if command -v sccache &>/dev/null; then
+    export RUSTC_WRAPPER=sccache
+    export SCCACHE_DIR="${SCCACHE_DIR:-/tmp/beefcake-sccache}"
+    mkdir -p "$SCCACHE_DIR"
+fi
+
+# ── Shared target directory ──
+# Multiple worktrees share one target dir to avoid redundant dep builds.
+# Cargo handles concurrent access with its own locking.
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/beefcake-shared-target}"
+mkdir -p "$CARGO_TARGET_DIR"
+
 # --- Telemetry ---
 DOGFOOD_START=$(date +%s)
 RUN_COUNT=0

@@ -1,3 +1,4 @@
+#![cfg(feature = "full")]
 //! Cross-environment smoke tests — verify core deterministic flows
 //! produce identical results regardless of execution environment
 //! (dev machine, container, HPC cluster).

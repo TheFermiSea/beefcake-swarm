@@ -58,4 +58,20 @@ if [[ "${SWARM_CLOUD_PREFLIGHT:-1}" == "1" ]]; then
   rm -f "$probe_req" "$probe_resp"
 fi
 export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
+
+# ── sccache: shared C/C++ compilation cache ──
+# Eliminates redundant proc-macro and native dep builds across worktrees.
+# Install: cargo install sccache
+if command -v sccache &>/dev/null; then
+    export RUSTC_WRAPPER=sccache
+    export SCCACHE_DIR="${SCCACHE_DIR:-/tmp/beefcake-sccache}"
+    mkdir -p "$SCCACHE_DIR"
+fi
+
+# ── Shared target directory ──
+# Multiple worktrees share one target dir to avoid redundant dep builds.
+# Cargo handles concurrent access with its own locking.
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/beefcake-shared-target}"
+mkdir -p "$CARGO_TARGET_DIR"
+
 exec cargo run -p swarm-agents -- "$@"

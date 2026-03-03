@@ -1,3 +1,4 @@
+#![cfg(feature = "full")]
 //! Golden transcript fixtures — deterministic debate transcripts for
 //! pass/fail/consensus/deadlock paths to prevent behavioral regressions.
 //!

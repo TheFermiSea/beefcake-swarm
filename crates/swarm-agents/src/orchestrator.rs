@@ -11,6 +11,7 @@ use rig::completion::Prompt;
 use rig::providers::openai;
 use tracing::{debug, error, info, warn};
 
+use crate::cluster_health::ClusterHealth;
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 
 /// Default timeout for each cloud validation call.
@@ -54,7 +55,7 @@ pub enum CoderRoute {
 /// (connection error, auth failure, or a hanging `nlm` CLI subprocess) returns
 /// an empty string instead of propagating an error. This ensures KB
 /// unavailability never blocks the orchestration loop.
-fn query_kb_with_failsafe(kb: &dyn KnowledgeBase, role: &str, question: &str) -> String {
+pub(crate) fn query_kb_with_failsafe(kb: &dyn KnowledgeBase, role: &str, question: &str) -> String {
     match kb.query(role, question) {
         Ok(response) => response,
         Err(e) => {
@@ -600,17 +601,17 @@ async fn retry_git_command_async(
 }
 
 /// Result of a single cloud model validation.
-struct CloudValidationResult {
-    model: String,
-    passed: bool,
-    feedback: String,
+pub(crate) struct CloudValidationResult {
+    pub(crate) model: String,
+    pub(crate) passed: bool,
+    pub(crate) feedback: String,
 }
 
 /// Convert a cloud validation result into structured validator feedback entries.
 ///
 /// Parses the reviewer's JSON response to extract blocking_issues and
 /// touched_files, converting prose feedback into actionable deltas (TextGrad pattern).
-fn extract_validator_feedback(result: &CloudValidationResult) -> Vec<ValidatorFeedback> {
+pub(crate) fn extract_validator_feedback(result: &CloudValidationResult) -> Vec<ValidatorFeedback> {
     if result.passed {
         return vec![];
     }
@@ -689,7 +690,7 @@ fn classify_issue(description: &str) -> ValidatorIssueType {
     }
 }
 
-fn timeout_from_env(var: &str, default_secs: u64) -> Duration {
+pub(crate) fn timeout_from_env(var: &str, default_secs: u64) -> Duration {
     let secs = std::env::var(var)
         .ok()
         .and_then(|v| v.parse::<u64>().ok())
@@ -698,7 +699,7 @@ fn timeout_from_env(var: &str, default_secs: u64) -> Duration {
     Duration::from_secs(secs)
 }
 
-fn u32_from_env(var: &str, default: u32) -> u32 {
+pub(crate) fn u32_from_env(var: &str, default: u32) -> u32 {
     std::env::var(var)
         .ok()
         .and_then(|v| v.parse::<u32>().ok())
@@ -706,7 +707,7 @@ fn u32_from_env(var: &str, default: u32) -> u32 {
         .unwrap_or(default)
 }
 
-fn bool_from_env(var: &str, default: bool) -> bool {
+pub(crate) fn bool_from_env(var: &str, default: bool) -> bool {
     std::env::var(var)
         .ok()
         .map(|v| {
@@ -719,7 +720,7 @@ fn bool_from_env(var: &str, default: bool) -> bool {
 }
 
 /// Count lines changed between two commits in the worktree.
-fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
+pub(crate) fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
     let output = std::process::Command::new("git")
         .args(["diff", "--numstat", from, to])
         .current_dir(wt_path)
@@ -749,7 +750,7 @@ fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
 /// `Modified`; files only in `to` are `Created`; files only in `from` are
 /// `Deleted`. The `size_delta` is approximated as `(added - removed)` lines
 /// (a line-count proxy; byte-level deltas would require `--stat`).
-fn collect_artifacts_from_diff(
+pub(crate) fn collect_artifacts_from_diff(
     wt_path: &Path,
     from: &str,
     to: &str,
@@ -800,11 +801,11 @@ fn collect_artifacts_from_diff(
 /// The guard fires only when auto-fix actually ran this iteration AND a minimum
 /// agent diff size is configured. This prevents rejecting legitimate small fixes
 /// that pass the verifier on their own merit (i.e. without auto-fix).
-fn should_reject_auto_fix(auto_fix_applied: bool, policy: &AcceptancePolicy) -> bool {
+pub(crate) fn should_reject_auto_fix(auto_fix_applied: bool, policy: &AcceptancePolicy) -> bool {
     auto_fix_applied && policy.min_diff_lines > 0
 }
 
-fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
+pub(crate) fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
     match std::env::var(var)
         .ok()
         .map(|v| v.trim().to_ascii_lowercase())
@@ -843,7 +844,7 @@ fn build_reviewer_prompt(diff_for_review: &str) -> String {
 
 /// - `SWARM_VALIDATOR_MODEL_1` (default: `gemini-3-pro-preview`)
 /// - `SWARM_VALIDATOR_MODEL_2` (default: `claude-sonnet-4-5-20250929`)
-async fn cloud_validate(
+pub(crate) async fn cloud_validate(
     cloud_client: &openai::CompletionsClient,
     wt_path: &Path,
     initial_commit: &str,
@@ -943,15 +944,15 @@ async fn cloud_validate(
 }
 
 /// Result of a local validator review (blocking gate).
-struct LocalValidationResult {
-    model: String,
-    passed: bool,
+pub(crate) struct LocalValidationResult {
+    pub(crate) model: String,
+    pub(crate) passed: bool,
     #[allow(dead_code)] // kept for diagnostics/future logging
-    schema_valid: bool,
-    feedback: String,
-    blocking_issues: Vec<String>,
-    suggested_next_action: String,
-    touched_files: Vec<String>,
+    pub(crate) schema_valid: bool,
+    pub(crate) feedback: String,
+    pub(crate) blocking_issues: Vec<String>,
+    pub(crate) suggested_next_action: String,
+    pub(crate) touched_files: Vec<String>,
 }
 
 /// Run local validation via the reviewer agent (vasp-02/HydraCoder).
@@ -959,7 +960,7 @@ struct LocalValidationResult {
 /// Generates a diff, sends it to the reviewer, and parses the structured JSON response.
 /// - **Fail-open** on infrastructure errors (diff failure, timeout, LLM error) — deterministic gates already passed.
 /// - **Fail-closed** on invalid JSON schema — malformed reviewer output counts as failure.
-async fn local_validate(
+pub(crate) async fn local_validate(
     reviewer: &crate::agents::coder::OaiAgent,
     wt_path: &Path,
     initial_commit: &str,
@@ -1109,7 +1110,9 @@ async fn local_validate(
 /// Convert a local validation result into structured validator feedback entries.
 ///
 /// Similar to `extract_validator_feedback` but operates on `LocalValidationResult`.
-fn extract_local_validator_feedback(result: &LocalValidationResult) -> Vec<ValidatorFeedback> {
+pub(crate) fn extract_local_validator_feedback(
+    result: &LocalValidationResult,
+) -> Vec<ValidatorFeedback> {
     if result.passed {
         return vec![];
     }
@@ -1159,7 +1162,7 @@ fn extract_local_validator_feedback(result: &LocalValidationResult) -> Vec<Valid
 /// Combines committed changes (git diff main..HEAD) and working-tree
 /// changes (git status --porcelain) to produce a deduplicated list of
 /// package names. Falls back to an empty Vec (= full workspace) on any error.
-fn detect_changed_packages(wt_path: &Path) -> Vec<String> {
+pub(crate) fn detect_changed_packages(wt_path: &Path) -> Vec<String> {
     let mut changed_files: std::collections::HashSet<std::path::PathBuf> = Default::default();
 
     // Committed changes since branching from main
@@ -1247,6 +1250,9 @@ fn find_package_name(file_path: &Path) -> Option<String> {
 /// - **PendingIntervention**: Formal human intervention requests when stuck
 ///
 /// Returns `true` if the issue was successfully resolved.
+///
+/// When `SWARM_STATE_DRIVER=1`, uses the new state-machine-driven loop
+/// from `driver.rs`. Otherwise, uses the legacy monolithic loop below.
 pub async fn process_issue(
     config: &SwarmConfig,
     factory: &AgentFactory,
@@ -1255,6 +1261,65 @@ pub async fn process_issue(
     beads: &dyn IssueTracker,
     knowledge_base: Option<&dyn KnowledgeBase>,
 ) -> Result<bool> {
+    // --- State driver gate ---
+    if bool_from_env("SWARM_STATE_DRIVER", false) {
+        info!(id = %issue.id, "Using state-machine driver (SWARM_STATE_DRIVER=1)");
+        let mut ctx = crate::driver::OrchestratorContext::new(
+            config,
+            factory,
+            worktree_bridge,
+            issue,
+            beads,
+            knowledge_base,
+        )
+        .await?;
+        let result = crate::driver::drive(&mut ctx).await;
+        // Move metrics out before handle_outcome (finalize consumes self)
+        let metrics = std::mem::replace(
+            &mut ctx.metrics,
+            crate::telemetry::MetricsCollector::new("", "", ""),
+        );
+        crate::driver::handle_outcome(&mut ctx, metrics).await;
+        return result;
+    }
+
+    // --- Mode runner gate ---
+    if bool_from_env("SWARM_MODE_DRIVER", false) {
+        use crate::modes::{ModeOrchestrator, ModeRequest, ModeRunnerConfig, SwarmMode};
+
+        let mode =
+            SwarmMode::from_issue(issue.issue_type.as_deref(), issue.priority, &issue.labels);
+        info!(id = %issue.id, ?mode, "Using mode runner (SWARM_MODE_DRIVER=1)");
+
+        let mode_config = ModeRunnerConfig::from_env();
+        let wt_path = worktree_bridge.create(&issue.id)?;
+        let mut runner = mode.into_runner(mode_config.clone(), wt_path.clone());
+        let orch = ModeOrchestrator::new(mode_config);
+        let request = ModeRequest::new(&issue.title).with_label(&issue.id);
+        let outcome = orch.run(runner.as_mut(), request).await;
+
+        let success = outcome.is_success();
+        if success {
+            info!(id = %issue.id, ?mode, "Mode runner succeeded — merging");
+            match worktree_bridge.merge_and_remove(&issue.id) {
+                Ok(()) => {
+                    let _ = beads.close(&issue.id, Some("mode runner completed successfully"));
+                }
+                Err(e) => {
+                    warn!(id = %issue.id, error = %e, "Merge failed after mode runner success");
+                    let _ = beads.update_status(&issue.id, "open");
+                    let _ = worktree_bridge.cleanup(&issue.id);
+                    return Ok(false);
+                }
+            }
+        } else {
+            warn!(id = %issue.id, ?mode, "Mode runner failed");
+            let _ = beads.update_status(&issue.id, "open");
+            let _ = worktree_bridge.cleanup(&issue.id);
+        }
+        return Ok(success);
+    }
+
     let worker_policy = TurnPolicy::for_tier(SwarmTier::Worker);
     let council_policy = TurnPolicy::for_tier(SwarmTier::Council);
     let worker_timeout = timeout_from_env("SWARM_WORKER_TIMEOUT_SECS", worker_policy.timeout_secs);
@@ -1336,6 +1401,41 @@ pub async fn process_issue(
 
     // --- Acceptance policy ---
     let acceptance_policy = AcceptancePolicy::default();
+
+    // --- Preflight: endpoint health check (P1.1 + P1.4) ---
+    // Probe all local inference endpoints before investing in agent builds.
+    // Fail fast if all workers are down — avoids burning cloud credits on
+    // delegation to dead endpoints.
+    let cluster_health = ClusterHealth::from_config(config);
+    let healthy_count = cluster_health.check_all_now().await;
+    info!(
+        healthy = healthy_count,
+        total = 3,
+        summary = %cluster_health.summary().await,
+        "Preflight endpoint health check"
+    );
+    if healthy_count == 0 {
+        warn!(
+            id = %issue.id,
+            "All inference endpoints are DOWN — cannot proceed"
+        );
+        // Reset issue status so it can be picked up later
+        let _ = beads.update_status(&issue.id, "open");
+        anyhow::bail!(
+            "Preflight failed: all 3 inference endpoints are down ({})",
+            cluster_health.summary().await
+        );
+    }
+
+    // Spawn background health monitor for ongoing checks during the session.
+    // Wrap in a guard so the monitor task is aborted when this function exits.
+    struct AbortOnDrop(tokio::task::JoinHandle<()>);
+    impl Drop for AbortOnDrop {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let _health_monitor = AbortOnDrop(cluster_health.spawn_monitor());
 
     // --- Build agents scoped to this worktree ---
     let rust_coder = factory.build_rust_coder(&wt_path);
@@ -1457,6 +1557,38 @@ pub async fn process_issue(
             &issue.id,
             format!("Iteration {iteration}, tier: {tier:?}"),
         );
+
+        // --- Pre-iteration auto-fix (P1.2) ---
+        // Run auto-fix BEFORE packing context so the agent starts each iteration
+        // with clean formatting and auto-fixable clippy issues already resolved.
+        // This prevents wasting a turn on lint errors from the previous iteration.
+        if iteration > 1 {
+            if let Some(ref report) = last_report {
+                if !report.all_green {
+                    if let Some(fixed_report) =
+                        try_auto_fix(&wt_path, &verifier_config, iteration).await
+                    {
+                        if fixed_report.all_green {
+                            info!(
+                                iteration,
+                                "Pre-iteration auto-fix resolved all issues — skipping agent"
+                            );
+                            // Commit auto-fix changes before declaring success
+                            let _ = git_commit_changes(&wt_path, iteration).await;
+                            metrics.record_auto_fix();
+                            metrics.finish_iteration();
+                            success = true;
+                            break;
+                        }
+                        // Update the report so context packing uses the post-autofix state
+                        last_report = Some(fixed_report);
+                        metrics.record_auto_fix();
+                        // Commit auto-fix changes so agent sees clean state
+                        let _ = git_commit_changes(&wt_path, iteration).await;
+                    }
+                }
+            }
+        }
 
         // Pack context with tier-appropriate token budget
         let packer = ContextPacker::new(&wt_path, tier);
@@ -1709,6 +1841,85 @@ pub async fn process_issue(
                         // Any file changes the manager made are already on disk.
                         Ok("Manager timed out. Changes are on disk for verifier.".to_string())
                     }
+                };
+
+                // --- Cloud fallback matrix (P1.3) ---
+                // If the primary cloud model failed with a quota/rate error, try
+                // fallback models before giving up. Rebuilds the manager agent with
+                // each fallback model in order.
+                let result = if let Err(ref primary_err) = result {
+                    let err_str = format!("{primary_err}");
+                    let err_lower = err_str.to_ascii_lowercase();
+                    let is_quota_or_model_error = err_str.contains("429")
+                        || err_str.contains("quota")
+                        || err_str.contains("overloaded")
+                        || err_lower.contains("capacity")
+                        || err_str.contains("500")
+                        || err_str.contains("503");
+
+                    if is_quota_or_model_error {
+                        let fallbacks = config.cloud_fallback_matrix.fallbacks();
+                        let mut fallback_result = None;
+                        for entry in fallbacks {
+                            warn!(
+                                iteration,
+                                model = %entry.model,
+                                tier = %entry.tier_label,
+                                primary_error = %err_str,
+                                "Primary cloud model failed — trying fallback"
+                            );
+                            if let Some(fallback_manager) =
+                                factory.build_manager_for_model(&wt_path, &entry.model)
+                            {
+                                let fb_adapter = RuntimeAdapter::new(AdapterConfig {
+                                    agent_name: format!("manager-{}", entry.tier_label),
+                                    deadline: Some(Instant::now() + manager_timeout),
+                                    ..Default::default()
+                                });
+                                match tokio::time::timeout(
+                                    manager_timeout,
+                                    prompt_with_hook_and_retry(
+                                        &fallback_manager,
+                                        &task_prompt,
+                                        1, // single retry for fallbacks
+                                        fb_adapter,
+                                    ),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(response)) => {
+                                        info!(
+                                            iteration,
+                                            model = %entry.model,
+                                            "Cloud fallback succeeded"
+                                        );
+                                        fallback_result = Some(Ok(response));
+                                        break;
+                                    }
+                                    Ok(Err(e)) => {
+                                        warn!(
+                                            iteration,
+                                            model = %entry.model,
+                                            error = %e,
+                                            "Cloud fallback also failed — trying next"
+                                        );
+                                    }
+                                    Err(_) => {
+                                        warn!(
+                                            iteration,
+                                            model = %entry.model,
+                                            "Cloud fallback timed out — trying next"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        fallback_result.unwrap_or(result)
+                    } else {
+                        result
+                    }
+                } else {
+                    result
                 };
                 (result, adapter)
             }
@@ -2594,7 +2805,7 @@ pub fn check_for_resume(repo_root: &Path) -> Option<SwarmResumeFile> {
 }
 
 /// Clear the resume file after successful completion.
-fn clear_resume_file(repo_root: &Path) {
+pub(crate) fn clear_resume_file(repo_root: &Path) {
     let resume_path = repo_root.join(".swarm-resume.json");
     if resume_path.exists() {
         let _ = std::fs::remove_file(&resume_path);
@@ -2642,7 +2853,7 @@ async fn prompt_with_retry(
 /// Like [`prompt_with_retry`] but attaches a [`RuntimeAdapter`] hook to each attempt.
 ///
 /// The hook provides tool-event visibility and budget enforcement for the manager tier.
-async fn prompt_with_hook_and_retry(
+pub(crate) async fn prompt_with_hook_and_retry(
     agent: &crate::agents::coder::OaiAgent,
     prompt: &str,
     max_retries: u32,
@@ -2804,7 +3015,7 @@ pub fn try_scaffold_fallback(
 /// 1. Records in session state (in-memory)
 /// 2. Writes `.swarm-interventions.json` in the worktree root
 /// 3. POSTs to `SWARM_WEBHOOK_URL` if configured
-fn create_stuck_intervention(
+pub(crate) fn create_stuck_intervention(
     session: &mut SessionManager,
     progress: &ProgressTracker,
     wt_path: &Path,

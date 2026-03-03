@@ -630,7 +630,12 @@ impl BudgetTracker {
     pub fn on_state_entered(&mut self, state: OrchestratorState) {
         self.state_entered_at = Some(Instant::now());
         *self.state_entry_counts.entry(state).or_insert(0) += 1;
-        self.total_iterations += 1;
+        // Only count Planning entries as global iterations — each Planning entry
+        // marks the start of a new solve attempt (plan → implement → verify cycle).
+        // Per-state entry counts still track all states for per-state budget checks.
+        if state == OrchestratorState::Planning {
+            self.total_iterations += 1;
+        }
     }
 
     /// Check if the current state has exceeded its budget.
@@ -1388,6 +1393,7 @@ mod tests {
     #[test]
     fn test_budget_tracker_no_violation() {
         let mut tracker = BudgetTracker::with_defaults();
+        tracker.on_state_entered(OrchestratorState::Planning);
         tracker.on_state_entered(OrchestratorState::Implementing);
 
         // Fresh entry — no violations
@@ -1395,6 +1401,7 @@ mod tests {
             .check_budget(OrchestratorState::Implementing)
             .is_none());
         assert_eq!(tracker.entry_count(OrchestratorState::Implementing), 1);
+        // total_iterations counts Planning entries only
         assert_eq!(tracker.total_iterations(), 1);
     }
 
@@ -1443,16 +1450,19 @@ mod tests {
         };
         let mut tracker = BudgetTracker::new(config);
 
+        // Simulate 3 iterations (Planning marks each iteration start)
+        tracker.on_state_entered(OrchestratorState::Planning);
         tracker.on_state_entered(OrchestratorState::Implementing);
-        tracker.on_state_entered(OrchestratorState::Verifying);
+        tracker.on_state_entered(OrchestratorState::Planning);
         tracker.on_state_entered(OrchestratorState::Implementing);
+        tracker.on_state_entered(OrchestratorState::Planning);
         assert!(tracker
             .check_budget(OrchestratorState::Implementing)
             .is_none());
 
-        // 4th entry exceeds global limit of 3
-        tracker.on_state_entered(OrchestratorState::Verifying);
-        match tracker.check_budget(OrchestratorState::Verifying) {
+        // 4th Planning entry exceeds global limit of 3
+        tracker.on_state_entered(OrchestratorState::Planning);
+        match tracker.check_budget(OrchestratorState::Planning) {
             Some(CancellationReason::GlobalBudgetExhausted {
                 total_iterations,
                 limit,
@@ -2065,34 +2075,29 @@ mod tests {
         assert!(report.invariant_violations.is_empty());
     }
 
-    /// Global budget caps total iterations across all states.
+    /// Global budget caps total iterations (counted by Planning entries).
     #[test]
     fn test_property_global_budget_caps_all_states() {
         let config = BudgetConfig {
             budgets: HashMap::new(),
-            global_max_iterations: 5,
+            global_max_iterations: 3,
         };
         let mut tracker = BudgetTracker::new(config);
 
-        let states = [
-            OrchestratorState::Implementing,
-            OrchestratorState::Verifying,
-            OrchestratorState::Implementing,
-            OrchestratorState::Verifying,
-            OrchestratorState::Implementing,
-        ];
-
-        for &s in &states {
-            tracker.on_state_entered(s);
+        // Simulate 3 full iterations: Planning→Implementing→Verifying each
+        for _ in 0..3 {
+            tracker.on_state_entered(OrchestratorState::Planning);
+            tracker.on_state_entered(OrchestratorState::Implementing);
+            tracker.on_state_entered(OrchestratorState::Verifying);
         }
         assert!(tracker
             .check_budget(OrchestratorState::Implementing)
             .is_none());
 
-        // One more pushes over
-        tracker.on_state_entered(OrchestratorState::Verifying);
+        // 4th Planning entry pushes over the global limit
+        tracker.on_state_entered(OrchestratorState::Planning);
         assert!(matches!(
-            tracker.check_budget(OrchestratorState::Verifying),
+            tracker.check_budget(OrchestratorState::Planning),
             Some(CancellationReason::GlobalBudgetExhausted { .. })
         ));
     }

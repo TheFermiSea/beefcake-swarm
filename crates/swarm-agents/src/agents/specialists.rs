@@ -16,7 +16,7 @@ use rig::providers::openai;
 use crate::prompts;
 use crate::tools::bundles::{self, WorkerRole};
 
-use super::coder::OaiAgent;
+use super::coder::{merge_params, worker_sampling_params, OaiAgent};
 
 const DEFAULT_PLANNER_MAX_TURNS: usize = 10;
 const DEFAULT_FIXER_MAX_TURNS: usize = 15;
@@ -53,7 +53,16 @@ pub fn build_planner_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let mut builder = client
+    let mut sampling = worker_sampling_params();
+
+    // Merge GBNF grammar params with sampling params when grammar is enabled.
+    if let Some(grammar_params) =
+        crate::grammars::params_if_enabled(crate::grammars::Grammar::PlannerOutput)
+    {
+        sampling = merge_params(sampling, grammar_params);
+    }
+
+    client
         .agent(model)
         .name(name)
         .description(
@@ -61,21 +70,14 @@ pub fn build_planner_named(
         )
         .preamble(prompts::PLANNER_PREAMBLE)
         .temperature(0.2)
+        .additional_params(sampling)
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::Planner,
             proxy_tools,
         ))
-        .default_max_turns(planner_max_turns());
-
-    // Attach GBNF grammar for structured plan output when enabled.
-    if let Some(params) =
-        crate::grammars::params_if_enabled(crate::grammars::Grammar::PlannerOutput)
-    {
-        builder = builder.additional_params(params);
-    }
-
-    builder.build()
+        .default_max_turns(planner_max_turns())
+        .build()
 }
 
 /// Build the fixer specialist.
@@ -102,6 +104,7 @@ pub fn build_fixer_named(
         )
         .preamble(prompts::FIXER_PREAMBLE)
         .temperature(0.2)
+        .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::General,

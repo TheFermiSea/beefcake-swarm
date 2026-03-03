@@ -1,3 +1,4 @@
+#![cfg(feature = "full")]
 //! Policy test suite — integration tests for agent profile access control.
 //!
 //! Enforces anti-pattern policies (no unwrap, no println, no unsafe) and
