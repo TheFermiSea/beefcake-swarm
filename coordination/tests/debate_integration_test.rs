@@ -1,3 +1,4 @@
+#![cfg(feature = "full")]
 //! Mocked debate integration test — exercises the full debate loop
 //! with deterministic mock agents (no LLM calls).
 //!

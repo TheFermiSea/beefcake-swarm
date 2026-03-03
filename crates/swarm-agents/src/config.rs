@@ -192,6 +192,16 @@ pub struct SwarmConfig {
     /// Issues with titles shorter than this are rejected before worktree creation.
     /// Populated from `SWARM_MIN_OBJECTIVE_LEN` env var (default: 10).
     pub min_objective_len: usize,
+    /// Maximum estimated cost (in USD) per issue before the loop aborts.
+    /// Uses approximate token costs: cloud=$15/M input + $75/M output, local=$0 (self-hosted).
+    /// Set to 0.0 to disable cost budgeting (default).
+    /// Populated from `SWARM_MAX_COST_PER_ISSUE` env var.
+    pub max_cost_per_issue: f64,
+    /// Number of iterations after which task prompts are pruned to save context.
+    /// After this many iterations, only the system prompt, last 2 iteration results,
+    /// and the latest verifier output are included in the prompt.
+    /// Populated from `SWARM_PRUNE_AFTER_ITERATION` env var (default: 3).
+    pub prune_after_iteration: u32,
 }
 
 impl Default for SwarmConfig {
@@ -254,6 +264,14 @@ impl Default for SwarmConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(10),
+            max_cost_per_issue: std::env::var("SWARM_MAX_COST_PER_ISSUE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0),
+            prune_after_iteration: std::env::var("SWARM_PRUNE_AFTER_ITERATION")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(3),
         }
     }
 }
@@ -311,6 +329,8 @@ impl SwarmConfig {
             cloud_fallback_matrix: CloudFallbackMatrix::default_matrix(),
             max_consecutive_no_change: 3,
             min_objective_len: 10,
+            max_cost_per_issue: 0.0,
+            prune_after_iteration: 3,
         }
     }
 }

@@ -45,7 +45,10 @@ required-features = ["heavy-state"]
 
 [features]
 default = []
-heavy-state = ["rocksdb", "bincode"]
+# Include all coordination modules (council, slurm, debate, etc.)
+# The MCP binary requires heavy-state which implies full.
+full = []
+heavy-state = ["full", "rocksdb", "bincode"]
 
 [dev-dependencies]
 tempfile = "3"

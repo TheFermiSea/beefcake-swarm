@@ -1,3 +1,4 @@
+#![cfg(feature = "full")]
 //! Compaction property tests — randomized validation of memory compaction
 //! invariants across varied inputs.
 //!

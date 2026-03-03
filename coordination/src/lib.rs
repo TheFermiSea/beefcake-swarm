@@ -45,37 +45,55 @@
 //! coordination --harness --ensemble
 //! ```
 
-pub mod agent_profile;
+// ── Always-compiled modules (used by swarm-agents) ──
 pub mod analytics;
 pub mod benchmark;
 pub mod context_packer;
+pub mod escalation;
+pub mod feedback;
+pub mod harness;
+pub mod otel;
+pub mod rollout;
+pub mod router;
+pub mod state;
+pub mod verifier;
+pub mod work_packet;
+
+// ── Full-only modules (unused by swarm-agents, needed by MCP binary) ──
+#[cfg(feature = "full")]
+pub mod agent_profile;
+#[cfg(feature = "full")]
 pub mod council;
+#[cfg(feature = "full")]
 pub mod debate;
 #[cfg(feature = "heavy-state")]
 pub mod ensemble;
-pub mod escalation;
 #[cfg(feature = "heavy-state")]
 pub mod events;
-pub mod feedback;
-pub mod harness;
+#[cfg(feature = "full")]
 pub mod memory;
-pub mod otel;
+#[cfg(feature = "full")]
 pub mod patch;
+#[cfg(feature = "full")]
 pub mod perf_control;
+#[cfg(feature = "full")]
 pub mod registry;
+#[cfg(feature = "full")]
 pub mod resilience;
+#[cfg(feature = "full")]
 pub mod reviewer_policy;
+#[cfg(feature = "full")]
 pub mod reviewer_tools;
-pub mod rollout;
-pub mod router;
+#[cfg(feature = "full")]
 pub mod shell_safety;
+#[cfg(feature = "full")]
 pub mod slurm;
+#[cfg(feature = "full")]
 pub mod speculation;
-pub mod state;
+#[cfg(feature = "full")]
 pub mod tool_bundle;
+#[cfg(feature = "full")]
 pub mod tool_schema;
-pub mod verifier;
-pub mod work_packet;
 
 // Re-export key harness types
 pub use harness::{load_session_state, save_session_state};
@@ -119,6 +137,7 @@ pub use events::{
 };
 
 // Re-export key SLURM types
+#[cfg(feature = "full")]
 pub use slurm::{
     EndpointHealth, EndpointHealthDetails, EndpointInfo, HealthCheckConfig,
     HealthCheckMetricsSnapshot, InferenceTier, JobInfo, JobState, SlurmConfig, SlurmError,
@@ -126,6 +145,7 @@ pub use slurm::{
 };
 
 // Re-export key Council types
+#[cfg(feature = "full")]
 pub use council::{
     CouncilConfig, CouncilDecision, CouncilError, CouncilMember, CouncilResponse, CouncilRole,
     DelegationReason, DelegationRequest, ErrorAttempt, EscalationContext, EscalationReason,
@@ -171,9 +191,11 @@ pub use router::{
 };
 
 // Re-export provider registry types
+#[cfg(feature = "full")]
 pub use registry::{ProviderCapabilities, ProviderEntry, ProviderHealth, ProviderRegistry};
 
 // Re-export resilience types
+#[cfg(feature = "full")]
 pub use resilience::{DegradationLevel, DegradedResponse, FallbackChain, FallbackTier, ToolHealth};
 
 // Re-export OTel span helpers

@@ -991,6 +991,350 @@ fn measure(
     }
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// Cost tracking and budget enforcement
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Approximate per-token costs in USD (per million tokens).
+///
+/// Cloud costs are based on Claude Opus 4.6 thinking pricing.
+/// Local costs are $0 since we self-host on HPC.
+pub mod cost_rates {
+    /// Cloud input: ~$15/M tokens (Opus 4.6 thinking via CLIAPIProxy)
+    pub const CLOUD_INPUT_PER_M: f64 = 15.0;
+    /// Cloud output: ~$75/M tokens (Opus 4.6 thinking via CLIAPIProxy)
+    pub const CLOUD_OUTPUT_PER_M: f64 = 75.0;
+    /// Local: $0 (self-hosted Qwen3.5 on V100S cluster)
+    pub const LOCAL_INPUT_PER_M: f64 = 0.0;
+    pub const LOCAL_OUTPUT_PER_M: f64 = 0.0;
+}
+
+/// Tracks estimated token costs across iterations and enforces a per-issue budget.
+#[derive(Debug, Clone)]
+pub struct CostTracker {
+    /// Maximum allowed cost in USD (0.0 = unlimited).
+    budget: f64,
+    /// Accumulated estimated cost in USD.
+    accumulated: f64,
+    /// Total prompt tokens across all iterations.
+    total_prompt_tokens: u64,
+    /// Total completion tokens across all iterations.
+    total_completion_tokens: u64,
+}
+
+impl CostTracker {
+    /// Create a new cost tracker with the given budget.
+    ///
+    /// A budget of 0.0 means no cost limit (unlimited).
+    pub fn new(budget: f64) -> Self {
+        Self {
+            budget,
+            accumulated: 0.0,
+            total_prompt_tokens: 0,
+            total_completion_tokens: 0,
+        }
+    }
+
+    /// Record token usage for an iteration and update estimated cost.
+    ///
+    /// `is_cloud` determines which pricing tier to apply.
+    pub fn record_usage(&mut self, prompt_tokens: u32, completion_tokens: u32, is_cloud: bool) {
+        self.total_prompt_tokens += prompt_tokens as u64;
+        self.total_completion_tokens += completion_tokens as u64;
+
+        let (input_rate, output_rate) = if is_cloud {
+            (cost_rates::CLOUD_INPUT_PER_M, cost_rates::CLOUD_OUTPUT_PER_M)
+        } else {
+            (cost_rates::LOCAL_INPUT_PER_M, cost_rates::LOCAL_OUTPUT_PER_M)
+        };
+
+        self.accumulated += (prompt_tokens as f64 / 1_000_000.0) * input_rate
+            + (completion_tokens as f64 / 1_000_000.0) * output_rate;
+    }
+
+    /// Check if the accumulated cost exceeds the budget.
+    ///
+    /// Returns `Some(reason)` if over budget, `None` if within budget or unlimited.
+    pub fn check_budget(&self) -> Option<String> {
+        if self.budget > 0.0 && self.accumulated >= self.budget {
+            Some(format!(
+                "cost budget exceeded: ${:.4} >= ${:.4} limit",
+                self.accumulated, self.budget
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Current accumulated cost in USD.
+    pub fn accumulated_cost(&self) -> f64 {
+        self.accumulated
+    }
+
+    /// Total prompt tokens recorded.
+    pub fn total_prompt_tokens(&self) -> u64 {
+        self.total_prompt_tokens
+    }
+
+    /// Total completion tokens recorded.
+    pub fn total_completion_tokens(&self) -> u64 {
+        self.total_completion_tokens
+    }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Context pruning for cost optimization
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Prune a task prompt to reduce token usage after multiple iterations.
+///
+/// After `prune_after` iterations, the prompt is trimmed to keep only:
+/// - The original task description (first paragraph)
+/// - The last `keep_recent` iteration results
+/// - The latest verifier output
+///
+/// Returns the original prompt unchanged if pruning is not applicable.
+pub fn prune_task_prompt(
+    prompt: &str,
+    current_iteration: u32,
+    prune_after: u32,
+    keep_recent: usize,
+) -> String {
+    if current_iteration <= prune_after {
+        return prompt.to_string();
+    }
+
+    let sections: Vec<&str> = prompt.split("\n---\n").collect();
+    if sections.len() <= keep_recent + 1 {
+        return prompt.to_string();
+    }
+
+    // Keep: first section (task description) + last `keep_recent` sections
+    let mut pruned = Vec::with_capacity(keep_recent + 2);
+    pruned.push(sections[0]);
+    pruned.push("[Earlier iterations pruned for context efficiency]");
+    for section in sections.iter().rev().take(keep_recent).rev() {
+        pruned.push(section);
+    }
+    pruned.join("\n---\n")
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Structured event emitter for real-time observability
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// A structured swarm event emitted in real-time during orchestration.
+///
+/// Each event is a self-contained JSON record written to `telemetry.jsonl` and
+/// optionally POSTed to a webhook URL. This supplements the batch
+/// `SessionMetrics` with live, per-action granularity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SwarmEvent {
+    /// Event type (dot-notation, e.g. `swarm.issue.started`).
+    pub event: String,
+    /// ISO 8601 timestamp.
+    pub timestamp: String,
+    /// Issue ID this event relates to.
+    pub issue_id: String,
+    /// Typed payload.
+    #[serde(flatten)]
+    pub payload: SwarmEventPayload,
+}
+
+/// Typed payloads for each event kind.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum SwarmEventPayload {
+    IssueStarted {
+        title: String,
+        priority: Option<u8>,
+        tier: String,
+    },
+    IterationCompleted {
+        iteration: u32,
+        tier: String,
+        error_count: usize,
+        no_change: bool,
+        elapsed_ms: u64,
+    },
+    WorkerFailed {
+        model: String,
+        error: String,
+        iteration: u32,
+    },
+    HealthCheck {
+        endpoint: String,
+        healthy: bool,
+        latency_ms: Option<u64>,
+    },
+    IssueResolved {
+        success: bool,
+        total_iterations: u32,
+        elapsed_ms: u64,
+    },
+}
+
+/// Emits structured events to a JSONL file and optional webhook.
+pub struct SwarmEventEmitter {
+    /// Path to the JSONL event log (typically `<repo_root>/.swarm-events.jsonl`).
+    event_log_path: std::path::PathBuf,
+    /// Optional webhook URL for critical events.
+    webhook_url: Option<String>,
+    /// HTTP client for webhook delivery (reused across calls).
+    http_client: Option<reqwest::Client>,
+}
+
+impl SwarmEventEmitter {
+    /// Create a new emitter writing to the given repo root.
+    ///
+    /// Reads `SWARM_WEBHOOK_URL` from the environment for webhook delivery.
+    pub fn new(repo_root: &Path) -> Self {
+        let webhook_url = std::env::var("SWARM_WEBHOOK_URL").ok().filter(|u| !u.is_empty());
+        let http_client = webhook_url.as_ref().map(|_| reqwest::Client::new());
+        Self {
+            event_log_path: repo_root.join(".swarm-events.jsonl"),
+            webhook_url,
+            http_client,
+        }
+    }
+
+    /// Emit a structured event. Writes to the event log and optionally fires a webhook.
+    pub fn emit(&self, event: SwarmEvent) {
+        // Write to JSONL
+        if let Ok(json) = serde_json::to_string(&event) {
+            use std::io::Write;
+            if let Ok(mut file) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&self.event_log_path)
+            {
+                let _ = writeln!(file, "{json}");
+            }
+
+            // Also emit as a structured tracing event for log aggregation
+            tracing::info!(
+                target: "swarm.events",
+                event_type = %event.event,
+                issue_id = %event.issue_id,
+                "structured_event"
+            );
+        }
+
+        // Webhook delivery for critical events (non-blocking fire-and-forget)
+        if let (Some(url), Some(client)) = (&self.webhook_url, &self.http_client) {
+            if Self::is_critical(&event) {
+                let url = url.clone();
+                let client = client.clone();
+                let event_clone = event;
+                tokio::spawn(async move {
+                    let _ = client
+                        .post(&url)
+                        .json(&event_clone)
+                        .timeout(std::time::Duration::from_secs(5))
+                        .send()
+                        .await;
+                });
+            }
+        }
+    }
+
+    /// Helper to emit an issue-started event.
+    pub fn issue_started(&self, issue_id: &str, title: &str, priority: Option<u8>, tier: &str) {
+        self.emit(SwarmEvent {
+            event: "swarm.issue.started".into(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            issue_id: issue_id.into(),
+            payload: SwarmEventPayload::IssueStarted {
+                title: title.into(),
+                priority,
+                tier: tier.into(),
+            },
+        });
+    }
+
+    /// Helper to emit an iteration-completed event.
+    pub fn iteration_completed(
+        &self,
+        issue_id: &str,
+        iteration: u32,
+        tier: &str,
+        error_count: usize,
+        no_change: bool,
+        elapsed_ms: u64,
+    ) {
+        self.emit(SwarmEvent {
+            event: "swarm.iteration.completed".into(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            issue_id: issue_id.into(),
+            payload: SwarmEventPayload::IterationCompleted {
+                iteration,
+                tier: tier.into(),
+                error_count,
+                no_change,
+                elapsed_ms,
+            },
+        });
+    }
+
+    /// Helper to emit a worker-failed event.
+    pub fn worker_failed(&self, issue_id: &str, model: &str, error: &str, iteration: u32) {
+        self.emit(SwarmEvent {
+            event: "swarm.worker.failed".into(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            issue_id: issue_id.into(),
+            payload: SwarmEventPayload::WorkerFailed {
+                model: model.into(),
+                error: error.into(),
+                iteration,
+            },
+        });
+    }
+
+    /// Helper to emit a health-check event.
+    pub fn health_check(&self, issue_id: &str, endpoint: &str, healthy: bool, latency_ms: Option<u64>) {
+        self.emit(SwarmEvent {
+            event: "swarm.health.check".into(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            issue_id: issue_id.into(),
+            payload: SwarmEventPayload::HealthCheck {
+                endpoint: endpoint.into(),
+                healthy,
+                latency_ms,
+            },
+        });
+    }
+
+    /// Helper to emit an issue-resolved event.
+    pub fn issue_resolved(
+        &self,
+        issue_id: &str,
+        success: bool,
+        total_iterations: u32,
+        elapsed_ms: u64,
+    ) {
+        self.emit(SwarmEvent {
+            event: "swarm.issue.resolved".into(),
+            timestamp: chrono::Utc::now().to_rfc3339(),
+            issue_id: issue_id.into(),
+            payload: SwarmEventPayload::IssueResolved {
+                success,
+                total_iterations,
+                elapsed_ms,
+            },
+        });
+    }
+
+    /// Whether an event is critical enough to warrant webhook delivery.
+    fn is_critical(event: &SwarmEvent) -> bool {
+        matches!(
+            event.payload,
+            SwarmEventPayload::WorkerFailed { .. }
+                | SwarmEventPayload::IssueResolved { .. }
+                | SwarmEventPayload::HealthCheck { healthy: false, .. }
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1809,5 +2153,139 @@ mod tests {
             .filter_map(|e| e.ok())
             .collect();
         assert_eq!(remaining.len(), 3);
+    }
+
+    #[test]
+    fn test_swarm_event_serialization() {
+        let event = SwarmEvent {
+            event: "swarm.issue.started".into(),
+            timestamp: "2026-03-03T00:00:00Z".into(),
+            issue_id: "test-123".into(),
+            payload: SwarmEventPayload::IssueStarted {
+                title: "Fix borrow checker error".into(),
+                priority: Some(1),
+                tier: "Worker".into(),
+            },
+        };
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("swarm.issue.started"));
+        assert!(json.contains("issue_started"));
+        assert!(json.contains("test-123"));
+
+        // Round-trip
+        let deserialized: SwarmEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized.event, "swarm.issue.started");
+        assert_eq!(deserialized.issue_id, "test-123");
+    }
+
+    #[test]
+    fn test_event_emitter_writes_jsonl() {
+        let dir = tempfile::tempdir().unwrap();
+        let emitter = SwarmEventEmitter::new(dir.path());
+
+        emitter.issue_started("test-456", "Add feature X", Some(2), "Worker");
+        emitter.iteration_completed("test-456", 1, "Worker", 3, false, 5000);
+        emitter.issue_resolved("test-456", true, 2, 10000);
+
+        let content = std::fs::read_to_string(dir.path().join(".swarm-events.jsonl")).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3);
+
+        // Each line is valid JSON
+        for line in &lines {
+            let _: SwarmEvent = serde_json::from_str(line).unwrap();
+        }
+    }
+
+    #[test]
+    fn test_is_critical() {
+        let critical = SwarmEvent {
+            event: "swarm.worker.failed".into(),
+            timestamp: "2026-03-03T00:00:00Z".into(),
+            issue_id: "test".into(),
+            payload: SwarmEventPayload::WorkerFailed {
+                model: "Qwen3.5".into(),
+                error: "timeout".into(),
+                iteration: 1,
+            },
+        };
+        assert!(SwarmEventEmitter::is_critical(&critical));
+
+        let non_critical = SwarmEvent {
+            event: "swarm.iteration.completed".into(),
+            timestamp: "2026-03-03T00:00:00Z".into(),
+            issue_id: "test".into(),
+            payload: SwarmEventPayload::IterationCompleted {
+                iteration: 1,
+                tier: "Worker".into(),
+                error_count: 0,
+                no_change: false,
+                elapsed_ms: 5000,
+            },
+        };
+        assert!(!SwarmEventEmitter::is_critical(&non_critical));
+
+        let unhealthy = SwarmEvent {
+            event: "swarm.health.check".into(),
+            timestamp: "2026-03-03T00:00:00Z".into(),
+            issue_id: "test".into(),
+            payload: SwarmEventPayload::HealthCheck {
+                endpoint: "vasp-03:8081".into(),
+                healthy: false,
+                latency_ms: None,
+            },
+        };
+        assert!(SwarmEventEmitter::is_critical(&unhealthy));
+    }
+
+    #[test]
+    fn test_cost_tracker_basic() {
+        let mut tracker = CostTracker::new(0.0); // unlimited
+        tracker.record_usage(1000, 500, false); // local, $0
+        assert_eq!(tracker.accumulated_cost(), 0.0);
+        assert_eq!(tracker.total_prompt_tokens(), 1000);
+        assert_eq!(tracker.total_completion_tokens(), 500);
+        assert!(tracker.check_budget().is_none());
+    }
+
+    #[test]
+    fn test_cost_tracker_cloud_pricing() {
+        let mut tracker = CostTracker::new(1.0); // $1 budget
+        // 100K prompt tokens = $1.50, should exceed $1 budget
+        tracker.record_usage(100_000, 0, true);
+        let cost = tracker.accumulated_cost();
+        assert!(cost > 0.0);
+        // $15/M * 100K = $1.50
+        assert!((cost - 1.5).abs() < 0.01);
+        assert!(tracker.check_budget().is_some());
+    }
+
+    #[test]
+    fn test_cost_tracker_budget_enforcement() {
+        let mut tracker = CostTracker::new(0.5); // $0.50 budget
+        // Small usage, under budget
+        tracker.record_usage(10_000, 1_000, true);
+        assert!(tracker.check_budget().is_none());
+        // Large usage, over budget
+        tracker.record_usage(100_000, 10_000, true);
+        assert!(tracker.check_budget().is_some());
+    }
+
+    #[test]
+    fn test_prune_task_prompt_no_prune() {
+        let prompt = "Task description\n---\nIteration 1\n---\nIteration 2";
+        // Iteration 2, prune_after 3 → no pruning
+        assert_eq!(prune_task_prompt(prompt, 2, 3, 2), prompt);
+    }
+
+    #[test]
+    fn test_prune_task_prompt_prunes() {
+        let prompt = "Task description\n---\nIteration 1\n---\nIteration 2\n---\nIteration 3\n---\nIteration 4";
+        let pruned = prune_task_prompt(prompt, 5, 3, 2);
+        assert!(pruned.contains("Task description"));
+        assert!(pruned.contains("Iteration 4"));
+        assert!(pruned.contains("Iteration 3"));
+        assert!(!pruned.contains("Iteration 1"));
+        assert!(pruned.contains("[Earlier iterations pruned"));
     }
 }

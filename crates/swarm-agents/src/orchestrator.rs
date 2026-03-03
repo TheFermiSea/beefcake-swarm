@@ -1283,6 +1283,39 @@ pub async fn process_issue(
         return result;
     }
 
+    // --- Mode runner gate ---
+    if bool_from_env("SWARM_MODE_DRIVER", false) {
+        use crate::modes::{ModeOrchestrator, ModeRequest, ModeRunnerConfig, SwarmMode};
+
+        let mode = SwarmMode::from_issue(
+            issue.issue_type.as_deref(),
+            issue.priority,
+            &issue.labels,
+        );
+        info!(id = %issue.id, ?mode, "Using mode runner (SWARM_MODE_DRIVER=1)");
+
+        let mode_config = ModeRunnerConfig::from_env();
+        let wt_path = worktree_bridge.create(&issue.id)?;
+        let mut runner = mode.into_runner(mode_config.clone(), wt_path.clone());
+        let orch = ModeOrchestrator::new(mode_config);
+        let request = ModeRequest::new(&issue.title).with_label(&issue.id);
+        let outcome = orch.run(runner.as_mut(), request).await;
+
+        let success = outcome.is_success();
+        if success {
+            info!(id = %issue.id, ?mode, "Mode runner succeeded — merging");
+            if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
+                warn!(id = %issue.id, error = %e, "Merge failed after mode runner success");
+            }
+            let _ = beads.close(&issue.id, Some("mode runner completed successfully"));
+        } else {
+            warn!(id = %issue.id, ?mode, "Mode runner failed");
+            let _ = beads.update_status(&issue.id, "open");
+            let _ = worktree_bridge.cleanup(&issue.id);
+        }
+        return Ok(success);
+    }
+
     let worker_policy = TurnPolicy::for_tier(SwarmTier::Worker);
     let council_policy = TurnPolicy::for_tier(SwarmTier::Council);
     let worker_timeout = timeout_from_env("SWARM_WORKER_TIMEOUT_SECS", worker_policy.timeout_secs);
