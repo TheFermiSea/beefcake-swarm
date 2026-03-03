@@ -523,8 +523,12 @@ pub async fn check_endpoint_with_model(
 mod tests {
     use super::*;
 
+    // Serialize tests that mutate process-wide environment variables.
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn test_default_config() {
+        let _guard = ENV_LOCK.lock().unwrap();
         // Unset the environment variable so we test the default value
         std::env::remove_var("SWARM_MAX_RETRIES");
         let config = SwarmConfig::default();

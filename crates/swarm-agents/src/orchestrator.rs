@@ -1287,11 +1287,8 @@ pub async fn process_issue(
     if bool_from_env("SWARM_MODE_DRIVER", false) {
         use crate::modes::{ModeOrchestrator, ModeRequest, ModeRunnerConfig, SwarmMode};
 
-        let mode = SwarmMode::from_issue(
-            issue.issue_type.as_deref(),
-            issue.priority,
-            &issue.labels,
-        );
+        let mode =
+            SwarmMode::from_issue(issue.issue_type.as_deref(), issue.priority, &issue.labels);
         info!(id = %issue.id, ?mode, "Using mode runner (SWARM_MODE_DRIVER=1)");
 
         let mode_config = ModeRunnerConfig::from_env();
@@ -1304,10 +1301,17 @@ pub async fn process_issue(
         let success = outcome.is_success();
         if success {
             info!(id = %issue.id, ?mode, "Mode runner succeeded — merging");
-            if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
-                warn!(id = %issue.id, error = %e, "Merge failed after mode runner success");
+            match worktree_bridge.merge_and_remove(&issue.id) {
+                Ok(()) => {
+                    let _ = beads.close(&issue.id, Some("mode runner completed successfully"));
+                }
+                Err(e) => {
+                    warn!(id = %issue.id, error = %e, "Merge failed after mode runner success");
+                    let _ = beads.update_status(&issue.id, "open");
+                    let _ = worktree_bridge.cleanup(&issue.id);
+                    return Ok(false);
+                }
             }
-            let _ = beads.close(&issue.id, Some("mode runner completed successfully"));
         } else {
             warn!(id = %issue.id, ?mode, "Mode runner failed");
             let _ = beads.update_status(&issue.id, "open");
@@ -1423,8 +1427,15 @@ pub async fn process_issue(
         );
     }
 
-    // Spawn background health monitor for ongoing checks during the session
-    let _health_monitor = cluster_health.spawn_monitor();
+    // Spawn background health monitor for ongoing checks during the session.
+    // Wrap in a guard so the monitor task is aborted when this function exits.
+    struct AbortOnDrop(tokio::task::JoinHandle<()>);
+    impl Drop for AbortOnDrop {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let _health_monitor = AbortOnDrop(cluster_health.spawn_monitor());
 
     // --- Build agents scoped to this worktree ---
     let rust_coder = factory.build_rust_coder(&wt_path);

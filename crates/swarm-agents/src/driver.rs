@@ -435,7 +435,7 @@ pub async fn handle_planning(ctx: &mut OrchestratorContext<'_>) -> Result<StateT
                         let _ = git_commit_changes(&ctx.wt_path, iteration).await;
                         ctx.metrics.record_auto_fix();
                         ctx.metrics.finish_iteration();
-                        ctx.success = true;
+                        // success is set after merge confirms in drive()
                         return Ok(StateTransition::Complete);
                     }
                     ctx.last_report = Some(fixed_report);
@@ -1279,7 +1279,7 @@ pub async fn handle_validating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
     }
 
     ctx.metrics.finish_iteration();
-    ctx.success = true;
+    // success is set after merge confirms in drive()
     Ok(StateTransition::Complete)
 }
 
@@ -1289,7 +1289,7 @@ pub async fn handle_escalating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
     let report = ctx
         .last_report
         .take()
-        .expect("report must exist in Escalating");
+        .ok_or_else(|| anyhow::anyhow!("No verifier report available in Escalating state"))?;
 
     // Pre-escalation KB check
     if let Some(kb) = ctx.knowledge_base {
@@ -1382,25 +1382,6 @@ pub async fn handle_merging(ctx: &mut OrchestratorContext<'_>) -> Result<StateTr
         }
     }
 
-    ctx.session.complete();
-    let _ = ctx.progress.log_session_end(
-        ctx.session.session_id(),
-        ctx.session.iteration(),
-        format!("Issue {} resolved (state driver)", ctx.issue.id),
-    );
-
-    // Retrospective
-    if let Some(kb) = ctx.knowledge_base {
-        let entries = ctx.progress.read_all().unwrap_or_default();
-        let retro = ctx.session.retrospective(&entries);
-        let svc = knowledge_sync::KnowledgeSyncService::new(kb);
-        let captures = svc.capture_from_retrospective(&retro, &ctx.issue.id, &ctx.issue.title);
-        debug!(
-            count = captures.len(),
-            "Retrospective captures (state driver)"
-        );
-    }
-
     info!(
         id = %ctx.issue.id,
         session_id = ctx.session.short_id(),
@@ -1417,6 +1398,27 @@ pub async fn handle_merging(ctx: &mut OrchestratorContext<'_>) -> Result<StateTr
         let _ = ctx.beads.update_status(&ctx.issue.id, "open");
         return Err(e);
     }
+
+    // Mark session complete only after merge succeeds
+    ctx.session.complete();
+    let _ = ctx.progress.log_session_end(
+        ctx.session.session_id(),
+        ctx.session.iteration(),
+        format!("Issue {} resolved (state driver)", ctx.issue.id),
+    );
+
+    // Retrospective (post-merge)
+    if let Some(kb) = ctx.knowledge_base {
+        let entries = ctx.progress.read_all().unwrap_or_default();
+        let retro = ctx.session.retrospective(&entries);
+        let svc = knowledge_sync::KnowledgeSyncService::new(kb);
+        let captures = svc.capture_from_retrospective(&retro, &ctx.issue.id, &ctx.issue.title);
+        debug!(
+            count = captures.len(),
+            "Retrospective captures (state driver)"
+        );
+    }
+
     ctx.beads.close(
         &ctx.issue.id,
         Some("Resolved by swarm orchestrator (state driver)"),
@@ -1488,6 +1490,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                 match merge_result {
                     StateTransition::Advance { to, reason } => {
                         ctx.state_machine.advance(to, Some(&reason))?;
+                        ctx.success = true;
                     }
                     StateTransition::Fail { reason } => {
                         ctx.state_machine.fail(&reason)?;
@@ -1495,9 +1498,9 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                     StateTransition::Complete => {
                         ctx.state_machine
                             .advance(OrchestratorState::Resolved, Some("merged and resolved"))?;
+                        ctx.success = true;
                     }
                 }
-                ctx.success = true;
                 break;
             }
             StateTransition::Fail { reason } => {

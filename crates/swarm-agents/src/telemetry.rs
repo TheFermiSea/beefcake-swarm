@@ -1043,9 +1043,15 @@ impl CostTracker {
         self.total_completion_tokens += completion_tokens as u64;
 
         let (input_rate, output_rate) = if is_cloud {
-            (cost_rates::CLOUD_INPUT_PER_M, cost_rates::CLOUD_OUTPUT_PER_M)
+            (
+                cost_rates::CLOUD_INPUT_PER_M,
+                cost_rates::CLOUD_OUTPUT_PER_M,
+            )
         } else {
-            (cost_rates::LOCAL_INPUT_PER_M, cost_rates::LOCAL_OUTPUT_PER_M)
+            (
+                cost_rates::LOCAL_INPUT_PER_M,
+                cost_rates::LOCAL_OUTPUT_PER_M,
+            )
         };
 
         self.accumulated += (prompt_tokens as f64 / 1_000_000.0) * input_rate
@@ -1189,7 +1195,9 @@ impl SwarmEventEmitter {
     ///
     /// Reads `SWARM_WEBHOOK_URL` from the environment for webhook delivery.
     pub fn new(repo_root: &Path) -> Self {
-        let webhook_url = std::env::var("SWARM_WEBHOOK_URL").ok().filter(|u| !u.is_empty());
+        let webhook_url = std::env::var("SWARM_WEBHOOK_URL")
+            .ok()
+            .filter(|u| !u.is_empty());
         let http_client = webhook_url.as_ref().map(|_| reqwest::Client::new());
         Self {
             event_log_path: repo_root.join(".swarm-events.jsonl"),
@@ -1203,12 +1211,27 @@ impl SwarmEventEmitter {
         // Write to JSONL
         if let Ok(json) = serde_json::to_string(&event) {
             use std::io::Write;
-            if let Ok(mut file) = std::fs::OpenOptions::new()
+            match std::fs::OpenOptions::new()
                 .create(true)
                 .append(true)
                 .open(&self.event_log_path)
             {
-                let _ = writeln!(file, "{json}");
+                Ok(mut file) => {
+                    if let Err(e) = writeln!(file, "{json}") {
+                        tracing::warn!(
+                            error = %e,
+                            path = %self.event_log_path.display(),
+                            "Failed to write JSONL event"
+                        );
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        path = %self.event_log_path.display(),
+                        "Failed to open JSONL event log"
+                    );
+                }
             }
 
             // Also emit as a structured tracing event for log aggregation
@@ -1223,17 +1246,21 @@ impl SwarmEventEmitter {
         // Webhook delivery for critical events (non-blocking fire-and-forget)
         if let (Some(url), Some(client)) = (&self.webhook_url, &self.http_client) {
             if Self::is_critical(&event) {
-                let url = url.clone();
-                let client = client.clone();
-                let event_clone = event;
-                tokio::spawn(async move {
-                    let _ = client
-                        .post(&url)
-                        .json(&event_clone)
-                        .timeout(std::time::Duration::from_secs(5))
-                        .send()
-                        .await;
-                });
+                if tokio::runtime::Handle::try_current().is_ok() {
+                    let url = url.clone();
+                    let client = client.clone();
+                    let event_clone = event;
+                    tokio::spawn(async move {
+                        let _ = client
+                            .post(&url)
+                            .json(&event_clone)
+                            .timeout(std::time::Duration::from_secs(5))
+                            .send()
+                            .await;
+                    });
+                } else {
+                    tracing::debug!("No Tokio runtime — skipping webhook delivery");
+                }
             }
         }
     }
@@ -1291,7 +1318,13 @@ impl SwarmEventEmitter {
     }
 
     /// Helper to emit a health-check event.
-    pub fn health_check(&self, issue_id: &str, endpoint: &str, healthy: bool, latency_ms: Option<u64>) {
+    pub fn health_check(
+        &self,
+        issue_id: &str,
+        endpoint: &str,
+        healthy: bool,
+        latency_ms: Option<u64>,
+    ) {
         self.emit(SwarmEvent {
             event: "swarm.health.check".into(),
             timestamp: chrono::Utc::now().to_rfc3339(),
@@ -2251,7 +2284,7 @@ mod tests {
     #[test]
     fn test_cost_tracker_cloud_pricing() {
         let mut tracker = CostTracker::new(1.0); // $1 budget
-        // 100K prompt tokens = $1.50, should exceed $1 budget
+                                                 // 100K prompt tokens = $1.50, should exceed $1 budget
         tracker.record_usage(100_000, 0, true);
         let cost = tracker.accumulated_cost();
         assert!(cost > 0.0);
@@ -2263,7 +2296,7 @@ mod tests {
     #[test]
     fn test_cost_tracker_budget_enforcement() {
         let mut tracker = CostTracker::new(0.5); // $0.50 budget
-        // Small usage, under budget
+                                                 // Small usage, under budget
         tracker.record_usage(10_000, 1_000, true);
         assert!(tracker.check_budget().is_none());
         // Large usage, over budget

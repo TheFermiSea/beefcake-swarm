@@ -53,20 +53,16 @@ impl SwarmMode {
     /// - bug with priority 0-1 → Agentic (fast, focused edits)
     /// - feature/task with label "modify_large" or "architecture" → Deepthink (parallel strategies)
     /// - everything else → Contextual (iterative refinement)
-    pub fn from_issue(
-        issue_type: Option<&str>,
-        priority: Option<u8>,
-        labels: &[String],
-    ) -> Self {
+    pub fn from_issue(issue_type: Option<&str>, priority: Option<u8>, labels: &[String]) -> Self {
         // High-priority bugs need fast, targeted fixes
         if issue_type == Some("bug") && priority.is_some_and(|p| p <= 1) {
             return SwarmMode::Agentic;
         }
 
         // Architecture/refactor tasks benefit from parallel strategy exploration
-        let is_architecture = labels.iter().any(|l| {
-            l == "architecture" || l == "refactor" || l == "modify_large"
-        });
+        let is_architecture = labels
+            .iter()
+            .any(|l| l == "architecture" || l == "refactor" || l == "modify_large");
         if is_architecture {
             return SwarmMode::Deepthink;
         }
@@ -99,7 +95,11 @@ impl SwarmMode {
     }
 
     /// Create the appropriate `ModeRunner` for this mode.
-    pub fn into_runner(self, config: ModeRunnerConfig, working_dir: std::path::PathBuf) -> Box<dyn ModeRunner> {
+    pub fn into_runner(
+        self,
+        config: ModeRunnerConfig,
+        working_dir: std::path::PathBuf,
+    ) -> Box<dyn ModeRunner> {
         match self {
             SwarmMode::Contextual => Box::new(contextual::ContextualRunner::new(config)),
             SwarmMode::Deepthink => Box::new(deepthink::DeepthinkRunner::new(config)),
