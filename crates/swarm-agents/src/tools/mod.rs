@@ -8,6 +8,7 @@ pub mod cargo_metadata_tool;
 pub mod exec_tool;
 pub mod file_exists_tool;
 pub mod fs_tools;
+pub mod git_tools;
 pub mod migration_matrix;
 pub mod notebook_tool;
 pub mod patch_tool;

@@ -292,4 +292,73 @@ impl AgentFactory {
             )
         }
     }
+
+    /// Build a cloud manager using a specific fallback model name.
+    ///
+    /// Used by the orchestrator when the primary cloud model fails (429/5xx/quota)
+    /// and we need to try the next model in the CloudFallbackMatrix.
+    /// Returns `None` if no cloud client is available.
+    pub fn build_manager_for_model(&self, wt_path: &Path, model: &str) -> Option<OaiAgent> {
+        let cloud_client = self.clients.cloud.as_ref()?;
+        info!(
+            model = %model,
+            "Building cloud manager with fallback model"
+        );
+        let planner = specialists::build_planner_named(
+            &self.clients.reasoning,
+            &self.config.reasoning_endpoint.model,
+            wt_path,
+            "proxy_planner",
+            true,
+        );
+        let fixer = specialists::build_fixer_named(
+            &self.clients.local,
+            &self.config.fast_endpoint.model,
+            wt_path,
+            "proxy_fixer",
+            true,
+        );
+        let rust_coder = coder::build_rust_coder_named(
+            &self.clients.local,
+            &self.config.fast_endpoint.model,
+            wt_path,
+            "proxy_rust_coder",
+            true,
+        );
+        let general_coder = coder::build_general_coder_named(
+            &self.clients.coder,
+            &self.config.coder_endpoint.model,
+            wt_path,
+            "proxy_general_coder",
+            true,
+        );
+        let reviewer = reviewer::build_reviewer_named(
+            &self.clients.local,
+            &self.config.fast_endpoint.model,
+            "proxy_reviewer",
+        );
+        let reasoning_worker = coder::build_reasoning_worker_named(
+            &self.clients.reasoning,
+            &self.config.reasoning_endpoint.model,
+            wt_path,
+            "proxy_reasoning_worker",
+            true,
+        );
+        let workers = manager::ManagerWorkers {
+            rust_coder,
+            general_coder,
+            reviewer,
+            planner,
+            fixer,
+            reasoning_worker: Some(reasoning_worker),
+            notebook_bridge: self.notebook_bridge.clone(),
+        };
+        Some(manager::build_cloud_manager(
+            cloud_client,
+            model,
+            workers,
+            wt_path,
+            &self.config.verifier_packages,
+        ))
+    }
 }

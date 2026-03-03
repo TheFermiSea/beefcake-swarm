@@ -157,11 +157,11 @@ mod tests {
 
     #[test]
     fn test_factory_manager_tools() -> TestResult {
-        // Manager (deterministic): run_verifier, read_file, list_files.
+        // Manager (deterministic): run_verifier, read_file, list_files, get_diff, list_changed_files.
         let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec!["test-pkg".to_string()], None);
         let tools = factory.manager_tools();
-        assert_eq!(tools.len(), 3, "Manager should have 3 tools");
+        assert_eq!(tools.len(), 5, "Manager should have 5 tools");
         Ok(())
     }
 

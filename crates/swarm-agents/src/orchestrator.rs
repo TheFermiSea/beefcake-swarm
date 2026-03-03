@@ -11,6 +11,7 @@ use rig::completion::Prompt;
 use rig::providers::openai;
 use tracing::{debug, error, info, warn};
 
+use crate::cluster_health::ClusterHealth;
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 
 /// Default timeout for each cloud validation call.
@@ -1337,6 +1338,34 @@ pub async fn process_issue(
     // --- Acceptance policy ---
     let acceptance_policy = AcceptancePolicy::default();
 
+    // --- Preflight: endpoint health check (P1.1 + P1.4) ---
+    // Probe all local inference endpoints before investing in agent builds.
+    // Fail fast if all workers are down — avoids burning cloud credits on
+    // delegation to dead endpoints.
+    let cluster_health = ClusterHealth::from_config(config);
+    let healthy_count = cluster_health.check_all_now().await;
+    info!(
+        healthy = healthy_count,
+        total = 3,
+        summary = %cluster_health.summary().await,
+        "Preflight endpoint health check"
+    );
+    if healthy_count == 0 {
+        warn!(
+            id = %issue.id,
+            "All inference endpoints are DOWN — cannot proceed"
+        );
+        // Reset issue status so it can be picked up later
+        let _ = beads.update_status(&issue.id, "open");
+        anyhow::bail!(
+            "Preflight failed: all 3 inference endpoints are down ({})",
+            cluster_health.summary().await
+        );
+    }
+
+    // Spawn background health monitor for ongoing checks during the session
+    let _health_monitor = cluster_health.spawn_monitor();
+
     // --- Build agents scoped to this worktree ---
     let rust_coder = factory.build_rust_coder(&wt_path);
     let general_coder = factory.build_general_coder(&wt_path);
@@ -1457,6 +1486,38 @@ pub async fn process_issue(
             &issue.id,
             format!("Iteration {iteration}, tier: {tier:?}"),
         );
+
+        // --- Pre-iteration auto-fix (P1.2) ---
+        // Run auto-fix BEFORE packing context so the agent starts each iteration
+        // with clean formatting and auto-fixable clippy issues already resolved.
+        // This prevents wasting a turn on lint errors from the previous iteration.
+        if iteration > 1 {
+            if let Some(ref report) = last_report {
+                if !report.all_green {
+                    if let Some(fixed_report) =
+                        try_auto_fix(&wt_path, &verifier_config, iteration).await
+                    {
+                        if fixed_report.all_green {
+                            info!(
+                                iteration,
+                                "Pre-iteration auto-fix resolved all issues — skipping agent"
+                            );
+                            // Commit auto-fix changes before declaring success
+                            let _ = git_commit_changes(&wt_path, iteration).await;
+                            metrics.record_auto_fix();
+                            metrics.finish_iteration();
+                            success = true;
+                            break;
+                        }
+                        // Update the report so context packing uses the post-autofix state
+                        last_report = Some(fixed_report);
+                        metrics.record_auto_fix();
+                        // Commit auto-fix changes so agent sees clean state
+                        let _ = git_commit_changes(&wt_path, iteration).await;
+                    }
+                }
+            }
+        }
 
         // Pack context with tier-appropriate token budget
         let packer = ContextPacker::new(&wt_path, tier);
@@ -1709,6 +1770,85 @@ pub async fn process_issue(
                         // Any file changes the manager made are already on disk.
                         Ok("Manager timed out. Changes are on disk for verifier.".to_string())
                     }
+                };
+
+                // --- Cloud fallback matrix (P1.3) ---
+                // If the primary cloud model failed with a quota/rate error, try
+                // fallback models before giving up. Rebuilds the manager agent with
+                // each fallback model in order.
+                let result = if let Err(ref primary_err) = result {
+                    let err_str = format!("{primary_err}");
+                    let err_lower = err_str.to_ascii_lowercase();
+                    let is_quota_or_model_error = err_str.contains("429")
+                        || err_str.contains("quota")
+                        || err_str.contains("overloaded")
+                        || err_lower.contains("capacity")
+                        || err_str.contains("500")
+                        || err_str.contains("503");
+
+                    if is_quota_or_model_error {
+                        let fallbacks = config.cloud_fallback_matrix.fallbacks();
+                        let mut fallback_result = None;
+                        for entry in fallbacks {
+                            warn!(
+                                iteration,
+                                model = %entry.model,
+                                tier = %entry.tier_label,
+                                primary_error = %err_str,
+                                "Primary cloud model failed — trying fallback"
+                            );
+                            if let Some(fallback_manager) =
+                                factory.build_manager_for_model(&wt_path, &entry.model)
+                            {
+                                let fb_adapter = RuntimeAdapter::new(AdapterConfig {
+                                    agent_name: format!("manager-{}", entry.tier_label),
+                                    deadline: Some(Instant::now() + manager_timeout),
+                                    ..Default::default()
+                                });
+                                match tokio::time::timeout(
+                                    manager_timeout,
+                                    prompt_with_hook_and_retry(
+                                        &fallback_manager,
+                                        &task_prompt,
+                                        1, // single retry for fallbacks
+                                        fb_adapter,
+                                    ),
+                                )
+                                .await
+                                {
+                                    Ok(Ok(response)) => {
+                                        info!(
+                                            iteration,
+                                            model = %entry.model,
+                                            "Cloud fallback succeeded"
+                                        );
+                                        fallback_result = Some(Ok(response));
+                                        break;
+                                    }
+                                    Ok(Err(e)) => {
+                                        warn!(
+                                            iteration,
+                                            model = %entry.model,
+                                            error = %e,
+                                            "Cloud fallback also failed — trying next"
+                                        );
+                                    }
+                                    Err(_) => {
+                                        warn!(
+                                            iteration,
+                                            model = %entry.model,
+                                            "Cloud fallback timed out — trying next"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        fallback_result.unwrap_or(result)
+                    } else {
+                        result
+                    }
+                } else {
+                    result
                 };
                 (result, adapter)
             }

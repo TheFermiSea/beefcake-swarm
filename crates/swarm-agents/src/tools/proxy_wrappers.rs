@@ -41,6 +41,7 @@ macro_rules! proxy_tool {
 
 use super::exec_tool::RunCommandTool;
 use super::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
+use super::git_tools::{GetDiffTool, ListChangedFilesTool};
 use super::notebook_tool::QueryNotebookTool;
 use super::patch_tool::EditFileTool;
 use super::verifier_tool::RunVerifierTool;
@@ -53,3 +54,5 @@ proxy_tool!(ProxyListFiles wraps ListFilesTool as "proxy_list_files");
 proxy_tool!(ProxyRunVerifier wraps RunVerifierTool as "proxy_run_verifier");
 proxy_tool!(ProxyQueryNotebook wraps QueryNotebookTool as "proxy_query_notebook");
 proxy_tool!(ProxyRunCommand wraps RunCommandTool as "proxy_run_command");
+proxy_tool!(ProxyGetDiff wraps GetDiffTool as "proxy_get_diff");
+proxy_tool!(ProxyListChangedFiles wraps ListChangedFilesTool as "proxy_list_changed_files");

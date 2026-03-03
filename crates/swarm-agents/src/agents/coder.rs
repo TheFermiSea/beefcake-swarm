@@ -6,6 +6,7 @@ use rig::agent::Agent;
 use rig::client::CompletionClient;
 use rig::completion::message::ToolChoice;
 use rig::providers::openai;
+use serde_json::Value;
 
 use crate::prompts;
 use crate::tools::bundles::{self, WorkerRole};
@@ -71,6 +72,39 @@ fn worker_tool_choice() -> ToolChoice {
     }
 }
 
+/// Additional sampling parameters for local Qwen3.5 workers.
+///
+/// `repetition_penalty: 1.1` — reduces repetitive tool-call loops where the
+/// model calls the same tool with identical arguments across turns.
+/// `presence_penalty: 0.1` — mild flat penalty for tokens already generated,
+/// encouraging more varied output without strongly suppressing needed repetition.
+///
+/// Both are supported by llama-server's `/v1/chat/completions` endpoint and
+/// OpenAI-compatible APIs. Passed via `additional_params` which Rig flattens
+/// into the request body.
+pub fn worker_sampling_params() -> Value {
+    serde_json::json!({
+        "repetition_penalty": 1.1,
+        "presence_penalty": 0.1
+    })
+}
+
+/// Merge two JSON objects. Keys in `extra` overwrite keys in `base`.
+///
+/// Used to combine sampling params with grammar params when both are needed
+/// (e.g., planner uses GBNF grammar + anti-repetition penalties).
+pub fn merge_params(base: Value, extra: Value) -> Value {
+    match (base, extra) {
+        (Value::Object(mut a), Value::Object(b)) => {
+            for (k, v) in b {
+                a.insert(k, v);
+            }
+            Value::Object(a)
+        }
+        (_, extra) => extra,
+    }
+}
+
 /// Build the Rust specialist coder (Qwen3.5-Implementer).
 ///
 /// Tools: read_file, write_file, edit_file, run_command (no list_files).
@@ -102,6 +136,7 @@ pub fn build_rust_coder_named(
         .preamble(prompts::RUST_CODER_PREAMBLE)
         .temperature(worker_temperature())
         .tool_choice(worker_tool_choice())
+        .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::RustSpecialist,
@@ -138,6 +173,7 @@ pub fn build_reasoning_worker_named(
         .preamble(prompts::REASONING_WORKER_PREAMBLE)
         .temperature(worker_temperature())
         .tool_choice(worker_tool_choice())
+        .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::General,
@@ -177,6 +213,7 @@ pub fn build_general_coder_named(
         .preamble(prompts::GENERAL_CODER_PREAMBLE)
         .temperature(worker_temperature())
         .tool_choice(worker_tool_choice())
+        .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::General,

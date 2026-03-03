@@ -17,7 +17,7 @@ use serde::Deserialize;
 use crate::prompts;
 use crate::tools::bundles::{self, WorkerRole};
 
-use super::coder::OaiAgent;
+use super::coder::{worker_sampling_params, OaiAgent};
 
 const DEFAULT_BREAKER_MAX_TURNS: usize = 6;
 
@@ -54,6 +54,7 @@ pub fn build_breaker_named(
         )
         .preamble(prompts::BREAKER_PREAMBLE)
         .temperature(0.4)
+        .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(
             wt_path,
             WorkerRole::General,

@@ -40,12 +40,17 @@
 //! store.put_task(&task)?;
 //! ```
 
+#[cfg(feature = "heavy-state")]
 pub mod schema;
+#[cfg(feature = "heavy-state")]
 pub mod store;
 pub mod types;
 
-// Re-export core types
+// Re-export RocksDB-backed store types (only with heavy-state)
+#[cfg(feature = "heavy-state")]
 pub use store::{SharedStateStore, StateStore, StoreError, StoreResult};
+
+// Re-export core types (always available)
 pub use types::{
     EnsembleSession, EnsembleTask, ModelId, ModelResult, SessionId, SharedContext, TaskId,
     TaskStatus, VoteRecord, VotingStrategy,

@@ -51,8 +51,10 @@ pub mod benchmark;
 pub mod context_packer;
 pub mod council;
 pub mod debate;
+#[cfg(feature = "heavy-state")]
 pub mod ensemble;
 pub mod escalation;
+#[cfg(feature = "heavy-state")]
 pub mod events;
 pub mod feedback;
 pub mod harness;
@@ -85,16 +87,21 @@ pub use harness::{
 };
 
 // Re-export key ensemble types
+#[cfg(feature = "heavy-state")]
 pub use ensemble::{
     ArbitrationDecision, ArbitrationRequest, EnsembleConfig, EnsembleCoordinator, EnsembleStatus,
     SharedEnsembleCoordinator, VoteOutcome,
 };
 
-// Re-export key state types
+// Re-export key state types (always available: pure data types)
 pub use state::{
-    EnsembleSession, EnsembleTask, ModelId, ModelResult, SharedContext, SharedStateStore,
-    StateStore, TaskStatus, VoteRecord, VotingStrategy,
+    EnsembleSession, EnsembleTask, ModelId, ModelResult, SharedContext, TaskStatus, VoteRecord,
+    VotingStrategy,
 };
+
+// Re-export RocksDB-backed state store types (only with heavy-state)
+#[cfg(feature = "heavy-state")]
+pub use state::{SharedStateStore, StateStore};
 
 // Re-export analytics types
 pub use analytics::error::{AnalyticsError, AnalyticsResult};
@@ -105,6 +112,7 @@ pub use analytics::verification::{
 };
 
 // Re-export key event types
+#[cfg(feature = "heavy-state")]
 pub use events::{
     ArbitrationReason, ContextUpdater, EnsembleEvent, EventBus, EventHistory, SessionEndReason,
     SharedEventBus,

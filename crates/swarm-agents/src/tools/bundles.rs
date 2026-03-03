@@ -17,11 +17,12 @@ use rig::tool::ToolDyn;
 
 use super::exec_tool::RunCommandTool;
 use super::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
+use super::git_tools::{GetDiffTool, ListChangedFilesTool};
 use super::notebook_tool::QueryNotebookTool;
 use super::patch_tool::EditFileTool;
 use super::proxy_wrappers::{
-    ProxyEditFile, ProxyListFiles, ProxyQueryNotebook, ProxyReadFile, ProxyRunCommand,
-    ProxyRunVerifier, ProxyWriteFile,
+    ProxyEditFile, ProxyGetDiff, ProxyListChangedFiles, ProxyListFiles, ProxyQueryNotebook,
+    ProxyReadFile, ProxyRunCommand, ProxyRunVerifier, ProxyWriteFile,
 };
 use super::verifier_tool::RunVerifierTool;
 use crate::notebook_bridge::KnowledgeBase;
@@ -107,12 +108,16 @@ pub fn manager_tools(
             )),
             Box::new(ProxyReadFile(ReadFileTool::new(wt_path))),
             Box::new(ProxyListFiles(ListFilesTool::new(wt_path))),
+            Box::new(ProxyGetDiff(GetDiffTool::new(wt_path))),
+            Box::new(ProxyListChangedFiles(ListChangedFilesTool::new(wt_path))),
         ]
     } else {
         vec![
             Box::new(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec())),
             Box::new(ReadFileTool::new(wt_path)),
             Box::new(ListFilesTool::new(wt_path)),
+            Box::new(GetDiffTool::new(wt_path)),
+            Box::new(ListChangedFilesTool::new(wt_path)),
         ]
     }
 }
@@ -186,13 +191,13 @@ mod tests {
     }
 
     #[test]
-    fn test_manager_tools_has_3_tools() {
+    fn test_manager_tools_has_5_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], false);
         assert_eq!(
             tools.len(),
-            3,
-            "Manager should have 3 tools (verifier, read, list)"
+            5,
+            "Manager should have 5 tools (verifier, read, list, get_diff, list_changed_files)"
         );
     }
 
