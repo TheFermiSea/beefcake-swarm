@@ -114,10 +114,10 @@ tail -f ~/code/beefcake-swarm/logs/dogfood/run-N-<issue>-*.log
 # Tool call distribution (requires RUST_LOG=debug)
 grep -o 'gen_ai.tool.name[^"]*"[^"]*"' logs/dogfood/run-*.log | sort | uniq -c | sort -rn
 
-# Check endpoint health
-curl -s http://vasp-03:8080/v1/models | python3 -m json.tool  # fast
-curl -s http://vasp-01:8081/v1/models | python3 -m json.tool  # coder
-curl -s http://vasp-02:8081/v1/models | python3 -m json.tool  # reasoning
+# Check endpoint health (all Qwen3.5-397B)
+curl -s http://vasp-03:8081/health  # fast
+curl -s http://vasp-01:8081/health  # coder
+curl -s http://vasp-02:8081/health  # reasoning
 ```
 
 ### Swarm Behavior Insights
@@ -131,17 +131,17 @@ curl -s http://vasp-02:8081/v1/models | python3 -m json.tool  # reasoning
 
 ```text
 ┌─────────────────────────────────────────────────┐
-│  Cloud Manager (Claude Sonnet 4.6)              │
+│  Cloud Manager (Claude Opus 4.6 thinking)       │
 │  via CLIAPIProxy on ai-proxy:8317               │
 │  ─────────────────────────────────              │
 │  Plans work, delegates to local workers,        │
 │  reads/analyzes code, runs verifier             │
 ├─────────────────────────────────────────────────┤
-│  Local Workers (proxy_ prefixed tools)          │
+│  Local Workers (all Qwen3.5-397B, proxy_ tools) │
 │  ┌──────────────┬───────────────┬─────────────┐ │
-│  │ HydraCoder   │ Qwen3-Coder  │ Qwen3.5-397B│ │
-│  │ 30B (vasp-03)│ 80B (vasp-01)│ (vasp-02)   │ │
-│  │ Fast analysis│ Code gen      │ Reasoning   │ │
+│  │ vasp-03:8081 │ vasp-01:8081  │ vasp-02:8081│ │
+│  │ Fast/Scout   │ Coder         │ Reasoning   │ │
+│  │ review,break │ code gen      │ plan,analyze│ │
 │  └──────────────┴───────────────┴─────────────┘ │
 ├─────────────────────────────────────────────────┤
 │  Verifier (deterministic quality gates)         │
@@ -153,7 +153,7 @@ curl -s http://vasp-02:8081/v1/models | python3 -m json.tool  # reasoning
 
 | Gotcha | Solution |
 |--------|----------|
-| CLIAPIProxy reports `owned_by=antigravity` | Set `SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0` |
+| CLIAPIProxy reports `owned_by=antigravity` | run-swarm.sh now accepts "antigravity" — no workaround needed |
 | `run-swarm.sh` eats CLI args | Fixed in PR #21 — `--` separator added |
 | Stale worktree blocks new run | `rm -rf /tmp/beefcake-wt/<id> && git worktree prune` |
 | `SWARM_CLOUD_URL` wrong on ai-proxy | Use `http://localhost:8317/v1`, not `http://10.0.0.5:8317/v1` |
