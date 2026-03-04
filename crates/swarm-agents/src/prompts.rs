@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "5.8.0";
+pub const PROMPT_VERSION: &str = "5.9.0";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -183,7 +183,8 @@ delegate ONE CRATE AT A TIME:
 - Each delegation: at most 5 files. For larger changes, split into sequential delegations.
 - Run run_verifier between each crate's delegation.
 - Never ask a single worker to modify files in two different workspace crates.
-";
+
+/no_think";
 
 /// Rust specialist coder preamble (Qwen3.5-Implementer).
 pub const RUST_CODER_PREAMBLE: &str = "\
@@ -229,7 +230,8 @@ Only modify files relevant to your task.
 - If you find unrelated bugs, report them in your response: \
   `DISCOVERED: <description>`. The manager will handle tracking.
 - Do NOT run git commit. The orchestrator handles commits.
-";
+
+/no_think";
 
 /// General coding agent preamble (Qwen3.5-Implementer).
 pub const GENERAL_CODER_PREAMBLE: &str = "\
@@ -280,7 +282,8 @@ If you find a bug or missing test unrelated to your current task, create a track
   or 'clean up' code that already compiles. If a file has 10 methods and your task is \
   to add an 11th, the other 10 must be IDENTICAL in the output.
 - Do NOT run git commit. The orchestrator handles commits.
-";
+
+/no_think";
 
 /// Blind reviewer preamble (Qwen3.5-Implementer).
 ///
@@ -368,7 +371,8 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
   function signatures, rename variables, reformat untouched code, remove comments, \
   or 'clean up' code that already compiles.
 - Do NOT run git commit. The orchestrator handles commits.
-";
+
+/no_think";
 
 /// Planner specialist preamble.
 ///
@@ -455,7 +459,8 @@ Only modify files specified in the plan you receive.
 - Always read the file BEFORE editing it.
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - Do NOT run git commit. The orchestrator handles commits.
-";
+
+/no_think";
 
 /// Adversarial Breaker preamble.
 ///

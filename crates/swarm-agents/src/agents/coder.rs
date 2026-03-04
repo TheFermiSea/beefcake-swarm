@@ -82,10 +82,26 @@ fn worker_tool_choice() -> ToolChoice {
 /// Both are supported by llama-server's `/v1/chat/completions` endpoint and
 /// OpenAI-compatible APIs. Passed via `additional_params` which Rig flattens
 /// into the request body.
+/// Default max_tokens for local workers.
+///
+/// 16384 tokens is generous for tool-call responses but prevents unbounded
+/// `<think>` block generation that consumed the entire 30-minute timeout
+/// during the 2026-03-04 dogfood run (8949+ thinking tokens, 0 tool calls).
+/// Combined with `/no_think` in prompts, this is a safety net — the `/no_think`
+/// tag should prevent thinking entirely, but max_tokens caps output even if
+/// the chat template ignores `/no_think` for some reason.
+const DEFAULT_WORKER_MAX_TOKENS: u64 = 16384;
+
 pub fn worker_sampling_params() -> Value {
+    let max_tokens = std::env::var("SWARM_WORKER_MAX_TOKENS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_WORKER_MAX_TOKENS);
     serde_json::json!({
         "repetition_penalty": 1.1,
-        "presence_penalty": 0.1
+        "presence_penalty": 0.1,
+        "max_tokens": max_tokens
     })
 }
 
