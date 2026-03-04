@@ -15,7 +15,7 @@ use crate::tools::bundles::{self, WorkerRole};
 pub type OaiAgent = Agent<openai::completion::CompletionModel>;
 
 const DEFAULT_WORKER_MAX_TURNS: usize = 10;
-const DEFAULT_REASONING_MAX_TURNS: usize = 20;
+const DEFAULT_REASONING_MAX_TURNS: usize = 10;
 
 /// Default temperature for worker agents.
 ///

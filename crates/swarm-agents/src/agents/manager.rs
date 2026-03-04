@@ -18,7 +18,7 @@ use crate::tools::bundles;
 
 use super::coder::OaiAgent;
 
-const DEFAULT_MANAGER_MAX_TURNS: usize = 20;
+const DEFAULT_MANAGER_MAX_TURNS: usize = 10;
 
 fn manager_max_turns() -> usize {
     std::env::var("SWARM_MANAGER_MAX_TURNS")

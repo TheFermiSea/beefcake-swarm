@@ -42,6 +42,12 @@ pub struct AdapterConfig {
     pub deadline: Option<Instant>,
     /// Maximum characters to capture in args/result previews.
     pub preview_len: usize,
+    /// Max consecutive read-only tool calls before termination.
+    /// Resets when an "action" tool is called (edit, write, delegate, verify).
+    pub max_reads_without_action: Option<usize>,
+    /// Max LLM turns without an edit_file/write_file call before termination.
+    /// For workers only (not planner/manager).
+    pub max_turns_without_write: Option<usize>,
 }
 
 impl Default for AdapterConfig {
@@ -51,8 +57,21 @@ impl Default for AdapterConfig {
             max_tool_calls: None,
             deadline: None,
             preview_len: 200,
+            max_reads_without_action: None,
+            max_turns_without_write: None,
         }
     }
+}
+
+/// Classification of a tool for anti-stall tracking.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolClass {
+    /// Read-only tools: increments consecutive_reads counter.
+    ReadOnly,
+    /// Action tools: resets consecutive_reads counter.
+    Action,
+    /// Neutral tools (e.g. run_command): no effect on counter.
+    Neutral,
 }
 
 /// Outcome of a tool call.
@@ -101,6 +120,10 @@ struct AdapterState {
     started_at: Instant,
     terminated_early: bool,
     termination_reason: Option<String>,
+    /// Consecutive read-only tool calls without an action. Reset by action tools.
+    consecutive_reads: usize,
+    /// Whether edit_file or write_file has been called at least once.
+    has_written: bool,
 }
 
 /// Rig [`PromptHook`] implementation for tool-event visibility and budget control.
@@ -125,6 +148,8 @@ impl RuntimeAdapter {
                 started_at: Instant::now(),
                 terminated_early: false,
                 termination_reason: None,
+                consecutive_reads: 0,
+                has_written: false,
             })),
             config: Arc::new(config),
         }
@@ -151,6 +176,26 @@ impl RuntimeAdapter {
         })
     }
 
+    /// Classify a tool as read-only, action, or neutral for anti-stall tracking.
+    /// Strips `proxy_` prefix before matching (CLIAPIProxy adds this prefix).
+    fn classify_tool(tool_name: &str) -> ToolClass {
+        let base = tool_name.strip_prefix("proxy_").unwrap_or(tool_name);
+        match base {
+            "read_file" | "list_files" | "get_diff" | "list_changed_files" | "query_notebook" => {
+                ToolClass::ReadOnly
+            }
+            "edit_file" | "write_file" | "run_verifier" | "rust_coder" | "general_coder"
+            | "fixer" | "planner" | "reasoning_worker" | "reviewer" => ToolClass::Action,
+            _ => ToolClass::Neutral,
+        }
+    }
+
+    /// Returns true if the tool is a write operation (edit_file or write_file).
+    fn is_write_tool(tool_name: &str) -> bool {
+        let base = tool_name.strip_prefix("proxy_").unwrap_or(tool_name);
+        base == "edit_file" || base == "write_file"
+    }
+
     fn truncate(s: &str, max_len: usize) -> String {
         if s.len() <= max_len {
             s.to_string()
@@ -173,19 +218,50 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
         _history: &[rig::completion::message::Message],
     ) -> impl std::future::Future<Output = HookAction> + Send {
         let state = self.state.clone();
-        let agent_name = self.config.agent_name.clone();
+        let config = self.config.clone();
         async move {
-            let turn = match state.lock() {
+            let (turn, should_terminate) = match state.lock() {
                 Ok(mut s) => {
                     s.turn_count += 1;
-                    s.turn_count
+                    let turn = s.turn_count;
+
+                    // Anti-stall: enforce write deadline
+                    let terminate = if let Some(max_turns) = config.max_turns_without_write {
+                        if turn > max_turns && !s.has_written {
+                            s.terminated_early = true;
+                            let reason = format!(
+                                "write deadline exceeded: {} turns with no edit_file/write_file (limit: {}). \
+                                 Write code now.",
+                                turn, max_turns
+                            );
+                            s.termination_reason = Some(reason.clone());
+                            warn!(
+                                agent = %config.agent_name,
+                                turn,
+                                max_turns,
+                                "Anti-stall: write deadline exceeded"
+                            );
+                            Some(reason)
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
+                    (turn, terminate)
                 }
                 Err(e) => {
-                    warn!(agent = %agent_name, error = %e, "Adapter state poisoned in on_completion_call");
-                    0
+                    warn!(agent = %config.agent_name, error = %e, "Adapter state poisoned in on_completion_call");
+                    (0, None)
                 }
             };
-            info!(agent = %agent_name, turn, "LLM turn started");
+
+            if let Some(reason) = should_terminate {
+                return HookAction::terminate(format!("Runtime adapter: {reason}"));
+            }
+
+            info!(agent = %config.agent_name, turn, "LLM turn started");
             HookAction::cont()
         }
     }
@@ -244,6 +320,57 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                         tool = %tool_name,
                         max_tool_calls = max,
                         "Tool call rejected: budget exceeded"
+                    );
+                    return ToolCallHookAction::terminate(format!("Runtime adapter: {reason}"));
+                }
+            }
+
+            // Anti-stall: classify tool and track read/action/write state
+            let tool_class = Self::classify_tool(&tool_name);
+            match tool_class {
+                ToolClass::ReadOnly => {
+                    s.consecutive_reads += 1;
+                    debug!(
+                        agent = %config.agent_name,
+                        tool = %tool_name,
+                        consecutive_reads = s.consecutive_reads,
+                        "Read-only tool call"
+                    );
+                }
+                ToolClass::Action => {
+                    if s.consecutive_reads > 0 {
+                        debug!(
+                            agent = %config.agent_name,
+                            tool = %tool_name,
+                            was = s.consecutive_reads,
+                            "Consecutive reads reset by action tool"
+                        );
+                    }
+                    s.consecutive_reads = 0;
+                }
+                ToolClass::Neutral => {}
+            }
+
+            // Track writes for write-deadline enforcement
+            if Self::is_write_tool(&tool_name) {
+                s.has_written = true;
+            }
+
+            // Enforce read budget
+            if let Some(max_reads) = config.max_reads_without_action {
+                if s.consecutive_reads > max_reads {
+                    s.terminated_early = true;
+                    let reason = format!(
+                        "read budget exceeded: {} consecutive reads without action (limit: {}). \
+                         Delegate to a worker or write code now.",
+                        s.consecutive_reads, max_reads
+                    );
+                    s.termination_reason = Some(reason.clone());
+                    warn!(
+                        agent = %config.agent_name,
+                        consecutive_reads = s.consecutive_reads,
+                        max_reads,
+                        "Anti-stall: read budget exceeded"
                     );
                     return ToolCallHookAction::terminate(format!("Runtime adapter: {reason}"));
                 }
@@ -361,6 +488,8 @@ mod tests {
             max_tool_calls: Some(50),
             deadline: Some(Instant::now() + Duration::from_secs(1800)),
             preview_len: 100,
+            max_reads_without_action: Some(8),
+            max_turns_without_write: Some(3),
         };
         let adapter = RuntimeAdapter::new(config);
         let report = adapter.report().unwrap();
@@ -580,5 +709,203 @@ mod tests {
     fn test_adapter_is_clone_send_sync() {
         fn assert_clone_send_sync<T: Clone + Send + Sync>() {}
         assert_clone_send_sync::<RuntimeAdapter>();
+    }
+
+    // --- Anti-stall tests ---
+
+    /// Helper: simulate a tool call + result round-trip.
+    async fn simulate_tool_call(adapter: &RuntimeAdapter, tool_name: &str, call_id: &str) {
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(adapter, tool_name, None, call_id, "{}")
+        .await;
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_result(adapter, tool_name, None, call_id, "{}", "ok")
+        .await;
+    }
+
+    /// Helper: simulate an LLM turn (on_completion_call).
+    async fn simulate_turn(adapter: &RuntimeAdapter) -> HookAction {
+        let msg: rig::completion::message::Message = "test".into();
+        <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_completion_call(adapter, &msg, &[])
+        .await
+    }
+
+    #[tokio::test]
+    async fn test_read_budget_enforcement() {
+        let adapter = RuntimeAdapter::new(AdapterConfig {
+            agent_name: "test-manager".into(),
+            max_reads_without_action: Some(8),
+            ..Default::default()
+        });
+
+        // 8 read_file calls should be fine
+        for i in 0..8 {
+            simulate_tool_call(&adapter, "proxy_read_file", &format!("r-{i}")).await;
+        }
+
+        // 9th read call should be terminated
+        let action = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(&adapter, "proxy_read_file", None, "r-8", "{}")
+        .await;
+        assert!(
+            matches!(action, ToolCallHookAction::Terminate { .. }),
+            "Expected Terminate after 9 consecutive reads, got {action:?}"
+        );
+
+        let report = adapter.report().unwrap();
+        assert!(report.terminated_early);
+        assert!(report
+            .termination_reason
+            .as_ref()
+            .unwrap()
+            .contains("read budget"));
+    }
+
+    #[tokio::test]
+    async fn test_read_budget_reset_on_action() {
+        let adapter = RuntimeAdapter::new(AdapterConfig {
+            agent_name: "test-manager".into(),
+            max_reads_without_action: Some(8),
+            ..Default::default()
+        });
+
+        // 7 reads, then an action (edit_file), then 7 more reads → should be fine
+        for i in 0..7 {
+            simulate_tool_call(&adapter, "proxy_read_file", &format!("a-{i}")).await;
+        }
+        // Action resets the counter
+        simulate_tool_call(&adapter, "proxy_rust_coder", "action-0").await;
+        for i in 0..7 {
+            simulate_tool_call(&adapter, "proxy_list_files", &format!("b-{i}")).await;
+        }
+
+        let report = adapter.report().unwrap();
+        assert!(
+            !report.terminated_early,
+            "Should not terminate — action reset the counter"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_deadline_enforcement() {
+        let adapter = RuntimeAdapter::new(AdapterConfig {
+            agent_name: "test-worker".into(),
+            max_turns_without_write: Some(3),
+            ..Default::default()
+        });
+
+        // 3 turns without writing → no termination yet
+        for _ in 0..3 {
+            let action = simulate_turn(&adapter).await;
+            assert_eq!(action, HookAction::cont());
+        }
+
+        // 4th turn → should terminate (turn 4 > limit 3, no writes)
+        let action = simulate_turn(&adapter).await;
+        assert!(
+            matches!(action, HookAction::Terminate { .. }),
+            "Expected Terminate after 4 turns without write, got {action:?}"
+        );
+
+        let report = adapter.report().unwrap();
+        assert!(report.terminated_early);
+        assert!(report
+            .termination_reason
+            .as_ref()
+            .unwrap()
+            .contains("write deadline"));
+    }
+
+    #[tokio::test]
+    async fn test_write_deadline_not_triggered_with_write() {
+        let adapter = RuntimeAdapter::new(AdapterConfig {
+            agent_name: "test-worker".into(),
+            max_turns_without_write: Some(3),
+            ..Default::default()
+        });
+
+        // Turn 1: read
+        simulate_turn(&adapter).await;
+        simulate_tool_call(&adapter, "read_file", "r-0").await;
+
+        // Turn 2: write (satisfies the deadline)
+        simulate_turn(&adapter).await;
+        simulate_tool_call(&adapter, "edit_file", "w-0").await;
+
+        // Turns 3-5: all should pass because has_written is true
+        for _ in 0..3 {
+            let action = simulate_turn(&adapter).await;
+            assert_eq!(
+                action,
+                HookAction::cont(),
+                "Should not terminate — edit_file was called on turn 2"
+            );
+        }
+
+        let report = adapter.report().unwrap();
+        assert!(!report.terminated_early);
+    }
+
+    #[test]
+    fn test_tool_classification() {
+        // Read-only tools
+        assert_eq!(
+            RuntimeAdapter::classify_tool("proxy_read_file"),
+            ToolClass::ReadOnly
+        );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("read_file"),
+            ToolClass::ReadOnly
+        );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("proxy_list_files"),
+            ToolClass::ReadOnly
+        );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("proxy_get_diff"),
+            ToolClass::ReadOnly
+        );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("query_notebook"),
+            ToolClass::ReadOnly
+        );
+
+        // Action tools
+        assert_eq!(
+            RuntimeAdapter::classify_tool("proxy_edit_file"),
+            ToolClass::Action
+        );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("edit_file"),
+            ToolClass::Action
+        );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("proxy_rust_coder"),
+            ToolClass::Action
+        );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("proxy_run_verifier"),
+            ToolClass::Action
+        );
+        assert_eq!(RuntimeAdapter::classify_tool("planner"), ToolClass::Action);
+
+        // Neutral tools
+        assert_eq!(
+            RuntimeAdapter::classify_tool("run_command"),
+            ToolClass::Neutral
+        );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("proxy_run_command"),
+            ToolClass::Neutral
+        );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("unknown_tool"),
+            ToolClass::Neutral
+        );
     }
 }
