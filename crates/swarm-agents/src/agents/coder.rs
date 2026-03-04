@@ -84,13 +84,12 @@ fn worker_tool_choice() -> ToolChoice {
 /// into the request body.
 /// Default max_tokens for local workers.
 ///
-/// 16384 tokens is generous for tool-call responses but prevents unbounded
-/// `<think>` block generation that consumed the entire 30-minute timeout
-/// during the 2026-03-04 dogfood run (8949+ thinking tokens, 0 tool calls).
-/// Combined with `/no_think` in prompts, this is a safety net — the `/no_think`
-/// tag should prevent thinking entirely, but max_tokens caps output even if
-/// the chat template ignores `/no_think` for some reason.
-const DEFAULT_WORKER_MAX_TOKENS: u64 = 16384;
+/// 4096 tokens caps each LLM turn to ~15 minutes at 4.5 tok/s.
+/// Qwen3.5 without thinking mode still dumps analysis text instead of
+/// tool calls (4500+ tokens observed). With 4096 cap and 10 max turns,
+/// the agentic loop will re-prompt the model if it wastes a turn on text.
+/// Override with SWARM_WORKER_MAX_TOKENS for larger responses.
+const DEFAULT_WORKER_MAX_TOKENS: u64 = 4096;
 
 pub fn worker_sampling_params() -> Value {
     let max_tokens = std::env::var("SWARM_WORKER_MAX_TOKENS")
