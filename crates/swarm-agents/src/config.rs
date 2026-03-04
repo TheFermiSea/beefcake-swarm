@@ -131,7 +131,7 @@ impl CloudFallbackMatrix {
         Self {
             entries: vec![
                 CloudFallbackEntry {
-                    model: "claude-opus-4-6-thinking".to_string(),
+                    model: "claude-opus-4-6".to_string(),
                     tier_label: "primary".to_string(),
                     max_tokens: 4096,
                 },
@@ -281,7 +281,7 @@ impl SwarmConfig {
         let url = std::env::var("SWARM_CLOUD_URL").ok()?;
         let api_key = std::env::var("SWARM_CLOUD_API_KEY").ok()?;
         let model = std::env::var("SWARM_CLOUD_MODEL")
-            .unwrap_or_else(|_| "claude-opus-4-6-thinking".into());
+            .unwrap_or_else(|_| "claude-opus-4-6".into());
         Some(CloudEndpoint {
             url,
             api_key,
@@ -305,20 +305,20 @@ impl SwarmConfig {
             },
             coder_endpoint: Endpoint {
                 url: proxy_url.clone(),
-                model: "claude-sonnet-4-5".into(),
+                model: "claude-sonnet-4-5-20250929".into(),
                 tier: Tier::Coder,
                 api_key: proxy_key.clone(),
             },
             reasoning_endpoint: Endpoint {
                 url: proxy_url.clone(),
-                model: "claude-opus-4-6-thinking".into(),
+                model: "claude-opus-4-6".into(),
                 tier: Tier::Reasoning,
                 api_key: proxy_key.clone(),
             },
             cloud_endpoint: Some(CloudEndpoint {
                 url: proxy_url,
                 api_key: proxy_key,
-                model: "claude-opus-4-6-thinking".into(),
+                model: "claude-opus-4-6".into(),
             }),
             max_retries: 3,
             worktree_base: None,
@@ -563,7 +563,7 @@ mod tests {
         assert_eq!(matrix.len(), 3);
         assert!(!matrix.is_empty());
         let primary = matrix.primary().unwrap();
-        assert_eq!(primary.model, "claude-opus-4-6-thinking");
+        assert_eq!(primary.model, "claude-opus-4-6");
         assert_eq!(primary.tier_label, "primary");
         let fallbacks = matrix.fallbacks();
         assert_eq!(fallbacks.len(), 2);
@@ -586,7 +586,7 @@ mod tests {
         assert_eq!(config.cloud_fallback_matrix.len(), 3);
         assert_eq!(
             config.cloud_fallback_matrix.primary().unwrap().model,
-            "claude-opus-4-6-thinking"
+            "claude-opus-4-6"
         );
     }
 }

@@ -27,9 +27,9 @@ if [[ -n "${SWARM_CLOUD_URL:-}" ]]; then
   # Cloud mode: require API key and run preflight checks
   : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
   export SWARM_CLOUD_API_KEY
-  # Default to antigravity-hosted models (routed via Google AI Studio)
-  export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6-thinking}"
-  export SWARM_CLOUD_FALLBACK_MODEL="${SWARM_CLOUD_FALLBACK_MODEL:-claude-sonnet-4-5}"
+  # Default to antigravity-hosted models (routed via CLIAPIProxy)
+  export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6}"
+  export SWARM_CLOUD_FALLBACK_MODEL="${SWARM_CLOUD_FALLBACK_MODEL:-claude-sonnet-4-5-20250929}"
   # CLIAPIProxy v6.8+ uses x-api-key header (not Authorization: Bearer)
   _PROXY_AUTH=(-H "x-api-key: $SWARM_CLOUD_API_KEY")
   if [[ "${SWARM_REQUIRE_ANTHROPIC_OWNERSHIP:-1}" == "1" ]]; then

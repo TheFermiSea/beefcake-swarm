@@ -93,7 +93,7 @@ All three compute nodes run the same model — **Qwen3.5-397B-A17B Q4_K_M** (233
 | Cloud | http://localhost:8317/v1 | ai-proxy (CLIAPIProxy) | 1 |
 
 MoE architecture: expert FFN layers on CPU RAM (~225GB), attention on GPU (V100S 32GB).
-Cloud model: `claude-opus-4-6-thinking` (fallback: `claude-sonnet-4-5`).
+Cloud model: `claude-opus-4-6` (fallback: `claude-sonnet-4-5-20250929`).
 
 **Start inference:**
 
@@ -130,8 +130,8 @@ All tiers default to Qwen3.5-397B-A17B. run-swarm.sh and config.rs are now align
 |----------|---------|-------|
 | `SWARM_CLOUD_URL` | `http://localhost:8317/v1` (script) / *(none)* (config.rs) | Required for cloud manager mode |
 | `SWARM_CLOUD_API_KEY` | *(none)* | Required if cloud URL set |
-| `SWARM_CLOUD_MODEL` | `claude-opus-4-6-thinking` | Primary cloud model |
-| `SWARM_CLOUD_FALLBACK_MODEL` (script) / `SWARM_CLOUD_FALLBACK_MODELS` (config.rs) | `claude-sonnet-4-5` (script) / `claude-sonnet-4-5-20250929, gemini-2.5-flash` (config.rs) | Note singular vs plural env var name |
+| `SWARM_CLOUD_MODEL` | `claude-opus-4-6` | Primary cloud model |
+| `SWARM_CLOUD_FALLBACK_MODEL` (script) / `SWARM_CLOUD_FALLBACK_MODELS` (config.rs) | `claude-sonnet-4-5-20250929` (script) / `claude-sonnet-4-5-20250929, gemini-2.5-flash` (config.rs) | Note singular vs plural env var name |
 | `SWARM_REQUIRE_ANTHROPIC_OWNERSHIP` | `1` | run-swarm.sh accepts both "anthropic" and "antigravity" |
 | `SWARM_CLOUD_PREFLIGHT` | `1` | Probe cloud endpoint before starting |
 
@@ -222,7 +222,7 @@ curl -s http://vasp-02:8081/health  # reasoning
 ```text
 INFO swarm_agents: Endpoint health check local_ok=true coder_ok=true reasoning_ok=true
 INFO swarm_agents: Beads-free mode: processing CLI issue id=<issue>
-INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed workers model=claude-opus-4-6-thinking
+INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed workers model=claude-opus-4-6
 ```
 
 ## External Tools (install separately)
