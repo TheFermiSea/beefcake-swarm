@@ -280,8 +280,7 @@ impl SwarmConfig {
     fn cloud_from_env() -> Option<CloudEndpoint> {
         let url = std::env::var("SWARM_CLOUD_URL").ok()?;
         let api_key = std::env::var("SWARM_CLOUD_API_KEY").ok()?;
-        let model = std::env::var("SWARM_CLOUD_MODEL")
-            .unwrap_or_else(|_| "claude-opus-4-6".into());
+        let model = std::env::var("SWARM_CLOUD_MODEL").unwrap_or_else(|_| "claude-opus-4-6".into());
         Some(CloudEndpoint {
             url,
             api_key,
