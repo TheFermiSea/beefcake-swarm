@@ -98,14 +98,14 @@ Cloud model: `claude-opus-4-6-thinking` (fallback: `claude-sonnet-4-5`).
 **Start inference:**
 
 ```bash
-ssh root@10.0.0.22 "bash /tmp/start-qwen35-q4km.sh"   # vasp-03 (fast tier)
-ssh root@10.0.0.20 "bash /tmp/start-qwen35-q4km.sh"   # vasp-01 (coder tier)
-ssh root@10.0.0.21 "bash /tmp/start-qwen35-q4km.sh"   # vasp-02 (reasoning tier)
+ssh root@10.0.0.22 "bash /tmp/start-qwen35-mmq.sh"   # vasp-03 (fast tier)
+ssh root@10.0.0.20 "bash /tmp/start-qwen35-mmq.sh"   # vasp-01 (coder tier)
+ssh root@10.0.0.21 "bash /tmp/start-qwen35-mmq.sh"   # vasp-02 (reasoning tier)
 ```
 
 **Cloud proxy:** CLIAPIProxy runs on ai-proxy (localhost:8317). Uses `x-api-key` header (not Bearer). API key set via `SWARM_CLOUD_API_KEY` env var.
 
-**llama.cpp build:** b8179 (ecbcb7e), native on vasp-03 (Rocky 8.8/GCC 13/CUDA 12.6). Binary: `/usr/local/bin/llama-server-vasp03`, deployed to all 3 nodes.
+**llama.cpp build:** b8179 (ecbcb7ea9), native on vasp-03 (Rocky 8.8/GCC 13/CUDA 12.6). Binary: `/usr/local/bin/llama-server-mmq` (compiled with `GGML_CUDA_FORCE_MMQ=ON` for V100), deployed to all 3 nodes. NFS backup: `/cluster/shared/llama-cpp/bin/mmq-build/`.
 
 ## Swarm Environment Variables
 
