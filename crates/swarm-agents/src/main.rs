@@ -236,7 +236,11 @@ async fn main() -> Result<()> {
         info!(id = %issue.id, title = %issue.title, mode = ?args.mode, "Beads-free mode: processing CLI issue");
         tokio::select! {
             result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref) => {
-                result?;
+                let resolved = result?;
+                if !resolved {
+                    error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
+                    std::process::exit(1);
+                }
             }
             _ = shutdown_signal() => {
                 warn!(id = %issue.id, "Shutdown signal received — cleaning up worktree");
@@ -262,7 +266,11 @@ async fn main() -> Result<()> {
         info!(id = %issue.id, title = %issue.title, "Beads-free mode: processing issue from file");
         tokio::select! {
             result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref) => {
-                result?;
+                let resolved = result?;
+                if !resolved {
+                    error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
+                    std::process::exit(1);
+                }
             }
             _ = shutdown_signal() => {
                 warn!(id = %issue.id, "Shutdown signal received — cleaning up worktree");
@@ -290,7 +298,11 @@ async fn main() -> Result<()> {
         info!(id = %issue.id, title = %issue.title, "SWARM_ISSUE: targeting specific issue");
         tokio::select! {
             result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref) => {
-                result?;
+                let resolved = result?;
+                if !resolved {
+                    error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
+                    std::process::exit(1);
+                }
             }
             _ = shutdown_signal() => {
                 warn!(id = %issue.id, "Shutdown signal received — cleaning up worktree");
@@ -359,7 +371,11 @@ async fn main() -> Result<()> {
 
         tokio::select! {
             result = orchestrator::process_issue(&config, &factory, &worktree_bridge, issue, &beads, kb_ref) => {
-                result?;
+                let resolved = result?;
+                if !resolved {
+                    error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
+                    std::process::exit(1);
+                }
             }
             _ = shutdown_signal() => {
                 warn!(id = %issue.id, "Shutdown signal received — cleaning up worktree");
