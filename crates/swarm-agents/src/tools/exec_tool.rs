@@ -26,13 +26,17 @@ const ALLOWED_COMMANDS: &[&str] = &[
 ];
 
 /// Characters that indicate command chaining or injection intent.
-/// Since we execute directly (no shell), these aren't technically dangerous,
-/// but they signal the LLM is trying to chain commands, which we block.
-/// Note: `|`, `&`, `(`, `)`, `$` are NOT included — without a shell
-/// (we use Command::new, not sh -c) these are passed as literal args.
-/// LLMs commonly try `cargo check 2>&1 | head -20`; `&` in `2>&1` is
-/// harmless without a shell and blocking it wastes worker turns.
+/// Blocked in ALL execution modes (direct and shell).
 const DANGEROUS_METACHARACTERS: &[char] = &[';', '`', '\n', '\r'];
+
+/// Patterns that enable command substitution — blocked when using shell mode.
+/// Without a shell these are harmless literals, but with `sh -c` they'd execute.
+const SHELL_SUBSTITUTION_PATTERNS: &[&str] = &["$(", "${"];
+
+/// Shell-like tokens that are no-ops in our tool (we always capture both
+/// stdout and stderr). Stripped from direct-execution args so LLMs can write
+/// natural shell commands like `cargo clippy 2>&1` without errors.
+const NOOP_REDIRECTIONS: &[&str] = &["2>&1", "2>/dev/null"];
 
 /// Default timeout for command execution.
 /// Set high to accommodate fresh worktree builds (RocksDB C++ compilation
@@ -101,6 +105,77 @@ impl Tool for RunCommandTool {
             });
         }
 
+        let has_pipe = args.command.contains('|');
+
+        if has_pipe {
+            // ── Shell pipeline mode ──
+            // LLMs naturally write `cargo clippy 2>&1 | grep pattern | head -20`.
+            // We validate every program in the pipeline against the allowlist,
+            // then execute the full command via `sh -c`.
+
+            // Block command substitution — safe as literal args but dangerous in sh.
+            for pat in SHELL_SUBSTITUTION_PATTERNS {
+                if args.command.contains(pat) {
+                    return Err(ToolError::CommandNotAllowed {
+                        command: format!(
+                            "command substitution '{pat}' not allowed in shell pipelines"
+                        ),
+                    });
+                }
+            }
+
+            // Validate every pipeline segment's program against the allowlist.
+            for segment in args.command.split('|') {
+                let seg = segment.trim();
+                if seg.is_empty() {
+                    continue;
+                }
+                let seg_parts =
+                    shlex::split(seg).ok_or_else(|| ToolError::CommandNotAllowed {
+                        command: "invalid quoting in pipeline segment".to_string(),
+                    })?;
+                let prog = seg_parts.first().ok_or_else(|| ToolError::CommandNotAllowed {
+                    command: "empty pipeline segment".to_string(),
+                })?;
+                if !ALLOWED_COMMANDS.contains(&prog.as_str()) {
+                    return Err(ToolError::CommandNotAllowed {
+                        command: prog.to_string(),
+                    });
+                }
+            }
+
+            // Determine timeout from the first command in the pipeline.
+            let timeout_secs =
+                if args.command.starts_with("cargo") && args.command.contains("test") {
+                    TEST_TIMEOUT_SECS
+                } else {
+                    DEFAULT_TIMEOUT_SECS
+                };
+
+            let cmd = args.command.clone();
+            let working_dir = self.working_dir.clone();
+
+            let result = tokio::task::spawn_blocking(move || {
+                let output = std::process::Command::new("sh")
+                    .args(["-c", &cmd])
+                    .current_dir(&working_dir)
+                    .output();
+
+                format_output(output)
+            });
+
+            return match tokio::time::timeout(Duration::from_secs(timeout_secs), result).await {
+                Ok(Ok(r)) => r,
+                Ok(Err(e)) => Err(ToolError::Io(std::io::Error::other(format!(
+                    "task join error: {e}"
+                )))),
+                Err(_) => Err(ToolError::Timeout {
+                    seconds: timeout_secs,
+                }),
+            };
+        }
+
+        // ── Direct execution mode (no shell) ──
         // Use shell-words parsing to properly handle quoted arguments
         // (e.g., `rg "foo bar"` → ["rg", "foo bar"] instead of ["rg", "\"foo", "bar\""])
         let parts = shlex::split(&args.command).ok_or_else(|| ToolError::CommandNotAllowed {
@@ -126,7 +201,15 @@ impl Tool for RunCommandTool {
 
         let working_dir = self.working_dir.clone();
         let program_owned = program.to_string();
-        let arg_list: Vec<String> = parts[1..].to_vec();
+
+        // Strip no-op redirections (2>&1, 2>/dev/null) that LLMs add out of habit.
+        // We already capture both stdout and stderr, so these are meaningless
+        // without a shell and would be passed as literal args to the program.
+        let arg_list: Vec<String> = parts[1..]
+            .iter()
+            .filter(|a| !NOOP_REDIRECTIONS.contains(&a.as_str()))
+            .cloned()
+            .collect();
 
         // Run in a blocking task to avoid blocking the async runtime.
         // Execute directly (no shell) to prevent metacharacter injection.
@@ -136,23 +219,7 @@ impl Tool for RunCommandTool {
                 .current_dir(&working_dir)
                 .output();
 
-            match output {
-                Ok(out) => {
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-
-                    if out.status.success() {
-                        Ok(format!("{stdout}{stderr}"))
-                    } else {
-                        let code = out.status.code().unwrap_or(-1);
-                        // Return stderr as output (not an error) so the agent can see it
-                        Ok(format!(
-                            "EXIT CODE: {code}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
-                        ))
-                    }
-                }
-                Err(e) => Err(ToolError::Io(e)),
-            }
+            format_output(output)
         });
 
         // Apply timeout
@@ -165,5 +232,27 @@ impl Tool for RunCommandTool {
                 seconds: timeout_secs,
             }),
         }
+    }
+}
+
+/// Format command output into a string for the agent.
+fn format_output(
+    output: Result<std::process::Output, std::io::Error>,
+) -> Result<String, ToolError> {
+    match output {
+        Ok(out) => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let stderr = String::from_utf8_lossy(&out.stderr);
+
+            if out.status.success() {
+                Ok(format!("{stdout}{stderr}"))
+            } else {
+                let code = out.status.code().unwrap_or(-1);
+                Ok(format!(
+                    "EXIT CODE: {code}\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+                ))
+            }
+        }
+        Err(e) => Err(ToolError::Io(e)),
     }
 }
