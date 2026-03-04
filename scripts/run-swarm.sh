@@ -12,21 +12,31 @@ export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-397B-A17B}"
 export SWARM_REASONING_URL="${SWARM_REASONING_URL:-http://vasp-02:8081/v1}"
 export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-Qwen3.5-397B-A17B}"
 # Cloud manager via CLIAPIProxy
+# Set SWARM_CLOUD_URL="" (empty) to run in worker-first mode (local models only).
 # Default to localhost when running on ai-proxy (where the proxy lives).
 # Use http://10.0.0.5:8317/v1 via SWARM_CLOUD_URL override when running from compute nodes.
-export SWARM_CLOUD_URL="${SWARM_CLOUD_URL:-http://localhost:8317/v1}"
-: "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
-export SWARM_CLOUD_API_KEY
-# Default to antigravity-hosted models (routed via Google AI Studio)
-export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6-thinking}"
-export SWARM_CLOUD_FALLBACK_MODEL="${SWARM_CLOUD_FALLBACK_MODEL:-claude-sonnet-4-5}"
-# CLIAPIProxy v6.8+ uses x-api-key header (not Authorization: Bearer)
-_PROXY_AUTH=(-H "x-api-key: $SWARM_CLOUD_API_KEY")
-if [[ "${SWARM_REQUIRE_ANTHROPIC_OWNERSHIP:-1}" == "1" ]]; then
-  models_resp="$(mktemp)"
-  if curl -sS "${_PROXY_AUTH[@]}" \
-    "${SWARM_CLOUD_URL%/}/models" > "$models_resp"; then
-    model_owner="$(python3 - "$models_resp" "$SWARM_CLOUD_MODEL" <<'PY'
+if [[ -z "${SWARM_CLOUD_URL+x}" ]]; then
+  # Not set at all — default to localhost proxy
+  export SWARM_CLOUD_URL="http://localhost:8317/v1"
+elif [[ -z "$SWARM_CLOUD_URL" ]]; then
+  # Explicitly set to empty — worker-first mode, unset so config.rs sees None
+  unset SWARM_CLOUD_URL
+fi
+
+if [[ -n "${SWARM_CLOUD_URL:-}" ]]; then
+  # Cloud mode: require API key and run preflight checks
+  : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
+  export SWARM_CLOUD_API_KEY
+  # Default to antigravity-hosted models (routed via Google AI Studio)
+  export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6-thinking}"
+  export SWARM_CLOUD_FALLBACK_MODEL="${SWARM_CLOUD_FALLBACK_MODEL:-claude-sonnet-4-5}"
+  # CLIAPIProxy v6.8+ uses x-api-key header (not Authorization: Bearer)
+  _PROXY_AUTH=(-H "x-api-key: $SWARM_CLOUD_API_KEY")
+  if [[ "${SWARM_REQUIRE_ANTHROPIC_OWNERSHIP:-1}" == "1" ]]; then
+    models_resp="$(mktemp)"
+    if curl -sS "${_PROXY_AUTH[@]}" \
+      "${SWARM_CLOUD_URL%/}/models" > "$models_resp"; then
+      model_owner="$(python3 - "$models_resp" "$SWARM_CLOUD_MODEL" <<'PY'
 import json, sys
 doc = json.load(open(sys.argv[1]))
 model = sys.argv[2]
@@ -34,28 +44,31 @@ entry = next((m for m in doc.get("data", []) if m.get("id") == model), None)
 print((entry or {}).get("owned_by", ""))
 PY
 )"
-    if [[ -n "$model_owner" && "$model_owner" != "anthropic" && "$model_owner" != "antigravity" ]]; then
-      echo "Cloud model ${SWARM_CLOUD_MODEL} is owned_by=${model_owner}; falling back to ${SWARM_CLOUD_FALLBACK_MODEL}"
+      if [[ -n "$model_owner" && "$model_owner" != "anthropic" && "$model_owner" != "antigravity" ]]; then
+        echo "Cloud model ${SWARM_CLOUD_MODEL} is owned_by=${model_owner}; falling back to ${SWARM_CLOUD_FALLBACK_MODEL}"
+        export SWARM_CLOUD_MODEL="$SWARM_CLOUD_FALLBACK_MODEL"
+      fi
+    fi
+    rm -f "$models_resp"
+  fi
+  if [[ "${SWARM_CLOUD_PREFLIGHT:-1}" == "1" ]]; then
+    probe_req="$(mktemp)"
+    probe_resp="${probe_req}.out"
+    printf '{"model":"%s","messages":[{"role":"user","content":"Reply OK"}],"max_tokens":8}\n' \
+      "$SWARM_CLOUD_MODEL" > "$probe_req"
+    probe_http="$(curl -sS -o "$probe_resp" -w "%{http_code}" \
+      "${_PROXY_AUTH[@]}" \
+      -H "Content-Type: application/json" \
+      "${SWARM_CLOUD_URL%/}/chat/completions" \
+      -d @"$probe_req" || echo "000")"
+    if [[ "$probe_http" != "200" ]] || grep -qiE 'auth_unavailable|quota_exhausted|resource_exhausted|exhausted your capacity|quota will reset' "$probe_resp"; then
+      echo "Cloud model ${SWARM_CLOUD_MODEL} unavailable (http=${probe_http}); falling back to ${SWARM_CLOUD_FALLBACK_MODEL}"
       export SWARM_CLOUD_MODEL="$SWARM_CLOUD_FALLBACK_MODEL"
     fi
+    rm -f "$probe_req" "$probe_resp"
   fi
-  rm -f "$models_resp"
-fi
-if [[ "${SWARM_CLOUD_PREFLIGHT:-1}" == "1" ]]; then
-  probe_req="$(mktemp)"
-  probe_resp="${probe_req}.out"
-  printf '{"model":"%s","messages":[{"role":"user","content":"Reply OK"}],"max_tokens":8}\n' \
-    "$SWARM_CLOUD_MODEL" > "$probe_req"
-  probe_http="$(curl -sS -o "$probe_resp" -w "%{http_code}" \
-    "${_PROXY_AUTH[@]}" \
-    -H "Content-Type: application/json" \
-    "${SWARM_CLOUD_URL%/}/chat/completions" \
-    -d @"$probe_req" || echo "000")"
-  if [[ "$probe_http" != "200" ]] || grep -qiE 'auth_unavailable|quota_exhausted|resource_exhausted|exhausted your capacity|quota will reset' "$probe_resp"; then
-    echo "Cloud model ${SWARM_CLOUD_MODEL} unavailable (http=${probe_http}); falling back to ${SWARM_CLOUD_FALLBACK_MODEL}"
-    export SWARM_CLOUD_MODEL="$SWARM_CLOUD_FALLBACK_MODEL"
-  fi
-  rm -f "$probe_req" "$probe_resp"
+else
+  echo "Worker-first mode: SWARM_CLOUD_URL not set, using local models only"
 fi
 export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
 
