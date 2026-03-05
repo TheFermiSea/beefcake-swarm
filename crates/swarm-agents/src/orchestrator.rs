@@ -1794,7 +1794,7 @@ pub async fn process_issue(
                             agent_name: "Qwen3.5-RustCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(30),
-                            max_turns_without_write: Some(5),
+                            max_turns_without_write: Some(8),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1824,7 +1824,7 @@ pub async fn process_issue(
                             agent_name: "Qwen3.5-GeneralCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(30),
-                            max_turns_without_write: Some(5),
+                            max_turns_without_write: Some(8),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
