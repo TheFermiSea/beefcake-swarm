@@ -130,13 +130,14 @@ impl Tool for RunCommandTool {
                 if seg.is_empty() {
                     continue;
                 }
-                let seg_parts =
-                    shlex::split(seg).ok_or_else(|| ToolError::CommandNotAllowed {
-                        command: "invalid quoting in pipeline segment".to_string(),
-                    })?;
-                let prog = seg_parts.first().ok_or_else(|| ToolError::CommandNotAllowed {
-                    command: "empty pipeline segment".to_string(),
+                let seg_parts = shlex::split(seg).ok_or_else(|| ToolError::CommandNotAllowed {
+                    command: "invalid quoting in pipeline segment".to_string(),
                 })?;
+                let prog = seg_parts
+                    .first()
+                    .ok_or_else(|| ToolError::CommandNotAllowed {
+                        command: "empty pipeline segment".to_string(),
+                    })?;
                 if !ALLOWED_COMMANDS.contains(&prog.as_str()) {
                     return Err(ToolError::CommandNotAllowed {
                         command: prog.to_string(),
@@ -145,12 +146,12 @@ impl Tool for RunCommandTool {
             }
 
             // Determine timeout from the first command in the pipeline.
-            let timeout_secs =
-                if args.command.starts_with("cargo") && args.command.contains("test") {
-                    TEST_TIMEOUT_SECS
-                } else {
-                    DEFAULT_TIMEOUT_SECS
-                };
+            let timeout_secs = if args.command.starts_with("cargo") && args.command.contains("test")
+            {
+                TEST_TIMEOUT_SECS
+            } else {
+                DEFAULT_TIMEOUT_SECS
+            };
 
             let cmd = args.command.clone();
             let working_dir = self.working_dir.clone();
