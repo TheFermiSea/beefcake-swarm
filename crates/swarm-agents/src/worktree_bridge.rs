@@ -444,51 +444,79 @@ impl WorktreeBridge {
 
                 if let Some(tree_sha) = tree_sha {
                     // Remove the .beads blob from the worktree branch's index.
-                    let _ = Command::new("git")
-                        .args(["rm", "--cached", "-f", "-q", "--ignore-unmatch", "--", ".beads"])
-                        .current_dir(&wt_path)
-                        .output();
+                    let rm = retry_git_command(
+                        &[
+                            "rm",
+                            "--cached",
+                            "-f",
+                            "-q",
+                            "--ignore-unmatch",
+                            "--",
+                            ".beads",
+                        ],
+                        &wt_path,
+                        3,
+                    )?;
+                    if !rm.status.success() {
+                        let stderr = String::from_utf8_lossy(&rm.stderr);
+                        bail!("Failed to remove .beads blob from index before merge: {stderr}");
+                    }
 
                     // Restore .beads/ directory entries from main HEAD (index-only, no working
                     // tree update — the working tree still has the symlink, but skip-worktree
                     // hides the discrepancy from git status/add/diff).
-                    let _ = Command::new("git")
-                        .args(["read-tree", "--prefix=.beads/", &tree_sha])
-                        .current_dir(&wt_path)
-                        .output();
+                    let read_tree = retry_git_command(
+                        &["read-tree", "--prefix=.beads/", &tree_sha],
+                        &wt_path,
+                        3,
+                    )?;
+                    if !read_tree.status.success() {
+                        let stderr = String::from_utf8_lossy(&read_tree.stderr);
+                        bail!("Failed to restore .beads/ tree into index before merge: {stderr}");
+                    }
 
                     // Re-apply skip-worktree bits on the restored .beads/ entries so they
                     // don't appear as local modifications.
-                    if let Ok(ls) = Command::new("git")
-                        .args(["ls-files", "--", ".beads/"])
-                        .current_dir(&wt_path)
-                        .output()
-                    {
+                    let ls = retry_git_command(&["ls-files", "--", ".beads/"], &wt_path, 3)?;
+                    if ls.status.success() {
                         let file_list = String::from_utf8_lossy(&ls.stdout).to_string();
                         let files: Vec<&str> =
                             file_list.lines().filter(|l| !l.is_empty()).collect();
                         if !files.is_empty() {
                             let mut args = vec!["update-index", "--skip-worktree"];
                             args.extend_from_slice(&files);
-                            let _ = Command::new("git")
-                                .args(&args)
-                                .current_dir(&wt_path)
-                                .output();
+                            let sw = retry_git_command(&args, &wt_path, 3)?;
+                            if !sw.status.success() {
+                                let stderr = String::from_utf8_lossy(&sw.stderr);
+                                bail!(
+                                    "Failed to set skip-worktree on .beads/ entries before merge: {stderr}"
+                                );
+                            }
                         }
                     }
 
                     // Commit the fixup so the merge sees a clean .beads/ directory.
-                    let _ = Command::new("git")
-                        .args([
+                    let fixup = retry_git_command(
+                        &[
                             "commit",
                             "--allow-empty",
                             "-m",
                             "swarm: restore .beads directory (strip accidental symlink)",
-                        ])
-                        .current_dir(&wt_path)
-                        .output();
+                        ],
+                        &wt_path,
+                        3,
+                    )?;
+                    if !fixup.status.success() {
+                        let stderr = String::from_utf8_lossy(&fixup.stderr);
+                        bail!("Failed to commit .beads fixup before merge: {stderr}");
+                    }
 
                     tracing::info!(issue_id = %issue_id, ".beads symlink stripped from branch; proceeding with merge");
+                } else {
+                    bail!(
+                        "Cannot strip .beads symlink from branch '{branch}': \
+                         HEAD:.beads tree SHA not found — merge aborted to avoid working-tree conflict"
+                    );
                 }
             }
         }
@@ -909,7 +937,10 @@ mod tests {
 
         // Mutate the .beads/ file in the worktree (simulates bd backup writes)
         let wt_beads_file = wt_path.join(".beads/backup/backup_state.json");
-        assert!(wt_beads_file.exists(), ".beads/ file should exist in worktree");
+        assert!(
+            wt_beads_file.exists(),
+            ".beads/ file should exist in worktree"
+        );
         std::fs::write(&wt_beads_file, r#"{"mutated": true}"#).unwrap();
 
         // git status may show "?? .beads" for the untracked symlink; that is expected.

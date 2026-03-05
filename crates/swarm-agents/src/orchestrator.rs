@@ -569,11 +569,14 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
     // stages a directory→symlink type change it may not fully undo the mode-120000 entry.
     // `update-index --force-remove` removes only the exact path '.beads' (not '.beads/<files>'),
     // ensuring the symlink is never committed to the branch even if restore didn't fully work.
-    let _ = tokio::process::Command::new("git")
-        .args(["update-index", "--force-remove", ".beads"])
-        .current_dir(wt_path)
-        .output()
-        .await;
+    // Exit code is 0 whether the path was present (removed) or absent (no-op), so a
+    // non-zero exit always indicates a real git error — fail-closed to prevent a dirty commit.
+    let force_remove =
+        retry_git_command_async(&["update-index", "--force-remove", ".beads"], wt_path, 3).await?;
+    if !force_remove.status.success() {
+        let stderr = String::from_utf8_lossy(&force_remove.stderr);
+        anyhow::bail!("git update-index --force-remove .beads failed: {stderr}");
+    }
 
     // Check if there are staged changes
     let status = tokio::process::Command::new("git")
