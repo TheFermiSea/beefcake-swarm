@@ -1752,6 +1752,8 @@ pub async fn process_issue(
                         let adapter = RuntimeAdapter::new(AdapterConfig {
                             agent_name: "Qwen3.5-RustCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
+                            max_tool_calls: Some(30),
+                            max_turns_without_write: Some(3),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1780,6 +1782,8 @@ pub async fn process_issue(
                         let adapter = RuntimeAdapter::new(AdapterConfig {
                             agent_name: "Qwen3.5-GeneralCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
+                            max_tool_calls: Some(30),
+                            max_turns_without_write: Some(3),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1814,6 +1818,7 @@ pub async fn process_issue(
                 let adapter = RuntimeAdapter::new(AdapterConfig {
                     agent_name: "manager".into(),
                     deadline: Some(Instant::now() + manager_timeout),
+                    max_reads_without_action: Some(8),
                     ..Default::default()
                 });
                 // Wrap manager call with timeout to enforce turn limits.
@@ -1874,6 +1879,7 @@ pub async fn process_issue(
                                 let fb_adapter = RuntimeAdapter::new(AdapterConfig {
                                     agent_name: format!("manager-{}", entry.tier_label),
                                     deadline: Some(Instant::now() + manager_timeout),
+                                    max_reads_without_action: Some(8),
                                     ..Default::default()
                                 });
                                 match tokio::time::timeout(

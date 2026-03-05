@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "5.9.1";
+pub const PROMPT_VERSION: &str = "5.10.0";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -73,6 +73,15 @@ claiming and closing — you focus on solving the problem.
    before retrying with a different worker or revised plan.
 6. **When the verifier passes (all_green: true), IMMEDIATELY stop and return your summary.** \
    Do NOT spawn additional workers, re-read files, or re-verify. The task is DONE.
+
+## CRITICAL: Delegation Deadline
+- You MUST delegate to a coder or fixer within your FIRST 3 turns.
+- Read at most 2-3 files to understand the problem, then delegate immediately.
+- Do NOT use proxy_planner for simple tasks (doc comments, clippy fixes, single-file \
+  changes). Delegate directly to proxy_rust_coder or proxy_general_coder with specific \
+  instructions including file paths and what to change.
+- Use proxy_planner ONLY for complex multi-step problems requiring analysis.
+- Every turn you spend reading without delegating wastes 3-8 minutes of compute.
 
 ## CRITICAL: Stop When Done
 **Once proxy_run_verifier returns all_green: true, you MUST stop immediately.** \
@@ -154,6 +163,15 @@ status changes — you focus on solving the problem.
 5. If verifier fails, check the debugging KB for known fixes before retrying.
 6. **When the verifier passes (all_green: true), IMMEDIATELY stop and return your summary.** \
    The task is DONE. Do NOT re-verify, re-read, or spawn more workers.
+
+## CRITICAL: Delegation Deadline
+- You MUST delegate to a coder or fixer within your FIRST 3 turns.
+- Read at most 2-3 files to understand the problem, then delegate immediately.
+- Do NOT use planner for simple tasks (doc comments, clippy fixes, single-file \
+  changes). Delegate directly to rust_coder or general_coder with specific \
+  instructions including file paths and what to change.
+- Use planner ONLY for complex multi-step problems requiring analysis.
+- Every turn you spend reading without delegating wastes 3-8 minutes of compute.
 
 ## CRITICAL: Stop When Done
 **Once run_verifier returns all_green: true, you MUST stop immediately.** \
