@@ -531,6 +531,18 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
         anyhow::bail!("git add failed (iteration {iteration}): {stderr}");
     }
 
+    // Best-effort: unstage .beads if it was accidentally staged via the worktree symlink.
+    // WorktreeBridge::create() replaces .beads/ with a symlink to the main repo's .beads/
+    // so that `bd` commands connect to the shared Dolt server. `git add .` in a worktree
+    // would stage this symlink (as a mode-120000 blob) and simultaneously delete the
+    // tracked .beads/backup/ paths from the index — falsely appearing as a code change.
+    // `git restore --staged .beads` is a no-op when .beads is not staged.
+    let _ = tokio::process::Command::new("git")
+        .args(["restore", "--staged", ".beads"])
+        .current_dir(wt_path)
+        .output()
+        .await;
+
     // Check if there are staged changes
     let status = tokio::process::Command::new("git")
         .args(["diff", "--cached", "--quiet"])
