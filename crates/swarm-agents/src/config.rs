@@ -3,6 +3,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use rig::providers::openai;
 use serde::Deserialize;
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
@@ -49,6 +50,43 @@ fn cloud_headers(api_key: &str) -> HeaderMap {
         headers.insert("x-api-key", val);
     }
     headers
+}
+
+/// Default per-request HTTP timeout for cloud API calls (CLIAPIProxy).
+///
+/// Cloud APIs (Opus 4.6 via CLIAPIProxy) respond within seconds to a few minutes.
+/// 5 minutes is generous; a hung proxy connection should fail fast so retry logic
+/// can kick in rather than burning the entire 45-minute manager budget.
+const DEFAULT_CLOUD_HTTP_TIMEOUT_SECS: u64 = 300;
+
+/// Default per-request HTTP timeout for local LLM calls (Qwen3.5 on vasp nodes).
+///
+/// Local models at ~6 tok/s with max_tokens=4096 need ~11 minutes worst case.
+/// 15 minutes provides headroom for slow prompts and context processing.
+const DEFAULT_LOCAL_HTTP_TIMEOUT_SECS: u64 = 900;
+
+/// Default TCP connect timeout for all endpoints.
+const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 15;
+
+/// Build a `reqwest::Client` with per-request and connect timeouts.
+///
+/// The per-request timeout covers the entire HTTP lifecycle (connect + send + receive).
+/// Without this, a hung endpoint silently consumes the entire manager/worker budget.
+fn http_client_with_timeout(timeout_secs: u64) -> Result<reqwest::Client> {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_secs))
+        .connect_timeout(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS))
+        .build()
+        .context("Failed to build reqwest::Client with timeout")
+}
+
+/// Read an HTTP timeout from an environment variable, falling back to a default.
+fn http_timeout_from_env(var: &str, default: u64) -> u64 {
+    std::env::var(var)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
 }
 
 /// A single entry in the cloud model fallback matrix.
@@ -354,6 +392,20 @@ pub struct ClientSet {
 
 impl ClientSet {
     pub fn from_config(config: &SwarmConfig) -> Result<Self> {
+        let cloud_timeout =
+            http_timeout_from_env("SWARM_CLOUD_HTTP_TIMEOUT_SECS", DEFAULT_CLOUD_HTTP_TIMEOUT_SECS);
+        let local_timeout =
+            http_timeout_from_env("SWARM_LOCAL_HTTP_TIMEOUT_SECS", DEFAULT_LOCAL_HTTP_TIMEOUT_SECS);
+
+        tracing::info!(
+            cloud_http_timeout_secs = cloud_timeout,
+            local_http_timeout_secs = local_timeout,
+            "HTTP client timeouts configured"
+        );
+
+        let cloud_http = http_client_with_timeout(cloud_timeout)?;
+        let local_http = http_client_with_timeout(local_timeout)?;
+
         // In cloud-only mode, reuse the cloud client for all tiers
         if config.cloud_only {
             let cloud_ep = config
@@ -361,29 +413,33 @@ impl ClientSet {
                 .as_ref()
                 .context("cloud_only requires cloud_endpoint to be configured")?;
             let headers = cloud_headers(&cloud_ep.api_key);
-            let cloud = openai::CompletionsClient::builder()
+            let cloud = openai::CompletionsClient::<reqwest::Client>::builder()
                 .api_key(&cloud_ep.api_key)
                 .base_url(&cloud_ep.url)
                 .http_headers(headers.clone())
+                .http_client(cloud_http.clone())
                 .build()
                 .context("Failed to build cloud client")?;
             // Build identical clients for local, coder, and reasoning slots
-            let local = openai::CompletionsClient::builder()
+            let local = openai::CompletionsClient::<reqwest::Client>::builder()
                 .api_key(&cloud_ep.api_key)
                 .base_url(&cloud_ep.url)
                 .http_headers(headers.clone())
+                .http_client(cloud_http.clone())
                 .build()
                 .context("Failed to build cloud-as-local client")?;
-            let coder = openai::CompletionsClient::builder()
+            let coder = openai::CompletionsClient::<reqwest::Client>::builder()
                 .api_key(&cloud_ep.api_key)
                 .base_url(&cloud_ep.url)
                 .http_headers(headers.clone())
+                .http_client(cloud_http.clone())
                 .build()
                 .context("Failed to build cloud-as-coder client")?;
-            let reasoning = openai::CompletionsClient::builder()
+            let reasoning = openai::CompletionsClient::<reqwest::Client>::builder()
                 .api_key(&cloud_ep.api_key)
                 .base_url(&cloud_ep.url)
                 .http_headers(headers)
+                .http_client(cloud_http)
                 .build()
                 .context("Failed to build cloud-as-reasoning client")?;
             return Ok(Self {
@@ -394,21 +450,24 @@ impl ClientSet {
             });
         }
 
-        let local = openai::CompletionsClient::builder()
+        let local = openai::CompletionsClient::<reqwest::Client>::builder()
             .api_key(&config.fast_endpoint.api_key)
             .base_url(&config.fast_endpoint.url)
+            .http_client(local_http.clone())
             .build()
             .context("Failed to build local/fast client (vasp-03)")?;
 
-        let coder = openai::CompletionsClient::builder()
+        let coder = openai::CompletionsClient::<reqwest::Client>::builder()
             .api_key(&config.coder_endpoint.api_key)
             .base_url(&config.coder_endpoint.url)
+            .http_client(local_http.clone())
             .build()
             .context("Failed to build coder client (vasp-01)")?;
 
-        let reasoning = openai::CompletionsClient::builder()
+        let reasoning = openai::CompletionsClient::<reqwest::Client>::builder()
             .api_key(&config.reasoning_endpoint.api_key)
             .base_url(&config.reasoning_endpoint.url)
+            .http_client(local_http)
             .build()
             .context("Failed to build reasoning client (vasp-02)")?;
 
@@ -416,10 +475,11 @@ impl ClientSet {
             .cloud_endpoint
             .as_ref()
             .map(|ep| {
-                openai::CompletionsClient::builder()
+                openai::CompletionsClient::<reqwest::Client>::builder()
                     .api_key(&ep.api_key)
                     .base_url(&ep.url)
                     .http_headers(cloud_headers(&ep.api_key))
+                    .http_client(cloud_http)
                     .build()
             })
             .transpose()
