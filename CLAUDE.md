@@ -145,6 +145,8 @@ All tiers default to Qwen3.5-397B-A17B. run-swarm.sh and config.rs are now align
 | `SWARM_CLOUD_ONLY` | `false` | Route all work through cloud (skip local) |
 | `SWARM_VERIFIER_PACKAGES` | *(empty)* | Comma-separated; empty = entire workspace |
 | `SWARM_MIN_OBJECTIVE_LEN` | `10` | Minimum issue title length |
+| `SWARM_CLOUD_HTTP_TIMEOUT_SECS` | `300` | Per-request HTTP timeout for cloud API calls (5 min) |
+| `SWARM_LOCAL_HTTP_TIMEOUT_SECS` | `900` | Per-request HTTP timeout for local LLM calls (15 min) |
 | `SWARM_BEADS_BIN` | `bd` | Beads CLI binary name |
 | `RUST_LOG` | `info` | Log level (see Debug & Monitoring) |
 
