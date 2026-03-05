@@ -260,9 +260,7 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                         error = %e,
                         "Adapter state poisoned in on_completion_call — terminating"
                     );
-                    return HookAction::terminate(
-                        "Runtime adapter: internal state corrupted",
-                    );
+                    return HookAction::terminate("Runtime adapter: internal state corrupted");
                 }
             };
 
