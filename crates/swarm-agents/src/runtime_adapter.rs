@@ -42,8 +42,10 @@ pub struct AdapterConfig {
     pub deadline: Option<Instant>,
     /// Maximum characters to capture in args/result previews.
     pub preview_len: usize,
-    /// Max consecutive read-only tool calls before termination.
+    /// Max read-only tool calls since last action before termination.
     /// Resets when an "action" tool is called (edit, write, delegate, verify).
+    /// Neutral tools (e.g. run_command) are transparent — they neither
+    /// increment nor reset the counter.
     pub max_reads_without_action: Option<usize>,
     /// Max LLM turns without an edit_file/write_file call before termination.
     /// For workers only (not planner/manager).
@@ -120,7 +122,8 @@ struct AdapterState {
     started_at: Instant,
     terminated_early: bool,
     termination_reason: Option<String>,
-    /// Consecutive read-only tool calls without an action. Reset by action tools.
+    /// Read-only tool calls since last action. Reset by action tools;
+    /// neutral tools (run_command) are transparent.
     consecutive_reads: usize,
     /// Whether edit_file or write_file has been called at least once.
     has_written: bool,
@@ -252,8 +255,14 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                     (turn, terminate)
                 }
                 Err(e) => {
-                    warn!(agent = %config.agent_name, error = %e, "Adapter state poisoned in on_completion_call");
-                    (0, None)
+                    warn!(
+                        agent = %config.agent_name,
+                        error = %e,
+                        "Adapter state poisoned in on_completion_call — terminating"
+                    );
+                    return HookAction::terminate(
+                        "Runtime adapter: internal state corrupted",
+                    );
                 }
             };
 
@@ -361,7 +370,7 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 if s.consecutive_reads > max_reads {
                     s.terminated_early = true;
                     let reason = format!(
-                        "read budget exceeded: {} consecutive reads without action (limit: {}). \
+                        "read budget exceeded: {} read-only calls since last action (limit: {}). \
                          Delegate to a worker or write code now.",
                         s.consecutive_reads, max_reads
                     );
