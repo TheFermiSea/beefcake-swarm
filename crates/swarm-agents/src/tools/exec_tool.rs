@@ -23,6 +23,8 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "ls", "wc", "find", "grep", "cat", "head", "tail", "sed", "awk", "sort", "uniq", "diff",
     // File operations
     "touch", "mkdir",
+    // Shell utilities (safe output/pipeline helpers)
+    "echo", "printf", "true", "false",
 ];
 
 /// Characters that indicate command chaining or injection intent.
@@ -78,7 +80,7 @@ impl Tool for RunCommandTool {
                           Prefer modern tools: rg (not grep), fd (not find), bat (not cat), \
                           sd (not sed), delta (not diff). \
                           Also allowed: cargo, git, bd, ls, wc, head, tail, awk, sort, uniq, \
-                          touch, mkdir. Use bd for beads issue tracking."
+                          touch, mkdir, echo, printf. Use bd for beads issue tracking."
                 .into(),
             parameters: serde_json::json!({
                 "type": "object",
