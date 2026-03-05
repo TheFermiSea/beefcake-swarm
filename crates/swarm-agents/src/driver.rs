@@ -648,7 +648,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                         agent_name: "Qwen3.5-RustCoder".into(),
                         deadline: Some(Instant::now() + ctx.worker_timeout),
                         max_tool_calls: Some(30),
-                        max_turns_without_write: Some(3),
+                        max_turns_without_write: Some(5),
                         ..Default::default()
                     });
                     let result = match tokio::time::timeout(
@@ -676,7 +676,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                         agent_name: "Qwen3.5-GeneralCoder".into(),
                         deadline: Some(Instant::now() + ctx.worker_timeout),
                         max_tool_calls: Some(30),
-                        max_turns_without_write: Some(3),
+                        max_turns_without_write: Some(5),
                         ..Default::default()
                     });
                     let result = match tokio::time::timeout(
