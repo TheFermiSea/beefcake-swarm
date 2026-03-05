@@ -234,9 +234,30 @@ impl WorktreeBridge {
                     .open(&exclude_file)
                 {
                     let _ = f.write_all(
-                        b"\n# Orchestrator artifacts\n.swarm-progress.txt\n.swarm-session.json\n",
+                        b"\n# Orchestrator artifacts\n.swarm-progress.txt\n.swarm-session.json\n# Beads data (auto-modified by bd, not real code changes)\n.beads/\n",
                     );
                 }
+            }
+        }
+
+        // Mark tracked .beads/ files as skip-worktree so git ignores
+        // modifications by bd commands. Prevents beads backup changes from
+        // appearing in git diff/status/add — fixes false positive acceptance,
+        // circuit breaker bypass, and agent confusion from beads noise.
+        if let Ok(ls_output) = Command::new("git")
+            .args(["ls-files", ".beads/"])
+            .current_dir(&wt_path)
+            .output()
+        {
+            let file_list = String::from_utf8_lossy(&ls_output.stdout).to_string();
+            let files: Vec<&str> = file_list.lines().filter(|l| !l.is_empty()).collect();
+            if !files.is_empty() {
+                let mut args: Vec<&str> = vec!["update-index", "--skip-worktree"];
+                args.extend(&files);
+                let _ = Command::new("git")
+                    .args(&args)
+                    .current_dir(&wt_path)
+                    .output();
             }
         }
 
