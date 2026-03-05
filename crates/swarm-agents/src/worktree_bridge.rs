@@ -291,6 +291,57 @@ impl WorktreeBridge {
             }
         }
 
+        // Replace the worktree's .beads/ directory with a symlink to the main repo's
+        // .beads/ so that `bd` commands from the worktree connect to the same Dolt
+        // database server as the main repo.
+        //
+        // Why symlink instead of copy:
+        //   - The beads Dolt server uses its startup CWD as the database root.
+        //   - The server is started by the first `bd` invocation in the main repo.
+        //   - Worktrees share the same server (port 3307 locked in .beads/dolt-server.lock).
+        //   - If the worktree runs `bd` against its own (fresh) .beads/dolt/, it starts a
+        //     NEW server process with a different CWD → "database not found" errors.
+        //   - Symlinking ensures all worktree `bd` commands use the main repo's running
+        //     server and authoritative issue database.
+        //
+        // Safety: skip-worktree bits (set above) prevent git from showing the "missing"
+        // tracked files as deleted. The symlink replaces a directory git thinks it owns,
+        // but git won't complain because skip-worktree hides those paths.
+        let wt_beads = wt_path.join(".beads");
+        let main_beads = self.repo_root.join(".beads");
+        if main_beads.exists() && wt_beads.exists() && !wt_beads.is_symlink() {
+            match std::fs::remove_dir_all(&wt_beads) {
+                Ok(()) => {
+                    #[cfg(unix)]
+                    match std::os::unix::fs::symlink(&main_beads, &wt_beads) {
+                        Ok(()) => {
+                            tracing::info!(
+                                src = %main_beads.display(),
+                                dst = %wt_beads.display(),
+                                "Symlinked .beads/ to main repo for shared Dolt access"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "Failed to symlink .beads/; bd commands may fail in worktree"
+                            );
+                        }
+                    }
+                    #[cfg(not(unix))]
+                    tracing::warn!(
+                        "Non-Unix platform: cannot symlink .beads/; bd commands may fail in worktree"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "Failed to remove worktree .beads/ for symlink; bd commands may fail"
+                    );
+                }
+            }
+        }
+
         Ok(wt_path)
     }
 
@@ -736,9 +787,21 @@ mod tests {
         let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
             .expect("bridge creation");
 
-        // Create worktree — should set skip-worktree on .beads/ files
+        // Create worktree — should set skip-worktree on .beads/ files AND symlink .beads/
         let wt_path = bridge.create("beads-test").expect("create worktree");
         assert!(wt_path.exists());
+
+        // .beads/ should be replaced with a symlink to the main repo's .beads/
+        let wt_beads_path = wt_path.join(".beads");
+        assert!(
+            wt_beads_path.is_symlink(),
+            ".beads/ should be a symlink to main repo's .beads/"
+        );
+        assert_eq!(
+            std::fs::read_link(&wt_beads_path).unwrap(),
+            repo_dir.path().join(".beads"),
+            ".beads/ symlink should point to main repo"
+        );
 
         // Mutate the .beads/ file in the worktree (simulates bd backup writes)
         let wt_beads_file = wt_path.join(".beads/backup/backup_state.json");
