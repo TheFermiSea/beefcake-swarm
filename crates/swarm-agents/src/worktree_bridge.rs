@@ -389,6 +389,97 @@ impl WorktreeBridge {
             }
         }
 
+        // Pre-merge: detect and strip .beads symlink from the branch if it was accidentally
+        // committed. When `git add .` stages the worktree's .beads symlink as a mode-120000
+        // blob, git merge would try to replace .beads/ (a directory) with a blob in the
+        // main working tree. This fails with "Updating the following directories would lose
+        // untracked files in them" because .beads/ contains active beads database files.
+        //
+        // Fix: if the branch tip has .beads as a blob (symlink), not a tree (directory),
+        // restore the proper .beads/ directory structure from main HEAD and create a fixup
+        // commit so the merge can proceed cleanly.
+        if wt_path.exists() {
+            let ls_beads = Command::new("git")
+                .args(["ls-tree", &branch, "--", ".beads"])
+                .current_dir(&self.repo_root)
+                .output();
+
+            // A symlink shows up as "120000 blob <sha>\t.beads"; a directory as "040000 tree ..."
+            let beads_is_blob = ls_beads
+                .map(|o| {
+                    let out = String::from_utf8_lossy(&o.stdout);
+                    out.contains(" blob ") && out.contains(".beads")
+                })
+                .unwrap_or(false);
+
+            if beads_is_blob {
+                tracing::warn!(
+                    issue_id = %issue_id,
+                    branch = %branch,
+                    ".beads committed as symlink/blob — stripping before merge to prevent working-tree conflict"
+                );
+
+                // Get the tree SHA for .beads/ from the current main HEAD so we can restore it.
+                let tree_sha = Command::new("git")
+                    .args(["rev-parse", "HEAD:.beads"])
+                    .current_dir(&self.repo_root)
+                    .output()
+                    .ok()
+                    .filter(|o| o.status.success())
+                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+                    .filter(|s| !s.is_empty());
+
+                if let Some(tree_sha) = tree_sha {
+                    // Remove the .beads blob from the worktree branch's index.
+                    let _ = Command::new("git")
+                        .args(["rm", "--cached", "-f", "-q", "--ignore-unmatch", "--", ".beads"])
+                        .current_dir(&wt_path)
+                        .output();
+
+                    // Restore .beads/ directory entries from main HEAD (index-only, no working
+                    // tree update — the working tree still has the symlink, but skip-worktree
+                    // hides the discrepancy from git status/add/diff).
+                    let _ = Command::new("git")
+                        .args(["read-tree", "--prefix=.beads/", &tree_sha])
+                        .current_dir(&wt_path)
+                        .output();
+
+                    // Re-apply skip-worktree bits on the restored .beads/ entries so they
+                    // don't appear as local modifications.
+                    if let Ok(ls) = Command::new("git")
+                        .args(["ls-files", "--", ".beads/"])
+                        .current_dir(&wt_path)
+                        .output()
+                    {
+                        let file_list = String::from_utf8_lossy(&ls.stdout).to_string();
+                        let files: Vec<&str> =
+                            file_list.lines().filter(|l| !l.is_empty()).collect();
+                        if !files.is_empty() {
+                            let mut args = vec!["update-index", "--skip-worktree"];
+                            args.extend_from_slice(&files);
+                            let _ = Command::new("git")
+                                .args(&args)
+                                .current_dir(&wt_path)
+                                .output();
+                        }
+                    }
+
+                    // Commit the fixup so the merge sees a clean .beads/ directory.
+                    let _ = Command::new("git")
+                        .args([
+                            "commit",
+                            "--allow-empty",
+                            "-m",
+                            "swarm: restore .beads directory (strip accidental symlink)",
+                        ])
+                        .current_dir(&wt_path)
+                        .output();
+
+                    tracing::info!(issue_id = %issue_id, ".beads symlink stripped from branch; proceeding with merge");
+                }
+            }
+        }
+
         // Merge the branch into the main repo
         let merge_msg = format!("swarm: merge {issue_id}");
         let merge = retry_git_command(

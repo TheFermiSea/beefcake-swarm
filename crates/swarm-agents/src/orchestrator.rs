@@ -543,6 +543,17 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
         .output()
         .await;
 
+    // Belt-and-suspenders: force-remove the .beads blob entry from the index.
+    // `git restore --staged` restores tracked paths from HEAD, but when `git add .`
+    // stages a directory→symlink type change it may not fully undo the mode-120000 entry.
+    // `update-index --force-remove` removes only the exact path '.beads' (not '.beads/<files>'),
+    // ensuring the symlink is never committed to the branch even if restore didn't fully work.
+    let _ = tokio::process::Command::new("git")
+        .args(["update-index", "--force-remove", ".beads"])
+        .current_dir(wt_path)
+        .output()
+        .await;
+
     // Check if there are staged changes
     let status = tokio::process::Command::new("git")
         .args(["diff", "--cached", "--quiet"])
