@@ -215,6 +215,13 @@ fn diff_line_count(wt_path: &Path, initial_commit: &str) -> Result<usize, String
     let mut total = 0usize;
     for line in stdout.lines() {
         let parts: Vec<&str> = line.split('\t').collect();
+        // Skip .beads/ paths — in worktrees, .beads/ is a symlink to the main
+        // repo's beads database. If it somehow appears in the diff (e.g. from
+        // a pre-PR#38 worktree), exclude it so the size gate isn't triggered by
+        // beads noise rather than real code changes.
+        if parts.len() >= 3 && parts[2].starts_with(".beads") {
+            continue;
+        }
         if parts.len() >= 2 {
             let added: usize = parts[0].parse().unwrap_or(0);
             let removed: usize = parts[1].parse().unwrap_or(0);
@@ -445,6 +452,71 @@ mod tests {
 
         let lines = diff_line_count(dir.path(), &initial).unwrap();
         assert_eq!(lines, 10);
+    }
+
+    #[test]
+    fn test_diff_line_count_excludes_beads_noise() {
+        let dir = tempfile::tempdir().unwrap();
+
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        std::fs::write(dir.path().join("README.md"), "# test\n").unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let initial = String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string();
+
+        // Add a real code change (5 lines) + .beads noise (1000 lines)
+        std::fs::write(dir.path().join("code.rs"), "a\nb\nc\nd\ne\n").unwrap();
+        std::fs::create_dir_all(dir.path().join(".beads/backup")).unwrap();
+        let beads_content = "noise\n".repeat(1000);
+        std::fs::write(dir.path().join(".beads/backup/issues.jsonl"), beads_content).unwrap();
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", "code + beads noise"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        // .beads lines should be excluded: only the 5 code lines count
+        let lines = diff_line_count(dir.path(), &initial).unwrap();
+        assert_eq!(lines, 5, ".beads noise should be excluded from diff count");
     }
 
     #[test]
