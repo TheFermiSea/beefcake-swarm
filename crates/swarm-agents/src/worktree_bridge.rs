@@ -345,12 +345,25 @@ impl WorktreeBridge {
         Ok(wt_path)
     }
 
-    /// Merge the worktree branch back into the current branch and clean up.
+    /// Merge the worktree branch for an issue into the current repository branch and remove the worktree and its branch.
     ///
-    /// 1. Checks for uncommitted changes in the worktree
-    /// 2. Merges `swarm/<issue_id>` with --no-ff
-    /// 3. Removes the worktree
-    /// 4. Deletes the branch
+    /// Performs these actions in order:
+    /// 1. Ensures the worktree has no uncommitted changes (errors if any are present).
+    /// 2. Detects and repairs an accidentally committed `.beads` symlink/blob on the branch (if present) so the merge can proceed.
+    /// 3. Merges `swarm/<sanitized-issue_id>` into the current branch with `--no-ff`.
+    /// 4. Removes the worktree and deletes the `swarm/<sanitized-issue_id>` branch (warnings are logged on non-fatal failures).
+    ///
+    /// If the merge fails (for example due to conflicts) this function returns an error and does not remove the branch.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use anyhow::Result;
+    /// # fn example(bridge: &crate::WorktreeBridge) -> Result<()> {
+    /// bridge.merge_and_remove("ISSUE-123")?;
+    /// # Ok(())
+    /// # }
+    /// ```
     #[tracing::instrument(skip(self), fields(issue_id = %issue_id))]
     pub fn merge_and_remove(&self, issue_id: &str) -> Result<()> {
         let safe_id = Self::sanitize_id(issue_id);

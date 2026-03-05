@@ -518,11 +518,32 @@ pub async fn try_auto_fix(
     }
 }
 
-/// Stage and commit all changes in the worktree.
+/// Stage and commit all changes in the given worktree, avoiding accidental commits of worktree symlinks.
 ///
-/// Returns `true` if there were changes to commit, `false` if clean.
-/// Uses `git add .` (not `-A`) to respect `.gitignore` and avoid staging
-/// agent-generated artifacts.
+/// Stages changes using `git add .` (so `.gitignore` is respected), then commits with the message
+/// `swarm: iteration {iteration} changes`. The implementation retries staging/commit on transient
+/// index.lock errors, performs a best-effort unstage of the special `.beads` entry and forcibly
+/// removes any `.beads` index blob to ensure the worktree symlink is never committed.
+///
+/// # Parameters
+///
+/// - `wt_path`: path to the worktree where git commands will be executed.
+/// - `iteration`: iteration number used to compose the commit message.
+///
+/// # Returns
+///
+/// `true` if a commit was created, `false` if there were no staged changes to commit.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let committed = crate::git_commit_changes(Path::new("."), 1).await?;
+/// println!("Committed changes: {}", committed);
+/// # Ok(()) }
+/// ```
 pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> {
     // Stage changes (respects .gitignore) — retry for transient index.lock errors
     let add = retry_git_command_async(&["add", "."], wt_path, 3).await?;
