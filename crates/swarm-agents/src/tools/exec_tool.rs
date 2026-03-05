@@ -22,8 +22,7 @@ const ALLOWED_COMMANDS: &[&str] = &[
     "rg", "fd", "bat", "sd", "delta", // Classic Unix fallbacks (LLMs default to these)
     "ls", "wc", "find", "grep", "cat", "head", "tail", "sed", "awk", "sort", "uniq", "diff",
     // File operations
-    "touch", "mkdir",
-    // Shell utilities (safe output/pipeline helpers)
+    "touch", "mkdir", // Shell utilities (safe output/pipeline helpers)
     "echo", "printf", "true", "false",
 ];
 

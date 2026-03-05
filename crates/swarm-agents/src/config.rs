@@ -392,10 +392,14 @@ pub struct ClientSet {
 
 impl ClientSet {
     pub fn from_config(config: &SwarmConfig) -> Result<Self> {
-        let cloud_timeout =
-            http_timeout_from_env("SWARM_CLOUD_HTTP_TIMEOUT_SECS", DEFAULT_CLOUD_HTTP_TIMEOUT_SECS);
-        let local_timeout =
-            http_timeout_from_env("SWARM_LOCAL_HTTP_TIMEOUT_SECS", DEFAULT_LOCAL_HTTP_TIMEOUT_SECS);
+        let cloud_timeout = http_timeout_from_env(
+            "SWARM_CLOUD_HTTP_TIMEOUT_SECS",
+            DEFAULT_CLOUD_HTTP_TIMEOUT_SECS,
+        );
+        let local_timeout = http_timeout_from_env(
+            "SWARM_LOCAL_HTTP_TIMEOUT_SECS",
+            DEFAULT_LOCAL_HTTP_TIMEOUT_SECS,
+        );
 
         tracing::info!(
             cloud_http_timeout_secs = cloud_timeout,

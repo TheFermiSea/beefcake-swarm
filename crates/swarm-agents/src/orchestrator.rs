@@ -518,11 +518,32 @@ pub async fn try_auto_fix(
     }
 }
 
-/// Stage and commit all changes in the worktree.
+/// Stage and commit all changes in the given worktree, avoiding accidental commits of worktree symlinks.
 ///
-/// Returns `true` if there were changes to commit, `false` if clean.
-/// Uses `git add .` (not `-A`) to respect `.gitignore` and avoid staging
-/// agent-generated artifacts.
+/// Stages changes using `git add .` (so `.gitignore` is respected), then commits with the message
+/// `swarm: iteration {iteration} changes`. The implementation retries staging/commit on transient
+/// index.lock errors, performs a best-effort unstage of the special `.beads` entry and forcibly
+/// removes any `.beads` index blob to ensure the worktree symlink is never committed.
+///
+/// # Parameters
+///
+/// - `wt_path`: path to the worktree where git commands will be executed.
+/// - `iteration`: iteration number used to compose the commit message.
+///
+/// # Returns
+///
+/// `true` if a commit was created, `false` if there were no staged changes to commit.
+///
+/// # Examples
+///
+/// ```ignore
+/// use std::path::Path;
+///
+/// # async fn example() -> anyhow::Result<()> {
+/// let committed = git_commit_changes(Path::new("."), 1).await?;
+/// println!("Committed changes: {}", committed);
+/// # Ok(()) }
+/// ```
 pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> {
     // Stage changes (respects .gitignore) — retry for transient index.lock errors
     let add = retry_git_command_async(&["add", "."], wt_path, 3).await?;
@@ -542,6 +563,20 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
         .current_dir(wt_path)
         .output()
         .await;
+
+    // Belt-and-suspenders: force-remove the .beads blob entry from the index.
+    // `git restore --staged` restores tracked paths from HEAD, but when `git add .`
+    // stages a directory→symlink type change it may not fully undo the mode-120000 entry.
+    // `update-index --force-remove` removes only the exact path '.beads' (not '.beads/<files>'),
+    // ensuring the symlink is never committed to the branch even if restore didn't fully work.
+    // Exit code is 0 whether the path was present (removed) or absent (no-op), so a
+    // non-zero exit always indicates a real git error — fail-closed to prevent a dirty commit.
+    let force_remove =
+        retry_git_command_async(&["update-index", "--force-remove", ".beads"], wt_path, 3).await?;
+    if !force_remove.status.success() {
+        let stderr = String::from_utf8_lossy(&force_remove.stderr);
+        anyhow::bail!("git update-index --force-remove .beads failed: {stderr}");
+    }
 
     // Check if there are staged changes
     let status = tokio::process::Command::new("git")
