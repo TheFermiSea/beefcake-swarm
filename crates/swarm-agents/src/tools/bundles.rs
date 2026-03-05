@@ -93,8 +93,13 @@ pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dy
 
 /// Build the deterministic tool bundle for a manager agent.
 ///
-/// Includes verifier, read, list_files. Managers delegate code changes
-/// to workers — they should never write/edit files directly.
+/// Cloud managers get delegate-only tools: verifier, diff, changed_files.
+/// NO read_file or list_files — forces the manager to delegate exploration
+/// to workers instead of absorbing read-work itself.
+///
+/// Local managers retain read/list since they may need to explore without
+/// cloud-quality planning ability.
+///
 /// When `proxy` is true, tools are wrapped with `proxy_` prefix.
 pub fn manager_tools(
     wt_path: &Path,
@@ -102,16 +107,17 @@ pub fn manager_tools(
     proxy: bool,
 ) -> Vec<Box<dyn ToolDyn>> {
     if proxy {
+        // Cloud manager: delegate-only (no read_file, no list_files).
+        // Workers have these tools — the manager must delegate to them.
         vec![
             Box::new(ProxyRunVerifier(
                 RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()),
             )),
-            Box::new(ProxyReadFile(ReadFileTool::new(wt_path))),
-            Box::new(ProxyListFiles(ListFilesTool::new(wt_path))),
             Box::new(ProxyGetDiff(GetDiffTool::new(wt_path))),
             Box::new(ProxyListChangedFiles(ListChangedFilesTool::new(wt_path))),
         ]
     } else {
+        // Local manager: retains read/list for direct exploration.
         vec![
             Box::new(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec())),
             Box::new(ReadFileTool::new(wt_path)),
@@ -191,13 +197,37 @@ mod tests {
     }
 
     #[test]
-    fn test_manager_tools_has_5_tools() {
+    fn test_manager_local_has_5_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], false);
         assert_eq!(
             tools.len(),
             5,
-            "Manager should have 5 tools (verifier, read, list, get_diff, list_changed_files)"
+            "Local manager should have 5 tools (verifier, read, list, get_diff, list_changed_files)"
+        );
+    }
+
+    #[test]
+    fn test_manager_cloud_has_3_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = manager_tools(dir.path(), &["test-pkg".to_string()], true);
+        assert_eq!(
+            tools.len(),
+            3,
+            "Cloud manager should have 3 delegate-only tools (verifier, get_diff, list_changed_files)"
+        );
+    }
+
+    #[test]
+    fn test_manager_cloud_no_read_list_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = manager_tools(dir.path(), &[], true);
+        let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
+        assert!(
+            !names
+                .iter()
+                .any(|n| n.contains("read_file") || n.contains("list_files")),
+            "Cloud manager should not have read_file/list_files, got: {names:?}"
         );
     }
 
