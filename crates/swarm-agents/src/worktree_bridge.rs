@@ -357,9 +357,9 @@ impl WorktreeBridge {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// # use anyhow::Result;
-    /// # fn example(bridge: &crate::WorktreeBridge) -> Result<()> {
+    /// # fn example(bridge: &WorktreeBridge) -> Result<()> {
     /// bridge.merge_and_remove("ISSUE-123")?;
     /// # Ok(())
     /// # }

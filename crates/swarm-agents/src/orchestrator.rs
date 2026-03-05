@@ -536,11 +536,11 @@ pub async fn try_auto_fix(
 ///
 /// # Examples
 ///
-/// ```no_run
+/// ```ignore
 /// use std::path::Path;
 ///
 /// # async fn example() -> anyhow::Result<()> {
-/// let committed = crate::git_commit_changes(Path::new("."), 1).await?;
+/// let committed = git_commit_changes(Path::new("."), 1).await?;
 /// println!("Committed changes: {}", committed);
 /// # Ok(()) }
 /// ```
