@@ -244,20 +244,50 @@ impl WorktreeBridge {
         // modifications by bd commands. Prevents beads backup changes from
         // appearing in git diff/status/add — fixes false positive acceptance,
         // circuit breaker bypass, and agent confusion from beads noise.
-        if let Ok(ls_output) = Command::new("git")
+        //
+        // Best-effort: worktree creation succeeds even if this fails, but we
+        // log warnings so failures are diagnosable.
+        match Command::new("git")
             .args(["ls-files", ".beads/"])
             .current_dir(&wt_path)
             .output()
         {
-            let file_list = String::from_utf8_lossy(&ls_output.stdout).to_string();
-            let files: Vec<&str> = file_list.lines().filter(|l| !l.is_empty()).collect();
-            if !files.is_empty() {
-                let mut args: Vec<&str> = vec!["update-index", "--skip-worktree"];
-                args.extend(&files);
-                let _ = Command::new("git")
-                    .args(&args)
-                    .current_dir(&wt_path)
-                    .output();
+            Ok(ls_output) if ls_output.status.success() => {
+                let file_list = String::from_utf8_lossy(&ls_output.stdout).to_string();
+                let files: Vec<&str> = file_list.lines().filter(|l| !l.is_empty()).collect();
+                if !files.is_empty() {
+                    let mut args: Vec<&str> = vec!["update-index", "--skip-worktree"];
+                    args.extend(&files);
+                    match retry_git_command(&args, &wt_path, 3) {
+                        Ok(ref out) if !out.status.success() => {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            tracing::warn!(
+                                stderr = %stderr.trim(),
+                                "git update-index --skip-worktree failed; .beads/ files may appear in status"
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                "Failed to run git update-index --skip-worktree"
+                            );
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(ls_output) => {
+                let stderr = String::from_utf8_lossy(&ls_output.stderr);
+                tracing::warn!(
+                    stderr = %stderr.trim(),
+                    "git ls-files .beads/ failed; skipping skip-worktree setup"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "Failed to execute git ls-files for .beads/"
+                );
             }
         }
 
@@ -665,6 +695,79 @@ mod tests {
 
         // Creating the same one again should fail
         assert!(bridge.create("test-issue").is_err());
+    }
+
+    #[test]
+    fn test_create_sets_skip_worktree_on_beads() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let wt_base = tempfile::tempdir().unwrap();
+
+        // Set up a git repo with an initial commit including a .beads/ file
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(repo_dir.path().join("README.md"), "hello").unwrap();
+        let beads_dir = repo_dir.path().join(".beads").join("backup");
+        std::fs::create_dir_all(&beads_dir).unwrap();
+        std::fs::write(beads_dir.join("backup_state.json"), "{}").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init with beads"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
+            .expect("bridge creation");
+
+        // Create worktree — should set skip-worktree on .beads/ files
+        let wt_path = bridge.create("beads-test").expect("create worktree");
+        assert!(wt_path.exists());
+
+        // Mutate the .beads/ file in the worktree (simulates bd backup writes)
+        let wt_beads_file = wt_path.join(".beads/backup/backup_state.json");
+        assert!(wt_beads_file.exists(), ".beads/ file should exist in worktree");
+        std::fs::write(&wt_beads_file, r#"{"mutated": true}"#).unwrap();
+
+        // git status should NOT show the .beads/ change
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+        let status_text = String::from_utf8_lossy(&status.stdout);
+        assert!(
+            !status_text.contains(".beads/"),
+            "skip-worktree should hide .beads/ changes, got: {status_text}"
+        );
+
+        // git diff should also be clean for .beads/
+        let diff = Command::new("git")
+            .args(["diff", "--stat"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+        let diff_text = String::from_utf8_lossy(&diff.stdout);
+        assert!(
+            !diff_text.contains(".beads/"),
+            "skip-worktree should hide .beads/ from diff, got: {diff_text}"
+        );
     }
 
     #[test]

@@ -113,7 +113,7 @@ run_issue() {
   local run_start run_end elapsed exit_code
 
   # Fetch title from beads for the objective
-  issue_title=$(bd show "$issue_id" --allow-stale 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('title',''))" 2>/dev/null || echo "Issue $issue_id")
+  issue_title=$(bd show "$issue_id" --json --allow-stale 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('title',''))" 2>/dev/null || echo "Issue $issue_id")
   issue_args=(--issue "$issue_id" --objective "$issue_title")
 
   log "  [run $run_num] Starting issue=$issue_id log=$run_log"
