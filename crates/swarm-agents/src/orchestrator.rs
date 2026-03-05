@@ -1500,26 +1500,20 @@ pub async fn process_issue(
 
     let council_budget_iterations = u32_from_env("SWARM_COUNCIL_MAX_ITERATIONS", 6);
     let council_budget_consultations = u32_from_env("SWARM_COUNCIL_MAX_CONSULTATIONS", 6);
-    let initial_tier = if feature_flags.worker_first_enabled {
-        let recommendation = classify_initial_tier(&issue.title, &[]);
-        info!(
-            tier = ?recommendation.tier,
-            complexity = %recommendation.complexity,
-            confidence = recommendation.confidence,
-            reason = %recommendation.reason,
-            "Worker-first classification"
-        );
-        recommendation.tier
-    } else {
-        // Without cloud, default to Worker — local models write code directly.
-        // With cloud, default to Council — cloud models handle delegation.
-        let default_tier = if config.cloud_endpoint.is_some() {
-            SwarmTier::Council
-        } else {
-            SwarmTier::Worker
-        };
-        tier_from_env("SWARM_INITIAL_TIER", default_tier)
-    };
+    // Always classify the task to determine starting tier.
+    // Simple tasks (doc comments, lint fixes) go directly to Worker (local coders).
+    // Complex tasks (refactors, multi-file arch) go to Council (cloud manager).
+    // Unknown tasks default to Worker — workers write code; manager just reads files.
+    let recommendation = classify_initial_tier(&issue.title, &[]);
+    info!(
+        tier = ?recommendation.tier,
+        complexity = %recommendation.complexity,
+        confidence = recommendation.confidence,
+        reason = %recommendation.reason,
+        "Task classification"
+    );
+    // Allow explicit env override, otherwise use classifier recommendation.
+    let initial_tier = tier_from_env("SWARM_INITIAL_TIER", recommendation.tier);
     // Clamp: Council requires cloud endpoint. Without cloud, the local manager
     // can't delegate to workers effectively. Honor explicit env override.
     let initial_tier = if initial_tier == SwarmTier::Council

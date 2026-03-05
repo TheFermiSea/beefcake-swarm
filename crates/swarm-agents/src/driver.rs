@@ -170,24 +170,16 @@ impl<'a> OrchestratorContext<'a> {
             orchestrator::u32_from_env("SWARM_COUNCIL_MAX_ITERATIONS", 6);
         let council_budget_consultations =
             orchestrator::u32_from_env("SWARM_COUNCIL_MAX_CONSULTATIONS", 6);
-        let initial_tier = if feature_flags.worker_first_enabled {
-            let recommendation = classify_initial_tier(&issue.title, &[]);
-            info!(
-                tier = ?recommendation.tier,
-                complexity = %recommendation.complexity,
-                confidence = recommendation.confidence,
-                reason = %recommendation.reason,
-                "Worker-first classification (state driver)"
-            );
-            recommendation.tier
-        } else {
-            let default_tier = if config.cloud_endpoint.is_some() {
-                SwarmTier::Council
-            } else {
-                SwarmTier::Worker
-            };
-            orchestrator::tier_from_env("SWARM_INITIAL_TIER", default_tier)
-        };
+        // Always classify — simple tasks go to Worker, complex to Council.
+        let recommendation = classify_initial_tier(&issue.title, &[]);
+        info!(
+            tier = ?recommendation.tier,
+            complexity = %recommendation.complexity,
+            confidence = recommendation.confidence,
+            reason = %recommendation.reason,
+            "Task classification (state driver)"
+        );
+        let initial_tier = orchestrator::tier_from_env("SWARM_INITIAL_TIER", recommendation.tier);
         let initial_tier = if initial_tier == SwarmTier::Council
             && config.cloud_endpoint.is_none()
             && std::env::var("SWARM_INITIAL_TIER").is_err()
