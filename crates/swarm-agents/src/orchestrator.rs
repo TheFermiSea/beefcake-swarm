@@ -1485,8 +1485,8 @@ pub async fn process_issue(
     let _health_monitor = AbortOnDrop(cluster_health.spawn_monitor());
 
     // --- Build agents scoped to this worktree ---
-    let rust_coder = factory.build_rust_coder(&wt_path);
-    let general_coder = factory.build_general_coder(&wt_path);
+    // Round-robin: each concurrent issue's factory clone selects the next node.
+    let (rust_coder, general_coder) = factory.build_worker_pair(&wt_path);
     let reviewer = factory.build_reviewer();
     let manager = factory.build_manager(&wt_path);
 

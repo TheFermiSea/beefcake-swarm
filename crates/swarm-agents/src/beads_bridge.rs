@@ -39,7 +39,7 @@ impl BeadsIssue {
 ///
 /// `BeadsBridge` implements this for the real beads CLI.
 /// Tests can provide a mock implementation.
-pub trait IssueTracker {
+pub trait IssueTracker: Send + Sync {
     fn list_ready(&self) -> Result<Vec<BeadsIssue>>;
     fn update_status(&self, id: &str, status: &str) -> Result<()>;
     fn close(&self, id: &str, reason: Option<&str>) -> Result<()>;
