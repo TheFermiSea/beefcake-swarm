@@ -11,7 +11,7 @@ use swarm_agents::beads_bridge::{BeadsBridge, BeadsIssue, IssueTracker, NoOpTrac
 use swarm_agents::config::{check_endpoint_with_model, SwarmConfig};
 use swarm_agents::modes::SwarmMode;
 use swarm_agents::notebook_bridge::{KnowledgeBase, NotebookBridge};
-use swarm_agents::orchestrator;
+use swarm_agents::orchestrator::{self, CANCEL_MSG};
 use swarm_agents::prompts;
 use swarm_agents::worktree_bridge::WorktreeBridge;
 
@@ -320,91 +320,8 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        // Cancel flag: set by shutdown listener task; checked per-iteration inside process_issue.
-        // OS threads cannot be cancelled by Tokio, so we use cooperative cancellation:
-        // the flag is stored with Release ordering here and loaded with Acquire inside the loop.
-        let cancel_flag = Arc::new(AtomicBool::new(false));
-        let flag_for_signal = Arc::clone(&cancel_flag);
-        tokio::spawn(async move {
-            shutdown_signal().await;
-            flag_for_signal.store(true, Ordering::Release);
-            warn!("Shutdown signal received — cancellation flag set for --issues batch");
-        });
-
-        info!(count = batch.len(), "Dispatching --issues batch in parallel");
-        let rt_handle = tokio::runtime::Handle::current();
-        let thread_handles: Vec<std::thread::JoinHandle<(String, anyhow::Result<bool>)>> = batch
-            .into_iter()
-            .map(|issue| {
-                let factory_clone = factory.clone();
-                let config_clone = config.clone();
-                let wb_clone = Arc::clone(&worktree_bridge);
-                let beads_clone = BeadsBridge::new();
-                let kb_clone = knowledge_base.clone();
-                let rt = rt_handle.clone();
-                let cancel = Arc::clone(&cancel_flag);
-                std::thread::spawn(move || {
-                    let id = issue.id.clone();
-                    let kb_ref = kb_clone.as_ref().map(|kb| kb.as_ref() as &dyn KnowledgeBase);
-                    let result = rt.block_on(orchestrator::process_issue(
-                        &config_clone,
-                        &factory_clone,
-                        &wb_clone,
-                        &issue,
-                        &beads_clone,
-                        kb_ref,
-                        cancel,
-                    ));
-                    (id, result)
-                })
-            })
-            .collect();
-
-        // Join via spawn_blocking to avoid blocking the async runtime.
-        let join_results = tokio::task::spawn_blocking(move || {
-            thread_handles
-                .into_iter()
-                .map(|h| h.join())
-                .collect::<Vec<_>>()
-        })
-        .await?;
-
-        // Distinguish shutdown-cancelled results from genuine failures.
-        // Cancelled issues have already been reset to "open" inside process_issue.
-        let cancelled = cancel_flag.load(Ordering::Acquire);
-        let mut any_failed = false;
-        for result in join_results {
-            match result {
-                Ok((id, Ok(true))) => info!(id = %id, "Issue resolved"),
-                Ok((id, Ok(false))) => {
-                    if cancelled {
-                        warn!(id = %id, "Issue not resolved (cancelled by shutdown signal)");
-                    } else {
-                        error!(id = %id, "Issue NOT resolved");
-                        any_failed = true;
-                    }
-                }
-                Ok((id, Err(e))) => {
-                    if cancelled && e.to_string().contains("cancelled by shutdown signal") {
-                        warn!(id = %id, "Issue cancelled by shutdown signal");
-                    } else {
-                        error!(id = %id, error = %e, "Issue errored");
-                        any_failed = true;
-                    }
-                }
-                Err(_) => {
-                    error!("Task panicked in parallel dispatch");
-                    any_failed = true;
-                }
-            }
-        }
-        if cancelled {
-            warn!("Graceful parallel shutdown complete (--issues batch)");
-            return Ok(());
-        }
-        if any_failed {
-            std::process::exit(1);
-        }
+        dispatch_parallel_issues(batch, &config, &factory, &worktree_bridge, knowledge_base.clone())
+            .await?;
     } else if let Ok(target_id) = std::env::var("SWARM_ISSUE") {
         // Branch 3: SWARM_ISSUE env var — fetch specific issue from beads
         let beads = BeadsBridge::new();
@@ -513,96 +430,121 @@ async fn main() -> Result<()> {
                 }
             }
         } else {
-            // Multiple issues: fan-out via OS threads (same pattern as Branch 1.5).
-            // process_issue is !Send, so we use thread::spawn + Handle::block_on.
-            //
-            // Cancel flag: set by shutdown listener; checked per-iteration inside
-            // process_issue so threads stop cleanly on SIGTERM.
-            let cancel_flag = Arc::new(AtomicBool::new(false));
-            let flag_for_signal = Arc::clone(&cancel_flag);
-            tokio::spawn(async move {
-                shutdown_signal().await;
-                flag_for_signal.store(true, Ordering::Release);
-                warn!("Shutdown signal received — cancellation flag set for parallel beads dispatch");
-            });
-
-            info!(count = claimed.len(), "Dispatching parallel issues via OS threads");
-            let rt_handle = tokio::runtime::Handle::current();
-            let thread_handles: Vec<std::thread::JoinHandle<(String, anyhow::Result<bool>)>> =
-                claimed
-                    .into_iter()
-                    .map(|issue| {
-                        let factory_clone = factory.clone();
-                        let config_clone = config.clone();
-                        let wb_clone = Arc::clone(&worktree_bridge);
-                        let beads_clone = BeadsBridge::new();
-                        let kb_clone = knowledge_base.clone();
-                        let rt = rt_handle.clone();
-                        let cancel = Arc::clone(&cancel_flag);
-                        std::thread::spawn(move || {
-                            let id = issue.id.clone();
-                            let kb_ref =
-                                kb_clone.as_ref().map(|kb| kb.as_ref() as &dyn KnowledgeBase);
-                            let result = rt.block_on(orchestrator::process_issue(
-                                &config_clone,
-                                &factory_clone,
-                                &wb_clone,
-                                &issue,
-                                &beads_clone,
-                                kb_ref,
-                                cancel,
-                            ));
-                            (id, result)
-                        })
-                    })
-                    .collect();
-
-            let join_results = tokio::task::spawn_blocking(move || {
-                thread_handles
-                    .into_iter()
-                    .map(|h| h.join())
-                    .collect::<Vec<_>>()
-            })
+            // Multiple issues: fan-out via OS threads. See dispatch_parallel_issues for details.
+            dispatch_parallel_issues(
+                claimed,
+                &config,
+                &factory,
+                &worktree_bridge,
+                knowledge_base.clone(),
+            )
             .await?;
-
-            // Distinguish shutdown-cancelled results from genuine failures.
-            let cancelled = cancel_flag.load(Ordering::Acquire);
-            let mut any_failed = false;
-            for result in join_results {
-                match result {
-                    Ok((id, Ok(true))) => info!(id = %id, "Issue resolved"),
-                    Ok((id, Ok(false))) => {
-                        if cancelled {
-                            warn!(id = %id, "Issue not resolved (cancelled by shutdown signal)");
-                        } else {
-                            error!(id = %id, "Issue NOT resolved");
-                            any_failed = true;
-                        }
-                    }
-                    Ok((id, Err(e))) => {
-                        if cancelled && e.to_string().contains("cancelled by shutdown signal") {
-                            warn!(id = %id, "Issue cancelled by shutdown signal");
-                        } else {
-                            error!(id = %id, error = %e, "Issue errored");
-                            any_failed = true;
-                        }
-                    }
-                    Err(_) => {
-                        error!("Task panicked in parallel dispatch");
-                        any_failed = true;
-                    }
-                }
-            }
-            if cancelled {
-                warn!("Graceful parallel shutdown complete (beads dispatch)");
-                return Ok(());
-            }
-            if any_failed {
-                std::process::exit(1);
-            }
         }
     }
 
+    Ok(())
+}
+
+/// Fan out a pre-assembled batch of issues across OS threads with cooperative cancellation.
+///
+/// `process_issue` is `!Send` (tracing's `dyn Value: !Sync` inside its body), so
+/// `JoinSet::spawn` won't compile. Each issue runs on its own OS thread via
+/// `std::thread::spawn` + `Handle::block_on`, sharing the same multi-thread Tokio
+/// runtime's I/O infrastructure.
+///
+/// A shared `Arc<AtomicBool>` cancel flag is set when SIGTERM/Ctrl-C arrives.
+/// Each thread checks it at iteration boundaries inside `process_issue`, resets the
+/// issue to `open`, and returns early. The fan-in then exits with code 0 (not 1) so
+/// `dogfood-loop.sh` treats SIGTERM as a clean stop rather than a failure.
+async fn dispatch_parallel_issues(
+    batch: Vec<BeadsIssue>,
+    config: &SwarmConfig,
+    factory: &AgentFactory,
+    worktree_bridge: &Arc<WorktreeBridge>,
+    knowledge_base: Option<Arc<dyn KnowledgeBase>>,
+) -> Result<()> {
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let flag_for_signal = Arc::clone(&cancel_flag);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        flag_for_signal.store(true, Ordering::Release);
+        warn!("Shutdown signal received — cancellation flag set for parallel dispatch");
+    });
+
+    info!(count = batch.len(), "Dispatching issues in parallel via OS threads");
+    let rt_handle = tokio::runtime::Handle::current();
+    let thread_handles: Vec<std::thread::JoinHandle<(String, anyhow::Result<bool>)>> = batch
+        .into_iter()
+        .map(|issue| {
+            let factory_clone = factory.clone();
+            let config_clone = config.clone();
+            let wb_clone = Arc::clone(worktree_bridge);
+            let beads_clone = BeadsBridge::new();
+            let kb_clone = knowledge_base.clone();
+            let rt = rt_handle.clone();
+            let cancel = Arc::clone(&cancel_flag);
+            std::thread::spawn(move || {
+                let id = issue.id.clone();
+                let kb_ref = kb_clone.as_ref().map(|kb| kb.as_ref() as &dyn KnowledgeBase);
+                let result = rt.block_on(orchestrator::process_issue(
+                    &config_clone,
+                    &factory_clone,
+                    &wb_clone,
+                    &issue,
+                    &beads_clone,
+                    kb_ref,
+                    cancel,
+                ));
+                (id, result)
+            })
+        })
+        .collect();
+
+    // Join via spawn_blocking to avoid blocking the async runtime.
+    let join_results = tokio::task::spawn_blocking(move || {
+        thread_handles
+            .into_iter()
+            .map(|h| h.join())
+            .collect::<Vec<_>>()
+    })
+    .await?;
+
+    // Distinguish shutdown-cancelled results from genuine failures.
+    // Cancelled issues are already reset to "open" inside process_issue before returning.
+    let cancelled = cancel_flag.load(Ordering::Acquire);
+    let mut any_failed = false;
+    for result in join_results {
+        match result {
+            Ok((id, Ok(true))) => info!(id = %id, "Issue resolved"),
+            Ok((id, Ok(false))) => {
+                if cancelled {
+                    warn!(id = %id, "Issue not resolved (cancelled by shutdown signal)");
+                } else {
+                    error!(id = %id, "Issue NOT resolved");
+                    any_failed = true;
+                }
+            }
+            Ok((id, Err(e))) => {
+                if cancelled && e.to_string().contains(CANCEL_MSG) {
+                    warn!(id = %id, "Issue cancelled by shutdown signal");
+                } else {
+                    error!(id = %id, error = %e, "Issue errored");
+                    any_failed = true;
+                }
+            }
+            Err(_) => {
+                error!("Task panicked in parallel dispatch");
+                any_failed = true;
+            }
+        }
+    }
+    if cancelled {
+        warn!("Graceful parallel shutdown complete");
+        return Ok(());
+    }
+    if any_failed {
+        std::process::exit(1);
+    }
     Ok(())
 }
 

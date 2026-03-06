@@ -19,6 +19,12 @@ use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 /// Default timeout for each cloud validation call.
 const DEFAULT_VALIDATION_TIMEOUT_SECS: u64 = 120; // 2 minutes
 
+/// Error message produced when cooperative cancellation fires inside the main loop.
+///
+/// Checked in `main.rs` fan-in logic to distinguish graceful shutdown from genuine
+/// failures — import this constant rather than hard-coding the string in both places.
+pub const CANCEL_MSG: &str = "cancelled by shutdown signal";
+
 use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::reviewer::{self, ReviewResult};
 use crate::agents::AgentFactory;
@@ -1592,7 +1598,7 @@ pub async fn process_issue(
             );
             let _ = beads.update_status(&issue.id, "open");
             let _ = worktree_bridge.cleanup(&issue.id);
-            anyhow::bail!("cancelled by shutdown signal");
+            anyhow::bail!("{CANCEL_MSG}");
         }
 
         let tier = escalation.current_tier;
