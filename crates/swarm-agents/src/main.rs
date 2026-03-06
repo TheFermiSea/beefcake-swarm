@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -10,7 +11,7 @@ use swarm_agents::beads_bridge::{BeadsBridge, BeadsIssue, IssueTracker, NoOpTrac
 use swarm_agents::config::{check_endpoint_with_model, SwarmConfig};
 use swarm_agents::modes::SwarmMode;
 use swarm_agents::notebook_bridge::{KnowledgeBase, NotebookBridge};
-use swarm_agents::orchestrator;
+use swarm_agents::orchestrator::{self, CANCEL_MSG};
 use swarm_agents::prompts;
 use swarm_agents::worktree_bridge::WorktreeBridge;
 
@@ -44,6 +45,12 @@ struct CliArgs {
     /// Expected shape: {"id": "...", "title": "...", "status": "open", "priority": 2}
     #[arg(long)]
     issue_file: Option<PathBuf>,
+
+    /// Batch of issue IDs to process in parallel (repeatable).
+    /// Up to SWARM_PARALLEL_ISSUES (default: 3) run simultaneously.
+    /// Each issue gets its own worktree; nodes are selected in round-robin order.
+    #[arg(long)]
+    issues: Vec<String>,
 
     /// Cloud-only mode: skip local endpoint health checks, route all work through cloud.
     /// Requires SWARM_CLOUD_URL to be configured.
@@ -200,7 +207,7 @@ async fn main() -> Result<()> {
             .context("--repo-root path does not exist")?,
         None => std::env::current_dir()?,
     };
-    let worktree_bridge = WorktreeBridge::new(config.worktree_base.clone(), &repo_root)?;
+    let worktree_bridge = Arc::new(WorktreeBridge::new(config.worktree_base.clone(), &repo_root)?);
 
     // --- Clean up zombie branches from previous crashed runs ---
     match worktree_bridge.cleanup_stale() {
@@ -235,7 +242,7 @@ async fn main() -> Result<()> {
         let tracker = NoOpTracker;
         info!(id = %issue.id, title = %issue.title, mode = ?args.mode, "Beads-free mode: processing CLI issue");
         tokio::select! {
-            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref) => {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
                     error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
@@ -265,7 +272,7 @@ async fn main() -> Result<()> {
         let tracker = NoOpTracker;
         info!(id = %issue.id, title = %issue.title, "Beads-free mode: processing issue from file");
         tokio::select! {
-            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref) => {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
                     error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
@@ -285,6 +292,36 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
         }
+    } else if !args.issues.is_empty() {
+        // Branch 1.5: --issues batch → OS-thread parallel dispatch
+        //
+        // `process_issue` is !Send (tracing's `dyn Value: !Sync` inside its body),
+        // so JoinSet::spawn won't compile. We use std::thread::spawn +
+        // Handle::block_on instead: each thread runs its own non-Send future
+        // against the same multi-thread Tokio runtime's I/O infrastructure.
+        //
+        // Fetch real issue details from beads, then fan-out. Each thread gets a
+        // fresh BeadsBridge for status tracking. The AgentFactory clone shares
+        // the Arc<AtomicUsize> round-robin counter so each thread lands on a
+        // different node.
+        let beads_lookup = BeadsBridge::new();
+        let mut batch: Vec<BeadsIssue> = Vec::new();
+        // Cap at parallel_issues to avoid overwhelming the cluster (Issue 6 fix).
+        for id in args.issues.iter().take(config.parallel_issues) {
+            match beads_lookup.show(id) {
+                Ok(issue) => batch.push(issue),
+                Err(e) => {
+                    warn!(id = %id, error = %e, "Could not fetch issue details — skipping");
+                }
+            }
+        }
+        if batch.is_empty() {
+            info!("No valid issues in --issues batch. Orchestrator exiting.");
+            return Ok(());
+        }
+
+        dispatch_parallel_issues(batch, &config, &factory, &worktree_bridge, knowledge_base.clone())
+            .await?;
     } else if let Ok(target_id) = std::env::var("SWARM_ISSUE") {
         // Branch 3: SWARM_ISSUE env var — fetch specific issue from beads
         let beads = BeadsBridge::new();
@@ -297,7 +334,7 @@ async fn main() -> Result<()> {
         };
         info!(id = %issue.id, title = %issue.title, "SWARM_ISSUE: targeting specific issue");
         tokio::select! {
-            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref) => {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
                     error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
@@ -317,7 +354,7 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        // Branch 4: Default — pick from beads
+        // Branch 4: Default — claim up to parallel_issues from beads and fan-out
         let beads = BeadsBridge::new();
         let issues = match beads.list_ready() {
             Ok(issues) => issues,
@@ -338,9 +375,13 @@ async fn main() -> Result<()> {
         let mut sorted = issues;
         sorted.sort_by_key(|i| (i.priority.unwrap_or(4), i.swarm_complexity_rank()));
 
-        // Try to claim each issue in priority order (prevents race with other instances)
-        let mut claimed_issue = None;
+        // Claim up to parallel_issues issues in priority order.
+        let max_parallel = config.parallel_issues;
+        let mut claimed: Vec<BeadsIssue> = Vec::new();
         for candidate in &sorted {
+            if claimed.len() >= max_parallel {
+                break;
+            }
             match beads.try_claim(&candidate.id) {
                 Ok(true) => {
                     info!(
@@ -349,8 +390,7 @@ async fn main() -> Result<()> {
                         priority = ?candidate.priority,
                         "Claimed issue to work on"
                     );
-                    claimed_issue = Some(candidate);
-                    break;
+                    claimed.push(candidate.clone());
                 }
                 Ok(false) => {
                     info!(id = %candidate.id, "Issue already claimed, trying next");
@@ -361,36 +401,150 @@ async fn main() -> Result<()> {
             }
         }
 
-        let issue = match claimed_issue {
-            Some(i) => i,
-            None => {
-                info!("All ready issues already claimed. Orchestrator exiting.");
-                return Ok(());
-            }
-        };
+        if claimed.is_empty() {
+            info!("All ready issues already claimed. Orchestrator exiting.");
+            return Ok(());
+        }
 
-        tokio::select! {
-            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, issue, &beads, kb_ref) => {
-                let resolved = result?;
-                if !resolved {
-                    error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
-                    std::process::exit(1);
+        if claimed.len() == 1 {
+            // Single issue: keep the existing tokio::select! shutdown path for graceful cleanup.
+            let issue = claimed.remove(0);
+            tokio::select! {
+                result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref, Arc::new(AtomicBool::new(false))) => {
+                    let resolved = result?;
+                    if !resolved {
+                        error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
+                        std::process::exit(1);
+                    }
+                }
+                _ = shutdown_signal() => {
+                    warn!(id = %issue.id, "Shutdown signal received — cleaning up worktree");
+                    if let Err(e) = worktree_bridge.cleanup(&issue.id) {
+                        error!(id = %issue.id, "Cleanup failed: {e}");
+                    }
+                    if let Err(e) = beads.update_status(&issue.id, "open") {
+                        error!(id = %issue.id, "Failed to reset issue status: {e}");
+                    }
+                    info!(id = %issue.id, "Graceful shutdown complete");
+                    return Ok(());
                 }
             }
-            _ = shutdown_signal() => {
-                warn!(id = %issue.id, "Shutdown signal received — cleaning up worktree");
-                if let Err(e) = worktree_bridge.cleanup(&issue.id) {
-                    error!(id = %issue.id, "Cleanup failed: {e}");
-                }
-                if let Err(e) = beads.update_status(&issue.id, "open") {
-                    error!(id = %issue.id, "Failed to reset issue status: {e}");
-                }
-                info!(id = %issue.id, "Graceful shutdown complete");
-                return Ok(());
-            }
+        } else {
+            // Multiple issues: fan-out via OS threads. See dispatch_parallel_issues for details.
+            dispatch_parallel_issues(
+                claimed,
+                &config,
+                &factory,
+                &worktree_bridge,
+                knowledge_base.clone(),
+            )
+            .await?;
         }
     }
 
+    Ok(())
+}
+
+/// Fan out a pre-assembled batch of issues across OS threads with cooperative cancellation.
+///
+/// `process_issue` is `!Send` (tracing's `dyn Value: !Sync` inside its body), so
+/// `JoinSet::spawn` won't compile. Each issue runs on its own OS thread via
+/// `std::thread::spawn` + `Handle::block_on`, sharing the same multi-thread Tokio
+/// runtime's I/O infrastructure.
+///
+/// A shared `Arc<AtomicBool>` cancel flag is set when SIGTERM/Ctrl-C arrives.
+/// Each thread checks it at iteration boundaries inside `process_issue`, resets the
+/// issue to `open`, and returns early. The fan-in then exits with code 0 (not 1) so
+/// `dogfood-loop.sh` treats SIGTERM as a clean stop rather than a failure.
+async fn dispatch_parallel_issues(
+    batch: Vec<BeadsIssue>,
+    config: &SwarmConfig,
+    factory: &AgentFactory,
+    worktree_bridge: &Arc<WorktreeBridge>,
+    knowledge_base: Option<Arc<dyn KnowledgeBase>>,
+) -> Result<()> {
+    let cancel_flag = Arc::new(AtomicBool::new(false));
+    let flag_for_signal = Arc::clone(&cancel_flag);
+    tokio::spawn(async move {
+        shutdown_signal().await;
+        flag_for_signal.store(true, Ordering::Release);
+        warn!("Shutdown signal received — cancellation flag set for parallel dispatch");
+    });
+
+    info!(count = batch.len(), "Dispatching issues in parallel via OS threads");
+    let rt_handle = tokio::runtime::Handle::current();
+    let thread_handles: Vec<std::thread::JoinHandle<(String, anyhow::Result<bool>)>> = batch
+        .into_iter()
+        .map(|issue| {
+            let factory_clone = factory.clone();
+            let config_clone = config.clone();
+            let wb_clone = Arc::clone(worktree_bridge);
+            let beads_clone = BeadsBridge::new();
+            let kb_clone = knowledge_base.clone();
+            let rt = rt_handle.clone();
+            let cancel = Arc::clone(&cancel_flag);
+            std::thread::spawn(move || {
+                let id = issue.id.clone();
+                let kb_ref = kb_clone.as_ref().map(|kb| kb.as_ref() as &dyn KnowledgeBase);
+                let result = rt.block_on(orchestrator::process_issue(
+                    &config_clone,
+                    &factory_clone,
+                    &wb_clone,
+                    &issue,
+                    &beads_clone,
+                    kb_ref,
+                    cancel,
+                ));
+                (id, result)
+            })
+        })
+        .collect();
+
+    // Join via spawn_blocking to avoid blocking the async runtime.
+    let join_results = tokio::task::spawn_blocking(move || {
+        thread_handles
+            .into_iter()
+            .map(|h| h.join())
+            .collect::<Vec<_>>()
+    })
+    .await?;
+
+    // Distinguish shutdown-cancelled results from genuine failures.
+    // Cancelled issues are already reset to "open" inside process_issue before returning.
+    let cancelled = cancel_flag.load(Ordering::Acquire);
+    let mut any_failed = false;
+    for result in join_results {
+        match result {
+            Ok((id, Ok(true))) => info!(id = %id, "Issue resolved"),
+            Ok((id, Ok(false))) => {
+                if cancelled {
+                    warn!(id = %id, "Issue not resolved (cancelled by shutdown signal)");
+                } else {
+                    error!(id = %id, "Issue NOT resolved");
+                    any_failed = true;
+                }
+            }
+            Ok((id, Err(e))) => {
+                if cancelled && e.to_string().contains(CANCEL_MSG) {
+                    warn!(id = %id, "Issue cancelled by shutdown signal");
+                } else {
+                    error!(id = %id, error = %e, "Issue errored");
+                    any_failed = true;
+                }
+            }
+            Err(_) => {
+                error!("Task panicked in parallel dispatch");
+                any_failed = true;
+            }
+        }
+    }
+    if cancelled {
+        warn!("Graceful parallel shutdown complete");
+        return Ok(());
+    }
+    if any_failed {
+        std::process::exit(1);
+    }
     Ok(())
 }
 

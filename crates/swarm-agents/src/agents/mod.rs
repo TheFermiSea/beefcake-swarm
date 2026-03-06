@@ -25,6 +25,7 @@ use anyhow::Result;
 use tracing::info;
 
 use crate::config::{ClientSet, SwarmConfig};
+use crate::endpoint_pool::EndpointPool;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::tools::shared::ToolFactory;
 use coder::OaiAgent;
@@ -33,6 +34,11 @@ use coder::OaiAgent;
 ///
 /// Holds pre-built `ClientSet` and config references needed to construct
 /// agents scoped to a particular worktree path.
+///
+/// Cloning `AgentFactory` is cheap: all heavyweight state is reference-counted.
+/// Parallel tasks should each hold a clone — the shared `EndpointPool` counter
+/// ensures each clone naturally selects the next node in round-robin order.
+#[derive(Clone)]
 pub struct AgentFactory {
     pub clients: ClientSet,
     pub config: SwarmConfig,
@@ -44,16 +50,23 @@ pub struct AgentFactory {
     /// `bundles::worker_tools()` / `bundles::manager_tools()` directly.
     /// Initialize via [`AgentFactory::with_worktree`].
     pub tool_factory: Option<ToolFactory>,
+    /// Round-robin pool for selecting the next worker node.
+    ///
+    /// Cloning `AgentFactory` shares this pool's `Arc<AtomicUsize>` counter,
+    /// so parallel issue tasks automatically cycle across different nodes.
+    pub endpoint_pool: EndpointPool,
 }
 
 impl AgentFactory {
     pub fn new(config: &SwarmConfig) -> Result<Self> {
         let clients = ClientSet::from_config(config)?;
+        let endpoint_pool = EndpointPool::new(&clients, config);
         Ok(Self {
             clients,
             config: config.clone(),
             notebook_bridge: None,
             tool_factory: None,
+            endpoint_pool,
         })
     }
 
@@ -127,6 +140,21 @@ impl AgentFactory {
             "general_coder",
             self.config.cloud_only,
         )
+    }
+
+    /// Select the next node in round-robin order and build the rust + general
+    /// coders both pointing to that same node.
+    ///
+    /// Call once per issue before the iteration loop. All parallel `AgentFactory`
+    /// clones share the same `Arc<AtomicUsize>` counter, so concurrent issues
+    /// land on different nodes automatically.
+    pub fn build_worker_pair(&self, wt_path: &Path) -> (OaiAgent, OaiAgent) {
+        let (client, model) = self.endpoint_pool.next();
+        let proxy = self.config.cloud_only;
+        let rust_coder = coder::build_rust_coder_named(client, model, wt_path, "rust_coder", proxy);
+        let general_coder =
+            coder::build_general_coder_named(client, model, wt_path, "general_coder", proxy);
+        (rust_coder, general_coder)
     }
 
     /// Build the reasoning worker (Qwen3.5-397B on vasp-01, Architect node).

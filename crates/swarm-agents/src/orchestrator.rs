@@ -4,6 +4,8 @@
 //! progress logging, and human intervention requests.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
@@ -16,6 +18,12 @@ use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 
 /// Default timeout for each cloud validation call.
 const DEFAULT_VALIDATION_TIMEOUT_SECS: u64 = 120; // 2 minutes
+
+/// Error message produced when cooperative cancellation fires inside the main loop.
+///
+/// Checked in `main.rs` fan-in logic to distinguish graceful shutdown from genuine
+/// failures — import this constant rather than hard-coding the string in both places.
+pub const CANCEL_MSG: &str = "cancelled by shutdown signal";
 
 use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::reviewer::{self, ReviewResult};
@@ -1307,6 +1315,7 @@ pub async fn process_issue(
     issue: &BeadsIssue,
     beads: &dyn IssueTracker,
     knowledge_base: Option<&dyn KnowledgeBase>,
+    cancel: Arc<AtomicBool>,
 ) -> Result<bool> {
     // --- State driver gate ---
     if bool_from_env("SWARM_STATE_DRIVER", false) {
@@ -1485,8 +1494,8 @@ pub async fn process_issue(
     let _health_monitor = AbortOnDrop(cluster_health.spawn_monitor());
 
     // --- Build agents scoped to this worktree ---
-    let rust_coder = factory.build_rust_coder(&wt_path);
-    let general_coder = factory.build_general_coder(&wt_path);
+    // Round-robin: each concurrent issue's factory clone selects the next node.
+    let (rust_coder, general_coder) = factory.build_worker_pair(&wt_path);
     let reviewer = factory.build_reviewer();
     let manager = factory.build_manager(&wt_path);
 
@@ -1576,6 +1585,21 @@ pub async fn process_issue(
                 break;
             }
         };
+
+        // Cooperative cancellation — checked once per iteration at the boundary
+        // between agent invocations. Set by the parallel-dispatch path in main.rs
+        // when SIGTERM/Ctrl-C is received. Using Acquire ensures we see the Release
+        // store performed by the shutdown listener task.
+        if cancel.load(Ordering::Acquire) {
+            warn!(
+                id = %issue.id,
+                iteration,
+                "Shutdown signal — resetting issue to open and cleaning up worktree"
+            );
+            let _ = beads.update_status(&issue.id, "open");
+            let _ = worktree_bridge.cleanup(&issue.id);
+            anyhow::bail!("{CANCEL_MSG}");
+        }
 
         let tier = escalation.current_tier;
         metrics.start_iteration(iteration, &format!("{tier:?}"));

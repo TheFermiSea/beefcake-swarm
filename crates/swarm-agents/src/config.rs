@@ -240,6 +240,10 @@ pub struct SwarmConfig {
     /// and the latest verifier output are included in the prompt.
     /// Populated from `SWARM_PRUNE_AFTER_ITERATION` env var (default: 3).
     pub prune_after_iteration: u32,
+    /// Number of issues to process concurrently.
+    /// Each issue gets its own worktree and uses the next node in round-robin order.
+    /// Populated from `SWARM_PARALLEL_ISSUES` env var (default: 3 = one per node).
+    pub parallel_issues: usize,
 }
 
 impl Default for SwarmConfig {
@@ -310,6 +314,11 @@ impl Default for SwarmConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(3),
+            parallel_issues: std::env::var("SWARM_PARALLEL_ISSUES")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|v: &usize| *v > 0)
+                .unwrap_or(3),
         }
     }
 }
@@ -368,6 +377,7 @@ impl SwarmConfig {
             min_objective_len: 10,
             max_cost_per_issue: 0.0,
             prune_after_iteration: 3,
+            parallel_issues: 1,
         }
     }
 }
@@ -378,6 +388,7 @@ impl SwarmConfig {
 /// - `local`     -> vasp-03:8080 (HydraCoder 30B, fast tier)
 /// - `coder`     -> vasp-01:8081 (Qwen3-Coder-Next 80B, code generation)
 /// - `reasoning` -> vasp-02:8081 (Qwen3.5-397B, deep analysis)
+#[derive(Clone)]
 pub struct ClientSet {
     /// Client for vasp-03:8080 (HydraCoder -- fast tier: analysis, routing, review)
     pub local: openai::CompletionsClient,

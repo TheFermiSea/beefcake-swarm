@@ -2,6 +2,7 @@ pub mod acceptance;
 pub mod agents;
 pub mod beads_bridge;
 pub mod cluster_health;
+pub mod endpoint_pool;
 pub mod config;
 pub mod contracts;
 pub mod dashboard;
