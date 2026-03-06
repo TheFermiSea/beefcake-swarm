@@ -74,7 +74,10 @@ pub struct ReviewResult {
 
 impl ReviewResult {
     pub fn parse(response: &str) -> Self {
-        match serde_json::from_str::<StructuredReview>(response) {
+        // Strip markdown code fences that LLMs sometimes wrap around JSON.
+        // e.g. "```json\n{...}\n```" → "{...}"
+        let cleaned = strip_markdown_fences(response);
+        match serde_json::from_str::<StructuredReview>(&cleaned) {
             Ok(parsed) => {
                 let passed = matches!(parsed.verdict, ReviewVerdict::Pass);
                 Self {
@@ -99,6 +102,24 @@ impl ReviewResult {
             },
         }
     }
+}
+
+/// Strip markdown code fences from LLM responses.
+///
+/// LLMs sometimes wrap JSON output in ` ```json ... ``` `. This extracts
+/// the content between the fences, or returns the original string if no
+/// fences are found.
+fn strip_markdown_fences(s: &str) -> String {
+    let trimmed = s.trim();
+    if let Some(rest) = trimmed.strip_prefix("```") {
+        // Skip the optional language tag on the opening fence line
+        let after_lang = rest.find('\n').map(|i| &rest[i + 1..]).unwrap_or(rest);
+        // Remove the closing fence
+        if let Some(end) = after_lang.rfind("```") {
+            return after_lang[..end].trim().to_string();
+        }
+    }
+    trimmed.to_string()
 }
 
 #[cfg(test)]
@@ -135,6 +156,23 @@ mod tests {
         assert!(!result.passed);
         assert!(result.schema_valid);
         assert_eq!(result.blocking_issues.len(), 1);
+    }
+
+    #[test]
+    fn test_parse_markdown_fenced_json() {
+        let fenced = "```json\n{\n  \"verdict\": \"pass\",\n  \"confidence\": 0.95,\n  \"blocking_issues\": [],\n  \"suggested_next_action\": \"merge\",\n  \"touched_files\": [\"src/runtime_adapter.rs\"]\n}\n```";
+        let result = ReviewResult::parse(fenced);
+        assert!(result.passed);
+        assert!(result.schema_valid);
+        assert_eq!(result.confidence, 0.95);
+    }
+
+    #[test]
+    fn test_strip_markdown_fences() {
+        assert_eq!(strip_markdown_fences("```json\n{}\n```"), "{}");
+        assert_eq!(strip_markdown_fences("```\n{}\n```"), "{}");
+        assert_eq!(strip_markdown_fences("{}"), "{}");
+        assert_eq!(strip_markdown_fences("  ```json\n{}\n```  "), "{}");
     }
 
     #[test]

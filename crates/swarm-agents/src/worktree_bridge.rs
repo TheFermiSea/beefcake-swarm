@@ -386,9 +386,22 @@ impl WorktreeBridge {
                 .args(["clean", "-fd"])
                 .current_dir(&wt_path)
                 .output();
+
+            // Restore .beads/ from HEAD to undo the symlink replacement.
+            // WorktreeBridge::create() replaces .beads/ with a symlink for bd
+            // compatibility. Before merging, we need to restore the tracked
+            // directory so git status doesn't report type-change noise.
+            let beads_path = wt_path.join(".beads");
+            if beads_path.is_symlink() {
+                let _ = std::fs::remove_file(&beads_path);
+            }
+            let _ = Command::new("git")
+                .args(["checkout", "HEAD", "--", ".beads"])
+                .current_dir(&wt_path)
+                .output();
         }
 
-        // Check for uncommitted changes in the worktree
+        // Check for uncommitted changes in the worktree (ignoring .beads/ noise)
         if wt_path.exists() {
             let status = Command::new("git")
                 .args(["status", "--porcelain"])
@@ -397,7 +410,17 @@ impl WorktreeBridge {
                 .context("Failed to check worktree status")?;
 
             let status_text = String::from_utf8_lossy(&status.stdout);
-            if !status_text.trim().is_empty() {
+            // Filter out .beads entries — these are beads infrastructure noise
+            // (symlink type changes, bd-modified backup files) not real code.
+            let non_beads_changes: Vec<&str> = status_text
+                .lines()
+                .filter(|line| {
+                    let path = line.get(3..).unwrap_or("");
+                    !path.starts_with(".beads")
+                })
+                .collect();
+
+            if !non_beads_changes.is_empty() {
                 bail!("Worktree {issue_id} has uncommitted changes — commit or discard first");
             }
         }
