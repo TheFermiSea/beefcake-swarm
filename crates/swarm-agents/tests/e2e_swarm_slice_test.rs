@@ -129,7 +129,7 @@ async fn test_short_title_issue_is_rejected_without_claim() {
         labels: vec![],
     };
 
-    let result = orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None)
+    let result = orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
         .await
         .expect("process_issue should not return Err for a short title");
 
@@ -179,7 +179,7 @@ async fn test_e2e_bug_fix_slice() {
     };
 
     let result =
-        orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None).await;
+        orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))).await;
 
     match &result {
         Ok(success) => eprintln!("bug-fix slice: success={success}"),
@@ -220,7 +220,7 @@ async fn test_e2e_feature_addition_slice() {
     };
 
     let result =
-        orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None).await;
+        orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))).await;
 
     match &result {
         Ok(success) => eprintln!("feature slice: success={success}"),
@@ -261,7 +261,7 @@ async fn test_e2e_refactor_slice() {
     };
 
     let result =
-        orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None).await;
+        orchestrator::process_issue(&config, &factory, &bridge, &issue, &beads, None, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false))).await;
 
     match &result {
         Ok(success) => eprintln!("refactor slice: success={success}"),

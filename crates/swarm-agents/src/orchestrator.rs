@@ -4,6 +4,8 @@
 //! progress logging, and human intervention requests.
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
@@ -1307,6 +1309,7 @@ pub async fn process_issue(
     issue: &BeadsIssue,
     beads: &dyn IssueTracker,
     knowledge_base: Option<&dyn KnowledgeBase>,
+    cancel: Arc<AtomicBool>,
 ) -> Result<bool> {
     // --- State driver gate ---
     if bool_from_env("SWARM_STATE_DRIVER", false) {
@@ -1576,6 +1579,21 @@ pub async fn process_issue(
                 break;
             }
         };
+
+        // Cooperative cancellation — checked once per iteration at the boundary
+        // between agent invocations. Set by the parallel-dispatch path in main.rs
+        // when SIGTERM/Ctrl-C is received. Using Acquire ensures we see the Release
+        // store performed by the shutdown listener task.
+        if cancel.load(Ordering::Acquire) {
+            warn!(
+                id = %issue.id,
+                iteration,
+                "Shutdown signal — resetting issue to open and cleaning up worktree"
+            );
+            let _ = beads.update_status(&issue.id, "open");
+            let _ = worktree_bridge.cleanup(&issue.id);
+            anyhow::bail!("cancelled by shutdown signal");
+        }
 
         let tier = escalation.current_tier;
         metrics.start_iteration(iteration, &format!("{tier:?}"));

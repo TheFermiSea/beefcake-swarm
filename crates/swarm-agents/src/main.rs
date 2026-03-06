@@ -1,5 +1,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -241,7 +242,7 @@ async fn main() -> Result<()> {
         let tracker = NoOpTracker;
         info!(id = %issue.id, title = %issue.title, mode = ?args.mode, "Beads-free mode: processing CLI issue");
         tokio::select! {
-            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref) => {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
                     error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
@@ -271,7 +272,7 @@ async fn main() -> Result<()> {
         let tracker = NoOpTracker;
         info!(id = %issue.id, title = %issue.title, "Beads-free mode: processing issue from file");
         tokio::select! {
-            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref) => {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
                     error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
@@ -305,7 +306,8 @@ async fn main() -> Result<()> {
         // different node.
         let beads_lookup = BeadsBridge::new();
         let mut batch: Vec<BeadsIssue> = Vec::new();
-        for id in &args.issues {
+        // Cap at parallel_issues to avoid overwhelming the cluster (Issue 6 fix).
+        for id in args.issues.iter().take(config.parallel_issues) {
             match beads_lookup.show(id) {
                 Ok(issue) => batch.push(issue),
                 Err(e) => {
@@ -318,6 +320,17 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
+        // Cancel flag: set by shutdown listener task; checked per-iteration inside process_issue.
+        // OS threads cannot be cancelled by Tokio, so we use cooperative cancellation:
+        // the flag is stored with Release ordering here and loaded with Acquire inside the loop.
+        let cancel_flag = Arc::new(AtomicBool::new(false));
+        let flag_for_signal = Arc::clone(&cancel_flag);
+        tokio::spawn(async move {
+            shutdown_signal().await;
+            flag_for_signal.store(true, Ordering::Release);
+            warn!("Shutdown signal received — cancellation flag set for --issues batch");
+        });
+
         info!(count = batch.len(), "Dispatching --issues batch in parallel");
         let rt_handle = tokio::runtime::Handle::current();
         let thread_handles: Vec<std::thread::JoinHandle<(String, anyhow::Result<bool>)>> = batch
@@ -329,6 +342,7 @@ async fn main() -> Result<()> {
                 let beads_clone = BeadsBridge::new();
                 let kb_clone = knowledge_base.clone();
                 let rt = rt_handle.clone();
+                let cancel = Arc::clone(&cancel_flag);
                 std::thread::spawn(move || {
                     let id = issue.id.clone();
                     let kb_ref = kb_clone.as_ref().map(|kb| kb.as_ref() as &dyn KnowledgeBase);
@@ -339,6 +353,7 @@ async fn main() -> Result<()> {
                         &issue,
                         &beads_clone,
                         kb_ref,
+                        cancel,
                     ));
                     (id, result)
                 })
@@ -354,23 +369,38 @@ async fn main() -> Result<()> {
         })
         .await?;
 
+        // Distinguish shutdown-cancelled results from genuine failures.
+        // Cancelled issues have already been reset to "open" inside process_issue.
+        let cancelled = cancel_flag.load(Ordering::Acquire);
         let mut any_failed = false;
         for result in join_results {
             match result {
                 Ok((id, Ok(true))) => info!(id = %id, "Issue resolved"),
                 Ok((id, Ok(false))) => {
-                    error!(id = %id, "Issue NOT resolved");
-                    any_failed = true;
+                    if cancelled {
+                        warn!(id = %id, "Issue not resolved (cancelled by shutdown signal)");
+                    } else {
+                        error!(id = %id, "Issue NOT resolved");
+                        any_failed = true;
+                    }
                 }
                 Ok((id, Err(e))) => {
-                    error!(id = %id, error = %e, "Issue errored");
-                    any_failed = true;
+                    if cancelled && e.to_string().contains("cancelled by shutdown signal") {
+                        warn!(id = %id, "Issue cancelled by shutdown signal");
+                    } else {
+                        error!(id = %id, error = %e, "Issue errored");
+                        any_failed = true;
+                    }
                 }
                 Err(_) => {
-                    error!("Task panicked");
+                    error!("Task panicked in parallel dispatch");
                     any_failed = true;
                 }
             }
+        }
+        if cancelled {
+            warn!("Graceful parallel shutdown complete (--issues batch)");
+            return Ok(());
         }
         if any_failed {
             std::process::exit(1);
@@ -387,7 +417,7 @@ async fn main() -> Result<()> {
         };
         info!(id = %issue.id, title = %issue.title, "SWARM_ISSUE: targeting specific issue");
         tokio::select! {
-            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref) => {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
                     error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
@@ -463,7 +493,7 @@ async fn main() -> Result<()> {
             // Single issue: keep the existing tokio::select! shutdown path for graceful cleanup.
             let issue = claimed.remove(0);
             tokio::select! {
-                result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref) => {
+                result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref, Arc::new(AtomicBool::new(false))) => {
                     let resolved = result?;
                     if !resolved {
                         error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
@@ -485,6 +515,17 @@ async fn main() -> Result<()> {
         } else {
             // Multiple issues: fan-out via OS threads (same pattern as Branch 1.5).
             // process_issue is !Send, so we use thread::spawn + Handle::block_on.
+            //
+            // Cancel flag: set by shutdown listener; checked per-iteration inside
+            // process_issue so threads stop cleanly on SIGTERM.
+            let cancel_flag = Arc::new(AtomicBool::new(false));
+            let flag_for_signal = Arc::clone(&cancel_flag);
+            tokio::spawn(async move {
+                shutdown_signal().await;
+                flag_for_signal.store(true, Ordering::Release);
+                warn!("Shutdown signal received — cancellation flag set for parallel beads dispatch");
+            });
+
             info!(count = claimed.len(), "Dispatching parallel issues via OS threads");
             let rt_handle = tokio::runtime::Handle::current();
             let thread_handles: Vec<std::thread::JoinHandle<(String, anyhow::Result<bool>)>> =
@@ -497,6 +538,7 @@ async fn main() -> Result<()> {
                         let beads_clone = BeadsBridge::new();
                         let kb_clone = knowledge_base.clone();
                         let rt = rt_handle.clone();
+                        let cancel = Arc::clone(&cancel_flag);
                         std::thread::spawn(move || {
                             let id = issue.id.clone();
                             let kb_ref =
@@ -508,6 +550,7 @@ async fn main() -> Result<()> {
                                 &issue,
                                 &beads_clone,
                                 kb_ref,
+                                cancel,
                             ));
                             (id, result)
                         })
@@ -522,23 +565,37 @@ async fn main() -> Result<()> {
             })
             .await?;
 
+            // Distinguish shutdown-cancelled results from genuine failures.
+            let cancelled = cancel_flag.load(Ordering::Acquire);
             let mut any_failed = false;
             for result in join_results {
                 match result {
                     Ok((id, Ok(true))) => info!(id = %id, "Issue resolved"),
                     Ok((id, Ok(false))) => {
-                        error!(id = %id, "Issue NOT resolved");
-                        any_failed = true;
+                        if cancelled {
+                            warn!(id = %id, "Issue not resolved (cancelled by shutdown signal)");
+                        } else {
+                            error!(id = %id, "Issue NOT resolved");
+                            any_failed = true;
+                        }
                     }
                     Ok((id, Err(e))) => {
-                        error!(id = %id, error = %e, "Issue errored");
-                        any_failed = true;
+                        if cancelled && e.to_string().contains("cancelled by shutdown signal") {
+                            warn!(id = %id, "Issue cancelled by shutdown signal");
+                        } else {
+                            error!(id = %id, error = %e, "Issue errored");
+                            any_failed = true;
+                        }
                     }
                     Err(_) => {
                         error!("Task panicked in parallel dispatch");
                         any_failed = true;
                     }
                 }
+            }
+            if cancelled {
+                warn!("Graceful parallel shutdown complete (beads dispatch)");
+                return Ok(());
             }
             if any_failed {
                 std::process::exit(1);
