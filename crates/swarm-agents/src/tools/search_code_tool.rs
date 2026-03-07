@@ -79,7 +79,8 @@ impl Tool for SearchCodeTool {
         }
 
         let output =
-            run_command_with_timeout("rg", &rg_args, &self.working_dir, DEFAULT_TIMEOUT_SECS).await?;
+            run_command_with_timeout("rg", &rg_args, &self.working_dir, DEFAULT_TIMEOUT_SECS)
+                .await?;
 
         let mut lines: Vec<String> = Vec::new();
         for raw in output.lines() {

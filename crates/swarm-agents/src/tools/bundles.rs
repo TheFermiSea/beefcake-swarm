@@ -105,7 +105,10 @@ pub fn subtask_worker_tools(
 
     let mut tools: Vec<Box<dyn ToolDyn>> = vec![
         Box::new(ReadFileTool::new(wt_path)),
-        Box::new(WriteFileTool::new_with_allowlist(wt_path, allowlist.clone())),
+        Box::new(WriteFileTool::new_with_allowlist(
+            wt_path,
+            allowlist.clone(),
+        )),
         Box::new(EditFileTool::new_with_allowlist(wt_path, allowlist)),
         Box::new(RunCommandTool::new(wt_path)),
     ];

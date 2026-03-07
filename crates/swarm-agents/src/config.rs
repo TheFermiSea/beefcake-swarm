@@ -448,12 +448,9 @@ impl ClientSet {
                 .context("cloud_only requires cloud_endpoint to be configured")?;
             let headers = cloud_headers(&cloud_ep.api_key);
 
-            let cloud = build_oai_client(
-                &cloud_ep.api_key,
-                &cloud_ep.url,
-                cloud_http,
-                Some(headers),
-            ).context("Failed to build cloud client")?;
+            let cloud =
+                build_oai_client(&cloud_ep.api_key, &cloud_ep.url, cloud_http, Some(headers))
+                    .context("Failed to build cloud client")?;
 
             return Ok(Self {
                 local: cloud.clone(),
@@ -468,21 +465,24 @@ impl ClientSet {
             &config.fast_endpoint.url,
             local_http.clone(),
             None,
-        ).context("Failed to build local/fast client (vasp-03)")?;
+        )
+        .context("Failed to build local/fast client (vasp-03)")?;
 
         let coder = build_oai_client(
             &config.coder_endpoint.api_key,
             &config.coder_endpoint.url,
             local_http.clone(),
             None,
-        ).context("Failed to build coder client (vasp-01)")?;
+        )
+        .context("Failed to build coder client (vasp-01)")?;
 
         let reasoning = build_oai_client(
             &config.reasoning_endpoint.api_key,
             &config.reasoning_endpoint.url,
             local_http,
             None,
-        ).context("Failed to build reasoning client (vasp-02)")?;
+        )
+        .context("Failed to build reasoning client (vasp-02)")?;
 
         let cloud = config
             .cloud_endpoint

@@ -47,7 +47,10 @@ impl EditFileTool {
         }
     }
 
-    pub fn new_with_allowlist(working_dir: &Path, allowed: std::collections::HashSet<String>) -> Self {
+    pub fn new_with_allowlist(
+        working_dir: &Path,
+        allowed: std::collections::HashSet<String>,
+    ) -> Self {
         Self {
             working_dir: working_dir.to_path_buf(),
             allowed_files: Some(allowed),

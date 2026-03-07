@@ -195,8 +195,8 @@ pub fn parse_subtask_plan(raw: &str) -> Result<SubtaskPlan> {
         .rfind('}')
         .context("no closing brace in planner response")?;
 
-    let plan: SubtaskPlan = serde_json::from_str(&json_str[start..=end])
-        .context("failed to parse SubtaskPlan JSON")?;
+    let plan: SubtaskPlan =
+        serde_json::from_str(&json_str[start..=end]).context("failed to parse SubtaskPlan JSON")?;
 
     // Validate: at least one subtask.
     anyhow::ensure!(!plan.subtasks.is_empty(), "plan has no subtasks");
@@ -242,8 +242,7 @@ pub async fn dispatch_subtasks(
 
     info!(
         subtask_count = plan.subtasks.len(),
-        max_concurrent,
-        "Dispatching concurrent subtasks"
+        max_concurrent, "Dispatching concurrent subtasks"
     );
 
     let mut join_set: JoinSet<SubtaskResult> = JoinSet::new();
@@ -268,8 +267,15 @@ pub async fn dispatch_subtasks(
                 target_files = ?subtask.target_files,
                 "Starting subtask worker"
             );
-            run_subtask_worker(&client, &model, &wt_path, &issue_id, &subtask, *timeout_secs)
-                .await
+            run_subtask_worker(
+                &client,
+                &model,
+                &wt_path,
+                &issue_id,
+                &subtask,
+                *timeout_secs,
+            )
+            .await
         });
     }
 

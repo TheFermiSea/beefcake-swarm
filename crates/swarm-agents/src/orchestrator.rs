@@ -1723,7 +1723,10 @@ pub async fn process_issue(
         // Prefer local reasoning tier for planning (escalation ladder compliance).
         // Only fall back to cloud if reasoning endpoint is unavailable.
         let (plan_client, plan_model) = {
-            (factory.clients.reasoning.clone(), config.reasoning_endpoint.model.clone())
+            (
+                factory.clients.reasoning.clone(),
+                config.reasoning_endpoint.model.clone(),
+            )
         };
 
         // Generate file listing for the planner.
@@ -1799,7 +1802,10 @@ pub async fn process_issue(
                     let _ = progress.log_session_end(
                         session.session_id(),
                         session.iteration(),
-                        format!("Issue {} resolved via concurrent subtask dispatch", issue.id),
+                        format!(
+                            "Issue {} resolved via concurrent subtask dispatch",
+                            issue.id
+                        ),
                     );
 
                     info!(

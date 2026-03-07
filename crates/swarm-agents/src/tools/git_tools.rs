@@ -116,7 +116,8 @@ impl Tool for ListChangedFilesTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let output = run_command_with_timeout("git", &["status", "--short"], &self.working_dir, 10).await?;
+        let output =
+            run_command_with_timeout("git", &["status", "--short"], &self.working_dir, 10).await?;
 
         if output.trim().is_empty() {
             Ok("No changes (working tree clean)".to_string())
