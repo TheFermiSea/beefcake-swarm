@@ -98,6 +98,11 @@ impl AgentFactory {
         self
     }
 
+    /// Return the cluster health monitor attached to the endpoint pool, if any.
+    pub fn cluster_health(&self) -> Option<&crate::cluster_health::ClusterHealth> {
+        self.endpoint_pool.cluster_health()
+    }
+
     /// Initialize the centralized tool factory for a given worktree path.
     ///
     /// Once set, the `tool_factory` field is available for callers that want

@@ -1604,7 +1604,14 @@ pub async fn process_issue(
     // Probe all local inference endpoints before investing in agent builds.
     // Fail fast if all workers are down — avoids burning cloud credits on
     // delegation to dead endpoints.
-    let cluster_health = ClusterHealth::from_config(config);
+    //
+    // Use the factory's shared ClusterHealth so that check_all_now() updates
+    // the same Arc<RwLock> that EndpointPool::next() reads. Creating a separate
+    // instance here would leave the pool with Unknown status for all tiers.
+    let cluster_health = factory
+        .cluster_health()
+        .cloned()
+        .unwrap_or_else(|| ClusterHealth::from_config(config));
     let healthy_count = cluster_health.check_all_now().await;
     info!(
         healthy = healthy_count,

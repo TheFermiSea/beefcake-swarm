@@ -111,6 +111,11 @@ impl EndpointPool {
     pub fn capacity(&self) -> usize {
         self.workers.len()
     }
+
+    /// Return a reference to the attached health monitor, if any.
+    pub fn cluster_health(&self) -> Option<&ClusterHealth> {
+        self.health.as_ref()
+    }
 }
 
 impl Clone for EndpointPool {
