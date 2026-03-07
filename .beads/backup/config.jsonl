@@ -9,7 +9,6 @@
 {"key":"compact_tier2_dep_levels","value":"5"}
 {"key":"compaction_enabled","value":"false"}
 {"key":"issue_prefix","value":"beefcake"}
-{"key":"kv.memory.file-targeting-fix-find-target-files-by-grep","value":"file-targeting-fix: find_target_files_by_grep now extracts snake_case identifiers (e.g., edit_file) in addition to CamelCase. Also added path-based scoring boosts: tools/ +2, patches/ -2, tests/ -1. dogfood-loop.sh now passes title+description (first 300 chars) as the objective. Commits 729e36c and 76c69b0."}
 {"key":"kv.memory.parallel-dispatch","value":"Parallel dispatch + round-robin routing shipped in PR #45 (feat/parallel-dispatch-round-robin). Key: process_issue is !Send (dyn tracing::Value: !Sync), so parallel dispatch uses std::thread::spawn + Handle::block_on, NOT JoinSet. Cooperative cancellation via Arc\u003cAtomicBool\u003e cancel param on process_issue."}
 {"key":"schema_version","value":"6"}
 {"key":"types.custom","value":"molecule,gate,convoy,merge-request,slot,agent,role,rig,message"}
