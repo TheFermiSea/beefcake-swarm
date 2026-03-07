@@ -18,7 +18,7 @@ use super::ToolError;
 /// Unix counterparts. Both are allowed since LLMs may default to classic syntax.
 const ALLOWED_COMMANDS: &[&str] = &[
     // Core build/vcs/tracking
-    "cargo", "git", "bd", // Modern Rust CLI tools (preferred)
+    "cargo", "git", "bd", "bdh", // Modern Rust CLI tools (preferred)
     "rg", "fd", "bat", "sd", "delta", // Classic Unix fallbacks (LLMs default to these)
     "ls", "wc", "find", "grep", "cat", "head", "tail", "sed", "awk", "sort", "uniq", "diff",
     // File operations

@@ -15,6 +15,7 @@ use std::sync::Arc;
 
 use rig::tool::ToolDyn;
 
+use super::bdh_tools::{CheckLocksTool, CheckMailTool, SendMailTool, TeamStatusTool};
 use super::exec_tool::RunCommandTool;
 use super::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
 use super::git_tools::{GetDiffTool, ListChangedFilesTool};
@@ -155,6 +156,28 @@ pub fn manager_tools(
             Box::new(ListChangedFilesTool::new(wt_path)),
         ]
     }
+}
+
+/// Build bdh coordination tools for the manager agent.
+///
+/// Returns coordination tools when `SWARM_USE_BDH=1`, empty vec otherwise.
+/// These give the manager team awareness: who's working on what, file locks,
+/// and inter-agent messaging.
+pub fn coordination_tools(wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
+    let use_bdh = std::env::var("SWARM_USE_BDH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !use_bdh {
+        return vec![];
+    }
+
+    vec![
+        Box::new(TeamStatusTool::new(wt_path)),
+        Box::new(CheckMailTool::new(wt_path)),
+        Box::new(SendMailTool::new(wt_path)),
+        Box::new(CheckLocksTool::new(wt_path)),
+    ]
 }
 
 /// Build the optional knowledge base tool for a manager agent.

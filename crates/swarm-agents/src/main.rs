@@ -7,6 +7,7 @@ use clap::Parser;
 use tracing::{error, info, warn};
 
 use swarm_agents::agents::AgentFactory;
+use swarm_agents::bdh_bridge::BdhBridge;
 use swarm_agents::beads_bridge::{BeadsBridge, BeadsIssue, IssueTracker, NoOpTracker};
 use swarm_agents::config::{check_endpoint_with_model, SwarmConfig};
 use swarm_agents::modes::SwarmMode;
@@ -248,9 +249,8 @@ async fn main() -> Result<()> {
                 description: None,
             }
         } else {
-            // Try fetching from beads for rich title + description
-            let beads = BeadsBridge::new();
-            match beads.show(issue_id) {
+            // Try fetching from beads/bdh for rich title + description
+            match show_issue(issue_id) {
                 Ok(mut issue) => {
                     issue.status = "open".to_string(); // ensure processable
                     issue
@@ -334,11 +334,10 @@ async fn main() -> Result<()> {
         // fresh BeadsBridge for status tracking. The AgentFactory clone shares
         // the Arc<AtomicUsize> round-robin counter so each thread lands on a
         // different node.
-        let beads_lookup = BeadsBridge::new();
         let mut batch: Vec<BeadsIssue> = Vec::new();
         // Cap at parallel_issues to avoid overwhelming the cluster (Issue 6 fix).
         for id in args.issues.iter().take(config.parallel_issues) {
-            match beads_lookup.show(id) {
+            match show_issue(id) {
                 Ok(issue) => batch.push(issue),
                 Err(e) => {
                     warn!(id = %id, error = %e, "Could not fetch issue details — skipping");
@@ -359,9 +358,9 @@ async fn main() -> Result<()> {
         )
         .await?;
     } else if let Ok(target_id) = std::env::var("SWARM_ISSUE") {
-        // Branch 3: SWARM_ISSUE env var — fetch specific issue from beads
-        let beads = BeadsBridge::new();
-        let issue = match beads.show(&target_id) {
+        // Branch 3: SWARM_ISSUE env var — fetch specific issue from beads/bdh
+        let tracker = new_tracker();
+        let issue = match show_issue(&target_id) {
             Ok(i) => i,
             Err(e) => {
                 error!(target_id = %target_id, error = %e, "SWARM_ISSUE not found");
@@ -370,7 +369,7 @@ async fn main() -> Result<()> {
         };
         info!(id = %issue.id, title = %issue.title, "SWARM_ISSUE: targeting specific issue");
         tokio::select! {
-            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref, Arc::new(AtomicBool::new(false))) => {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &*tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
                     error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
@@ -382,7 +381,7 @@ async fn main() -> Result<()> {
                 if let Err(e) = worktree_bridge.cleanup(&issue.id) {
                     error!(id = %issue.id, "Cleanup failed: {e}");
                 }
-                if let Err(e) = beads.update_status(&issue.id, "open") {
+                if let Err(e) = tracker.update_status(&issue.id, "open") {
                     error!(id = %issue.id, "Failed to reset issue status: {e}");
                 }
                 info!(id = %issue.id, "Graceful shutdown complete");
@@ -390,12 +389,12 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        // Branch 4: Default — claim up to parallel_issues from beads and fan-out
-        let beads = BeadsBridge::new();
-        let issues = match beads.list_ready() {
+        // Branch 4: Default — claim up to parallel_issues from beads/bdh and fan-out
+        let tracker = new_tracker();
+        let issues = match tracker.list_ready() {
             Ok(issues) => issues,
             Err(e) => {
-                warn!(error = %e, "Beads not available");
+                warn!(error = %e, "Issue tracker not available");
                 info!("No issues to process. Orchestrator exiting.");
                 return Ok(());
             }
@@ -418,7 +417,7 @@ async fn main() -> Result<()> {
             if claimed.len() >= max_parallel {
                 break;
             }
-            match beads.try_claim(&candidate.id) {
+            match tracker.try_claim(&candidate.id) {
                 Ok(true) => {
                     info!(
                         id = %candidate.id,
@@ -446,7 +445,7 @@ async fn main() -> Result<()> {
             // Single issue: keep the existing tokio::select! shutdown path for graceful cleanup.
             let issue = claimed.remove(0);
             tokio::select! {
-                result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, kb_ref, Arc::new(AtomicBool::new(false))) => {
+                result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &*tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                     let resolved = result?;
                     if !resolved {
                         error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
@@ -458,7 +457,7 @@ async fn main() -> Result<()> {
                     if let Err(e) = worktree_bridge.cleanup(&issue.id) {
                         error!(id = %issue.id, "Cleanup failed: {e}");
                     }
-                    if let Err(e) = beads.update_status(&issue.id, "open") {
+                    if let Err(e) = tracker.update_status(&issue.id, "open") {
                         error!(id = %issue.id, "Failed to reset issue status: {e}");
                     }
                     info!(id = %issue.id, "Graceful shutdown complete");
@@ -518,7 +517,7 @@ async fn dispatch_parallel_issues(
             let factory_clone = factory.clone();
             let config_clone = config.clone();
             let wb_clone = Arc::clone(worktree_bridge);
-            let beads_clone = BeadsBridge::new();
+            let beads_clone = new_tracker();
             let kb_clone = knowledge_base.clone();
             let rt = rt_handle.clone();
             let cancel = Arc::clone(&cancel_flag);
@@ -532,7 +531,7 @@ async fn dispatch_parallel_issues(
                     &factory_clone,
                     &wb_clone,
                     &issue,
-                    &beads_clone,
+                    &*beads_clone,
                     kb_ref,
                     cancel,
                 ));
@@ -587,6 +586,36 @@ async fn dispatch_parallel_issues(
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Returns true if `SWARM_USE_BDH=1` is set, selecting BdhBridge over BeadsBridge.
+fn use_bdh() -> bool {
+    std::env::var("SWARM_USE_BDH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false)
+}
+
+/// Create the appropriate issue tracker based on the `SWARM_USE_BDH` env var.
+///
+/// When `SWARM_USE_BDH=1`, returns a [`BdhBridge`] for multi-agent coordination
+/// (atomic claiming, mail/chat, file locking). Otherwise returns a [`BeadsBridge`]
+/// for direct `bd` CLI integration.
+fn new_tracker() -> Box<dyn IssueTracker> {
+    if use_bdh() {
+        info!("Using BdhBridge (SWARM_USE_BDH=1)");
+        Box::new(BdhBridge::new())
+    } else {
+        Box::new(BeadsBridge::new())
+    }
+}
+
+/// Look up a single issue by ID, using the appropriate bridge.
+fn show_issue(id: &str) -> Result<BeadsIssue> {
+    if use_bdh() {
+        BdhBridge::new().show(id)
+    } else {
+        BeadsBridge::new().show(id)
+    }
 }
 
 async fn shutdown_signal() {
