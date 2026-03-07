@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "beefcake_swarm",
+  "project_id": "a9aed39c-f88d-4bbd-a7e8-b5fc448c15d7"
+}

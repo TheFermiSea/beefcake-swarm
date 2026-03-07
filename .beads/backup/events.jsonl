@@ -1092,4 +1092,20 @@
 {"actor":"TheFermiSea","comment":null,"created_at":"2026-03-06T22:20:11Z","event_type":"created","id":1135,"issue_id":"beefcake-vkvi","new_value":"","old_value":""}
 {"actor":"TheFermiSea","comment":null,"created_at":"2026-03-06T22:20:11Z","event_type":"created","id":1136,"issue_id":"beefcake-mzfp","new_value":"","old_value":""}
 {"actor":"TheFermiSea","comment":null,"created_at":"2026-03-06T22:20:11Z","event_type":"created","id":1137,"issue_id":"beefcake-flbd","new_value":"","old_value":""}
-{"actor":"Brian Squires","comment":null,"created_at":"2026-03-07T04:40:54Z","event_type":"status_changed","id":1138,"issue_id":"beefcake-ud3y","new_value":"{\"status\":\"open\"}","old_value":"{\"id\":\"beefcake-ud3y\",\"title\":\"Linter guardrail: reject syntactically invalid edits before applying\",\"description\":\"SWE-agent pattern. Run cargo check on the edited file immediately after edit_file applies. If it introduces new errors not in the pre-edit baseline, reject the edit and return diagnostics to the LLM in-context. Evidence: +3% SWE-bench resolve rate from this single change. Implementation: In edit_file tool handler, after writing, run cargo check --message-format=json. If new errors, revert and return diagnostics. We already have the verifier's error parser.\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"task\",\"owner\":\"squires.b@gmail.com\",\"created_at\":\"2026-03-07T04:01:40Z\",\"created_by\":\"claude-code\",\"updated_at\":\"2026-03-07T04:01:40Z\"}"}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-06T22:20:36Z","event_type":"created","id":1138,"issue_id":"beefcake-siwb","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-06T22:20:36Z","event_type":"created","id":1139,"issue_id":"beefcake-k62t","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-06T22:20:36Z","event_type":"created","id":1140,"issue_id":"beefcake-8cnh","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-06T22:20:36Z","event_type":"created","id":1141,"issue_id":"beefcake-q33c","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:43:43Z","event_type":"created","id":1142,"issue_id":"beefcake-xxzv","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:03Z","event_type":"created","id":1143,"issue_id":"beefcake-vbjk","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:03Z","event_type":"created","id":1144,"issue_id":"beefcake-8jn8","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:03Z","event_type":"created","id":1145,"issue_id":"beefcake-tuck","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:27Z","event_type":"created","id":1146,"issue_id":"beefcake-t0zx","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:27Z","event_type":"created","id":1147,"issue_id":"beefcake-ccvb","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:27Z","event_type":"created","id":1148,"issue_id":"beefcake-qvks","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:28Z","event_type":"created","id":1149,"issue_id":"beefcake-11bt","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:28Z","event_type":"created","id":1150,"issue_id":"beefcake-qw6x","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:49Z","event_type":"created","id":1151,"issue_id":"beefcake-gb81","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:49Z","event_type":"created","id":1152,"issue_id":"beefcake-n701","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:49Z","event_type":"created","id":1153,"issue_id":"beefcake-voyy","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-07T12:44:49Z","event_type":"created","id":1154,"issue_id":"beefcake-cshn","new_value":"","old_value":""}
