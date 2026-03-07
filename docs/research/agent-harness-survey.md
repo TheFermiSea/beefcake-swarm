@@ -46,6 +46,8 @@ We surveyed 10+ coding agent harnesses to identify patterns that can improve bee
 | **Roo Code** | TypeScript | Any | Orchestrator pattern, native tool calling migration |
 | **SWE-agent** | Python | Any | Agent-Computer Interface (ACI) design, linter guardrail |
 | **OpenHands** | Python | Any | Micro-agents, AgentDelegateAction, 87% same-day bug fix |
+| **Plandex** | Go | Any | Three-stage context pipeline, sandboxed edits, debug retry loop |
+| **Amp (Sourcegraph)** | TypeScript | Multi-model | Code graph infrastructure, Oracle tool (GPT-5.4), AGENTS.md |
 | **Continue.dev** | TypeScript | Any | XML tool calling, repo maps, MCP + rules files |
 
 ---
@@ -61,11 +63,22 @@ Aider's repo map is the most sophisticated file-selection system in production:
 3. **PageRank with personalization**: Ranks files by graph centrality, biased toward files mentioned in the current task
    - Personalization vector prioritizes files added via `--read` or currently in chat
    - Default: `1 / num_nodes` for unspecified files
-4. **Binary search**: Fits the maximum number of high-ranking definitions within the token budget
+   - **Edge weight multipliers** (from `repomap.py`):
+     - `x10` if identifier appears in user's message (`mentioned_idents`)
+     - `x10` for snake_case/camelCase identifiers >= 8 chars (more specific = more important)
+     - `x0.1` for underscore-prefixed names (private/internal)
+     - `x0.1` if defined in >5 files (too generic)
+     - `x50` if referencing file is already in chat
+     - All applied to `sqrt(num_refs)` to dampen high-frequency symbols
+4. **Binary search**: Fits the maximum number of high-ranking definitions within the token budget. Acceptance tolerance: 15%. For text >= 200 chars, token counting samples ~1% of lines for speed
 5. **Dynamic token budget**: Defaults to 1K tokens (`--map-tokens`), expands when no files are in chat
    - Formula: `min(map_tokens * map_mul_no_files, max_context_window - 4096)`
+6. **Multi-level caching**: Disk cache of tags per file keyed by mtime, in-memory caches for TreeContext objects and rendered maps. If map processing exceeds 1 second, caching kicks in
 
 **Output format**: Concise map showing key classes/functions/signatures (not full content). Uses `...` to indicate omitted sections. The LLM can request specific files for full details.
+
+**Full message assembly order** (`format_chat_chunks()`):
+1. System prompt → 2. Few-shot examples → 3. Done messages (summarized history) → 4. Repo map → 5. Read-only files → 6. Chat files (full content) → 7. Current messages → 8. Reminder
 
 **Why this matters for us**: Our current context packer walks 402 `.rs` files alphabetically. Only ~18 fit in the 7471-token budget, and they're all from `coordination/src/` (alphabetically first). Target files in `crates/swarm-agents/src/` are never included. PageRank would rank `runtime_adapter.rs` highly because it's imported by `orchestrator.rs`, `driver.rs`, and test files.
 
@@ -108,6 +121,42 @@ Aider's repo map is the most sophisticated file-selection system in production:
 - **Original memory access**: Agent can open files in sandbox to access full history
 - **Research finding**: "Observation masking" matched LLM summarization in cost savings after hyperparameter tuning
 
+### Plandex: Three-Stage Context Pipeline (Most Scalable)
+
+Plandex has the most structured context management, built around a three-stage pipeline:
+
+1. **Context Loading**: Tree-sitter project map of all top-level symbols (30+ languages). Map + user prompt sent to LLM which **selects** which files to fully load
+2. **Planning**: Only LLM-selected files are loaded. LLM creates a multi-step plan
+3. **Implementation**: **Smart context** filters per step, loading only files directly relevant to each implementation step. Creates a "sliding context window that grows and shrinks as needed"
+
+**Example**: 10 files need updates. Without smart context, all 10 load every step. With smart context, only the 1-2 files edited per step are loaded.
+
+**Token budget**: 200K max. Long conversations are summarized. **Notes** (persistent instructions) survive summarization.
+
+**Effective capacity**: 2M tokens with default model pack, loading only ~100K per step. Directories with 20M+ tokens can be indexed via tree-sitter maps.
+
+**Key difference from Aider's repo map**: Plandex's map is used by the LLM to _select_ which files to load fully (active filtering), whereas Aider's map is sent alongside the request as passive context. Plandex scales better to very large codebases because the LLM acts as the filter.
+
+### Cline: Agentic Search with Pruning Strategies
+
+Cline uses agentic search (no pre-computed map), but with sophisticated pruning:
+
+- **Three pruning strategies**: Temporal (removes old parts), Semantic (keeps only relevant code), Hierarchical (maintains structure, prunes details)
+- **Auto-Compact at 80%**: Generates comprehensive summary preserving decisions and code changes
+- **Focus Chain**: Automatic todo lists that persist through Auto-Compact, maintaining task continuity
+- **FileContextTracker**: Detects files modified externally after a message timestamp, warns about stale context
+- **Plan & Act mode**: Read-only exploration (Plan) before code changes (Act) — builds understanding before writing
+
+### Amp (Sourcegraph): Code Graph Infrastructure
+
+Amp leverages Sourcegraph's code graph — a fundamentally different approach:
+
+- **Context aggregation**: Semantic data from repositories (symbols, references, dependency trees)
+- **Librarian tool**: Searches GitHub/Bitbucket repos using Sourcegraph's global code graph
+- **AGENTS.md system**: Hierarchical guidance files with `@`-mentions and YAML `globs` for scoped rules
+- **No compaction**: Recommends **handoff** — drafting a new thread with relevant context. "Abandon threads if they accumulated too much noise"
+- **Subagents**: Each gets its own context window. They work in isolation, main agent only receives final summary
+
 ### Claude Code: No Indexing, Agentic Search
 
 - **No pre-indexing** — model uses Glob/Grep/Read tools to search on-demand
@@ -119,9 +168,12 @@ Aider's repo map is the most sophisticated file-selection system in production:
 | Agent | Strategy | Token Budget | Pre-indexes? |
 |-------|----------|-------------|-------------|
 | **Aider** | PageRank + tree-sitter | 1K-4K default | Yes (graph) |
+| **Plandex** | Three-stage: map → select → smart context | 200K, ~100K/step | Yes (tree-sitter map) |
+| **Amp** | Sourcegraph code graph + Librarian | Model-dependent | Yes (code graph) |
 | **Codex CLI** | Byte-heuristic truncation + compaction | ~258K cap | No |
 | **Gemini CLI** | Hierarchical GEMINI.md + 2-phase compression | 1M default | No |
 | **OpenCode** | 2000-line limit + auto-summarization | Model-dependent | No |
+| **Cline** | Agentic search + 3-strategy pruning | 50-70% of model | No |
 | **OpenHands** | Fixed 32K + conservative condensing | 32K | No |
 | **Claude Code** | Agentic search (no indexing) | 200K+ | No |
 | **Our system** | Alphabetical file walk + token budget | ~7.5K | Sort of |
@@ -220,11 +272,61 @@ From Aider's controlled experiments on GPT-4 Turbo:
 - Selected linter errors shown to agent with before/after snippets
 - **Impact**: Without linting, performance drops from 18.0% to 15.0% resolved (+3% from guardrail alone)
 
+### Aider: 4-Level Fuzzy Matching + 6 Edit Formats
+
+Aider supports 6 edit formats auto-selected per model:
+
+| Format | Mechanism | Best For |
+|--------|-----------|----------|
+| `whole` | LLM returns entire file | Simple models, small files |
+| `diff` (search/replace) | `<<<<<<< SEARCH` / `>>>>>>> REPLACE` blocks | GPT-4o (default) |
+| `diff-fenced` | Same but filepath inside fence | Gemini models |
+| `udiff` | Modified unified diff | GPT-4 Turbo (reduces laziness 3x) |
+| `patch` | OpenAI's structured patch format | GPT-4.1 (trained on this format) |
+| `editor-diff/whole` | Simplified prompts for architect mode | o1 + editor model pairs |
+
+**4-level fuzzy matching fallback** when applying search/replace blocks:
+1. Exact match
+2. Whitespace-insensitive match
+3. Indentation-preserving match
+4. Fuzzy match via `difflib`
+
+This layered fallback is critical for local LLMs like Qwen3.5 which may produce slightly imprecise edits.
+
+### Cline: Order-Invariant Diff + Fallback
+
+- `replace_in_file`: Search/replace using `<<<<<<< SEARCH` / `>>>>>>> REPLACE` blocks
+- **Order-invariant algorithm**: Correctly applies blocks even when model provides them out of order (addresses LLM instruction-following limitation)
+- **Exact matching only** (no fuzzy fallback) — stricter than Aider
+- **3-failure fallback**: If `replace_in_file` fails 3 times, falls back to `write_to_file` (full rewrite)
+- **Model-specific markers**: Anthropic models use `---/+++`; Gemini/xAI use `>>>/<<<`
+- **Success rate improvements**: Claude 3.5 Sonnet +25%, GPT-4.1 +21%, Claude Opus 4 +15%
+
+### Plandex: Sandboxed Edits + Syntax Validation
+
+- All edits stay in a **sandbox** (cumulative diff review) until explicitly applied
+- **Syntax validation via tree-sitter** for 30+ languages before accepting edits
+- **Logic validation** as needed
+- Version-controlled plans with branches for exploring alternatives
+- Multiple fallback layers when edits fail
+- Edits can be reviewed, revised, and selectively applied
+
 ### Roo Code: Native Tool Calling Migration
 
 Migrated from XML-based tool calling to native function calling:
 - **XML problems**: Latency, accuracy issues, inconsistent formats, parsing complexity
 - **Native benefits**: Type safety, eliminates parsing errors, significantly faster edits
+
+### Edit Matching Comparison
+
+| Tool | Primary Matching | Fallback Chain | Validation |
+|------|-----------------|----------------|------------|
+| **Aider** | Exact | Whitespace → indent → fuzzy | Lint after apply |
+| **Cline** | Exact only | 3 failures → full rewrite | None |
+| **Plandex** | Exact | Multiple layers | Tree-sitter syntax |
+| **Gemini CLI** | Exact | Whitespace → regex → Levenshtein | Omission detection |
+| **Codex CLI** | Lark grammar | N/A (structured) | N/A |
+| **Our system** | Exact | None | None |
 
 ### Our System: Search/Replace Blocks via `edit_file`
 
@@ -303,6 +405,30 @@ export const TaskTool = Tool.define("task", async () => {
 - **Mailbox messaging**: 1:1 agent communication
 - **Auto-unblocking**: When blocking task completes, dependent tasks become claimable
 
+### Plandex: Plan-First Architecture (Most Structured Multi-File)
+
+- **Plan-first**: LLM creates multi-step plan before implementation
+- **Version-controlled plans**: Every plan update versioned, with branches for alternatives
+- **Cumulative diff sandbox**: All changes accumulate for review before applying
+- **Smart context per step**: Only loads files relevant to each implementation step
+- **Autonomy levels**: 5 tiers from `none` (manual everything) to `full` (auto-load, auto-apply, auto-exec, auto-debug)
+
+### Amp (Sourcegraph): Multi-Model Orchestra
+
+Amp's most distinctive feature is its **multi-model architecture**:
+
+| Role | Model | Purpose |
+|------|-------|---------|
+| Main agent | Claude Opus 4.6 | Primary coding agent |
+| Oracle (reasoning) | GPT-5.4 | Complex problem analysis |
+| Deep mode | GPT-5.3 Codex | Deep code generation |
+| Painter (images) | Gemini 3 Pro | Image-related tasks |
+
+- **Subagents**: Isolated context windows, can't communicate with each other. Main agent only receives final summary
+- **Skills system**: Packages with `SKILL.md` files and optional bundled MCP servers
+- **Code Review tool**: Spawns subagents per check (parallelized verification)
+- `includeTools` filters on MCP servers expose only needed tools per context
+
 ### Our System: Cloud Manager + Local Workers
 
 - Cloud manager (Claude Opus) plans and delegates via WorkPackets
@@ -316,6 +442,8 @@ export const TaskTool = Tool.define("task", async () => {
 | Agent | Architecture | Isolation | State Sharing |
 |-------|-------------|-----------|---------------|
 | **Codex CLI** | Full lifecycle (spawn/wait/close/resume) | Thread + history | Context forking |
+| **Plandex** | Plan-first, sandboxed, per-step context | Versioned sandbox | Smart context |
+| **Amp** | Multi-model oracle + subagents | Context per agent | Final summary only |
 | **OpenCode** | Hierarchical, stateless | Session + context | TODO system |
 | **Gemini CLI** | LocalAgentExecutor + A2A server | Tool registry + chat | Structured JSON output |
 | **Roo Code** | Mode switching (single agent) | N/A | Shared context |
@@ -384,12 +512,45 @@ const diagnostics = await LSP.diagnostics()
 - **Same-error detection**: 5 identical errors → circuit opens
 - Most sophisticated anti-stall mechanism surveyed
 
+### Aider: Reflection Mechanism (max_reflections=3)
+
+Aider's core turn management loop:
+
+1. LLM generates edits → edits applied
+2. **Auto-lint** runs (tree-sitter-based, built-in for most languages, custom via `--lint-cmd`)
+3. If lint errors found, packaged with AST context (error within containing function/class) and set as `reflected_message`
+4. Loop continues with reflected message as next input
+5. **Hard cap: `max_reflections = 3`** (hardcoded) — prevents infinite token consumption
+
+Same reflection mechanism handles: lint/compilation errors, test failures (`--auto-test`), malformed edit format errors, and response truncation.
+
+**Known weakness**: If LLM cannot fix a lint error within 3 reflections, issue persists. No escalation to a more capable model.
+
+### Cline: Auto-Compact + max_requests
+
+- **Auto-Compact at 80%** context: Comprehensive summary preserving decisions and code changes
+- **max_requests**: Hard safety net against runaway agents
+- **Permission model**: Approve-per-action naturally creates turn boundaries
+- **No explicit stall detection** — max_requests and Auto-Compact are primary safeguards
+- **`/new` command**: Hard reset for maximum context availability
+
+### Plandex: Debug Retry Loop (Most Explicit)
+
+The most explicit retry loop of any tool surveyed:
+
+- `plandex debug 'npm test'` — runs command, on failure rolls back, sends errors to LLM, applies fix, retries
+- **Default: 5 retries** (configurable: `plandex debug 10 'npm test'`)
+- Changes sandboxed so rollback is cheap
+- **Model provider failover**: If primary API fails, falls back to alternate providers
+- **Weakness**: Can freeze during processing with no indication. Manual `s` to stop + `plandex rewind` required
+
 ### Our System: Write Deadline + Max No-Change
 
 - `max_turns_without_write=5`: Terminates agents that don't write within N turns
 - `SWARM_MAX_NO_CHANGE=3`: Circuit breaker for iterations with no file changes
 - `SWARM_MAX_RETRIES=10`: Overall limit
 - **Gap**: No per-edit validation, no LSP feedback, no loop detection events
+- **Note**: Beefcake-swarm's stall detection is already more sophisticated than most surveyed tools
 
 ### Comparison
 
@@ -397,6 +558,9 @@ const diagnostics = await LSP.diagnostics()
 |-------|---------------|----------------|----------------|
 | **SWE-agent** | N/A | Linter guardrail (reject invalid) | Immediate |
 | **OpenCode** | Step limit (1000) | LSP diagnostics | ~150ms |
+| **Aider** | max_reflections=3 | Auto-lint (tree-sitter) | Immediate |
+| **Plandex** | 5-retry debug loop | Tree-sitter syntax | Per-retry |
+| **Cline** | Auto-Compact at 80% | None | Turn-level |
 | **Gemini CLI** | Event-based + time limits | None | Turn-level |
 | **Codex CLI** | None (model trusted) | None | N/A |
 | **Ralph** | Circuit breaker (3 loops) | None | 30-min cooldown |
@@ -599,6 +763,19 @@ Dedicated read-only agent that explores the codebase and returns structured find
 ### Continue.dev
 - [Continue.dev](https://www.continue.dev/)
 - [How to Make Agent mode Aware of Codebases and Documentation](https://docs.continue.dev/guides/codebase-documentation-awareness)
+
+### Cline
+- [Cline Context Management](https://docs.cline.bot/prompting/understanding-context-management)
+- [Cline Diff Improvements Blog](https://cline.bot/blog/improving-diff-edits-by-10)
+- [Cline System Prompt Advanced](https://cline.bot/blog/system-prompt-advanced)
+- [Cline Diff Reliability Issue](https://github.com/cline/cline/issues/4384)
+
+### Plandex
+- [Plandex Context Management](https://docs.plandex.ai/core-concepts/context-management/)
+- [Plandex Execution and Debugging](https://docs.plandex.ai/core-concepts/execution-and-debugging/)
+
+### Amp (Sourcegraph)
+- [Amp Owner's Manual](https://ampcode.com/manual)
 
 ### General
 - [AI Code Edit Formats Guide 2025: Diff vs Whole File vs Semantic](https://www.morphllm.com/edit-formats)
