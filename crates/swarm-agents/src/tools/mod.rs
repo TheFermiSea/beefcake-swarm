@@ -18,6 +18,7 @@ pub mod shared;
 pub mod verifier_tool;
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 /// Errors that can occur during tool execution.
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +46,48 @@ pub enum ToolError {
 
     #[error("policy violation: {0}")]
     Policy(String),
+}
+
+/// Run a command with timeout, returning stdout or a formatted error.
+pub(crate) async fn run_command_with_timeout(
+    program: &str,
+    args: &[&str],
+    working_dir: &Path,
+    timeout_secs: u64,
+) -> Result<String, ToolError> {
+    let program = program.to_string();
+    let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();
+    let wd = working_dir.to_path_buf();
+
+    let result = tokio::task::spawn_blocking(move || {
+        std::process::Command::new(&program)
+            .args(&args)
+            .current_dir(&wd)
+            .output()
+            .map_err(ToolError::Io)
+    });
+
+    match tokio::time::timeout(Duration::from_secs(timeout_secs), result).await {
+        Ok(Ok(Ok(output))) => {
+            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+            if output.status.success() {
+                Ok(stdout)
+            } else {
+                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                Ok(format!(
+                    "Exit code: {}\nstdout:\n{}\nstderr:\n{}",
+                    output.status, stdout, stderr
+                ))
+            }
+        }
+        Ok(Ok(Err(e))) => Err(e),
+        Ok(Err(e)) => Err(ToolError::Io(std::io::Error::other(format!(
+            "task joined with error (panic): {e}"
+        )))),
+        Err(_) => Err(ToolError::Timeout {
+            seconds: timeout_secs,
+        }),
+    }
 }
 
 /// Validate that a resolved path stays within the sandbox root.

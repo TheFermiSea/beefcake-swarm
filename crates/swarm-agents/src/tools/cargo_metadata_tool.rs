@@ -1,13 +1,12 @@
 //! Tool for querying Cargo workspace metadata.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 
-use super::ToolError;
+use super::{run_command_with_timeout, ToolError};
 
 const TIMEOUT_SECS: u64 = 60;
 
@@ -47,42 +46,17 @@ impl Tool for CargoMetadataTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let working_dir = self.working_dir.clone();
+        let output = run_command_with_timeout(
+            "cargo",
+            &["metadata", "--format-version=1", "--no-deps"],
+            &self.working_dir,
+            TIMEOUT_SECS,
+        )
+        .await?;
 
-        let result = tokio::task::spawn_blocking(move || {
-            std::process::Command::new("cargo")
-                .args(["metadata", "--format-version=1", "--no-deps"])
-                .current_dir(&working_dir)
-                .output()
-                .map_err(ToolError::Io)
-        });
-
-        let output = match tokio::time::timeout(Duration::from_secs(TIMEOUT_SECS), result).await {
-            Ok(Ok(r)) => r?,
-            Ok(Err(e)) => {
-                return Err(ToolError::Io(std::io::Error::other(format!(
-                    "task join error: {e}"
-                ))))
-            }
-            Err(_) => {
-                return Err(ToolError::Timeout {
-                    seconds: TIMEOUT_SECS,
-                })
-            }
-        };
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let code = output.status.code().unwrap_or(-1);
-            return Err(ToolError::CommandFailed {
-                code,
-                stderr: stderr.to_string(),
-            });
-        }
-
-        let meta: serde_json::Value = serde_json::from_slice(&output.stdout).map_err(|e| {
+        let meta: serde_json::Value = serde_json::from_str(&output).map_err(|e| {
             ToolError::Io(std::io::Error::other(format!(
-                "failed to parse cargo metadata JSON: {e}"
+                "failed to parse cargo metadata JSON: {e}. Output was: {output}"
             )))
         })?;
 

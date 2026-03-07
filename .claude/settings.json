@@ -1,12 +1,23 @@
 {
   "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "bdh :notify",
+            "type": "command"
+          }
+        ],
+        "matcher": ".*"
+      }
+    ],
     "TaskCompleted": [
       {
         "hooks": [
           {
-            "type": "command",
             "command": ".claude/hooks/verify-task.sh",
-            "timeout": 300
+            "timeout": 300,
+            "type": "command"
           }
         ]
       }
@@ -15,9 +26,9 @@
       {
         "hooks": [
           {
-            "type": "command",
             "command": ".claude/hooks/teammate-idle.sh",
-            "timeout": 30
+            "timeout": 30,
+            "type": "command"
           }
         ]
       }
