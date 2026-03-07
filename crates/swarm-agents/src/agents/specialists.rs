@@ -16,7 +16,7 @@ use rig::providers::openai;
 use crate::prompts;
 use crate::tools::bundles::{self, WorkerRole};
 
-use super::coder::{merge_params, worker_sampling_params, OaiAgent};
+use super::coder::{worker_sampling_params, OaiAgent};
 
 const DEFAULT_PLANNER_MAX_TURNS: usize = 10;
 const DEFAULT_FIXER_MAX_TURNS: usize = 15;
@@ -53,14 +53,7 @@ pub fn build_planner_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let mut sampling = worker_sampling_params();
-
-    // Merge GBNF grammar params with sampling params when grammar is enabled.
-    if let Some(grammar_params) =
-        crate::grammars::params_if_enabled(crate::grammars::Grammar::PlannerOutput)
-    {
-        sampling = merge_params(sampling, grammar_params);
-    }
+    let sampling = worker_sampling_params();
 
     client
         .agent(model)

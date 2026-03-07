@@ -107,22 +107,6 @@ pub fn worker_sampling_params() -> Value {
     })
 }
 
-/// Merge two JSON objects. Keys in `extra` overwrite keys in `base`.
-///
-/// Used to combine sampling params with grammar params when both are needed
-/// (e.g., planner uses GBNF grammar + anti-repetition penalties).
-pub fn merge_params(base: Value, extra: Value) -> Value {
-    match (base, extra) {
-        (Value::Object(mut a), Value::Object(b)) => {
-            for (k, v) in b {
-                a.insert(k, v);
-            }
-            Value::Object(a)
-        }
-        (_, extra) => extra,
-    }
-}
-
 /// Build the Rust specialist coder (Qwen3.5-Implementer).
 ///
 /// Tools: read_file, write_file, edit_file, run_command (no list_files).

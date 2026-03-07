@@ -7,7 +7,6 @@ pub mod contracts;
 pub mod dashboard;
 pub mod driver;
 pub mod endpoint_pool;
-pub mod grammars;
 pub mod kb_refresh;
 pub mod knowledge_sync;
 pub mod modes;

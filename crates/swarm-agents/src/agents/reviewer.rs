@@ -23,24 +23,13 @@ pub fn build_reviewer_named(
     model: &str,
     name: &str,
 ) -> OaiAgent {
-    let mut builder = client
+    client
         .agent(model)
         .name(name)
         .description("Blind code reviewer. Returns strict JSON validation output.")
         .preamble(prompts::REVIEWER_PREAMBLE)
-        .temperature(0.1);
-
-    // Attach GBNF grammar for structured review output when enabled.
-    // This forces llama-server to produce valid JSON matching the
-    // StructuredReview schema, eliminating fail-closed fallbacks from
-    // malformed output.
-    if let Some(params) =
-        crate::grammars::params_if_enabled(crate::grammars::Grammar::ReviewVerdict)
-    {
-        builder = builder.additional_params(params);
-    }
-
-    builder.build()
+        .temperature(0.1)
+        .build()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
