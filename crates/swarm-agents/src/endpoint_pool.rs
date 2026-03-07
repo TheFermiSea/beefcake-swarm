@@ -1,18 +1,28 @@
-//! Round-robin pool of local inference endpoints.
+//! Round-robin pool of local inference endpoints with optional health awareness.
 //!
 //! Cloning an `EndpointPool` shares the `Arc<AtomicUsize>` counter, so parallel
 //! `AgentFactory` clones all draw from the same sequence — each parallel issue
 //! naturally lands on the next node.
+//!
+//! When a `ClusterHealth` monitor is attached, `next()` skips endpoints that
+//! are marked `Down`. Falls back to normal round-robin when all nodes are down
+//! (health check may be stale) or when health data is unavailable.
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use rig::providers::openai;
+use tracing::debug;
 
+use crate::cluster_health::ClusterHealth;
 use crate::config::{ClientSet, SwarmConfig};
+
+/// Tier names matching ClusterHealth's status map keys.
+const TIER_NAMES: [&str; 3] = ["fast", "coder", "reasoning"];
 
 pub struct EndpointPool {
     workers: Vec<(openai::CompletionsClient, String)>, // (client, model_name)
     counter: Arc<AtomicUsize>,
+    health: Option<ClusterHealth>,
 }
 
 impl EndpointPool {
@@ -27,16 +37,73 @@ impl EndpointPool {
                 ),
             ],
             counter: Arc::new(AtomicUsize::new(0)),
+            health: None,
         }
     }
 
-    /// Select the next (client, model) pair in round-robin order.
+    /// Attach a health monitor. When set, `next()` skips down nodes.
+    pub fn with_health(mut self, health: ClusterHealth) -> Self {
+        self.health = Some(health);
+        self
+    }
+
+    /// Select the next (client, model) pair, skipping unhealthy endpoints.
     ///
-    /// Thread-safe: `fetch_add(Relaxed)` is sufficient — we only need global
-    /// progress, not strict ordering between tasks.
+    /// Tries up to `workers.len()` candidates. If all are down (or health data
+    /// is unavailable), returns the original round-robin pick — stale health
+    /// data shouldn't block all work.
+    ///
+    /// Thread-safe: uses `fetch_add(Relaxed)` for the counter and `try_read()`
+    /// on the health RwLock (non-blocking).
     pub fn next(&self) -> (&openai::CompletionsClient, &str) {
-        let idx = self.counter.fetch_add(1, Ordering::Relaxed) % self.workers.len();
-        let (client, model) = &self.workers[idx];
+        let n = self.workers.len();
+        let base = self.counter.fetch_add(1, Ordering::Relaxed);
+        let default_idx = base % n;
+
+        // Without health data, pure round-robin.
+        let health = match &self.health {
+            Some(h) => h,
+            None => {
+                let (client, model) = &self.workers[default_idx];
+                return (client, model.as_str());
+            }
+        };
+
+        // Try to read health status without blocking.
+        let status_guard = match health.try_read_status() {
+            Some(guard) => guard,
+            None => {
+                // Write lock held (health check in progress) — use default.
+                let (client, model) = &self.workers[default_idx];
+                return (client, model.as_str());
+            }
+        };
+
+        // Try each candidate in round-robin order, skipping down nodes.
+        for offset in 0..n {
+            let idx = (base + offset) % n;
+            let tier_name = TIER_NAMES[idx];
+            let is_usable = status_guard
+                .get(tier_name)
+                .map(|s| s.is_usable())
+                .unwrap_or(true); // unknown = assume usable
+
+            if is_usable {
+                if offset > 0 {
+                    debug!(
+                        skipped = offset,
+                        selected = tier_name,
+                        "Skipped unhealthy endpoint(s)"
+                    );
+                }
+                let (client, model) = &self.workers[idx];
+                return (client, model.as_str());
+            }
+        }
+
+        // All down — use original pick anyway (health may be stale).
+        debug!("All endpoints report down — using default round-robin");
+        let (client, model) = &self.workers[default_idx];
         (client, model.as_str())
     }
 
@@ -51,6 +118,7 @@ impl Clone for EndpointPool {
         Self {
             workers: self.workers.clone(), // clones CompletionsClient (cheap Arc)
             counter: Arc::clone(&self.counter), // shares the counter — key for round-robin
+            health: self.health.clone(),
         }
     }
 }

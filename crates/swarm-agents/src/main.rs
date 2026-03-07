@@ -194,8 +194,9 @@ async fn main() -> Result<()> {
         None
     };
 
-    // --- Build agent factory ---
-    let mut factory = AgentFactory::new(&config)?;
+    // --- Build agent factory with health-aware routing ---
+    let cluster_health = swarm_agents::cluster_health::ClusterHealth::from_config(&config);
+    let mut factory = AgentFactory::new(&config)?.with_health(cluster_health);
     if let Some(ref kb) = knowledge_base {
         factory = factory.with_notebook_bridge(kb.clone());
     }

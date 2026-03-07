@@ -70,6 +70,16 @@ impl AgentFactory {
         })
     }
 
+    /// Attach a health monitor to the endpoint pool for health-aware routing.
+    ///
+    /// When set, `endpoint_pool.next()` will skip endpoints that are marked
+    /// as `Down` by the health monitor, falling back to round-robin when all
+    /// endpoints are down or health data is unavailable.
+    pub fn with_health(mut self, health: crate::cluster_health::ClusterHealth) -> Self {
+        self.endpoint_pool = self.endpoint_pool.with_health(health);
+        self
+    }
+
     /// Set the knowledge base for the notebook tool.
     ///
     /// If a [`ToolFactory`] was already initialized via [`with_worktree`],

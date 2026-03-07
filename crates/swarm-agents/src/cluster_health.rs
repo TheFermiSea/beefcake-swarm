@@ -207,6 +207,16 @@ impl ClusterHealth {
         parts.join(", ")
     }
 
+    /// Non-blocking read of the status map for synchronous callers.
+    ///
+    /// Returns `None` if a write lock is held (health check in progress).
+    /// Used by `EndpointPool::next()` to skip down nodes without blocking.
+    pub fn try_read_status(
+        &self,
+    ) -> Option<tokio::sync::RwLockReadGuard<'_, HashMap<String, EndpointStatus>>> {
+        self.status.try_read().ok()
+    }
+
     /// Count how many endpoints are usable (healthy or degraded).
     pub async fn usable_count(&self) -> usize {
         let map = self.status.read().await;
