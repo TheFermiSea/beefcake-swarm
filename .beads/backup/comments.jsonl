@@ -1,0 +1,6 @@
+{"author":"TheFermiSea","created_at":"2026-02-21T12:43:56Z","id":1,"issue_id":"bd-tk92","text":"CODE REVIEW: APPROVED - Dynamic feature discovery + DB persistence pipeline complete, all quality gates passed (134 driver tests + 9 integration tests, zero clippy warnings, no circular deps, comprehensive error handling). Stack: introspection.rs (1224 lines) → register_dynamic_features() → schema v6 → reconciler hooks → integration tests. Ready to merge."}
+{"author":"TheFermiSea","created_at":"2026-03-06T22:51:10Z","id":2,"issue_id":"bd-cflibs-runtime","text":"Closed in rust-daq on 2026-03-06. This work belongs in the CF-LIBS repository/tracker."}
+{"author":"TheFermiSea","created_at":"2026-03-06T22:51:11Z","id":3,"issue_id":"bd-1ud9","text":"Closed in rust-daq on 2026-03-06. This work belongs in the CF-LIBS repository/tracker."}
+{"author":"TheFermiSea","created_at":"2026-03-06T22:52:47Z","id":4,"issue_id":"bd-3yb8.25","text":"Deferred on 2026-03-06 pending the next scheduled Windows LIBS machine session."}
+{"author":"TheFermiSea","created_at":"2026-03-06T22:52:47Z","id":5,"issue_id":"bd-a9zy","text":"Deferred on 2026-03-06 pending the next real-hardware validation window."}
+{"author":"TheFermiSea","created_at":"2026-03-06T22:52:47Z","id":6,"issue_id":"bd-wucy","text":"Deferred on 2026-03-06 pending the next real-hardware validation window."}
