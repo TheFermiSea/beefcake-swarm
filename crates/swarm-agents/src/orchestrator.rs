@@ -1720,10 +1720,9 @@ pub async fn process_issue(
     if bool_from_env("SWARM_CONCURRENT_SUBTASKS", false) {
         info!(id = %issue.id, "Using concurrent subtask dispatch (SWARM_CONCURRENT_SUBTASKS=1)");
 
-        // Use the reasoning tier (or cloud if available) for planning.
-        let (plan_client, plan_model) = if let Some(ref cloud) = factory.clients.cloud {
-            (cloud.clone(), config.cloud_endpoint.as_ref().map_or("claude-opus-4-6", |e| e.model.as_str()).to_string())
-        } else {
+        // Prefer local reasoning tier for planning (escalation ladder compliance).
+        // Only fall back to cloud if reasoning endpoint is unavailable.
+        let (plan_client, plan_model) = {
             (factory.clients.reasoning.clone(), config.reasoning_endpoint.model.clone())
         };
 
@@ -1756,8 +1755,9 @@ pub async fn process_issue(
                     plan.subtasks.len()
                 );
 
-                // Dispatch workers concurrently (bounded by cluster slot count).
-                let max_concurrent = config.parallel_issues.max(1);
+                // Dispatch workers concurrently, bounded by endpoint pool capacity
+                // (number of inference nodes, not parallel_issues which is a separate concern).
+                let max_concurrent = factory.endpoint_pool.capacity();
                 let timeout = timeout_from_env("SWARM_LOCAL_HTTP_TIMEOUT_SECS", 900).as_secs();
                 let outcome = crate::subtask::dispatch_subtasks(
                     &plan,
@@ -1789,6 +1789,26 @@ pub async fn process_issue(
                         "Concurrent subtask dispatch: verifier PASSED"
                     );
 
+                    // Commit the concurrent workers' edits before merge.
+                    if let Err(e) = git_commit_changes(&wt_path, 0).await {
+                        warn!(id = %issue.id, "Failed to commit concurrent edits: {e}");
+                    }
+
+                    // Session bookkeeping (mirrors the normal success path).
+                    session.complete();
+                    let _ = progress.log_session_end(
+                        session.session_id(),
+                        session.iteration(),
+                        format!("Issue {} resolved via concurrent subtask dispatch", issue.id),
+                    );
+
+                    info!(
+                        id = %issue.id,
+                        session_id = session.short_id(),
+                        elapsed = %session.elapsed_human(),
+                        "Issue resolved — merging worktree"
+                    );
+
                     // Try to merge and close.
                     if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
                         error!(id = %issue.id, "Merge failed: {e}");
@@ -1797,6 +1817,7 @@ pub async fn process_issue(
                         return Err(e);
                     }
                     beads.close(&issue.id, Some("Resolved by concurrent subtask dispatch"))?;
+                    clear_resume_file(worktree_bridge.repo_root());
                     return Ok(true);
                 }
 

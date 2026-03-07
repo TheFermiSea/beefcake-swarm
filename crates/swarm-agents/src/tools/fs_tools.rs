@@ -171,12 +171,23 @@ pub struct WriteFileArgs {
 /// Write content to a file in the worktree. Creates parent directories.
 pub struct WriteFileTool {
     pub working_dir: PathBuf,
+    /// When set, only paths in this set may be written. Used by subtask dispatch
+    /// to enforce the non-overlap constraint at the tool layer.
+    allowed_files: Option<std::collections::HashSet<String>>,
 }
 
 impl WriteFileTool {
     pub fn new(working_dir: &Path) -> Self {
         Self {
             working_dir: working_dir.to_path_buf(),
+            allowed_files: None,
+        }
+    }
+
+    pub fn new_with_allowlist(working_dir: &Path, allowed: std::collections::HashSet<String>) -> Self {
+        Self {
+            working_dir: working_dir.to_path_buf(),
+            allowed_files: Some(allowed),
         }
     }
 }
@@ -211,6 +222,14 @@ impl Tool for WriteFileTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        if let Some(ref allowed) = self.allowed_files {
+            if !allowed.contains(&args.path) {
+                return Err(ToolError::Policy(format!(
+                    "write_file: path '{}' is not in this worker's target_files allowlist",
+                    args.path
+                )));
+            }
+        }
         let full_path = sandbox_check(&self.working_dir, &args.path)?;
         if !args.path.contains('/') {
             tracing::warn!(

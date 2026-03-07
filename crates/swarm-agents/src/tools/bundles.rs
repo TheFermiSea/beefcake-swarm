@@ -91,6 +91,32 @@ pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dy
     }
 }
 
+/// Build a worker tool bundle with a file allowlist for subtask dispatch.
+///
+/// Like `worker_tools`, but `edit_file` and `write_file` will reject writes
+/// to paths outside `target_files`, enforcing the non-overlap constraint at
+/// the tool layer (not just the prompt).
+pub fn subtask_worker_tools(
+    wt_path: &Path,
+    role: WorkerRole,
+    target_files: &[String],
+) -> Vec<Box<dyn ToolDyn>> {
+    let allowlist: std::collections::HashSet<String> = target_files.iter().cloned().collect();
+
+    let mut tools: Vec<Box<dyn ToolDyn>> = vec![
+        Box::new(ReadFileTool::new(wt_path)),
+        Box::new(WriteFileTool::new_with_allowlist(wt_path, allowlist.clone())),
+        Box::new(EditFileTool::new_with_allowlist(wt_path, allowlist)),
+        Box::new(RunCommandTool::new(wt_path)),
+    ];
+
+    if role == WorkerRole::General {
+        tools.push(Box::new(ListFilesTool::new(wt_path)));
+    }
+
+    tools
+}
+
 /// Build the deterministic tool bundle for a manager agent.
 ///
 /// Cloud managers get delegate-only tools: verifier, diff, changed_files.

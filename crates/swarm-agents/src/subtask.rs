@@ -273,6 +273,10 @@ pub async fn dispatch_subtasks(
         });
     }
 
+    // Track pending subtask IDs so we can account for panicked workers.
+    let mut pending_ids: std::collections::HashSet<String> =
+        plan.subtasks.iter().map(|s| s.id.clone()).collect();
+
     let mut results = Vec::with_capacity(plan.subtasks.len());
     while let Some(res) = join_set.join_next().await {
         match res {
@@ -284,12 +288,25 @@ pub async fn dispatch_subtasks(
                     tool_calls = result.report.as_ref().map(|r| r.total_tool_calls).unwrap_or(0),
                     "Subtask completed"
                 );
+                pending_ids.remove(&result.subtask_id);
                 results.push(result);
             }
             Err(e) => {
                 error!(error = %e, "Subtask worker panicked");
             }
         }
+    }
+
+    // Any remaining pending IDs are from panicked workers — record as failures.
+    for id in pending_ids {
+        error!(subtask_id = %id, "Subtask worker panicked — recording as failure");
+        results.push(SubtaskResult {
+            subtask_id: id,
+            success: false,
+            response: "Worker panicked".to_string(),
+            elapsed: start.elapsed(),
+            report: None,
+        });
     }
 
     DispatchOutcome {
@@ -362,8 +379,8 @@ async fn run_subtask_worker(
         _ => WorkerRole::General,
     };
 
-    // Build tools scoped to the worktree.
-    let tools = bundles::worker_tools(wt_path, role, false);
+    // Build tools scoped to the worktree with file allowlist enforcement.
+    let tools = bundles::subtask_worker_tools(wt_path, role, &subtask.target_files);
 
     // Build the agent with a subtask-specific system prompt.
     let system_prompt = build_subtask_system_prompt(subtask);
@@ -413,8 +430,20 @@ async fn run_subtask_worker(
             }
         }
         Err(e) => {
-            let is_budget = e.to_string().contains("Budget exhausted")
-                || e.to_string().contains("deadline");
+            // Use the adapter report as the primary budget-exhaustion signal.
+            // RuntimeAdapter sets terminated_early=true for max_tool_calls,
+            // deadline, read-budget, and write-stall terminations. Fallback
+            // to error string matching for cases where the report is unavailable.
+            let is_budget = report
+                .as_ref()
+                .map(|r| r.terminated_early)
+                .unwrap_or_else(|| {
+                    let msg = e.to_string();
+                    msg.contains("Budget exhausted")
+                        || msg.contains("deadline")
+                        || msg.contains("max tool calls")
+                        || msg.contains("exceeded")
+                });
             if is_budget {
                 // Budget exhaustion means the worker ran out of time/calls but
                 // may have made partial progress. Treat as success if it wrote files.
