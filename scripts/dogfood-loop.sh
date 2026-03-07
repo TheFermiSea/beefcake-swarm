@@ -112,9 +112,17 @@ run_issue() {
   local issue_title issue_args=()
   local run_start run_end elapsed exit_code
 
-  # Fetch title from beads for the objective
-  issue_title=$(bd show "$issue_id" --json --allow-stale 2>/dev/null | python3 -c "import json,sys; print(json.load(sys.stdin)[0].get('title',''))" 2>/dev/null || echo "Issue $issue_id")
-  issue_args=(--issue "$issue_id" --objective "$issue_title")
+  # Fetch title + description from beads for the objective
+  # Including the description gives find_target_files_by_grep more identifiers
+  # to search for (e.g., "edit_file", "verifier") beyond just the title.
+  issue_title=$(bd show "$issue_id" --json --allow-stale 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin)[0]; print(d.get('title',''))" 2>/dev/null || echo "Issue $issue_id")
+  issue_desc=$(bd show "$issue_id" --json --allow-stale 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin)[0]; print(d.get('description','')[:300])" 2>/dev/null || echo "")
+  if [[ -n "$issue_desc" ]]; then
+    issue_objective="${issue_title}. ${issue_desc}"
+  else
+    issue_objective="$issue_title"
+  fi
+  issue_args=(--issue "$issue_id" --objective "$issue_objective")
 
   log "  [run $run_num] Starting issue=$issue_id log=$run_log"
 

@@ -262,10 +262,23 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
 /// (which covers only ~18 files due to token budget) may not include the target file.
 fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Option<Vec<String>> {
     // Extract CamelCase identifiers (likely struct/type/trait names)
-    let patterns: Vec<&str> = objective
+    let camel: Vec<&str> = objective
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|w| w.len() >= 4 && w.chars().next().is_some_and(|c| c.is_uppercase()))
         .collect();
+
+    // Also extract snake_case identifiers (e.g., edit_file, cargo_check, work_packet)
+    // These are common in Rust codebases and often appear in issue descriptions.
+    let snake: Vec<&str> = objective
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| w.contains('_') && w.len() >= 5 && w.chars().all(|c| c.is_lowercase() || c == '_' || c.is_ascii_digit()))
+        .collect();
+
+    let mut patterns: Vec<&str> = Vec::new();
+    // CamelCase first (more specific), then snake_case
+    patterns.extend(camel.iter().take(3));
+    patterns.extend(snake.iter().take(3));
+    patterns.dedup();
 
     debug!(
         wt_root = %wt_root.display(),
@@ -274,12 +287,12 @@ fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Option<Vec<Stri
     );
 
     if patterns.is_empty() {
-        debug!("find_target_files_by_grep: no CamelCase patterns found");
+        debug!("find_target_files_by_grep: no searchable patterns found");
         return None;
     }
 
     let mut all_files: Vec<String> = Vec::new();
-    for pattern in patterns.iter().take(3) {
+    for pattern in patterns.iter().take(6) {
         match std::process::Command::new("grep")
             .args(["-rl", "--include=*.rs", pattern])
             .current_dir(wt_root)
