@@ -105,7 +105,7 @@ ssh root@10.0.0.21 "bash /tmp/start-qwen35-mmq.sh"   # vasp-02 (reasoning tier)
 
 **Cloud proxy:** CLIAPIProxy runs on ai-proxy (localhost:8317). Uses `x-api-key` header (not Bearer). API key set via `SWARM_CLOUD_API_KEY` env var.
 
-**llama.cpp build:** b8179 (ecbcb7ea9), native on vasp-03 (Rocky 8.8/GCC 13/CUDA 12.6). Binary: `/usr/local/bin/llama-server-mmq` (compiled with `GGML_CUDA_FORCE_MMQ=ON` for V100), deployed to all 3 nodes. NFS backup: `/cluster/shared/llama-cpp/bin/mmq-build/`.
+**llama.cpp build:** v8231 (c024d8590), native on vasp-03 (Rocky 8.8/GCC 13/CUDA 12.6). Binary: `/usr/local/bin/llama-server-mmq` (compiled with `GGML_CUDA_FORCE_MMQ=ON` for V100), deployed to all 3 nodes. Includes autoparser refactor for Qwen3-Coder XML tool call parsing. NFS backup: `/cluster/shared/llama-cpp/bin/autoparser-build/`. Rollback: `/usr/local/bin/llama-server-mmq.b8179`.
 
 ## Swarm Environment Variables
 
