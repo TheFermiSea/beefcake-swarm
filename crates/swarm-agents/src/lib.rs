@@ -17,6 +17,7 @@ pub mod pipeline;
 pub mod prompts;
 pub mod runtime_adapter;
 pub mod state_machine;
+pub mod subtask;
 pub mod telemetry;
 pub mod tools;
 pub mod worktree_bridge;

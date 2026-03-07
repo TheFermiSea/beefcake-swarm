@@ -1712,6 +1712,120 @@ pub async fn process_issue(
         ..VerifierConfig::default()
     };
 
+    // --- Concurrent subtask dispatch gate ---
+    //
+    // When enabled, the planner decomposes the issue into non-overlapping subtasks,
+    // then multiple workers execute them concurrently in the same worktree.
+    // After all workers finish, the verifier runs on the combined result.
+    if bool_from_env("SWARM_CONCURRENT_SUBTASKS", false) {
+        info!(id = %issue.id, "Using concurrent subtask dispatch (SWARM_CONCURRENT_SUBTASKS=1)");
+
+        // Use the reasoning tier (or cloud if available) for planning.
+        let (plan_client, plan_model) = if let Some(ref cloud) = factory.clients.cloud {
+            (cloud.clone(), config.cloud_endpoint.as_ref().map_or("claude-opus-4-6", |e| e.model.as_str()).to_string())
+        } else {
+            (factory.clients.reasoning.clone(), config.reasoning_endpoint.model.clone())
+        };
+
+        // Generate file listing for the planner.
+        let file_listing = crate::subtask::list_source_files(&wt_path);
+        let issue_context = format!(
+            "Issue ID: {}\nType: {}\nPriority: {:?}",
+            issue.id,
+            issue.issue_type.as_deref().unwrap_or("unknown"),
+            issue.priority,
+        );
+
+        // Plan subtasks.
+        let plan_result = crate::subtask::plan_subtasks(
+            &plan_client,
+            &plan_model,
+            &issue.title,
+            &file_listing,
+            &issue_context,
+        )
+        .await;
+
+        match plan_result {
+            Ok(plan) if plan.subtasks.len() > 1 => {
+                info!(
+                    id = %issue.id,
+                    subtask_count = plan.subtasks.len(),
+                    summary = %plan.summary,
+                    "Planner decomposed issue into {} concurrent subtasks",
+                    plan.subtasks.len()
+                );
+
+                // Dispatch workers concurrently (bounded by cluster slot count).
+                let max_concurrent = config.parallel_issues.max(1);
+                let timeout = timeout_from_env("SWARM_LOCAL_HTTP_TIMEOUT_SECS", 900).as_secs();
+                let outcome = crate::subtask::dispatch_subtasks(
+                    &plan,
+                    &factory.endpoint_pool,
+                    &wt_path,
+                    &issue.id,
+                    max_concurrent,
+                    timeout,
+                )
+                .await;
+
+                info!(
+                    id = %issue.id,
+                    succeeded = outcome.success_count(),
+                    total = outcome.results.len(),
+                    tool_calls = outcome.total_tool_calls(),
+                    elapsed_ms = outcome.total_elapsed.as_millis() as u64,
+                    "All subtask workers completed"
+                );
+
+                // Run verifier on the combined result.
+                let verifier = Verifier::new(&wt_path, verifier_config.clone());
+                let report = verifier.run_pipeline().await;
+
+                if report.all_green {
+                    info!(
+                        id = %issue.id,
+                        summary = %report.summary(),
+                        "Concurrent subtask dispatch: verifier PASSED"
+                    );
+
+                    // Try to merge and close.
+                    if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
+                        error!(id = %issue.id, "Merge failed: {e}");
+                        let _ = worktree_bridge.cleanup(&issue.id);
+                        let _ = beads.update_status(&issue.id, "open");
+                        return Err(e);
+                    }
+                    beads.close(&issue.id, Some("Resolved by concurrent subtask dispatch"))?;
+                    return Ok(true);
+                }
+
+                // Verifier failed — fall through to the normal loop for retry.
+                warn!(
+                    id = %issue.id,
+                    errors = report.failure_signals.len(),
+                    summary = %report.summary(),
+                    "Concurrent subtask dispatch: verifier FAILED — falling through to retry loop"
+                );
+                last_report = Some(report);
+            }
+            Ok(plan) => {
+                info!(
+                    id = %issue.id,
+                    "Planner returned single subtask — falling through to normal loop"
+                );
+                debug!(summary = %plan.summary, "Single-subtask plan");
+            }
+            Err(e) => {
+                warn!(
+                    id = %issue.id,
+                    error = %e,
+                    "Subtask planning failed — falling through to normal loop"
+                );
+            }
+        }
+    }
+
     // --- Main loop: implement → verify → review → escalate ---
     loop {
         let iteration = match session.next_iteration() {
