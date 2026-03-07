@@ -334,13 +334,23 @@ fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Option<Vec<Stri
         return None;
     }
 
-    // Score files by how many patterns they match
+    // Score files by how many patterns they match, with path-based boosts.
+    // Source files in tools/src/ are more likely implementation targets than
+    // patches/, tests/, or vendored code.
     let mut scored: Vec<(usize, String)> = all_files
         .into_iter()
         .map(|f| {
             let full = wt_root.join(&f);
             let content = std::fs::read_to_string(&full).unwrap_or_default();
-            let score = patterns.iter().filter(|p| content.contains(*p)).count();
+            let mut score = patterns.iter().filter(|p| content.contains(*p)).count();
+            // Boost actual source files, penalize vendored/test/patch files
+            if f.contains("/tools/") {
+                score += 2;
+            } else if f.starts_with("patches/") {
+                score = score.saturating_sub(2);
+            } else if f.contains("/tests/") || f.ends_with("_test.rs") || f.ends_with("_tests.rs") {
+                score = score.saturating_sub(1);
+            }
             (score, f)
         })
         .collect();
