@@ -57,8 +57,16 @@ pub mod stringified_json {
     where
         D: Deserializer<'de>,
     {
-        let s = String::deserialize(deserializer)?;
-        serde_json::from_str(&s).map_err(serde::de::Error::custom)
+        // Accept both formats:
+        // - OpenAI: arguments is a JSON string: "{\"path\": \"hello.txt\"}"
+        // - llama.cpp: arguments is a JSON object: {"path": "hello.txt"}
+        let raw = serde_json::Value::deserialize(deserializer)?;
+        match raw {
+            serde_json::Value::String(s) => {
+                serde_json::from_str(&s).map_err(serde::de::Error::custom)
+            }
+            other => Ok(other),
+        }
     }
 }
 
@@ -196,6 +204,17 @@ mod tests {
     #[test]
     fn test_stringified_json_deserialize() {
         let json_str = r#"{"data":"{\"key\":\"value\"}"}"#;
+        let dummy: Dummy = serde_json::from_str(json_str).unwrap();
+        let expected = Dummy {
+            data: serde_json::json!({"key": "value"}),
+        };
+        assert_eq!(dummy, expected);
+    }
+
+    #[test]
+    fn test_stringified_json_deserialize_object() {
+        // llama.cpp returns arguments as a direct JSON object, not a string
+        let json_str = r#"{"data":{"key":"value"}}"#;
         let dummy: Dummy = serde_json::from_str(json_str).unwrap();
         let expected = Dummy {
             data: serde_json::json!({"key": "value"}),
