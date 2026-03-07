@@ -409,7 +409,12 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
             .split(|c: char| c.is_whitespace() || c == ',')
             .map(|w| {
                 w.trim_end_matches(|c: char| {
-                    c.is_ascii_punctuation() && c != '/' && c != '.' && c != '_' && c != '-' && c != '*'
+                    c.is_ascii_punctuation()
+                        && c != '/'
+                        && c != '.'
+                        && c != '_'
+                        && c != '-'
+                        && c != '*'
                 })
                 .trim()
             })
@@ -421,7 +426,13 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
                 } else {
                     // Bare filename — search worktree for matching files
                     match std::process::Command::new("find")
-                        .args([wt_root.to_str().unwrap_or("."), "-name", w, "-path", "*/src/*"])
+                        .args([
+                            wt_root.to_str().unwrap_or("."),
+                            "-name",
+                            w,
+                            "-path",
+                            "*/src/*",
+                        ])
                         .output()
                     {
                         Ok(output) if output.status.success() => {
