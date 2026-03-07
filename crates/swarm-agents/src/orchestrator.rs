@@ -255,6 +255,65 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
     prompt
 }
 
+/// Search the worktree for .rs files containing CamelCase identifiers from the objective.
+///
+/// Returns `Some(files)` if grep finds matches, `None` otherwise.
+/// This is critical for initial packs where the context packer's file_contexts
+/// (which covers only ~18 files due to token budget) may not include the target file.
+fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Option<Vec<String>> {
+    // Extract CamelCase identifiers (likely struct/type/trait names)
+    let patterns: Vec<&str> = objective
+        .split(|c: char| !c.is_alphanumeric() && c != '_')
+        .filter(|w| w.len() >= 4 && w.chars().next().is_some_and(|c| c.is_uppercase()))
+        .collect();
+
+    if patterns.is_empty() {
+        return None;
+    }
+
+    let mut all_files: Vec<String> = Vec::new();
+    for pattern in patterns.iter().take(3) {
+        if let Ok(output) = std::process::Command::new("grep")
+            .args(["-rl", "--include=*.rs", pattern])
+            .current_dir(wt_root)
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines().take(10) {
+                    let path = line.trim().to_string();
+                    if !all_files.contains(&path) {
+                        all_files.push(path);
+                    }
+                }
+            }
+        }
+    }
+
+    if all_files.is_empty() {
+        return None;
+    }
+
+    // Score files by how many patterns they match
+    let mut scored: Vec<(usize, String)> = all_files
+        .into_iter()
+        .map(|f| {
+            let full = wt_root.join(&f);
+            let content = std::fs::read_to_string(&full).unwrap_or_default();
+            let score = patterns.iter().filter(|p| content.contains(*p)).count();
+            (score, f)
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+
+    let result: Vec<String> = scored.into_iter().map(|(_, f)| f).take(3).collect();
+    if result.is_empty() {
+        None
+    } else {
+        Some(result)
+    }
+}
+
 /// Format a compact task prompt for small local models (HydraCoder, etc).
 ///
 /// Long structured prompts suppress tool-call generation in small MoE models.
@@ -271,13 +330,13 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
     prompt.push_str(&format!("# Task: {}\n\n", packet.objective));
 
     // Target files — prefer explicit scope, then extract from objective text,
+    // then grep the worktree for objective identifiers,
     // then fall back to first few file_contexts filenames.
-    let target_files: Vec<&str> = if !packet.files_touched.is_empty() {
-        packet.files_touched.iter().map(|s| s.as_str()).collect()
+    let target_files: Vec<String> = if !packet.files_touched.is_empty() {
+        packet.files_touched.clone()
     } else {
         // Try to extract file paths from objective (e.g., "File: src/foo.rs")
-        // Strip trailing punctuation (period, comma, etc.) before checking extension.
-        let objective_files: Vec<&str> = packet
+        let objective_files: Vec<String> = packet
             .objective
             .split_whitespace()
             .filter(|w| {
@@ -290,76 +349,35 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
                 w.trim_end_matches(|c: char| {
                     c.is_ascii_punctuation() && c != '/' && c != '.' && c != '_' && c != '-'
                 })
+                .to_string()
             })
             .collect();
         if !objective_files.is_empty() {
             objective_files
         } else {
-            // Extract identifiers from objective, splitting CamelCase and snake_case.
-            // Prioritize file_contexts whose content/filename match them.
-            // Also searches fc.content (AST summary / first 30 lines of code).
-            let raw_words: Vec<&str> = packet
-                .objective
-                .split(|c: char| !c.is_alphanumeric() && c != '_')
-                .filter(|w| w.len() >= 3)
-                .collect();
-            let mut words: Vec<String> = raw_words
-                .iter()
-                .map(|w| w.to_lowercase())
-                .collect();
-            // Split CamelCase: "AdapterReport" → ["adapter", "report"]
-            for w in &raw_words {
-                let mut start = 0;
-                let chars: Vec<char> = w.chars().collect();
-                for i in 1..chars.len() {
-                    if chars[i].is_uppercase() {
-                        let part: String = chars[start..i].iter().collect();
-                        if part.len() >= 3 {
-                            words.push(part.to_lowercase());
-                        }
-                        start = i;
-                    }
-                }
-                let tail: String = chars[start..].iter().collect();
-                if tail.len() >= 3 && tail.to_lowercase() != w.to_lowercase() {
-                    words.push(tail.to_lowercase());
-                }
-            }
-            words.sort();
-            words.dedup();
-            let mut scored: Vec<(usize, &str)> = packet
-                .file_contexts
-                .iter()
-                .map(|fc| {
-                    let file_lower = fc.file.to_lowercase();
-                    let content_lower = fc.content.to_lowercase();
-                    let score = words
+            // Grep the worktree for CamelCase identifiers from the objective.
+            // The context packer's file_contexts only covers ~18 files (token budget)
+            // and likely misses the target file in large workspaces (402 .rs files).
+            find_target_files_by_grep(wt_root, &packet.objective)
+                .unwrap_or_else(|| {
+                    // Final fallback: first 3 file_contexts
+                    packet
+                        .file_contexts
                         .iter()
-                        .filter(|w| {
-                            file_lower.contains(w.as_str())
-                                || content_lower.contains(w.as_str())
-                        })
-                        .count();
-                    (score, fc.file.as_str())
+                        .map(|fc| fc.file.clone())
+                        .take(3)
+                        .collect()
                 })
-                .collect();
-            scored.sort_by(|a, b| b.0.cmp(&a.0));
-            scored
-                .into_iter()
-                .map(|(_, f)| f)
-                .take(3)
-                .collect()
         }
     };
 
-    // Guard against empty target_files — fall back to common entry points
-    // to prevent prompt starvation on architectural tasks.
-    let target_files = if target_files.is_empty() {
+    // Guard against empty target_files — fall back to common entry points.
+    let target_files: Vec<String> = if target_files.is_empty() {
         ["src/lib.rs", "src/main.rs"]
             .iter()
-            .copied()
             .filter(|p| wt_root.join(p).exists())
-            .chain(std::iter::once("Cargo.toml"))
+            .map(|p| p.to_string())
+            .chain(std::iter::once("Cargo.toml".to_string()))
             .take(3)
             .collect()
     } else {
@@ -402,7 +420,7 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
     // Inline the first (most relevant) target file content to save read_file turns.
     // Critical with max_turns_without_write=5: agent must write within 5 turns.
     if !target_files.is_empty() {
-        let target_path = wt_root.join(target_files[0]);
+        let target_path = wt_root.join(&target_files[0]);
         if let Ok(content) = std::fs::read_to_string(&target_path) {
             let truncated = if content.len() > 4000 {
                 format!("{}...\n[truncated at 4000 chars]", &content[..4000])
@@ -1808,6 +1826,13 @@ pub async fn process_issue(
         } else {
             format_task_prompt(&packet)
         };
+
+        debug!(
+            iteration,
+            prompt_len = task_prompt.len(),
+            prompt_preview = %&task_prompt[..task_prompt.len().min(500)],
+            "Compact task prompt assembled"
+        );
 
         // Inject verifier stderr into prompt when failure_signals are thin.
         // Fmt errors don't produce ParsedErrors, so the packet may lack error details.
