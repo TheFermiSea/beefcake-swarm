@@ -295,10 +295,32 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
         if !objective_files.is_empty() {
             objective_files
         } else {
-            packet
+            // Extract identifiers (CamelCase, snake_case) from objective and
+            // prioritize file_contexts whose filenames or relevance match them.
+            // This prevents the agent from wasting turns on list_files navigation.
+            let words: Vec<&str> = packet
+                .objective
+                .split(|c: char| !c.is_alphanumeric() && c != '_')
+                .filter(|w| w.len() >= 3)
+                .collect();
+            let mut scored: Vec<(usize, &str)> = packet
                 .file_contexts
                 .iter()
-                .map(|fc| fc.file.as_str())
+                .map(|fc| {
+                    let score = words
+                        .iter()
+                        .filter(|w| {
+                            fc.file.contains(*w)
+                                || fc.relevance.contains(*w)
+                        })
+                        .count();
+                    (score, fc.file.as_str())
+                })
+                .collect();
+            scored.sort_by(|a, b| b.0.cmp(&a.0));
+            scored
+                .into_iter()
+                .map(|(_, f)| f)
                 .take(3)
                 .collect()
         }
@@ -351,9 +373,9 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
         prompt.push('\n');
     }
 
-    // Inline the target file content when there's exactly one target file.
-    // This saves a read_file turn (critical with max_turns=5).
-    if target_files.len() == 1 {
+    // Inline the first (most relevant) target file content to save read_file turns.
+    // Critical with max_turns_without_write=5: agent must write within 5 turns.
+    if !target_files.is_empty() {
         let target_path = wt_root.join(target_files[0]);
         if let Ok(content) = std::fs::read_to_string(&target_path) {
             let truncated = if content.len() > 4000 {
@@ -365,9 +387,15 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
                 "**Current content of `{}`:**\n```\n{}\n```\n\n",
                 target_files[0], truncated
             ));
-            prompt.push_str(
-                "Apply your edits directly with edit_file — the file content is above.\n",
-            );
+            if target_files.len() == 1 {
+                prompt.push_str(
+                    "Apply your edits directly with edit_file — the file content is above.\n",
+                );
+            } else {
+                prompt.push_str(
+                    "Apply your edits with edit_file. Use read_file for the other target files if needed.\n",
+                );
+            }
         } else {
             prompt.push_str(&format!(
                 "Start by calling read_file on `{}`, then apply your edits with edit_file.\n",
@@ -1818,7 +1846,7 @@ pub async fn process_issue(
                             agent_name: "Qwen3.5-RustCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(30),
-                            max_turns_without_write: Some(8),
+                            max_turns_without_write: Some(5),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1848,7 +1876,7 @@ pub async fn process_issue(
                             agent_name: "Qwen3.5-GeneralCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(30),
-                            max_turns_without_write: Some(8),
+                            max_turns_without_write: Some(5),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
