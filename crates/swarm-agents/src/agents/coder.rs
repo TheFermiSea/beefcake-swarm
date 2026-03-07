@@ -100,7 +100,10 @@ pub fn worker_sampling_params() -> Value {
     serde_json::json!({
         "repetition_penalty": 1.1,
         "presence_penalty": 0.1,
-        "max_tokens": max_tokens
+        "max_tokens": max_tokens,
+        "chat_template_kwargs": {
+            "enable_thinking": false
+        }
     })
 }
 

@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "5.11.0";
+pub const PROMPT_VERSION: &str = "5.12.0";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -196,8 +196,7 @@ delegate ONE CRATE AT A TIME:
 - Each delegation: at most 5 files. For larger changes, split into sequential delegations.
 - Run run_verifier between each crate's delegation.
 - Never ask a single worker to modify files in two different workspace crates.
-
-/no_think";
+";
 
 /// Rust specialist coder preamble (Qwen3.5-Implementer).
 pub const RUST_CODER_PREAMBLE: &str = "\
@@ -229,11 +228,12 @@ Only modify files relevant to your task.
 - Async/Send: wrap non-Send types in Arc<Mutex<>> or restructure around .await.
 
 ## Rules
-- **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
+- **FIRST TURN**: Your very first response MUST be a tool call (read_file). \
+  Do NOT write any text analysis before calling a tool. Call the tool immediately.
+- **READ PHASE** (turns 1-2): Read the files mentioned in the task to understand the code.
+- **WRITE PHASE** (turns 3+): You MUST call edit_file or write_file. Analysis-only \
   replies with no file edits are INVALID. If you cannot make progress, add a \
   `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
-- **FIRST TURN**: Your very first response MUST be a tool call (read_file or edit_file). \
-  Do NOT write any text analysis before calling a tool. Call the tool immediately.
 - Always read the file BEFORE editing it.
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - One logical change at a time. Don't refactor unrelated code.
@@ -243,8 +243,7 @@ Only modify files relevant to your task.
 - If you find unrelated bugs, report them in your response: \
   `DISCOVERED: <description>`. The manager will handle tracking.
 - Do NOT run git commit. The orchestrator handles commits.
-
-/no_think";
+";
 
 /// General coding agent preamble (Qwen3.5-Implementer).
 pub const GENERAL_CODER_PREAMBLE: &str = "\
@@ -282,11 +281,12 @@ If you find a bug or missing test unrelated to your current task, create a track
 (the issue ID is in the task header as `**Issue:** <id>`). Stay focused on your task.
 
 ## Rules
-- **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
+- **FIRST TURN**: Your very first response MUST be a tool call (list_files or read_file). \
+  Do NOT write any text analysis before calling a tool. Call the tool immediately.
+- **READ PHASE** (turns 1-2): Explore the project structure and read files you need to modify.
+- **WRITE PHASE** (turns 3+): You MUST call edit_file or write_file. Analysis-only \
   replies with no file edits are INVALID. If you cannot make progress, add a \
   `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
-- **FIRST TURN**: Your very first response MUST be a tool call. Do NOT write text analysis \
-  before calling a tool.
 - Always read before editing. Use edit_file for targeted changes.
 - Update mod.rs / lib.rs when adding or removing modules.
 - After changes, verify compilation before reporting done.
@@ -295,8 +295,7 @@ If you find a bug or missing test unrelated to your current task, create a track
   or 'clean up' code that already compiles. If a file has 10 methods and your task is \
   to add an 11th, the other 10 must be IDENTICAL in the output.
 - Do NOT run git commit. The orchestrator handles commits.
-
-/no_think";
+";
 
 /// Blind reviewer preamble (Qwen3.5-Implementer).
 ///
@@ -371,11 +370,12 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
 (the issue ID is in the task header). Focus on the assigned task.
 
 ## Rules
-- **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
+- **FIRST TURN**: Your very first response MUST be a tool call (read_file). \
+  Do NOT write any text analysis before calling a tool. Call the tool immediately.
+- **READ PHASE** (turns 1-3): Read the relevant files to understand the full context and error chain.
+- **WRITE PHASE** (turns 4+): You MUST call edit_file or write_file. Analysis-only \
   replies with no file edits are INVALID. If you cannot make progress, add a \
   `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
-- **FIRST TURN**: Your very first response MUST be a tool call. Do NOT write text analysis \
-  before calling a tool.
 - Always read files before editing them.
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - Consider full implications of changes across the codebase.
@@ -384,8 +384,7 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
   function signatures, rename variables, reformat untouched code, remove comments, \
   or 'clean up' code that already compiles.
 - Do NOT run git commit. The orchestrator handles commits.
-
-/no_think";
+";
 
 /// Planner specialist preamble.
 ///
@@ -460,10 +459,11 @@ Only modify files specified in the plan you receive.
 - **write_file**: Use ONLY for creating new files.
 
 ## Rules
-- **MANDATORY**: You MUST call edit_file or write_file in every response. Analysis-only \
+- **FIRST TURN**: Your very first response MUST be a tool call (read_file). \
+  Do NOT write any text analysis before calling a tool. Call the tool immediately.
+- **READ PHASE** (turn 1): Read the first target file in the plan.
+- **WRITE PHASE** (turns 2+): You MUST call edit_file or write_file. Analysis-only \
   replies with no file edits are INVALID.
-- **FIRST TURN**: Your very first response MUST be a tool call. Do NOT write text analysis \
-  before calling a tool.
 - **Follow the plan**: Implement the steps as specified. Do not deviate, skip steps, \
   or add extra changes not in the plan.
 - **Scope discipline**: Only modify files listed in the plan's `target_files`. \
@@ -472,8 +472,7 @@ Only modify files specified in the plan you receive.
 - Always read the file BEFORE editing it.
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - Do NOT run git commit. The orchestrator handles commits.
-
-/no_think";
+";
 
 /// Adversarial Breaker preamble.
 ///

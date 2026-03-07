@@ -105,6 +105,8 @@ pub struct AdapterReport {
     pub wall_time_ms: u64,
     pub terminated_early: bool,
     pub termination_reason: Option<String>,
+    /// Whether edit_file or write_file was called at least once during this session.
+    pub has_written: bool,
 }
 
 /// In-flight tool call tracking.
@@ -176,6 +178,7 @@ impl RuntimeAdapter {
             wall_time_ms: state.started_at.elapsed().as_millis() as u64,
             terminated_early: state.terminated_early,
             termination_reason: state.termination_reason.clone(),
+            has_written: state.has_written,
         })
     }
 
@@ -702,6 +705,7 @@ mod tests {
             wall_time_ms: 5000,
             terminated_early: false,
             termination_reason: None,
+            has_written: false,
         };
 
         let json = serde_json::to_string(&report).unwrap();

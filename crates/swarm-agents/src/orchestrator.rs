@@ -4,8 +4,8 @@
 //! progress logging, and human intervention requests.
 
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result};
@@ -1997,7 +1997,7 @@ pub async fn process_issue(
         };
 
         // Log runtime adapter report for tool-event visibility
-        match adapter.report() {
+        let agent_has_written = match adapter.report() {
             Ok(adapter_report) => {
                 info!(
                     iteration,
@@ -2006,16 +2006,19 @@ pub async fn process_issue(
                     tool_calls = adapter_report.total_tool_calls,
                     tool_time_ms = adapter_report.total_tool_time_ms,
                     terminated_early = adapter_report.terminated_early,
+                    has_written = adapter_report.has_written,
                     "Runtime adapter report"
                 );
                 if let Some(ref reason) = adapter_report.termination_reason {
                     warn!(iteration, reason = %reason, "Agent terminated early by adapter");
                 }
+                adapter_report.has_written
             }
             Err(e) => {
                 warn!(iteration, error = %e, "Failed to extract runtime adapter report");
+                true // assume written on error to avoid false no-progress detection
             }
-        }
+        };
 
         // Handle agent failure
         let agent_elapsed = agent_start.elapsed();
@@ -2128,7 +2131,23 @@ pub async fn process_issue(
             }
         }
 
-        if !has_changes {
+        // Detect false-positive: git has changes (e.g. from cargo fmt) but agent
+        // never called edit_file/write_file. Treat as no-progress to avoid the
+        // verifier trivially passing on formatting-only diffs.
+        if has_changes && !agent_has_written {
+            warn!(
+                iteration,
+                "Agent produced git changes but never called edit_file/write_file — \
+                 treating as no-progress (likely formatting-only diff)"
+            );
+            // Revert the formatting-only commit so it doesn't pollute the worktree
+            if let Some(ref rollback_hash) = pre_worker_commit {
+                let _ = git_mgr.hard_rollback(rollback_hash);
+            }
+            // Fall through to no-change handling
+        }
+
+        if !has_changes || !agent_has_written {
             escalation.record_no_change();
             metrics.record_no_change();
             warn!(
@@ -2136,7 +2155,8 @@ pub async fn process_issue(
                 response_len = response.len(),
                 consecutive_no_change = escalation.consecutive_no_change,
                 threshold = config.max_consecutive_no_change,
-                "No file changes after agent response — manager may not have called workers"
+                agent_has_written,
+                "No meaningful changes after agent response"
             );
 
             // --- No-change circuit breaker ---

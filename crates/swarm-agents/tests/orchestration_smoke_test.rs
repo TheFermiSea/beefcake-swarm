@@ -146,9 +146,16 @@ fn main() {
     };
 
     // Run the orchestration loop
-    let result =
-        orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &beads, None, std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)))
-            .await;
+    let result = orchestrator::process_issue(
+        &config,
+        &factory,
+        &worktree_bridge,
+        &issue,
+        &beads,
+        None,
+        std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
+    )
+    .await;
 
     // The loop should not panic regardless of outcome
     match &result {

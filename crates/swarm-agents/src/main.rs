@@ -1,6 +1,6 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use clap::Parser;
@@ -207,7 +207,10 @@ async fn main() -> Result<()> {
             .context("--repo-root path does not exist")?,
         None => std::env::current_dir()?,
     };
-    let worktree_bridge = Arc::new(WorktreeBridge::new(config.worktree_base.clone(), &repo_root)?);
+    let worktree_bridge = Arc::new(WorktreeBridge::new(
+        config.worktree_base.clone(),
+        &repo_root,
+    )?);
 
     // --- Clean up zombie branches from previous crashed runs ---
     match worktree_bridge.cleanup_stale() {
@@ -320,8 +323,14 @@ async fn main() -> Result<()> {
             return Ok(());
         }
 
-        dispatch_parallel_issues(batch, &config, &factory, &worktree_bridge, knowledge_base.clone())
-            .await?;
+        dispatch_parallel_issues(
+            batch,
+            &config,
+            &factory,
+            &worktree_bridge,
+            knowledge_base.clone(),
+        )
+        .await?;
     } else if let Ok(target_id) = std::env::var("SWARM_ISSUE") {
         // Branch 3: SWARM_ISSUE env var — fetch specific issue from beads
         let beads = BeadsBridge::new();
@@ -471,7 +480,10 @@ async fn dispatch_parallel_issues(
         warn!("Shutdown signal received — cancellation flag set for parallel dispatch");
     });
 
-    info!(count = batch.len(), "Dispatching issues in parallel via OS threads");
+    info!(
+        count = batch.len(),
+        "Dispatching issues in parallel via OS threads"
+    );
     let rt_handle = tokio::runtime::Handle::current();
     let thread_handles: Vec<std::thread::JoinHandle<(String, anyhow::Result<bool>)>> = batch
         .into_iter()
@@ -485,7 +497,9 @@ async fn dispatch_parallel_issues(
             let cancel = Arc::clone(&cancel_flag);
             std::thread::spawn(move || {
                 let id = issue.id.clone();
-                let kb_ref = kb_clone.as_ref().map(|kb| kb.as_ref() as &dyn KnowledgeBase);
+                let kb_ref = kb_clone
+                    .as_ref()
+                    .map(|kb| kb.as_ref() as &dyn KnowledgeBase);
                 let result = rt.block_on(orchestrator::process_issue(
                     &config_clone,
                     &factory_clone,
