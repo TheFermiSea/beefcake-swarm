@@ -52,6 +52,25 @@ fn cloud_headers(api_key: &str) -> HeaderMap {
     headers
 }
 
+/// Helper function to build a rig OpenAI CompletionsClient.
+fn build_oai_client(
+    api_key: &str,
+    url: &str,
+    http_client: reqwest::Client,
+    headers: Option<HeaderMap>,
+) -> Result<openai::CompletionsClient> {
+    let mut builder = openai::CompletionsClient::<reqwest::Client>::builder()
+        .api_key(api_key)
+        .base_url(url)
+        .http_client(http_client);
+
+    if let Some(h) = headers {
+        builder = builder.http_headers(h);
+    }
+
+    Ok(builder.build()?)
+}
+
 /// Default per-request HTTP timeout for cloud API calls (CLIAPIProxy).
 ///
 /// Cloud APIs (Opus 4.6 via CLIAPIProxy) respond within seconds to a few minutes.
@@ -428,74 +447,53 @@ impl ClientSet {
                 .as_ref()
                 .context("cloud_only requires cloud_endpoint to be configured")?;
             let headers = cloud_headers(&cloud_ep.api_key);
-            let cloud = openai::CompletionsClient::<reqwest::Client>::builder()
-                .api_key(&cloud_ep.api_key)
-                .base_url(&cloud_ep.url)
-                .http_headers(headers.clone())
-                .http_client(cloud_http.clone())
-                .build()
-                .context("Failed to build cloud client")?;
-            // Build identical clients for local, coder, and reasoning slots
-            let local = openai::CompletionsClient::<reqwest::Client>::builder()
-                .api_key(&cloud_ep.api_key)
-                .base_url(&cloud_ep.url)
-                .http_headers(headers.clone())
-                .http_client(cloud_http.clone())
-                .build()
-                .context("Failed to build cloud-as-local client")?;
-            let coder = openai::CompletionsClient::<reqwest::Client>::builder()
-                .api_key(&cloud_ep.api_key)
-                .base_url(&cloud_ep.url)
-                .http_headers(headers.clone())
-                .http_client(cloud_http.clone())
-                .build()
-                .context("Failed to build cloud-as-coder client")?;
-            let reasoning = openai::CompletionsClient::<reqwest::Client>::builder()
-                .api_key(&cloud_ep.api_key)
-                .base_url(&cloud_ep.url)
-                .http_headers(headers)
-                .http_client(cloud_http)
-                .build()
-                .context("Failed to build cloud-as-reasoning client")?;
+
+            let cloud = build_oai_client(
+                &cloud_ep.api_key,
+                &cloud_ep.url,
+                cloud_http,
+                Some(headers),
+            ).context("Failed to build cloud client")?;
+
             return Ok(Self {
-                local,
-                coder,
-                reasoning,
+                local: cloud.clone(),
+                coder: cloud.clone(),
+                reasoning: cloud.clone(),
                 cloud: Some(cloud),
             });
         }
 
-        let local = openai::CompletionsClient::<reqwest::Client>::builder()
-            .api_key(&config.fast_endpoint.api_key)
-            .base_url(&config.fast_endpoint.url)
-            .http_client(local_http.clone())
-            .build()
-            .context("Failed to build local/fast client (vasp-03)")?;
+        let local = build_oai_client(
+            &config.fast_endpoint.api_key,
+            &config.fast_endpoint.url,
+            local_http.clone(),
+            None,
+        ).context("Failed to build local/fast client (vasp-03)")?;
 
-        let coder = openai::CompletionsClient::<reqwest::Client>::builder()
-            .api_key(&config.coder_endpoint.api_key)
-            .base_url(&config.coder_endpoint.url)
-            .http_client(local_http.clone())
-            .build()
-            .context("Failed to build coder client (vasp-01)")?;
+        let coder = build_oai_client(
+            &config.coder_endpoint.api_key,
+            &config.coder_endpoint.url,
+            local_http.clone(),
+            None,
+        ).context("Failed to build coder client (vasp-01)")?;
 
-        let reasoning = openai::CompletionsClient::<reqwest::Client>::builder()
-            .api_key(&config.reasoning_endpoint.api_key)
-            .base_url(&config.reasoning_endpoint.url)
-            .http_client(local_http)
-            .build()
-            .context("Failed to build reasoning client (vasp-02)")?;
+        let reasoning = build_oai_client(
+            &config.reasoning_endpoint.api_key,
+            &config.reasoning_endpoint.url,
+            local_http,
+            None,
+        ).context("Failed to build reasoning client (vasp-02)")?;
 
         let cloud = config
             .cloud_endpoint
             .as_ref()
             .map(|ep| {
-                openai::CompletionsClient::<reqwest::Client>::builder()
-                    .api_key(&ep.api_key)
-                    .base_url(&ep.url)
-                    .http_headers(cloud_headers(&ep.api_key))
-                    .http_client(cloud_http)
-                    .build()
+                build_oai_client(
+                    &ep.api_key,
+                    &ep.url,
+                    cloud_http,
+                    Some(cloud_headers(&ep.api_key)),
+                )
             })
             .transpose()
             .context("Failed to build cloud client (CLIAPIProxy)")?;
