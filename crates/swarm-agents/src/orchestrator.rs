@@ -267,28 +267,55 @@ fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Option<Vec<Stri
         .filter(|w| w.len() >= 4 && w.chars().next().is_some_and(|c| c.is_uppercase()))
         .collect();
 
+    debug!(
+        wt_root = %wt_root.display(),
+        ?patterns,
+        "find_target_files_by_grep: extracted patterns"
+    );
+
     if patterns.is_empty() {
+        debug!("find_target_files_by_grep: no CamelCase patterns found");
         return None;
     }
 
     let mut all_files: Vec<String> = Vec::new();
     for pattern in patterns.iter().take(3) {
-        if let Ok(output) = std::process::Command::new("grep")
+        match std::process::Command::new("grep")
             .args(["-rl", "--include=*.rs", pattern])
             .current_dir(wt_root)
             .output()
         {
-            if output.status.success() {
+            Ok(output) => {
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                for line in stdout.lines().take(10) {
-                    let path = line.trim().to_string();
-                    if !all_files.contains(&path) {
-                        all_files.push(path);
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                debug!(
+                    pattern,
+                    success = output.status.success(),
+                    exit_code = output.status.code(),
+                    stdout_lines = stdout.lines().count(),
+                    stderr = %stderr,
+                    "find_target_files_by_grep: grep result"
+                );
+                if output.status.success() {
+                    for line in stdout.lines().take(10) {
+                        let path = line.trim().to_string();
+                        if !all_files.contains(&path) {
+                            all_files.push(path);
+                        }
                     }
                 }
             }
+            Err(e) => {
+                warn!(pattern, error = %e, "find_target_files_by_grep: grep command failed");
+            }
         }
     }
+
+    debug!(
+        found = all_files.len(),
+        files = ?all_files,
+        "find_target_files_by_grep: grep results"
+    );
 
     if all_files.is_empty() {
         return None;
@@ -332,8 +359,19 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
     // Target files — prefer explicit scope, then extract from objective text,
     // then grep the worktree for objective identifiers,
     // then fall back to first few file_contexts filenames.
-    let target_files: Vec<String> = if !packet.files_touched.is_empty() {
-        packet.files_touched.clone()
+    // Filter out metadata paths (e.g., .beads/, .git/) that aren't code targets.
+    let source_files_touched: Vec<String> = packet
+        .files_touched
+        .iter()
+        .filter(|f| {
+            !f.starts_with(".beads/")
+                && !f.starts_with(".git/")
+                && !f.starts_with(".claude/")
+        })
+        .cloned()
+        .collect();
+    let target_files: Vec<String> = if !source_files_touched.is_empty() {
+        source_files_touched
     } else {
         // Try to extract file paths from objective (e.g., "File: src/foo.rs")
         let objective_files: Vec<String> = packet
@@ -370,6 +408,12 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
                 })
         }
     };
+
+    debug!(
+        raw_files_touched = ?packet.files_touched,
+        target_files = ?target_files,
+        "compact prompt: file targeting pipeline"
+    );
 
     // Guard against empty target_files — fall back to common entry points.
     let target_files: Vec<String> = if target_files.is_empty() {

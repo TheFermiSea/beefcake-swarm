@@ -494,7 +494,18 @@ impl WorkPacketGenerator {
         }
 
         if !all_files.is_empty() {
-            return all_files.into_iter().collect();
+            // Filter out metadata directories that aren't meaningful code targets.
+            // .beads/ files change on every `bd update` (issue state tracking) and
+            // would poison files_touched, making the compact prompt target .beads
+            // instead of actual source files.
+            return all_files
+                .into_iter()
+                .filter(|f| {
+                    !f.starts_with(".beads/")
+                        && !f.starts_with(".git/")
+                        && !f.starts_with(".claude/")
+                })
+                .collect();
         }
 
         // 3. Fallback: porcelain status
@@ -513,6 +524,11 @@ impl WorkPacketGenerator {
                         } else {
                             None
                         }
+                    })
+                    .filter(|f| {
+                        !f.starts_with(".beads/")
+                            && !f.starts_with(".git/")
+                            && !f.starts_with(".claude/")
                     })
                     .collect()
             })
