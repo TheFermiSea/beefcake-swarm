@@ -401,20 +401,43 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
         source_files_touched
     } else {
         // Try to extract file paths from objective (e.g., "File: src/foo.rs")
+        // Accepts both full paths (crates/swarm-agents/src/foo.rs) and bare
+        // filenames (runtime_adapter.rs). Bare filenames are resolved by
+        // searching the worktree.
         let objective_files: Vec<String> = packet
             .objective
-            .split_whitespace()
-            .filter(|w| {
-                let trimmed = w.trim_end_matches(|c: char| {
-                    c.is_ascii_punctuation() && c != '/' && c != '.' && c != '_' && c != '-'
-                });
-                trimmed.contains('/') && (trimmed.ends_with(".rs") || trimmed.ends_with(".toml"))
-            })
+            .split(|c: char| c.is_whitespace() || c == ',')
             .map(|w| {
                 w.trim_end_matches(|c: char| {
-                    c.is_ascii_punctuation() && c != '/' && c != '.' && c != '_' && c != '-'
+                    c.is_ascii_punctuation() && c != '/' && c != '.' && c != '_' && c != '-' && c != '*'
                 })
-                .to_string()
+                .trim()
+            })
+            .filter(|w| !w.is_empty() && (w.ends_with(".rs") || w.ends_with(".toml")))
+            .flat_map(|w| {
+                if w.contains('/') {
+                    // Full path — use as-is
+                    vec![w.to_string()]
+                } else {
+                    // Bare filename — search worktree for matching files
+                    match std::process::Command::new("find")
+                        .args([wt_root.to_str().unwrap_or("."), "-name", w, "-path", "*/src/*"])
+                        .output()
+                    {
+                        Ok(output) if output.status.success() => {
+                            let stdout = String::from_utf8_lossy(&output.stdout);
+                            stdout
+                                .lines()
+                                .take(3)
+                                .filter_map(|line| {
+                                    line.strip_prefix(wt_root.to_str().unwrap_or(""))
+                                        .map(|p| p.trim_start_matches('/').to_string())
+                                })
+                                .collect()
+                        }
+                        _ => vec![],
+                    }
+                }
             })
             .collect();
         if !objective_files.is_empty() {
@@ -1945,12 +1968,20 @@ pub async fn process_issue(
             }
         }
 
+        // Build the full objective: title + description (if available).
+        // The description contains file lists, implementation details, and context
+        // that the file targeting pipeline uses to locate relevant source files.
+        let full_objective = match &issue.description {
+            Some(desc) if !desc.is_empty() => format!("{}\n\n{}", issue.title, desc),
+            _ => issue.title.clone(),
+        };
+
         // Pack context with tier-appropriate token budget
         let packer = ContextPacker::new(&wt_path, tier);
         let mut packet = if let Some(ref report) = last_report {
-            packer.pack_retry(&issue.id, &issue.title, &escalation, report)
+            packer.pack_retry(&issue.id, &full_objective, &escalation, report)
         } else {
-            packer.pack_initial(&issue.id, &issue.title)
+            packer.pack_initial(&issue.id, &full_objective)
         };
 
         // Inject structured validator feedback from prior iteration (TextGrad pattern)

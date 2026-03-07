@@ -13,6 +13,11 @@ pub struct BeadsIssue {
     pub issue_type: Option<String>,
     #[serde(default)]
     pub labels: Vec<String>,
+    /// Full issue description (from `bd show --json`). Contains file lists,
+    /// implementation details, and context that the file targeting pipeline
+    /// uses to locate relevant source files.
+    #[serde(default)]
+    pub description: Option<String>,
 }
 
 impl BeadsIssue {

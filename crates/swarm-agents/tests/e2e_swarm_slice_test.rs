@@ -127,6 +127,7 @@ async fn test_short_title_issue_is_rejected_without_claim() {
         priority: Some(2),
         issue_type: Some("bug".into()),
         labels: vec![],
+        description: None,
     };
 
     let result = orchestrator::process_issue(
@@ -184,6 +185,7 @@ async fn test_e2e_bug_fix_slice() {
         priority: Some(1),
         issue_type: Some("bug".into()),
         labels: vec![],
+        description: None,
     };
 
     let result = orchestrator::process_issue(
@@ -233,6 +235,7 @@ async fn test_e2e_feature_addition_slice() {
         priority: Some(2),
         issue_type: Some("feature".into()),
         labels: vec![],
+        description: None,
     };
 
     let result = orchestrator::process_issue(
@@ -282,6 +285,7 @@ async fn test_e2e_refactor_slice() {
         priority: Some(3),
         issue_type: Some("task".into()),
         labels: vec![],
+        description: None,
     };
 
     let result = orchestrator::process_issue(

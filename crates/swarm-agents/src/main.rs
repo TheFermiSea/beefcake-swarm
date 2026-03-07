@@ -230,18 +230,44 @@ async fn main() -> Result<()> {
         .map(|kb| kb.as_ref() as &dyn KnowledgeBase);
 
     if let Some(ref issue_id) = args.issue {
-        // Branch 1: --issue provided → beads-free synthetic issue
-        let title = args
-            .objective
-            .clone()
-            .unwrap_or_else(|| format!("CLI issue: {issue_id}"));
-        let issue = BeadsIssue {
-            id: issue_id.clone(),
-            title,
-            status: "open".to_string(),
-            priority: Some(1),
-            issue_type: Some("task".to_string()),
-            labels: vec![],
+        // Branch 1: --issue provided → try beads lookup, fall back to synthetic
+        //
+        // If bd/bdh is available, fetch the real title + description so the file
+        // targeting pipeline can extract identifiers and file paths from the
+        // description text. Without this, the objective is just "CLI issue: {id}"
+        // and the model gets sent to wrong files.
+        let issue = if args.objective.is_some() {
+            // Explicit --objective overrides beads lookup
+            BeadsIssue {
+                id: issue_id.clone(),
+                title: args.objective.clone().unwrap(),
+                status: "open".to_string(),
+                priority: Some(1),
+                issue_type: Some("task".to_string()),
+                labels: vec![],
+                description: None,
+            }
+        } else {
+            // Try fetching from beads for rich title + description
+            let beads = BeadsBridge::new();
+            match beads.show(issue_id) {
+                Ok(mut issue) => {
+                    issue.status = "open".to_string(); // ensure processable
+                    issue
+                }
+                Err(e) => {
+                    warn!(id = %issue_id, error = %e, "Beads lookup failed — using synthetic issue");
+                    BeadsIssue {
+                        id: issue_id.clone(),
+                        title: format!("CLI issue: {issue_id}"),
+                        status: "open".to_string(),
+                        priority: Some(1),
+                        issue_type: Some("task".to_string()),
+                        labels: vec![],
+                        description: None,
+                    }
+                }
+            }
         };
         let tracker = NoOpTracker;
         info!(id = %issue.id, title = %issue.title, mode = ?args.mode, "Beads-free mode: processing CLI issue");
