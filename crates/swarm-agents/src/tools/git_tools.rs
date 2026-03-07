@@ -1,13 +1,6 @@
 //! Git awareness tools for agent situational awareness.
 
-use std::path::{Path, PathBuf};
-use std::time::Duration;
-
-use rig::completion::ToolDefinition;
-use rig::tool::Tool;
-use serde::Deserialize;
-
-use super::ToolError;
+use super::{run_command_with_timeout, ToolError};
 
 // ── GetDiffTool ──────────────────────────────────────────────────────────
 
@@ -64,43 +57,16 @@ impl Tool for GetDiffTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let base = args.base_ref.as_deref().unwrap_or("HEAD~1");
         let name_only = args.name_only.unwrap_or(false);
-        let working_dir = self.working_dir.clone();
-        let base_owned = base.to_string();
 
-        let result = tokio::task::spawn_blocking(move || {
-            let mut cmd = std::process::Command::new("git");
-            cmd.arg("diff").arg(&base_owned);
-            if name_only {
-                cmd.arg("--name-only");
-            } else {
-                cmd.arg("--stat");
-            }
-            cmd.current_dir(&working_dir);
-            cmd.output().map_err(ToolError::Io)
-        });
+        let stat_arg = if name_only { "--name-only" } else { "--stat" };
+        let args = ["diff", base, stat_arg];
 
-        let output = match tokio::time::timeout(Duration::from_secs(30), result).await {
-            Ok(Ok(r)) => r?,
-            Ok(Err(e)) => {
-                return Err(ToolError::Io(std::io::Error::other(format!(
-                    "task join error: {e}"
-                ))))
-            }
-            Err(_) => return Err(ToolError::Timeout { seconds: 30 }),
-        };
+        let output = run_command_with_timeout("git", &args, &self.working_dir, 30).await?;
 
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let stderr = String::from_utf8_lossy(&output.stderr);
-
-        if output.status.success() {
-            if stdout.trim().is_empty() {
-                Ok("No changes".to_string())
-            } else {
-                Ok(stdout.to_string())
-            }
+        if output.trim().is_empty() {
+            Ok("No changes".to_string())
         } else {
-            // git diff with an invalid ref returns non-zero
-            Ok(format!("git diff failed: {stderr}"))
+            Ok(output)
         }
     }
 }
@@ -144,31 +110,12 @@ impl Tool for ListChangedFilesTool {
     }
 
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let working_dir = self.working_dir.clone();
+        let output = run_command_with_timeout("git", &["status", "--short"], &self.working_dir, 10).await?;
 
-        let result = tokio::task::spawn_blocking(move || {
-            std::process::Command::new("git")
-                .args(["status", "--short"])
-                .current_dir(&working_dir)
-                .output()
-                .map_err(ToolError::Io)
-        });
-
-        let output = match tokio::time::timeout(Duration::from_secs(10), result).await {
-            Ok(Ok(r)) => r?,
-            Ok(Err(e)) => {
-                return Err(ToolError::Io(std::io::Error::other(format!(
-                    "task join error: {e}"
-                ))))
-            }
-            Err(_) => return Err(ToolError::Timeout { seconds: 10 }),
-        };
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        if stdout.trim().is_empty() {
+        if output.trim().is_empty() {
             Ok("No changes (working tree clean)".to_string())
         } else {
-            Ok(stdout.to_string())
+            Ok(output)
         }
     }
 }
