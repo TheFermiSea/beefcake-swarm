@@ -295,23 +295,49 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
         if !objective_files.is_empty() {
             objective_files
         } else {
-            // Extract identifiers (CamelCase, snake_case) from objective and
-            // prioritize file_contexts whose filenames or relevance match them.
-            // This prevents the agent from wasting turns on list_files navigation.
-            let words: Vec<&str> = packet
+            // Extract identifiers from objective, splitting CamelCase and snake_case.
+            // Prioritize file_contexts whose content/filename match them.
+            // Also searches fc.content (AST summary / first 30 lines of code).
+            let raw_words: Vec<&str> = packet
                 .objective
                 .split(|c: char| !c.is_alphanumeric() && c != '_')
                 .filter(|w| w.len() >= 3)
                 .collect();
+            let mut words: Vec<String> = raw_words
+                .iter()
+                .map(|w| w.to_lowercase())
+                .collect();
+            // Split CamelCase: "AdapterReport" → ["adapter", "report"]
+            for w in &raw_words {
+                let mut start = 0;
+                let chars: Vec<char> = w.chars().collect();
+                for i in 1..chars.len() {
+                    if chars[i].is_uppercase() {
+                        let part: String = chars[start..i].iter().collect();
+                        if part.len() >= 3 {
+                            words.push(part.to_lowercase());
+                        }
+                        start = i;
+                    }
+                }
+                let tail: String = chars[start..].iter().collect();
+                if tail.len() >= 3 && tail.to_lowercase() != w.to_lowercase() {
+                    words.push(tail.to_lowercase());
+                }
+            }
+            words.sort();
+            words.dedup();
             let mut scored: Vec<(usize, &str)> = packet
                 .file_contexts
                 .iter()
                 .map(|fc| {
+                    let file_lower = fc.file.to_lowercase();
+                    let content_lower = fc.content.to_lowercase();
                     let score = words
                         .iter()
                         .filter(|w| {
-                            fc.file.contains(*w)
-                                || fc.relevance.contains(*w)
+                            file_lower.contains(w.as_str())
+                                || content_lower.contains(w.as_str())
                         })
                         .count();
                     (score, fc.file.as_str())
