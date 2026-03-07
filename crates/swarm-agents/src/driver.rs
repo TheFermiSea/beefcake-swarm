@@ -792,20 +792,27 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     };
 
     // Log runtime adapter report
-    match adapter.report() {
+    let agent_terminated_without_writing = match adapter.report() {
         Ok(adapter_report) => {
             info!(
                 iteration,
                 agent = %adapter_report.agent_name,
                 turns = adapter_report.turn_count,
                 tool_calls = adapter_report.total_tool_calls,
+                terminated_early = adapter_report.terminated_early,
+                has_written = adapter_report.has_written,
                 "Runtime adapter report (state driver)"
             );
+            if let Some(ref reason) = adapter_report.termination_reason {
+                warn!(iteration, reason = %reason, "Agent terminated early (state driver)");
+            }
+            adapter_report.terminated_early && !adapter_report.has_written
         }
         Err(e) => {
             warn!(iteration, error = %e, "Failed to extract adapter report (state driver)");
+            false
         }
-    }
+    };
 
     // Handle agent failure
     let agent_elapsed = agent_start.elapsed();
@@ -904,8 +911,33 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
             iteration,
             response_len = response.len(),
             consecutive_no_change = ctx.escalation.consecutive_no_change,
+            agent_terminated_without_writing,
             "No file changes (state driver)"
         );
+
+        // Write-deadline escalation: immediate Cloud escalation
+        if agent_terminated_without_writing
+            && ctx.escalation.current_tier == SwarmTier::Worker
+            && ctx.config.cloud_endpoint.is_some()
+        {
+            warn!(
+                iteration,
+                "Write-deadline escalation (state driver): worker terminated without writing — \
+                 escalating to Council immediately"
+            );
+            ctx.escalation.record_escalation(
+                SwarmTier::Council,
+                EscalationReason::Explicit {
+                    reason: "write deadline: worker exhausted turns without edit_file/write_file"
+                        .to_string(),
+                },
+            );
+            ctx.metrics.finish_iteration();
+            return Ok(StateTransition::Advance {
+                to: OrchestratorState::Planning,
+                reason: "write-deadline escalation → Council".into(),
+            });
+        }
 
         // No-change circuit breaker
         if ctx.escalation.consecutive_no_change >= ctx.config.max_consecutive_no_change {

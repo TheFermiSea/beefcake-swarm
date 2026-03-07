@@ -271,7 +271,12 @@ fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Option<Vec<Stri
     // These are common in Rust codebases and often appear in issue descriptions.
     let snake: Vec<&str> = objective
         .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|w| w.contains('_') && w.len() >= 5 && w.chars().all(|c| c.is_lowercase() || c == '_' || c.is_ascii_digit()))
+        .filter(|w| {
+            w.contains('_')
+                && w.len() >= 5
+                && w.chars()
+                    .all(|c| c.is_lowercase() || c == '_' || c.is_ascii_digit())
+        })
         .collect();
 
     let mut patterns: Vec<&str> = Vec::new();
@@ -2140,7 +2145,7 @@ pub async fn process_issue(
         };
 
         // Log runtime adapter report for tool-event visibility
-        let agent_has_written = match adapter.report() {
+        let (agent_has_written, agent_terminated_without_writing) = match adapter.report() {
             Ok(adapter_report) => {
                 info!(
                     iteration,
@@ -2155,11 +2160,13 @@ pub async fn process_issue(
                 if let Some(ref reason) = adapter_report.termination_reason {
                     warn!(iteration, reason = %reason, "Agent terminated early by adapter");
                 }
-                adapter_report.has_written
+                let terminated_without_writing =
+                    adapter_report.terminated_early && !adapter_report.has_written;
+                (adapter_report.has_written, terminated_without_writing)
             }
             Err(e) => {
                 warn!(iteration, error = %e, "Failed to extract runtime adapter report");
-                true // assume written on error to avoid false no-progress detection
+                (true, false) // assume written on error to avoid false no-progress detection
             }
         };
 
@@ -2299,8 +2306,37 @@ pub async fn process_issue(
                 consecutive_no_change = escalation.consecutive_no_change,
                 threshold = config.max_consecutive_no_change,
                 agent_has_written,
+                agent_terminated_without_writing,
                 "No meaningful changes after agent response"
             );
+
+            // --- Write-deadline escalation: immediate Cloud escalation ---
+            // When the worker exhausted its turn budget without ever calling
+            // edit_file/write_file, the task likely exceeds local model capability
+            // (e.g., feature implementation requiring planning). Escalate to
+            // Council (cloud manager) immediately instead of burning 3 iterations
+            // (~90 min) on the no-change circuit breaker.
+            if agent_terminated_without_writing
+                && tier == SwarmTier::Worker
+                && config.cloud_endpoint.is_some()
+            {
+                warn!(
+                    iteration,
+                    "Write-deadline escalation: worker terminated without writing — \
+                     escalating to Council (cloud manager) immediately"
+                );
+                escalation.record_escalation(
+                    SwarmTier::Council,
+                    EscalationReason::Explicit {
+                        reason: format!(
+                            "write deadline: worker exhausted {} turns without edit_file/write_file",
+                            5 // max_turns_without_write
+                        ),
+                    },
+                );
+                metrics.finish_iteration();
+                continue;
+            }
 
             // --- No-change circuit breaker ---
             if escalation.consecutive_no_change >= config.max_consecutive_no_change {
