@@ -158,6 +158,41 @@ impl OrchestrationError {
             message: message.into(),
         }
     }
+
+    /// Classify any error into the best-fit `OrchestrationError` variant.
+    ///
+    /// Replaces fragile string matching like `e.to_string().contains("Budget exhausted")`
+    /// with a single classification point. Falls back to `InferenceFailure` for
+    /// unrecognized errors.
+    pub fn classify(err: &dyn std::error::Error) -> Self {
+        let msg = err.to_string().to_lowercase();
+
+        if msg.contains("rate limit") || msg.contains("429") || msg.contains("too many requests") {
+            return Self::RateLimit(err.to_string());
+        }
+        if msg.contains("context") && (msg.contains("exhaust") || msg.contains("window"))
+            || msg.contains("maximum context length")
+        {
+            return Self::ContextExhausted(0, 0);
+        }
+        if msg.contains("budget exhausted")
+            || msg.contains("max tool calls")
+            || msg.contains("max iterations")
+        {
+            return Self::MaxIterations(0);
+        }
+        if msg.contains("cancelled") || msg.contains("canceled") || msg.contains("abort") {
+            return Self::Cancelled(err.to_string());
+        }
+        if msg.contains("deadline") || msg.contains("timed out") || msg.contains("timeout") {
+            return Self::InferenceFailure(err.to_string());
+        }
+        if msg.contains("parse") || msg.contains("json") && msg.contains("invalid") {
+            return Self::ParseFailure(err.to_string());
+        }
+        // Unrecognized — wrap as Internal (classified as Transient = retriable).
+        Self::InferenceFailure(err.to_string())
+    }
 }
 
 #[cfg(test)]
@@ -196,5 +231,39 @@ mod tests {
     fn tool_failure_is_retriable() {
         let err = OrchestrationError::tool("apply_diff", "hunk mismatch at line 42");
         assert!(err.is_retriable());
+    }
+
+    // ── classify() tests ──
+
+    #[test]
+    fn classify_budget_exhausted() {
+        let err = anyhow::anyhow!("Budget exhausted after 15 tool calls");
+        let classified = OrchestrationError::classify(err.as_ref());
+        assert_eq!(classified.retry_category(), RetryCategory::MaxIterations);
+        assert!(!classified.is_retriable());
+    }
+
+    #[test]
+    fn classify_rate_limit() {
+        let err = anyhow::anyhow!("API returned 429: rate limit exceeded");
+        let classified = OrchestrationError::classify(err.as_ref());
+        assert_eq!(classified.retry_category(), RetryCategory::RateLimit);
+        assert!(classified.is_retriable());
+    }
+
+    #[test]
+    fn classify_timeout_as_transient() {
+        let err = anyhow::anyhow!("request timed out after 300s");
+        let classified = OrchestrationError::classify(err.as_ref());
+        assert_eq!(classified.retry_category(), RetryCategory::Transient);
+        assert!(classified.is_retriable());
+    }
+
+    #[test]
+    fn classify_unknown_as_transient() {
+        let err = anyhow::anyhow!("something completely unexpected happened");
+        let classified = OrchestrationError::classify(err.as_ref());
+        assert_eq!(classified.retry_category(), RetryCategory::Transient);
+        assert!(classified.is_retriable());
     }
 }

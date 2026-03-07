@@ -439,16 +439,19 @@ async fn run_subtask_worker(
             // Use the adapter report as the primary budget-exhaustion signal.
             // RuntimeAdapter sets terminated_early=true for max_tool_calls,
             // deadline, read-budget, and write-stall terminations. Fallback
-            // to error string matching for cases where the report is unavailable.
+            // to OrchestrationError::classify() for typed error matching when
+            // the report is unavailable.
+            use crate::modes::errors::OrchestrationError;
             let is_budget = report
                 .as_ref()
                 .map(|r| r.terminated_early)
                 .unwrap_or_else(|| {
-                    let msg = e.to_string();
-                    msg.contains("Budget exhausted")
-                        || msg.contains("deadline")
-                        || msg.contains("max tool calls")
-                        || msg.contains("exceeded")
+                    let classified = OrchestrationError::classify(&e);
+                    matches!(
+                        classified,
+                        OrchestrationError::MaxIterations(_)
+                            | OrchestrationError::InferenceFailure(_)
+                    )
                 });
             if is_budget {
                 // Budget exhaustion means the worker ran out of time/calls but
