@@ -7,7 +7,7 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 
-use super::{sandbox_check, ToolError};
+use super::{run_command_with_timeout, sandbox_check, ToolError};
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 const DEFAULT_MAX_RESULTS: usize = 20;
@@ -70,43 +70,20 @@ impl Tool for SearchCodeTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let max = args.max_results.unwrap_or(DEFAULT_MAX_RESULTS);
-        let working_dir = self.working_dir.clone();
         let pattern = args.pattern.clone();
         let glob = args.glob.clone();
 
-        let result = tokio::task::spawn_blocking({
-            let dir = working_dir.clone();
-            move || {
-                let mut cmd = std::process::Command::new("rg");
-                cmd.arg("--json").arg(&pattern);
-                if let Some(ref g) = glob {
-                    cmd.arg("--glob").arg(g);
-                }
-                cmd.current_dir(&dir);
-                cmd.output().map_err(ToolError::Io)
-            }
-        });
+        let mut rg_args = vec!["--json", &pattern];
+        if let Some(ref g) = glob {
+            rg_args.push("--glob");
+            rg_args.push(g);
+        }
 
         let output =
-            match tokio::time::timeout(Duration::from_secs(DEFAULT_TIMEOUT_SECS), result).await {
-                Ok(Ok(r)) => r?,
-                Ok(Err(e)) => {
-                    return Err(ToolError::Io(std::io::Error::other(format!(
-                        "task join error: {e}"
-                    ))))
-                }
-                Err(_) => {
-                    return Err(ToolError::Timeout {
-                        seconds: DEFAULT_TIMEOUT_SECS,
-                    })
-                }
-            };
-
-        // rg exits non-zero when there are no matches — that's fine.
-        let stdout = String::from_utf8_lossy(&output.stdout);
+            run_command_with_timeout("rg", &rg_args, &self.working_dir, DEFAULT_TIMEOUT_SECS).await?;
 
         let mut lines: Vec<String> = Vec::new();
-        for raw in stdout.lines() {
+        for raw in output.lines() {
             if lines.len() >= max {
                 break;
             }
@@ -136,7 +113,7 @@ impl Tool for SearchCodeTool {
 
             // Sandbox-check the relative path returned by rg.
             if !file_path.is_empty() {
-                sandbox_check(&working_dir, file_path)?;
+                sandbox_check(&self.working_dir, file_path)?;
             }
 
             lines.push(format!("{file_path}:{line_number}: {content}"));
