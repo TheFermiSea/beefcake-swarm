@@ -14,6 +14,7 @@ use rig::providers::openai;
 use tracing::{debug, error, info, warn};
 
 use crate::cluster_health::ClusterHealth;
+use crate::modes::errors::OrchestrationError;
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 
 /// Default timeout for each cloud validation call.
@@ -3223,10 +3224,11 @@ pub(crate) fn clear_resume_file(repo_root: &Path) {
     }
 }
 
-/// Prompt an agent with exponential backoff retry for transient HTTP errors.
+/// Prompt an agent with exponential backoff retry for transient errors.
 ///
-/// Retries on connection errors, 502, 503, 429 with backoff: 2s, 4s, 8s, ...
-/// Non-transient errors fail immediately.
+/// Uses `OrchestrationError::classify()` to detect retriable errors (connection
+/// failures, rate limits, timeouts). Non-retriable errors fail immediately.
+/// Backoff: 2s, 4s, 8s, ...
 async fn prompt_with_retry(
     agent: &impl Prompt,
     prompt: &str,
@@ -3237,11 +3239,8 @@ async fn prompt_with_retry(
         match agent.prompt(prompt).await {
             Ok(response) => return Ok(response),
             Err(e) => {
-                let err_str = format!("{e}");
-                let err_lower = err_str.to_ascii_lowercase();
-                let is_transient = is_transient_error(&err_str, &err_lower);
-
-                if !is_transient || attempt == max_retries {
+                let classified = OrchestrationError::classify(&e);
+                if !classified.is_retriable() || attempt == max_retries {
                     return Err(e);
                 }
 
@@ -3250,7 +3249,8 @@ async fn prompt_with_retry(
                     attempt = attempt + 1,
                     max_retries,
                     backoff_secs = backoff.as_secs(),
-                    error = %err_str,
+                    category = %classified.retry_category(),
+                    error = %e,
                     "Transient error — retrying"
                 );
                 last_err = Some(e);
@@ -3275,11 +3275,8 @@ pub(crate) async fn prompt_with_hook_and_retry(
         match agent.prompt(prompt).with_hook(hook.clone()).await {
             Ok(response) => return Ok(response),
             Err(e) => {
-                let err_str = format!("{e}");
-                let err_lower = err_str.to_ascii_lowercase();
-                let is_transient = is_transient_error(&err_str, &err_lower);
-
-                if !is_transient || attempt == max_retries {
+                let classified = OrchestrationError::classify(&e);
+                if !classified.is_retriable() || attempt == max_retries {
                     return Err(e);
                 }
 
@@ -3288,7 +3285,8 @@ pub(crate) async fn prompt_with_hook_and_retry(
                     attempt = attempt + 1,
                     max_retries,
                     backoff_secs = backoff.as_secs(),
-                    error = %err_str,
+                    category = %classified.retry_category(),
+                    error = %e,
                     "Transient error — retrying (with hook)"
                 );
                 last_err = Some(e);
@@ -3297,27 +3295,6 @@ pub(crate) async fn prompt_with_hook_and_retry(
         }
     }
     Err(last_err.unwrap())
-}
-
-/// Classify whether an LLM API error is transient (connection failures, rate limits,
-/// proxy hiccups) and worth retrying, vs permanent (auth errors, schema mismatches).
-fn is_transient_error(err_str: &str, err_lower: &str) -> bool {
-    // HTTP status codes
-    err_str.contains("502")
-        || err_str.contains("503")
-        || err_str.contains("429")
-        // Connection-level failures (reqwest)
-        || err_lower.contains("connection")
-        || err_lower.contains("timed out")
-        || err_lower.contains("timeout")
-        || err_lower.contains("error sending request")
-        || err_lower.contains("broken pipe")
-        || err_lower.contains("reset by peer")
-        // Proxy occasionally returns empty-but-200 payloads; retry recovers.
-        || err_lower.contains("no message or tool call (empty)")
-        || err_lower.contains("response contained no message or tool call")
-        // Proxy/model schema mismatches can be intermittent during model churn.
-        || err_lower.contains("jsonerror")
 }
 
 /// Detect whether an issue is doc-oriented based on title/description keywords.
@@ -4251,50 +4228,26 @@ mod tests {
     }
 
     #[test]
-    fn test_is_transient_error_classifies_correctly() {
-        use super::is_transient_error;
+    fn test_orchestration_error_classify_transient() {
+        use crate::modes::errors::OrchestrationError;
 
-        // Connection-level failures from reqwest
-        let err = "Http client error: error sending request for url (http://example.com/v1/chat)";
-        assert!(
-            is_transient_error(err, &err.to_ascii_lowercase()),
-            "reqwest SendError should be transient"
-        );
+        // Connection/timeout errors should be retriable
+        let err = anyhow::anyhow!("request timed out after 300s");
+        assert!(OrchestrationError::classify(err.as_ref()).is_retriable());
 
-        // Standard HTTP status codes
-        assert!(is_transient_error("502 Bad Gateway", "502 bad gateway"));
-        assert!(is_transient_error(
-            "503 Service Unavailable",
-            "503 service unavailable"
-        ));
-        assert!(is_transient_error(
-            "429 Too Many Requests",
-            "429 too many requests"
-        ));
+        let err = anyhow::anyhow!("429 Too Many Requests");
+        assert!(OrchestrationError::classify(err.as_ref()).is_retriable());
 
-        // Connection and timeout variants
-        assert!(is_transient_error(
-            "connection refused",
-            "connection refused"
-        ));
-        assert!(is_transient_error("request timed out", "request timed out"));
-        assert!(is_transient_error("read timeout", "read timeout"));
-        assert!(is_transient_error("broken pipe", "broken pipe"));
-        assert!(is_transient_error("reset by peer", "reset by peer"));
+        let err = anyhow::anyhow!("connection refused");
+        assert!(OrchestrationError::classify(err.as_ref()).is_retriable());
 
-        // Empty response from proxy
-        assert!(is_transient_error(
-            "no message or tool call (empty)",
-            "no message or tool call (empty)"
-        ));
+        // Budget exhaustion should NOT be retriable
+        let err = anyhow::anyhow!("Budget exhausted after 15 tool calls");
+        assert!(!OrchestrationError::classify(err.as_ref()).is_retriable());
 
-        // Permanent errors should NOT be transient
-        assert!(!is_transient_error("401 Unauthorized", "401 unauthorized"));
-        assert!(!is_transient_error("invalid api key", "invalid api key"));
-        assert!(!is_transient_error(
-            "model not found: gpt-99",
-            "model not found: gpt-99"
-        ));
+        // Unknown errors fall through as transient (retriable)
+        let err = anyhow::anyhow!("something unexpected");
+        assert!(OrchestrationError::classify(err.as_ref()).is_retriable());
     }
 
     // ========================================================================
