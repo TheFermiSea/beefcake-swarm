@@ -364,9 +364,9 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
         .files_touched
         .iter()
         .filter(|f| {
-            !f.starts_with(".beads/")
+            !f.starts_with(".beads")
                 && !f.starts_with(".git/")
-                && !f.starts_with(".claude/")
+                && !f.starts_with(".claude")
         })
         .cloned()
         .collect();

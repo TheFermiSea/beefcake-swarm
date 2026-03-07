@@ -501,9 +501,9 @@ impl WorkPacketGenerator {
             return all_files
                 .into_iter()
                 .filter(|f| {
-                    !f.starts_with(".beads/")
+                    !f.starts_with(".beads")
                         && !f.starts_with(".git/")
-                        && !f.starts_with(".claude/")
+                        && !f.starts_with(".claude")
                 })
                 .collect();
         }
