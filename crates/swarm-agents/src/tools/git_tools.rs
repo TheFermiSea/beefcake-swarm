@@ -1,5 +1,11 @@
 //! Git awareness tools for agent situational awareness.
 
+use std::path::{Path, PathBuf};
+
+use rig::completion::ToolDefinition;
+use rig::tool::Tool;
+use serde::Deserialize;
+
 use super::{run_command_with_timeout, ToolError};
 
 // ── GetDiffTool ──────────────────────────────────────────────────────────

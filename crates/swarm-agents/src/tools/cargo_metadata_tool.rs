@@ -1,7 +1,6 @@
 //! Tool for querying Cargo workspace metadata.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use rig::completion::ToolDefinition;
 use rig::tool::Tool;
