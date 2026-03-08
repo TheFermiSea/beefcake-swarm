@@ -14,14 +14,24 @@ use std::process::Command;
 /// but bounded so crashed agents don't hold locks forever.
 const DEFAULT_LOCK_TTL_SECS: u32 = 1800;
 
-/// Information about an active file lock.
+/// Information about an active file lock (reservation).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LockInfo {
+    /// The resource key (file path) that is locked.
+    #[serde(alias = "resource_key")]
     pub path: String,
-    #[serde(default)]
+    /// Alias of the agent holding the lock.
+    #[serde(default, alias = "holder_alias")]
     pub holder: Option<String>,
     #[serde(default)]
     pub ttl_remaining: Option<u32>,
+}
+
+/// Wrapper for `bdh :aweb locks --json` output.
+#[derive(Debug, Clone, Deserialize)]
+struct LocksResponse {
+    #[serde(default)]
+    reservations: Vec<LockInfo>,
 }
 
 /// Manages file locks via bdh for cross-issue conflict prevention.
@@ -48,7 +58,7 @@ impl FileLockManager {
     /// The lock has a TTL to prevent deadlocks from crashed agents. If the file
     /// is already locked by another agent, returns false (non-blocking).
     pub fn try_lock(&self, path: &str, ttl_secs: u32) -> Result<bool> {
-        let ttl_arg = format!("--ttl={ttl_secs}");
+        let ttl_arg = format!("--ttl-seconds={ttl_secs}");
         let output = Command::new(&self.bin)
             .args([":aweb", "lock", path, &ttl_arg])
             .current_dir(&self.wt_path)
@@ -92,17 +102,41 @@ impl FileLockManager {
 
     /// Release all locks held by this agent.
     ///
+    /// Lists locks with `--mine`, then unlocks each one individually.
     /// Called during worktree cleanup to ensure no stale locks remain.
     pub fn unlock_all_mine(&self) -> Result<()> {
+        // List our locks
         let output = Command::new(&self.bin)
-            .args([":aweb", "unlock", "--all"])
+            .args([":aweb", "locks", "--mine", "--json"])
             .current_dir(&self.wt_path)
             .output()
-            .with_context(|| format!("Failed to run `{} :aweb unlock --all`", self.bin))?;
+            .with_context(|| format!("Failed to run `{} :aweb locks --mine`", self.bin))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
-            tracing::warn!(stderr = %stderr.trim(), "unlock --all failed");
+            tracing::warn!(stderr = %stderr.trim(), "Failed to list own locks for cleanup");
+            return Ok(());
+        }
+
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let response: LocksResponse = serde_json::from_str(&stdout).unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Failed to parse locks JSON for cleanup");
+            LocksResponse {
+                reservations: vec![],
+            }
+        });
+
+        for lock in &response.reservations {
+            if let Err(e) = self.unlock(&lock.path) {
+                tracing::warn!(path = %lock.path, error = %e, "Failed to release lock during cleanup");
+            }
+        }
+
+        if !response.reservations.is_empty() {
+            tracing::info!(
+                count = response.reservations.len(),
+                "Released all owned file locks"
+            );
         }
         Ok(())
     }
@@ -122,10 +156,13 @@ impl FileLockManager {
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
-        Ok(serde_json::from_str(&stdout).unwrap_or_else(|e| {
+        let response: LocksResponse = serde_json::from_str(&stdout).unwrap_or_else(|e| {
             tracing::warn!(error = %e, "Failed to parse locks JSON");
-            vec![]
-        }))
+            LocksResponse {
+                reservations: vec![],
+            }
+        });
+        Ok(response.reservations)
     }
 
     /// Filter a list of target files, removing any that are locked by other agents.

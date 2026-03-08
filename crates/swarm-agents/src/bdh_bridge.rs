@@ -141,8 +141,31 @@ impl BdhBridge {
     /// Runs `bdh :init` to create a `.beadhub` file that identifies this
     /// agent (alias + role) for all subsequent bdh commands in that worktree.
     pub fn init_worktree(&self, wt_path: &Path, alias: &str, role: &str) -> Result<()> {
+        let mut args = vec![
+            ":init".to_string(),
+            "--alias".to_string(),
+            alias.to_string(),
+            "--role".to_string(),
+            role.to_string(),
+        ];
+
+        // Pass BeadHub URL and API key if available (required for non-interactive auth).
+        if let Ok(url) = std::env::var("SWARM_BEADHUB_URL") {
+            args.push("--beadhub-url".to_string());
+            args.push(url);
+        }
+        if let Ok(key) = std::env::var("SWARM_BEADHUB_API_KEY") {
+            args.push("--api-key".to_string());
+            args.push(key);
+        }
+        if let Ok(project) = std::env::var("SWARM_BEADHUB_PROJECT") {
+            args.push("--project".to_string());
+            args.push(project);
+        }
+
+        let args_ref: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
         let output = Command::new(&self.bin)
-            .args([":init", "--alias", alias, "--role", role])
+            .args(&args_ref)
             .current_dir(wt_path)
             .output()
             .with_context(|| {
