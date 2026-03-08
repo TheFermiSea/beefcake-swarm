@@ -1736,6 +1736,7 @@ pub async fn process_issue(
     let mut success = false;
     let mut last_report: Option<VerifierReport> = None;
     let mut last_validator_feedback: Vec<ValidatorFeedback> = Vec::new();
+    let mut worker_chat_messages: Option<String> = None;
     let mut span_summary = SpanSummary::new();
     let mut consecutive_validator_failures: u32 = 0;
 
@@ -1979,13 +1980,34 @@ pub async fn process_issue(
             }
         }
 
+        // --- Chat polling (bdh Phase 4) ---
+        // Between iterations, check if any worker sent a chat message.
+        // Messages are injected into the next agent prompt as additional context.
+        if iteration > 1 {
+            if let Some(ref chat_context) = poll_worker_chat(&wt_path) {
+                info!(
+                    iteration,
+                    chat_len = chat_context.len(),
+                    "Injecting worker chat messages into prompt"
+                );
+                // chat_context will be appended to the objective below
+                worker_chat_messages = Some(chat_context.clone());
+            }
+        }
+
         // Build the full objective: title + description (if available).
         // The description contains file lists, implementation details, and context
         // that the file targeting pipeline uses to locate relevant source files.
-        let full_objective = match &issue.description {
+        let mut full_objective = match &issue.description {
             Some(desc) if !desc.is_empty() => format!("{}\n\n{}", issue.title, desc),
             _ => issue.title.clone(),
         };
+
+        // Append worker chat messages if any were received between iterations
+        if let Some(ref chat) = worker_chat_messages.take() {
+            full_objective.push_str("\n\n## Worker Messages (from previous iteration)\n");
+            full_objective.push_str(chat);
+        }
 
         // Pack context with tier-appropriate token budget
         let packer = ContextPacker::new(&wt_path, tier);
@@ -3446,12 +3468,68 @@ pub fn try_scaffold_fallback(
     true
 }
 
+/// Poll for pending worker chat messages via bdh.
+///
+/// Returns `Some(messages)` if there are pending messages, `None` otherwise.
+/// Fails silently if bdh is not available or SWARM_USE_BDH is not set.
+fn poll_worker_chat(wt_path: &Path) -> Option<String> {
+    let use_bdh = std::env::var("SWARM_USE_BDH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !use_bdh {
+        return None;
+    }
+
+    let bridge = crate::bdh_bridge::BdhBridge::with_worktree(wt_path);
+    match bridge.check_chat_pending() {
+        Ok(pending) if !pending.trim().is_empty() && !pending.contains("no pending") => {
+            info!(
+                pending_len = pending.len(),
+                "Worker chat messages detected between iterations"
+            );
+            Some(pending)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            debug!(error = %e, "Chat polling failed (non-fatal)");
+            None
+        }
+    }
+}
+
+/// Escalate to human via bdh (async, non-blocking) when available.
+///
+/// Falls back to the traditional `create_stuck_intervention` mechanism
+/// when bdh is not configured.
+fn escalate_via_bdh(wt_path: &Path, issue_id: &str, reason: &str) {
+    let use_bdh = std::env::var("SWARM_USE_BDH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !use_bdh {
+        return;
+    }
+
+    let bridge = crate::bdh_bridge::BdhBridge::with_worktree(wt_path);
+    let subject = format!("Issue {issue_id} stuck");
+    match bridge.escalate(&subject, reason) {
+        Ok(()) => info!(issue_id, "Async escalation sent via bdh :escalate"),
+        Err(e) => warn!(
+            issue_id,
+            error = %e,
+            "bdh :escalate failed (falling back to intervention file)"
+        ),
+    }
+}
+
 /// Create a human intervention request when the escalation engine reports stuck.
 ///
-/// Surfaces the intervention through 3 mechanisms:
+/// Surfaces the intervention through 4 mechanisms:
 /// 1. Records in session state (in-memory)
 /// 2. Writes `.swarm-interventions.json` in the worktree root
 /// 3. POSTs to `SWARM_WEBHOOK_URL` if configured
+/// 4. Sends async `bdh :escalate` notification (when `SWARM_USE_BDH=1`)
 pub(crate) fn create_stuck_intervention(
     session: &mut SessionManager,
     progress: &ProgressTracker,
@@ -3511,6 +3589,9 @@ pub(crate) fn create_stuck_intervention(
             }
         });
     }
+
+    // --- Mechanism 4: Async bdh escalation ---
+    escalate_via_bdh(wt_path, &feature_id, reason);
 }
 
 #[cfg(test)]

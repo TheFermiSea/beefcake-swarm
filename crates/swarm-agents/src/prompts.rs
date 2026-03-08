@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "5.12.0";
+pub const PROMPT_VERSION: &str = "5.13.0";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -52,6 +52,14 @@ claiming and closing — you focus on solving the problem.
   decisions), \"debugging_kb\" (error patterns, known fixes). Use BEFORE delegating complex tasks.
 - **proxy_get_diff**: Show git diff output. Use for situational awareness after workers make changes.
 - **proxy_list_changed_files**: List uncommitted changes (git status --short).
+
+## Coordination Tools (when bdh is active)
+- **team_status**: Check what other agents are working on before delegating.
+- **check_locks**: See which files are locked before assigning work.
+- **send_mail**: Notify other agents of important changes (async, fire-and-forget).
+- **check_mail**: Read messages from other agents.
+- **chat_send**: Send a chat message to another agent (non-blocking).
+- **chat_check**: Check for pending chat messages from workers.
 
 **You do NOT have proxy_read_file or proxy_list_files.** Workers have these tools. \
 You MUST delegate all file reading and exploration to workers.
@@ -145,6 +153,14 @@ status changes — you focus on solving the problem.
   Use for situational awareness before planning next steps.
 - **list_changed_files**: List uncommitted changes (git status --short). Quick way to see \
   what files have been modified, added, or deleted.
+
+## Coordination Tools (when bdh is active)
+- **team_status**: Check what other agents are working on before delegating.
+- **check_locks**: See which files are locked before assigning work.
+- **send_mail**: Notify other agents of important changes (async, fire-and-forget).
+- **check_mail**: Read messages from other agents.
+- **chat_send**: Send a chat message to another agent (non-blocking).
+- **chat_check**: Check for pending chat messages from workers.
 
 ## Delegation Protocol
 1. Read relevant files to understand the problem.
@@ -243,6 +259,12 @@ Only modify files relevant to your task.
 - If you find unrelated bugs, report them in your response: \
   `DISCOVERED: <description>`. The manager will handle tracking.
 - Do NOT run git commit. The orchestrator handles commits.
+
+## Communication (when chat_send is available)
+- If the task description seems wrong or incomplete, use `chat_send` to ask the manager.
+- If you encounter an error pattern outside your expertise, use `chat_send` to flag it.
+- If you're stuck after 2 attempts, use `chat_send` with a summary of what you tried.
+- Keep messages concise — one sentence describing the problem and what you need.
 ";
 
 /// General coding agent preamble (Qwen3.5-Implementer).
@@ -295,6 +317,12 @@ If you find a bug or missing test unrelated to your current task, create a track
   or 'clean up' code that already compiles. If a file has 10 methods and your task is \
   to add an 11th, the other 10 must be IDENTICAL in the output.
 - Do NOT run git commit. The orchestrator handles commits.
+
+## Communication (when chat_send is available)
+- If the task description seems wrong or incomplete, use `chat_send` to ask the manager.
+- If you encounter an error pattern outside your expertise, use `chat_send` to flag it.
+- If you're stuck after 2 attempts, use `chat_send` with a summary of what you tried.
+- Keep messages concise — one sentence describing the problem and what you need.
 ";
 
 /// Blind reviewer preamble (Qwen3.5-Implementer).
@@ -384,6 +412,11 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
   function signatures, rename variables, reformat untouched code, remove comments, \
   or 'clean up' code that already compiles.
 - Do NOT run git commit. The orchestrator handles commits.
+
+## Communication (when chat_send is available)
+- If your analysis reveals the problem is more complex than expected, use `chat_send` \
+  to inform the manager before attempting the fix.
+- If the task requires architectural changes beyond your scope, use `chat_send` to flag it.
 ";
 
 /// Planner specialist preamble.

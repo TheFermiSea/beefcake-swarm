@@ -207,6 +207,19 @@ impl BdhBridge {
     pub fn list_mail(&self) -> Result<String> {
         self.run_bdh_ok(&[":aweb", "mail", "list"])
     }
+
+    /// Check for pending chat messages (conversations with unread messages).
+    ///
+    /// Returns the raw output from `bdh :aweb chat pending`.
+    /// Empty string if no pending messages.
+    pub fn check_chat_pending(&self) -> Result<String> {
+        self.run_bdh_ok(&[":aweb", "chat", "pending"])
+    }
+
+    /// Read unread chat messages from a specific agent.
+    pub fn read_chat(&self, alias: &str) -> Result<String> {
+        self.run_bdh_ok(&[":aweb", "chat", "open", alias])
+    }
 }
 
 impl IssueTracker for BdhBridge {

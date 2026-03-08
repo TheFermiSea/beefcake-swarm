@@ -188,9 +188,9 @@ impl RuntimeAdapter {
         let base = tool_name.strip_prefix("proxy_").unwrap_or(tool_name);
         match base {
             "read_file" | "list_files" | "get_diff" | "list_changed_files" | "query_notebook"
-            | "team_status" | "check_mail" | "check_locks" => ToolClass::ReadOnly,
+            | "team_status" | "check_mail" | "check_locks" | "chat_check" => ToolClass::ReadOnly,
             "edit_file" | "write_file" | "run_verifier" | "rust_coder" | "general_coder"
-            | "fixer" | "planner" | "reasoning_worker" | "reviewer" | "send_mail" => {
+            | "fixer" | "planner" | "reasoning_worker" | "reviewer" | "send_mail" | "chat_send" => {
                 ToolClass::Action
             }
             _ => ToolClass::Neutral,
