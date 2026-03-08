@@ -15,7 +15,9 @@ use std::sync::Arc;
 
 use rig::tool::ToolDyn;
 
-use super::bdh_tools::{CheckLocksTool, CheckMailTool, SendMailTool, TeamStatusTool};
+use super::bdh_tools::{
+    ChatCheckTool, ChatSendTool, CheckLocksTool, CheckMailTool, SendMailTool, TeamStatusTool,
+};
 use super::exec_tool::RunCommandTool;
 use super::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
 use super::git_tools::{GetDiffTool, ListChangedFilesTool};
@@ -86,6 +88,10 @@ pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dy
                     tools.push(Box::new(ListFilesTool::new(wt_path)));
                 }
             }
+
+            // Workers get chat_send when bdh coordination is active.
+            // This lets workers signal the manager when stuck or need clarification.
+            tools.extend(worker_chat_tools(wt_path));
 
             tools
         }
@@ -162,7 +168,7 @@ pub fn manager_tools(
 ///
 /// Returns coordination tools when `SWARM_USE_BDH=1`, empty vec otherwise.
 /// These give the manager team awareness: who's working on what, file locks,
-/// and inter-agent messaging.
+/// and inter-agent messaging (including chat).
 pub fn coordination_tools(wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
     let use_bdh = std::env::var("SWARM_USE_BDH")
         .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -177,7 +183,25 @@ pub fn coordination_tools(wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
         Box::new(CheckMailTool::new(wt_path)),
         Box::new(SendMailTool::new(wt_path)),
         Box::new(CheckLocksTool::new(wt_path)),
+        Box::new(ChatSendTool::new(wt_path)),
+        Box::new(ChatCheckTool::new(wt_path)),
     ]
+}
+
+/// Build bdh chat tools for worker agents.
+///
+/// Returns chat_send when `SWARM_USE_BDH=1`, empty vec otherwise.
+/// Workers can signal the manager when stuck or when they need clarification.
+pub fn worker_chat_tools(wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
+    let use_bdh = std::env::var("SWARM_USE_BDH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !use_bdh {
+        return vec![];
+    }
+
+    vec![Box::new(ChatSendTool::new(wt_path))]
 }
 
 /// Build the optional knowledge base tool for a manager agent.

@@ -5,6 +5,10 @@
 //! - `CheckMailTool` — read incoming mail messages
 //! - `SendMailTool` — send async messages to other agents
 //! - `CheckLocksTool` — see which files are locked
+//!
+//! Worker chat tools (for signaling the manager):
+//! - `ChatSendTool` — send a non-blocking chat message (send-and-leave)
+//! - `ChatCheckTool` — check for pending chat messages
 
 use std::path::{Path, PathBuf};
 
@@ -227,5 +231,125 @@ impl Tool for CheckLocksTool {
         let bin = self.bin.clone();
         let wt = self.wt_path.clone();
         super::run_command_with_timeout(&bin, &[":aweb", "locks"], &wt, BDH_TIMEOUT_SECS).await
+    }
+}
+
+// ── ChatSendTool ──────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ChatSendArgs {
+    /// The alias of the agent to message.
+    pub to: String,
+    /// The message to send.
+    pub message: String,
+}
+
+/// Send a non-blocking chat message to another agent (fire-and-forget).
+///
+/// Uses `bdh :aweb chat send-and-leave` so the worker doesn't block waiting
+/// for a reply. The orchestrator polls for responses between iterations.
+pub struct ChatSendTool {
+    bin: String,
+    wt_path: PathBuf,
+}
+
+impl ChatSendTool {
+    pub fn new(wt_path: &Path) -> Self {
+        Self {
+            bin: std::env::var("SWARM_BDH_BIN").unwrap_or_else(|_| "bdh".into()),
+            wt_path: wt_path.to_path_buf(),
+        }
+    }
+}
+
+impl Tool for ChatSendTool {
+    const NAME: &'static str = "chat_send";
+    type Error = ToolError;
+    type Args = ChatSendArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: "chat_send".into(),
+            description: "Send a chat message to another agent (non-blocking). \
+                          Use when you're stuck, need clarification, or want to \
+                          flag an issue to the manager. The message is sent without \
+                          waiting for a reply."
+                .into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "to": {
+                        "type": "string",
+                        "description": "Alias of the recipient agent (e.g. 'manager' or another worker alias)"
+                    },
+                    "message": {
+                        "type": "string",
+                        "description": "The message to send"
+                    }
+                },
+                "required": ["to", "message"]
+            }),
+        }
+    }
+
+    async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let bin = self.bin.clone();
+        let wt = self.wt_path.clone();
+        super::run_command_with_timeout(
+            &bin,
+            &[":aweb", "chat", "send-and-leave", &args.to, &args.message],
+            &wt,
+            BDH_TIMEOUT_SECS,
+        )
+        .await
+    }
+}
+
+// ── ChatCheckTool ─────────────────────────────────────────────────────
+
+#[derive(Deserialize)]
+pub struct ChatCheckArgs {}
+
+/// Check for pending (unread) chat messages from other agents.
+pub struct ChatCheckTool {
+    bin: String,
+    wt_path: PathBuf,
+}
+
+impl ChatCheckTool {
+    pub fn new(wt_path: &Path) -> Self {
+        Self {
+            bin: std::env::var("SWARM_BDH_BIN").unwrap_or_else(|_| "bdh".into()),
+            wt_path: wt_path.to_path_buf(),
+        }
+    }
+}
+
+impl Tool for ChatCheckTool {
+    const NAME: &'static str = "chat_check";
+    type Error = ToolError;
+    type Args = ChatCheckArgs;
+    type Output = String;
+
+    async fn definition(&self, _prompt: String) -> ToolDefinition {
+        ToolDefinition {
+            name: "chat_check".into(),
+            description: "Check for pending chat messages from other agents. \
+                          Returns unread messages waiting for your attention."
+                .into(),
+            parameters: serde_json::json!({
+                "type": "object",
+                "properties": {},
+                "required": []
+            }),
+        }
+    }
+
+    async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
+        let bin = self.bin.clone();
+        let wt = self.wt_path.clone();
+        super::run_command_with_timeout(&bin, &[":aweb", "chat", "pending"], &wt, BDH_TIMEOUT_SECS)
+            .await
     }
 }
