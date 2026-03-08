@@ -87,6 +87,12 @@ pub fn build_cloud_manager(
         builder = builder.tools(kb_tools);
     }
 
+    // Coordination tools (bdh team status, mail, locks — active when SWARM_USE_BDH=1)
+    let coord_tools = bundles::coordination_tools(wt_path);
+    if !coord_tools.is_empty() {
+        builder = builder.tools(coord_tools);
+    }
+
     builder.default_max_turns(manager_max_turns()).build()
 }
 
@@ -120,6 +126,12 @@ pub fn build_local_manager(
     let kb_tools = bundles::notebook_tool(workers.notebook_bridge, false);
     if !kb_tools.is_empty() {
         builder = builder.tools(kb_tools);
+    }
+
+    // Coordination tools (bdh team status, mail, locks — active when SWARM_USE_BDH=1)
+    let coord_tools = bundles::coordination_tools(wt_path);
+    if !coord_tools.is_empty() {
+        builder = builder.tools(coord_tools);
     }
 
     builder.default_max_turns(manager_max_turns()).build()

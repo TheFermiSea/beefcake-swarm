@@ -1,5 +1,6 @@
 pub mod acceptance;
 pub mod agents;
+pub mod bdh_bridge;
 pub mod beads_bridge;
 pub mod cluster_health;
 pub mod config;
@@ -7,6 +8,7 @@ pub mod contracts;
 pub mod dashboard;
 pub mod driver;
 pub mod endpoint_pool;
+pub mod file_lock;
 pub mod kb_refresh;
 pub mod knowledge_sync;
 pub mod modes;
