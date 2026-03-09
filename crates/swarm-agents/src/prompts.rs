@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "5.13.0";
+pub const PROMPT_VERSION: &str = "5.14.1";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -243,14 +243,29 @@ Only modify files relevant to your task.
 - Type mismatches: read both expected and actual types before converting.
 - Async/Send: wrap non-Send types in Arc<Mutex<>> or restructure around .await.
 
+## Mandatory Workflow
+1. Read the target file(s) mentioned in the task. If the file content is already \
+   provided in the task prompt, skip this step.
+2. Identify the exact code region to change.
+3. Call **edit_file** with old_content (the exact text to find) and new_content \
+   (the replacement). Include 3-5 lines of surrounding context in old_content \
+   for uniqueness.
+4. If you truly cannot make progress (missing information, architectural blocker), \
+   return a text explanation starting with `BLOCKED:` and the reason. Do NOT write \
+   placeholder comments or fake edits — the orchestrator needs the no-write signal \
+   to escalate properly.
+
+**CRITICAL**: You MUST call edit_file or write_file in every response where you \
+can make progress. Text-only responses waste compute time. Never say \"I'll edit\" \
+without calling the tool in the same response.
+
+## Important: old_content Must Match Raw File
+When using edit_file, the old_content must match the **raw file content** on disk — \
+NOT the line-numbered output from read_file. If read_file showed `   42: fn main()`, \
+strip the `   42: ` prefix — the file actually contains `fn main()`.
+
 ## Rules
-- **FIRST TURN**: Your very first response MUST be a tool call (read_file). \
-  Do NOT write any text analysis before calling a tool. Call the tool immediately.
-- **READ PHASE** (turns 1-2): Read the files mentioned in the task to understand the code.
-- **WRITE PHASE** (turns 3+): You MUST call edit_file or write_file. Analysis-only \
-  replies with no file edits are INVALID. If you cannot make progress, add a \
-  `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
-- Always read the file BEFORE editing it.
+- Always read the file BEFORE editing it (unless content is provided in the task).
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - One logical change at a time. Don't refactor unrelated code.
 - **SCOPE DISCIPLINE**: Only add/modify what the task asks for. Do NOT change existing \
@@ -302,16 +317,30 @@ If you find a bug or missing test unrelated to your current task, create a track
 `bd dep add <new-id> <current-issue-id> --type discovered-from` \
 (the issue ID is in the task header as `**Issue:** <id>`). Stay focused on your task.
 
+## Mandatory Workflow
+1. Read the target file(s) or explore the project structure. If file content is \
+   already provided in the task prompt, skip this step.
+2. Plan your changes (mentally — do NOT write out a plan as text).
+3. Call **edit_file** (existing files) or **write_file** (new files only) to apply \
+   each change. Include 3-5 lines of surrounding context in old_content for uniqueness.
+4. Update mod.rs / lib.rs when adding or removing modules.
+5. If you truly cannot make progress (missing information, architectural blocker), \
+   return a text explanation starting with `BLOCKED:` and the reason. Do NOT write \
+   placeholder comments or fake edits — the orchestrator needs the no-write signal \
+   to escalate properly.
+
+**CRITICAL**: You MUST call edit_file or write_file in every response where you \
+can make progress. Text-only responses waste compute time. Never say \"I'll edit\" \
+without calling the tool in the same response.
+
+## Important: old_content Must Match Raw File
+When using edit_file, the old_content must match the **raw file content** on disk — \
+NOT the line-numbered output from read_file. If read_file showed `   42: fn main()`, \
+strip the `   42: ` prefix — the file actually contains `fn main()`.
+
 ## Rules
-- **FIRST TURN**: Your very first response MUST be a tool call (list_files or read_file). \
-  Do NOT write any text analysis before calling a tool. Call the tool immediately.
-- **READ PHASE** (turns 1-2): Explore the project structure and read files you need to modify.
-- **WRITE PHASE** (turns 3+): You MUST call edit_file or write_file. Analysis-only \
-  replies with no file edits are INVALID. If you cannot make progress, add a \
-  `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
-- Always read before editing. Use edit_file for targeted changes.
-- Update mod.rs / lib.rs when adding or removing modules.
-- After changes, verify compilation before reporting done.
+- Always read before editing (unless content is provided in the task).
+- Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - **SCOPE DISCIPLINE**: Only add/modify what the task asks for. Do NOT change existing \
   function signatures, rename variables, reformat untouched code, remove comments, \
   or 'clean up' code that already compiles. If a file has 10 methods and your task is \
@@ -402,8 +431,9 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
   Do NOT write any text analysis before calling a tool. Call the tool immediately.
 - **READ PHASE** (turns 1-3): Read the relevant files to understand the full context and error chain.
 - **WRITE PHASE** (turns 4+): You MUST call edit_file or write_file. Analysis-only \
-  replies with no file edits are INVALID. If you cannot make progress, add a \
-  `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
+  replies with no file edits are INVALID. If you truly cannot make progress, return \
+  a text explanation starting with `BLOCKED:` and the reason. Do NOT write placeholder \
+  comments or fake edits.
 - Always read files before editing them.
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - Consider full implications of changes across the codebase.
