@@ -1742,6 +1742,14 @@ pub async fn process_issue(
     // Tracks whether the previous iteration's agent called edit_file/write_file.
     // Used to inject an edit nudge into the next iteration's task prompt.
     let mut agent_has_written_prev = true; // assume true for first iteration
+                                           // Hill-climbing: track the best (lowest) error count seen across all iterations.
+                                           // Changes are only kept when they improve on the best — otherwise rolled back.
+    let mut best_error_count: Option<usize> = None;
+    // Minimum error reduction required to keep changes (env: SWARM_MIN_ERROR_DELTA).
+    let min_error_delta: usize = std::env::var("SWARM_MIN_ERROR_DELTA")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
 
     // Scope verifier to changed packages.
     // If explicit packages are configured (CLI --package or SWARM_VERIFIER_PACKAGES), use those.
@@ -2124,6 +2132,15 @@ pub async fn process_issue(
             );
         }
 
+        // --- Directive injection: learned patterns from previous sessions ---
+        let directives = load_directives(&wt_path);
+        if !directives.is_empty() {
+            task_prompt.push_str("\n**Learned patterns (from previous sessions):**\n");
+            for d in &directives {
+                task_prompt.push_str(&format!("- {d}\n"));
+            }
+        }
+
         debug!(
             iteration,
             prompt_len = task_prompt.len(),
@@ -2165,7 +2182,6 @@ pub async fn process_issue(
         // --- Checkpoint before agent invocation ---
         // Save the current commit so we can rollback if the agent makes things worse.
         let pre_worker_commit = git_mgr.current_commit_full().ok();
-        let prev_error_count = last_report.as_ref().map(|r| r.failure_signals.len());
 
         // --- Route to agent based on current tier ---
         //
@@ -2714,65 +2730,118 @@ pub async fn process_issue(
             lm.emit();
         }
 
-        // --- Regression detection: rollback if errors increased ---
+        // --- Hill-climbing: keep changes only when they improve on the best ---
         if !report.all_green {
             // Reset validator failure counter — verifier itself failed, so
             // prior validator feedback is stale.
             consecutive_validator_failures = 0;
-            if let Some(prev_count) = prev_error_count {
-                if error_count > prev_count {
-                    warn!(
-                        iteration,
-                        prev_errors = prev_count,
-                        curr_errors = error_count,
-                        "Regression detected — errors increased after agent changes"
-                    );
-                    let mut rolled_back = false;
-                    if let Some(ref rollback_hash) = pre_worker_commit {
-                        match git_mgr.hard_rollback(rollback_hash) {
-                            Ok(()) => {
-                                rolled_back = true;
-                                info!(
-                                    iteration,
-                                    rollback_to = %rollback_hash,
-                                    "Rolled back to pre-worker commit"
-                                );
-                                let _ = progress.log_error(
-                                    session.session_id(),
-                                    iteration,
-                                    format!(
-                                        "Regression: {prev_count} → {error_count} errors. Rolled back to {rollback_hash}"
-                                    ),
-                                );
-                            }
-                            Err(e) => {
-                                error!(iteration, "Rollback failed: {e}");
-                            }
+
+            // Record progress score for telemetry.
+            if let Some(best) = best_error_count {
+                metrics.record_progress_score(error_count, best);
+            }
+
+            // Determine if this iteration improved on the best error count.
+            let current_best = best_error_count.unwrap_or(usize::MAX);
+            let improved = error_count + min_error_delta < current_best;
+
+            if improved {
+                // Partial progress — keep changes and update best.
+                best_error_count = Some(error_count);
+                info!(
+                    iteration,
+                    error_count,
+                    prev_best = current_best,
+                    "Partial progress kept (new best error count)"
+                );
+                // Log experiment TSV: keep
+                let commit = pre_worker_commit.as_deref().unwrap_or("unknown");
+                crate::telemetry::append_experiment_tsv(
+                    &wt_path,
+                    commit,
+                    error_count,
+                    &[],
+                    "keep",
+                    &format!("improved: {current_best} → {error_count}"),
+                );
+            } else {
+                // Non-improvement vs best — rollback.
+                warn!(
+                    iteration,
+                    error_count,
+                    best = current_best,
+                    "Non-improvement rollback — errors not better than best"
+                );
+                let mut rolled_back = false;
+                if let Some(ref rollback_hash) = pre_worker_commit {
+                    // Save patch artifact before rollback (SuperQode pattern).
+                    let artifacts_dir = wt_path.join(".swarm-artifacts");
+                    let _ = std::fs::create_dir_all(&artifacts_dir);
+                    let patch_path = artifacts_dir.join(format!("iter-{iteration}.patch"));
+                    if let Ok(output) = std::process::Command::new("git")
+                        .args(["diff", rollback_hash])
+                        .current_dir(&wt_path)
+                        .output()
+                    {
+                        let _ = std::fs::write(&patch_path, &output.stdout);
+                        debug!(iteration, path = %patch_path.display(), "Saved patch artifact before rollback");
+                    }
+
+                    match git_mgr.hard_rollback(rollback_hash) {
+                        Ok(()) => {
+                            rolled_back = true;
+                            info!(
+                                iteration,
+                                rollback_to = %rollback_hash,
+                                "Rolled back to pre-worker commit"
+                            );
+                            let _ = progress.log_error(
+                                session.session_id(),
+                                iteration,
+                                format!(
+                                    "Non-improvement: {error_count} errors (best: {current_best}). Rolled back to {rollback_hash}"
+                                ),
+                            );
+                        }
+                        Err(e) => {
+                            error!(iteration, "Rollback failed: {e}");
                         }
                     }
-                    metrics.record_regression(rolled_back);
-                    if rolled_back {
-                        // Re-run verifier against rolled-back code so last_report
-                        // reflects the pre-regression error state, not the regressed state.
-                        let rb_verifier_config = if config.verifier_packages.is_empty() {
-                            VerifierConfig {
-                                packages: detect_changed_packages(&wt_path),
-                                ..verifier_config.clone()
-                            }
-                        } else {
-                            verifier_config.clone()
-                        };
-                        let rb_verifier = Verifier::new(&wt_path, rb_verifier_config);
-                        let rb_report = rb_verifier.run_pipeline().await;
-                        info!(
-                            iteration,
-                            rollback_errors = rb_report.failure_signals.len(),
-                            "Verifier re-run after rollback"
-                        );
-                        last_report = Some(rb_report);
-                        metrics.finish_iteration();
-                        continue;
-                    }
+                }
+
+                // Log experiment TSV: revert
+                let commit = pre_worker_commit.as_deref().unwrap_or("unknown");
+                crate::telemetry::append_experiment_tsv(
+                    &wt_path,
+                    commit,
+                    error_count,
+                    &[],
+                    "revert",
+                    &format!("non-improvement: {error_count} >= best {current_best}"),
+                );
+
+                metrics.record_regression(rolled_back);
+                if rolled_back {
+                    // Re-run verifier against rolled-back code so last_report
+                    // reflects the pre-regression error state, not the regressed state.
+                    let rb_verifier_config = if config.verifier_packages.is_empty() {
+                        VerifierConfig {
+                            packages: detect_changed_packages(&wt_path),
+                            ..verifier_config.clone()
+                        }
+                    } else {
+                        verifier_config.clone()
+                    };
+                    let rb_verifier = Verifier::new(&wt_path, rb_verifier_config);
+                    let rb_report = rb_verifier.run_pipeline().await;
+                    info!(
+                        iteration,
+                        rollback_errors = rb_report.failure_signals.len(),
+                        "Verifier re-run after rollback"
+                    );
+                    last_report = Some(rb_report);
+                    metrics.finish_iteration();
+                    continue;
                 }
             }
         }
@@ -2882,6 +2951,18 @@ pub async fn process_issue(
                 "Verifier passed (all gates green) — checking acceptance"
             );
             escalation.record_iteration(error_cats, error_count, true);
+            best_error_count = Some(0);
+
+            // Log experiment TSV: success
+            let commit = pre_worker_commit.as_deref().unwrap_or("unknown");
+            crate::telemetry::append_experiment_tsv(
+                &wt_path,
+                commit,
+                0,
+                &["fmt", "clippy", "check", "test"],
+                "success",
+                "all gates green",
+            );
 
             // Create harness checkpoint on success
             if let Ok(hash) = git_mgr.current_commit() {
@@ -3151,6 +3232,16 @@ pub async fn process_issue(
             summary = %escalation.summary(),
             "Issue NOT resolved — leaving worktree for inspection"
         );
+    }
+
+    // --- Post-session: detect failure patterns and save directives ---
+    let directives = detect_failure_patterns(&wt_path);
+    if !directives.is_empty() {
+        info!(
+            count = directives.len(),
+            "Detected failure patterns — saving directives"
+        );
+        save_directives(worktree_bridge.repo_root(), &directives);
     }
 
     // --- Write telemetry ---
@@ -3618,6 +3709,92 @@ pub(crate) fn create_stuck_intervention(
 
     // --- Mechanism 4: Async bdh escalation ---
     escalate_via_bdh(wt_path, &feature_id, reason);
+}
+
+// ---------------------------------------------------------------------------
+// P5B: Pattern detection + directive injection
+// ---------------------------------------------------------------------------
+
+/// Detect repeated failure patterns from the failure ledger.
+///
+/// Groups entries by `(tool, error_class)` and generates directives for
+/// patterns that occurred 3+ times. Returns at most 5 directives.
+fn detect_failure_patterns(worktree_path: &Path) -> Vec<String> {
+    let path = worktree_path.join(".swarm-failure-ledger.jsonl");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut counts: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+    for line in content.lines() {
+        if let Ok(entry) = serde_json::from_str::<crate::telemetry::FailureLedgerEntry>(line) {
+            if !entry.success {
+                *counts
+                    .entry((entry.tool.clone(), entry.error_class.clone()))
+                    .or_insert(0) += 1;
+            }
+        }
+    }
+
+    let mut directives: Vec<String> = counts
+        .into_iter()
+        .filter(|(_, count)| *count >= 3)
+        .map(|((tool, class), count)| {
+            format!("Avoid: {tool} failures due to '{class}' (seen {count}x). Use anchor-based editing or re-read files before editing.")
+        })
+        .collect();
+
+    directives.sort();
+    directives.truncate(5);
+    directives
+}
+
+/// Save generated directives to `.swarm-directives.jsonl` in the repo root.
+fn save_directives(repo_root: &Path, directives: &[String]) {
+    use std::io::Write;
+    let path = repo_root.join(".swarm-directives.jsonl");
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            let ts = chrono::Utc::now().to_rfc3339();
+            for d in directives {
+                let entry = serde_json::json!({"timestamp": ts, "directive": d});
+                let _ = writeln!(file, "{}", entry);
+            }
+        }
+        Err(e) => warn!("Failed to write directives: {e}"),
+    }
+}
+
+/// Load recent directives from `.swarm-directives.jsonl`.
+///
+/// Returns at most 5 recent directives (deduped).
+fn load_directives(repo_root: &Path) -> Vec<String> {
+    let path = repo_root.join(".swarm-directives.jsonl");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut directives: Vec<String> = content
+        .lines()
+        .rev() // most recent first
+        .filter_map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            v.get("directive")?.as_str().map(|s| s.to_string())
+        })
+        .collect();
+
+    // Deduplicate while preserving order
+    let mut seen = std::collections::HashSet::new();
+    directives.retain(|d| seen.insert(d.clone()));
+    directives.truncate(5);
+    directives
 }
 
 #[cfg(test)]

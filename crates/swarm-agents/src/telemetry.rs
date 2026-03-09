@@ -197,6 +197,12 @@ pub struct IterationMetrics {
     /// Typed execution artifact for replay and diagnostics.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution_artifact: Option<ExecutionArtifact>,
+    /// Hill-climbing progress score: 1.0 - (error_count / best_error_count).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub progress_score: Option<f64>,
+    /// Best error count seen so far across all iterations.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub best_error_count: Option<usize>,
 }
 
 /// Metrics for a complete orchestrator session.
@@ -259,6 +265,8 @@ struct IterationBuilder {
     coder_route: Option<String>,
     artifacts: Vec<ArtifactRecord>,
     execution_artifact: ExecutionArtifact,
+    progress_score: Option<f64>,
+    best_error_count: Option<usize>,
 }
 
 impl MetricsCollector {
@@ -295,6 +303,8 @@ impl MetricsCollector {
             coder_route: None,
             artifacts: Vec::new(),
             execution_artifact: ExecutionArtifact::new(),
+            progress_score: None,
+            best_error_count: None,
         });
     }
 
@@ -370,6 +380,19 @@ impl MetricsCollector {
         }
     }
 
+    /// Record the hill-climbing progress score for this iteration.
+    pub fn record_progress_score(&mut self, error_count: usize, best_error_count: usize) {
+        if let Some(ref mut iter) = self.current_iteration {
+            let score = if best_error_count == 0 {
+                1.0
+            } else {
+                1.0 - (error_count as f64 / best_error_count as f64)
+            };
+            iter.progress_score = Some(score);
+            iter.best_error_count = Some(best_error_count);
+        }
+    }
+
     /// Record a file artifact touched during this iteration.
     pub fn record_artifact(&mut self, artifact: ArtifactRecord) {
         if let Some(ref mut iter) = self.current_iteration {
@@ -437,6 +460,8 @@ impl MetricsCollector {
                 coder_route: iter.coder_route,
                 artifacts: iter.artifacts,
                 execution_artifact: artifact,
+                progress_score: iter.progress_score,
+                best_error_count: iter.best_error_count,
             });
         }
     }
@@ -540,6 +565,84 @@ pub fn append_telemetry(metrics: &SessionMetrics, repo_root: &Path) {
             }
         }
         Err(e) => warn!("Failed to serialize telemetry: {e}"),
+    }
+}
+
+/// Append a row to `experiments.tsv` in the worktree.
+///
+/// Each row captures a single iteration decision point for trajectory analysis.
+/// Header is written on first call. The TSV format enables easy `sort | uniq -c`
+/// analysis without JSON parsing.
+pub fn append_experiment_tsv(
+    worktree_path: &Path,
+    commit: &str,
+    error_count: usize,
+    gates_passed: &[&str],
+    status: &str,
+    description: &str,
+) {
+    use std::io::Write;
+    let tsv_path = worktree_path.join("experiments.tsv");
+    let needs_header = !tsv_path.exists();
+
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&tsv_path)
+    {
+        Ok(mut file) => {
+            if needs_header {
+                let _ = writeln!(
+                    file,
+                    "timestamp\tcommit\terror_count\tgates_passed\tstatus\tdescription"
+                );
+            }
+            let ts = chrono::Utc::now().to_rfc3339();
+            let gates = gates_passed.join(",");
+            let _ = writeln!(
+                file,
+                "{ts}\t{commit}\t{error_count}\t{gates}\t{status}\t{description}"
+            );
+        }
+        Err(e) => warn!("Failed to write experiments.tsv: {e}"),
+    }
+}
+
+/// A single entry in the failure ledger (JSONL format).
+///
+/// Captures both failures and successes (per ECC continuous learning pattern)
+/// for trajectory analysis and pattern detection.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailureLedgerEntry {
+    pub tool: String,
+    pub error_class: String,
+    pub signal_traced: String,
+    pub file_path: Option<String>,
+    pub iteration: usize,
+    pub timestamp: String,
+    pub success: bool,
+}
+
+/// Append an entry to `.swarm-failure-ledger.jsonl` in the worktree.
+pub fn append_failure_ledger(worktree_path: &Path, entry: &FailureLedgerEntry) {
+    use std::io::Write;
+    let path = worktree_path.join(".swarm-failure-ledger.jsonl");
+    match serde_json::to_string(entry) {
+        Ok(json) => {
+            match std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                Ok(mut file) => {
+                    if let Err(e) = writeln!(file, "{json}") {
+                        warn!("Failed to append failure ledger: {e}");
+                    }
+                }
+                Err(e) => warn!("Failed to open failure ledger: {e}"),
+            }
+        }
+        Err(e) => warn!("Failed to serialize failure ledger entry: {e}"),
     }
 }
 
@@ -1565,6 +1668,8 @@ mod tests {
             coder_route: None,
             artifacts: vec![],
             execution_artifact: None,
+            progress_score: None,
+            best_error_count: None,
         });
         metrics1.iterations.push(IterationMetrics {
             iteration: 2,
@@ -1584,6 +1689,8 @@ mod tests {
             coder_route: None,
             artifacts: vec![],
             execution_artifact: None,
+            progress_score: None,
+            best_error_count: None,
         });
 
         let mut metrics2 = SessionMetrics {
@@ -1619,6 +1726,8 @@ mod tests {
             coder_route: None,
             artifacts: vec![],
             execution_artifact: None,
+            progress_score: None,
+            best_error_count: None,
         });
 
         append_telemetry(&metrics1, dir.path());
@@ -2121,6 +2230,8 @@ mod tests {
                         evaluator_snapshot: None,
                         retry_rationale: None,
                     }),
+                    progress_score: None,
+                    best_error_count: None,
                 },
                 IterationMetrics {
                     iteration: 2,
@@ -2141,6 +2252,8 @@ mod tests {
                     artifacts: vec![],
                     // No artifact for this iteration
                     execution_artifact: None,
+                    progress_score: None,
+                    best_error_count: None,
                 },
             ],
             timestamp: "2026-01-01T00:00:00Z".into(),
@@ -2320,5 +2433,70 @@ mod tests {
         assert!(pruned.contains("Iteration 3"));
         assert!(!pruned.contains("Iteration 1"));
         assert!(pruned.contains("[Earlier iterations pruned"));
+    }
+
+    #[test]
+    fn test_append_experiment_tsv_creates_header() {
+        let dir = tempfile::TempDir::new().unwrap();
+        append_experiment_tsv(
+            dir.path(),
+            "abc123",
+            5,
+            &["fmt", "clippy"],
+            "keep",
+            "partial progress",
+        );
+        let content = std::fs::read_to_string(dir.path().join("experiments.tsv")).unwrap();
+        assert!(content.starts_with("timestamp\t"));
+        assert!(content.contains("abc123"));
+        assert!(content.contains("keep"));
+    }
+
+    #[test]
+    fn test_append_experiment_tsv_appends() {
+        let dir = tempfile::TempDir::new().unwrap();
+        append_experiment_tsv(dir.path(), "abc", 5, &["fmt"], "keep", "first");
+        append_experiment_tsv(dir.path(), "def", 3, &["fmt", "clippy"], "revert", "second");
+        let content = std::fs::read_to_string(dir.path().join("experiments.tsv")).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert_eq!(lines.len(), 3); // header + 2 rows
+    }
+
+    #[test]
+    fn test_append_failure_ledger() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let entry = FailureLedgerEntry {
+            tool: "edit_file".to_string(),
+            error_class: "match_failure".to_string(),
+            signal_traced: "old_content not found".to_string(),
+            file_path: Some("src/main.rs".to_string()),
+            iteration: 1,
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            success: false,
+        };
+        append_failure_ledger(dir.path(), &entry);
+        let content =
+            std::fs::read_to_string(dir.path().join(".swarm-failure-ledger.jsonl")).unwrap();
+        assert!(content.contains("edit_file"));
+        assert!(content.contains("match_failure"));
+    }
+
+    #[test]
+    fn test_failure_ledger_success_entry() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let entry = FailureLedgerEntry {
+            tool: "edit_file".to_string(),
+            error_class: "anchor_edit".to_string(),
+            signal_traced: "lines 10-15 replaced".to_string(),
+            file_path: Some("src/lib.rs".to_string()),
+            iteration: 2,
+            timestamp: "2026-01-01T00:00:00Z".to_string(),
+            success: true,
+        };
+        append_failure_ledger(dir.path(), &entry);
+        let content =
+            std::fs::read_to_string(dir.path().join(".swarm-failure-ledger.jsonl")).unwrap();
+        let parsed: FailureLedgerEntry = serde_json::from_str(content.trim()).unwrap();
+        assert!(parsed.success);
     }
 }

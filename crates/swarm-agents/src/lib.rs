@@ -1,4 +1,5 @@
 pub mod acceptance;
+pub mod action_validator;
 pub mod agents;
 pub mod bdh_bridge;
 pub mod beads_bridge;

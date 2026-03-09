@@ -30,7 +30,16 @@ async fn test_read_file_existing() {
         })
         .await;
 
-    assert_eq!(result.unwrap(), "hello world");
+    let output = result.unwrap();
+    // Hashline format: "1:{hash}|hello world"
+    assert!(
+        output.contains("|hello world"),
+        "expected hashline content in:\n{output}"
+    );
+    assert!(
+        output.starts_with("1:"),
+        "expected line number prefix in:\n{output}"
+    );
 }
 
 #[tokio::test]
@@ -90,7 +99,7 @@ async fn test_read_file_line_range() {
         "line5 should not appear:\n{result}"
     );
     assert!(
-        result.contains("[Lines 2-4 of 5 total]"),
+        result.contains("[Lines 2-4 of 5 total"),
         "header missing:\n{result}"
     );
 }
@@ -371,6 +380,8 @@ async fn test_edit_file_exact_match() {
     let tool = EditFileTool::new(dir.path());
     let result = tool
         .call(EditFileArgs {
+            anchor_start: None,
+            anchor_end: None,
             path: "lib.rs".into(),
             old_content: "    println!(\"hello\");".into(),
             new_content: "    println!(\"world\");".into(),
@@ -394,6 +405,8 @@ async fn test_edit_file_no_match() {
     let tool = EditFileTool::new(dir.path());
     let result = tool
         .call(EditFileArgs {
+            anchor_start: None,
+            anchor_end: None,
             path: "lib.rs".into(),
             old_content: "fn bar() {}".into(),
             new_content: "fn baz() {}".into(),
@@ -415,6 +428,8 @@ async fn test_edit_file_ambiguous_match() {
     let tool = EditFileTool::new(dir.path());
     let result = tool
         .call(EditFileArgs {
+            anchor_start: None,
+            anchor_end: None,
             path: "lib.rs".into(),
             old_content: "let x = 1;".into(),
             new_content: "let x = 99;".into(),
@@ -439,6 +454,8 @@ async fn test_edit_file_whitespace_fuzzy_match() {
     // old_content uses 2-space indent — should still match via fuzzy
     let result = tool
         .call(EditFileArgs {
+            anchor_start: None,
+            anchor_end: None,
             path: "lib.rs".into(),
             old_content: "fn foo() {\n  let x = 1;\n}".into(),
             new_content: "fn foo() {\n    let x = 2;\n}".into(),
@@ -459,6 +476,8 @@ async fn test_edit_file_delete_block() {
     let tool = EditFileTool::new(dir.path());
     let result = tool
         .call(EditFileArgs {
+            anchor_start: None,
+            anchor_end: None,
             path: "lib.rs".into(),
             old_content: "\nfn bar() {}\n".into(),
             new_content: "".into(),
@@ -478,6 +497,8 @@ async fn test_edit_file_sandbox_escape_blocked() {
     let tool = EditFileTool::new(dir.path());
     let result = tool
         .call(EditFileArgs {
+            anchor_start: None,
+            anchor_end: None,
             path: "../../../etc/passwd".into(),
             old_content: "root".into(),
             new_content: "hacked".into(),
@@ -500,6 +521,8 @@ async fn test_edit_file_multiline_replace() {
     let tool = EditFileTool::new(dir.path());
     let result = tool
         .call(EditFileArgs {
+            anchor_start: None,
+            anchor_end: None,
             path: "main.rs".into(),
             old_content: "    println!(\"v1\");\n    println!(\"v2\");".into(),
             new_content: "    println!(\"v3\");".into(),

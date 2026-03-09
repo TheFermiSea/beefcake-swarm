@@ -12,6 +12,7 @@ use rig::tool::Tool;
 use serde::Deserialize;
 
 use super::{sandbox_check, ToolError};
+use crate::action_validator::blake3_short;
 
 /// Maximum number of replacements allowed in a single call to prevent
 /// accidental mass-edits (e.g., replacing a common keyword everywhere).
@@ -25,6 +26,13 @@ pub struct EditFileArgs {
     pub old_content: String,
     /// The replacement text.
     pub new_content: String,
+    /// Anchor start: "line:hash" from read_file hashline output (e.g. "42:a3").
+    /// When both anchors are provided, replaces the line range instead of using str_replace.
+    #[serde(default)]
+    pub anchor_start: Option<String>,
+    /// Anchor end: "line:hash" from read_file hashline output (e.g. "44:0e").
+    #[serde(default)]
+    pub anchor_end: Option<String>,
 }
 
 /// Edit a file by replacing a unique substring with new content.
@@ -55,6 +63,117 @@ impl EditFileTool {
             working_dir: working_dir.to_path_buf(),
             allowed_files: Some(allowed),
         }
+    }
+
+    /// Anchor-based edit: replace a line range identified by hashline anchors.
+    fn anchor_edit(
+        &self,
+        rel_path: &str,
+        full_path: &std::path::Path,
+        content: &str,
+        start_anchor: &str,
+        end_anchor: &str,
+        new_content: &str,
+    ) -> Result<String, ToolError> {
+        let lines: Vec<&str> = content.lines().collect();
+
+        let (start_line, start_hash) = parse_anchor(start_anchor).ok_or_else(|| {
+            ToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Invalid anchor_start format: '{start_anchor}'. Expected 'line:hash' (e.g. '42:a3')"),
+            ))
+        })?;
+
+        let (end_line, end_hash) = parse_anchor(end_anchor).ok_or_else(|| {
+            ToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("Invalid anchor_end format: '{end_anchor}'. Expected 'line:hash' (e.g. '44:0e')"),
+            ))
+        })?;
+
+        // Validate line numbers
+        if start_line == 0 || end_line == 0 || start_line > lines.len() || end_line > lines.len() {
+            return Err(ToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Anchor line numbers out of range: start={start_line}, end={end_line}, \
+                     file has {} lines. Re-read the file to get fresh anchors.",
+                    lines.len()
+                ),
+            )));
+        }
+
+        if start_line > end_line {
+            return Err(ToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("anchor_start line ({start_line}) must be <= anchor_end line ({end_line})"),
+            )));
+        }
+
+        // Verify hashes match current content
+        let actual_start_hash = blake3_short(lines[start_line - 1].trim());
+        if actual_start_hash != start_hash {
+            return Err(ToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Stale anchor_start: line {start_line} hash is now '{actual_start_hash}' \
+                     (expected '{start_hash}'). Re-read the file to get fresh anchors."
+                ),
+            )));
+        }
+
+        let actual_end_hash = blake3_short(lines[end_line - 1].trim());
+        if actual_end_hash != end_hash {
+            return Err(ToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "Stale anchor_end: line {end_line} hash is now '{actual_end_hash}' \
+                     (expected '{end_hash}'). Re-read the file to get fresh anchors."
+                ),
+            )));
+        }
+
+        // Build new file: lines before range + new_content + lines after range
+        let mut result = String::with_capacity(content.len());
+        for line in &lines[..start_line - 1] {
+            result.push_str(line);
+            result.push('\n');
+        }
+        result.push_str(new_content);
+        if !new_content.ends_with('\n') {
+            result.push('\n');
+        }
+        for line in &lines[end_line..] {
+            result.push_str(line);
+            result.push('\n');
+        }
+        // Trim trailing newline if original didn't have one
+        if !content.ends_with('\n') && result.ends_with('\n') {
+            result.pop();
+        }
+
+        // No-op detection
+        if result == content {
+            return Err(ToolError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!(
+                    "edit_file: no-op anchor edit — replacement is identical to lines {start_line}-{end_line} \
+                     in {rel_path}. Verify your change is different."
+                ),
+            )));
+        }
+
+        std::fs::write(full_path, &result)?;
+
+        let old_lines = end_line - start_line + 1;
+        let new_lines = new_content.lines().count();
+        let diff = new_lines as i64 - old_lines as i64;
+        let sign = if diff >= 0 { "+" } else { "" };
+
+        Ok(format!(
+            "Edited {rel_path} (anchor mode): replaced lines {start_line}-{end_line} \
+             ({old_lines} lines) with {new_lines} lines ({sign}{diff})"
+        ))
     }
 }
 
@@ -122,6 +241,16 @@ fn reindent_to_match(original_region: &str, new_content: &str) -> String {
         result.push('\n');
     }
     result
+}
+
+/// Parse an anchor string like "42:a3" into (line_number, hash_string).
+fn parse_anchor(s: &str) -> Option<(usize, String)> {
+    let parts: Vec<&str> = s.splitn(2, ':').collect();
+    if parts.len() != 2 {
+        return None;
+    }
+    let line_num: usize = parts[0].parse().ok()?;
+    Some((line_num, parts[1].to_string()))
 }
 
 /// Find all occurrences of `needle` in `haystack`, returning their byte offsets.
@@ -248,6 +377,14 @@ impl Tool for EditFileTool {
                     "new_content": {
                         "type": "string",
                         "description": "The replacement text. Can be empty to delete the old_content block."
+                    },
+                    "anchor_start": {
+                        "type": "string",
+                        "description": "Start anchor from read_file hashline output (e.g. '42:a3'). When both anchor_start and anchor_end are provided, replaces the line range instead of matching old_content."
+                    },
+                    "anchor_end": {
+                        "type": "string",
+                        "description": "End anchor from read_file hashline output (e.g. '44:0e'). Used with anchor_start."
                     }
                 },
                 "required": ["path", "old_content", "new_content"]
@@ -277,6 +414,20 @@ impl Tool for EditFileTool {
         // Heuristic: unescape double-encoded content from local models
         let old_content = unescape_if_double_encoded(&args.old_content);
         let new_content = unescape_if_double_encoded(&args.new_content);
+
+        // --- Anchor-based edit path (preferred when anchors are provided) ---
+        if let (Some(ref start_anchor), Some(ref end_anchor)) =
+            (&args.anchor_start, &args.anchor_end)
+        {
+            return self.anchor_edit(
+                &args.path,
+                &full_path,
+                &content,
+                start_anchor,
+                end_anchor,
+                &new_content,
+            );
+        }
 
         // Try exact match first (raw old_content as provided by the model)
         let mut occurrences = find_all(&content, &old_content);
@@ -638,6 +789,13 @@ mod tests {
         assert_eq!(result, input);
     }
 
+    #[test]
+    fn test_strip_hashline_prefixes() {
+        let input = "1:a3|fn main() {\n2:0e|    println!(\"hi\");\n3:ff|}";
+        let result = strip_line_number_prefixes(input);
+        assert_eq!(result, "fn main() {\n    println!(\"hi\");\n}");
+    }
+
     // --- unescape_if_double_encoded ---
 
     #[test]
@@ -700,6 +858,34 @@ mod tests {
         let bytes = b"a\nb\nc";
         assert_eq!(memchr_newline(bytes, 2), Some(3));
     }
+
+    // --- parse_anchor ---
+
+    #[test]
+    fn test_parse_anchor() {
+        assert_eq!(parse_anchor("42:a3"), Some((42, "a3".to_string())));
+        assert_eq!(parse_anchor("1:ff"), Some((1, "ff".to_string())));
+        assert_eq!(parse_anchor("invalid"), None);
+        assert_eq!(parse_anchor(""), None);
+    }
+
+    // --- EditFileArgs with anchors ---
+
+    #[test]
+    fn test_edit_file_args_with_anchors() {
+        let json = r#"{"path": "x.rs", "old_content": "", "new_content": "y", "anchor_start": "1:ab", "anchor_end": "3:cd"}"#;
+        let args: EditFileArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.anchor_start, Some("1:ab".to_string()));
+        assert_eq!(args.anchor_end, Some("3:cd".to_string()));
+    }
+
+    #[test]
+    fn test_edit_file_args_without_anchors() {
+        let json = r#"{"path": "x.rs", "old_content": "a", "new_content": "b"}"#;
+        let args: EditFileArgs = serde_json::from_str(json).unwrap();
+        assert!(args.anchor_start.is_none());
+        assert!(args.anchor_end.is_none());
+    }
 }
 
 /// Strip line-number prefixes added by `read_file` ranged output.
@@ -733,6 +919,7 @@ fn strip_line_number_prefixes(s: &str) -> String {
 
     // Count lines matching the read_file line-number format: optional whitespace,
     // digits, colon, space (e.g., "   42: code here" or "1: code here")
+    // Also matches hashline format: "42:a3|code here"
     let prefix_count = non_empty
         .iter()
         .filter(|line| {
@@ -741,9 +928,24 @@ fn strip_line_number_prefixes(s: &str) -> String {
             if !trimmed.starts_with(|c: char| c.is_ascii_digit()) {
                 return false;
             }
-            // Find the ": " separator after digits
-            if let Some(colon_pos) = trimmed.find(": ") {
-                trimmed[..colon_pos].chars().all(|c| c.is_ascii_digit())
+            // Match old format: "42: code" OR new hashline format: "42:a3|code"
+            if let Some(colon_pos) = trimmed.find(':') {
+                let before_colon = &trimmed[..colon_pos];
+                if !before_colon.chars().all(|c| c.is_ascii_digit()) {
+                    return false;
+                }
+                let after_colon = &trimmed[colon_pos + 1..];
+                // Old format: ": " (space after colon)
+                if after_colon.starts_with(' ') {
+                    return true;
+                }
+                // Hashline format: "hex|" (hex chars then pipe)
+                if let Some(pipe_pos) = after_colon.find('|') {
+                    return after_colon[..pipe_pos]
+                        .chars()
+                        .all(|c| c.is_ascii_hexdigit());
+                }
+                false
             } else {
                 false
             }
@@ -755,14 +957,28 @@ fn strip_line_number_prefixes(s: &str) -> String {
         return s.to_string();
     }
 
-    // Strip the prefix: everything up to and including the first ": "
+    // Strip the prefix: everything up to and including the first ": " or hashline "N:hex|"
     lines
         .iter()
         .map(|line| {
             let trimmed = line.trim_start();
-            if let Some(colon_pos) = trimmed.find(": ") {
-                if trimmed[..colon_pos].chars().all(|c| c.is_ascii_digit()) {
-                    return &trimmed[colon_pos + 2..];
+            if let Some(colon_pos) = trimmed.find(':') {
+                let before_colon = &trimmed[..colon_pos];
+                if before_colon.chars().all(|c| c.is_ascii_digit()) {
+                    let after_colon = &trimmed[colon_pos + 1..];
+                    // Old format: "42: code"
+                    if let Some(stripped) = after_colon.strip_prefix(' ') {
+                        return stripped;
+                    }
+                    // Hashline format: "42:a3|code"
+                    if let Some(pipe_pos) = after_colon.find('|') {
+                        if after_colon[..pipe_pos]
+                            .chars()
+                            .all(|c| c.is_ascii_hexdigit())
+                        {
+                            return &after_colon[pipe_pos + 1..];
+                        }
+                    }
                 }
             }
             line

@@ -31,6 +31,8 @@ use rig::completion::CompletionModel;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use crate::action_validator::{ActionValidator, ValidatorState};
+
 /// Configuration for the runtime adapter.
 #[derive(Debug, Clone)]
 pub struct AdapterConfig {
@@ -129,6 +131,8 @@ struct AdapterState {
     consecutive_reads: usize,
     /// Whether edit_file or write_file has been called at least once.
     has_written: bool,
+    /// Validator state for pre-tool-call validation.
+    validator_state: ValidatorState,
 }
 
 /// Rig [`PromptHook`] implementation for tool-event visibility and budget control.
@@ -139,6 +143,8 @@ struct AdapterState {
 pub struct RuntimeAdapter {
     state: Arc<Mutex<AdapterState>>,
     config: Arc<AdapterConfig>,
+    /// Pre-tool-call validators. Run before budget checks in `on_tool_call`.
+    validators: Arc<Vec<Box<dyn ActionValidator>>>,
 }
 
 impl RuntimeAdapter {
@@ -155,8 +161,33 @@ impl RuntimeAdapter {
                 termination_reason: None,
                 consecutive_reads: 0,
                 has_written: false,
+                validator_state: ValidatorState::new(),
             })),
             config: Arc::new(config),
+            validators: Arc::new(Vec::new()),
+        }
+    }
+
+    /// Create a new adapter with validators for pre-tool-call validation.
+    pub fn with_validators(
+        config: AdapterConfig,
+        validators: Vec<Box<dyn ActionValidator>>,
+    ) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(AdapterState {
+                tool_events: Vec::new(),
+                turn_count: 0,
+                in_flight: HashMap::new(),
+                total_tool_time: Duration::ZERO,
+                started_at: Instant::now(),
+                terminated_early: false,
+                termination_reason: None,
+                consecutive_reads: 0,
+                has_written: false,
+                validator_state: ValidatorState::new(),
+            })),
+            config: Arc::new(config),
+            validators: Arc::new(validators),
         }
     }
 
@@ -286,8 +317,10 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
     ) -> impl std::future::Future<Output = ToolCallHookAction> + Send {
         let state = self.state.clone();
         let config = self.config.clone();
+        let validators = self.validators.clone();
         let tool_name = tool_name.to_string();
         let internal_call_id = internal_call_id.to_string();
+        let args_owned = args.to_string();
         let args_preview = Self::truncate(args, config.preview_len);
 
         async move {
@@ -305,6 +338,20 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                     );
                 }
             };
+
+            // Run action validators (pre-tool-call checks).
+            // Returns an error to the LLM but does NOT terminate the agent loop.
+            for validator in validators.iter() {
+                if let Err(msg) = validator.validate(&tool_name, &args_owned, &s.validator_state) {
+                    warn!(
+                        agent = %config.agent_name,
+                        validator = validator.name(),
+                        tool = %tool_name,
+                        "Validation failed: {msg}"
+                    );
+                    return ToolCallHookAction::skip(msg);
+                }
+            }
 
             // Check deadline
             if let Some(deadline) = config.deadline {
@@ -413,7 +460,7 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
         tool_name: &str,
         _tool_call_id: Option<String>,
         internal_call_id: &str,
-        _args: &str,
+        args: &str,
         result: &str,
     ) -> impl std::future::Future<Output = HookAction> + Send {
         let state = self.state.clone();
@@ -423,6 +470,7 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
         let result_preview = Self::truncate(result, config.preview_len);
         let result_len = result.len();
         let is_error = result.starts_with("Error") || result.starts_with("error");
+        let args_for_path = args.to_string();
 
         async move {
             let mut s = match state.lock() {
@@ -465,16 +513,32 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
             );
 
             s.tool_events.push(ToolEvent {
-                tool_name,
+                tool_name: tool_name.clone(),
                 args_preview,
                 result_preview,
                 duration_ms,
                 outcome,
             });
 
+            // Update validator state: track file reads/writes for pre-call validators.
+            let base = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
+            if let Some(path) = extract_path_from_args(&args_for_path) {
+                match base {
+                    "read_file" => s.validator_state.record_read(&path),
+                    "edit_file" | "write_file" => s.validator_state.record_write(&path),
+                    _ => {}
+                }
+            }
+
             HookAction::cont()
         }
     }
+}
+
+/// Best-effort extraction of "path" field from JSON args for validator state tracking.
+fn extract_path_from_args(json: &str) -> Option<String> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    v.get("path")?.as_str().map(|s| s.to_string())
 }
 
 #[cfg(test)]

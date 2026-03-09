@@ -398,6 +398,8 @@ mod tests {
                 coder_route: coder_routes.get(i as usize).map(|s| s.to_string()),
                 artifacts: vec![],
                 execution_artifact: None,
+                progress_score: None,
+                best_error_count: None,
             })
             .collect();
 

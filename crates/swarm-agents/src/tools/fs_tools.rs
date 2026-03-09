@@ -7,6 +7,7 @@ use rig::tool::Tool;
 use serde::Deserialize;
 
 use super::{sandbox_check, ToolError};
+use crate::action_validator::blake3_short;
 
 // ---------------------------------------------------------------------------
 // ReadFileTool
@@ -63,8 +64,9 @@ impl Tool for ReadFileTool {
     async fn definition(&self, _prompt: String) -> ToolDefinition {
         ToolDefinition {
             name: "read_file".into(),
-            description: "Read the contents of a file in the workspace. \
-                          Use start_line/end_line to read a specific range when the file is large."
+            description: "Read a file. Lines are annotated as `{line}:{hash}|{content}` where hash is a content anchor. \
+                          Use these anchors with edit_file's anchor_start/anchor_end for reliable edits. \
+                          Use start_line/end_line to read a specific range."
                 .into(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -116,16 +118,28 @@ impl Tool for ReadFileTool {
             let annotated: String = lines[start..end]
                 .iter()
                 .enumerate()
-                .map(|(i, line)| format!("{:>5}: {}", start + i + 1, line))
+                .map(|(i, line)| {
+                    let hash = blake3_short(line.trim());
+                    format!("{}:{}|{}", start + i + 1, hash, line)
+                })
                 .collect::<Vec<_>>()
                 .join("\n");
             format!(
-                "[Lines {}-{} of {total} total]\n{annotated}",
+                "[Lines {}-{} of {total} total (hashline format: line:hash|content)]\n{annotated}",
                 start + 1,
                 end
             )
         } else {
+            // Full-file read: annotate with hashline anchors
             content
+                .lines()
+                .enumerate()
+                .map(|(i, line)| {
+                    let hash = blake3_short(line.trim());
+                    format!("{}:{}|{}", i + 1, hash, line)
+                })
+                .collect::<Vec<_>>()
+                .join("\n")
         };
 
         // Truncate large files to keep context small for local models.
@@ -363,6 +377,17 @@ mod tests {
     #[test]
     fn test_has_json_escape_sequences_with_unicode() {
         assert!(has_json_escape_sequences(r#""hello\u0020world""#));
+    }
+
+    #[test]
+    fn test_hashline_format() {
+        use crate::action_validator::blake3_short;
+        let line = "fn main() {";
+        let hash = blake3_short(line.trim());
+        let formatted = format!("1:{}|{}", hash, line);
+        assert!(formatted.starts_with("1:"));
+        assert!(formatted.contains('|'));
+        assert!(formatted.ends_with("fn main() {"));
     }
 
     #[test]
