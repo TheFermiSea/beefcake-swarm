@@ -4,10 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Model Selection & Routing
 
-- **Rust/Code Tasks:** All three compute nodes run **Qwen3.5-397B-A17B** (Q4_K_M, --parallel 2 each, 6 total slots):
-  - Fast/Scout: vasp-03:8081 (`/ask-local "Qwen3.5-397B-A17B" "..."`)
-  - Coder: vasp-01:8081
-  - Reasoning/Planning: vasp-02:8081
+- **Local RPC Distributed Ensemble (March 2026):**
+  - **Scout/Reviewer:** Qwen3.5-27B-Distilled (vasp-03:8081) — 256K Context, Blazing speed.
+  - **Integrator:** Qwen3.5-122B-A10B (vasp-01+02 RPC) — 128K Context, Distributed VRAM.
 - **General/Complex:** Claude Opus 4.6 / Sonnet 4.6 (default).
 - **Research:** Always check **NotebookLM** first using `/ask-notebook` or `notebook_query`.
 
@@ -61,10 +60,9 @@ Key modules:
 
 ```text
 Cloud Manager (Claude Opus 4.6 thinking via CLIAPIProxy, max 10 iterations)
-    → delegates to local workers (all Qwen3.5-397B-A17B Q4_K_M):
-        vasp-03:8081 — fast/scout tier (read, review, breaker)
-        vasp-01:8081 — coder tier (general_coder, rust_coder)
-        vasp-02:8081 — reasoning tier (planner, reasoning_worker)
+    → delegates to local workers (2026 VRAM-Resident RPC):
+        vasp-03:8081 — Scout/Reviewer tier (27B, 256K context)
+        vasp-01:8081 — Integrator tier (122B RPC, 128K context)
     → runs verifier after each worker completes
     ↓ all budgets exhausted
 Human Intervention (blocking beads issue)
@@ -83,24 +81,26 @@ When cloud is unavailable, falls back to worker-first mode (local models only).
 
 ## Inference Endpoints
 
-All three compute nodes run the same model — **Qwen3.5-397B-A17B Q4_K_M** (233GB, 7 GGUF shards).
+The swarm uses a **VRAM-Resident Distributed** architecture (Transitioning March 2026).
 
-| Tier | Endpoint | Node | Concurrency |
-|------|----------|------|-------------|
-| Fast/Scout | http://vasp-03:8081/v1 | vasp-03 | 2 parallel @ 64K |
-| Coder | http://vasp-01:8081/v1 | vasp-01 | 2 parallel @ 64K |
-| Reasoning | http://vasp-02:8081/v1 | vasp-02 | 2 parallel @ 64K |
-| Cloud | http://localhost:8317/v1 | ai-proxy (CLIAPIProxy) | 1 |
+| Tier | Model | Node | Context | Hardware Strategy |
+|------|-------|------|---------|-------------------|
+| Scout/Reviewer | Qwen3.5-27B-Distilled | vasp-03 | 256K | Full GPU Offload (32GB) |
+| Integrator | Qwen3.5-122B-A10B | vasp-01/02 | 128K | Dual-Node RPC (64GB VRAM) |
+| Cloud | Claude Opus 4.6 | ai-proxy | 200K | CLIAPIProxy Relay |
 
-MoE architecture: expert FFN layers on CPU RAM (~225GB), attention on GPU (V100S 32GB).
-Cloud model: `claude-opus-4-6` (fallback: `claude-sonnet-4-5-20250929`).
-
-**Start inference:**
+**Health Checks:**
 
 ```bash
-ssh root@10.0.0.22 "bash /tmp/start-qwen35-mmq.sh"   # vasp-03 (fast tier)
-ssh root@10.0.0.20 "bash /tmp/start-qwen35-mmq.sh"   # vasp-01 (coder tier)
-ssh root@10.0.0.21 "bash /tmp/start-qwen35-mmq.sh"   # vasp-02 (reasoning tier)
+curl -s http://vasp-03:8081/health  # Scout
+curl -s http://vasp-01:8081/health  # Integrator (Head)
+```
+
+**Start inference (New RPC Ensemble):**
+
+```bash
+ssh root@10.0.0.22 "sbatch /cluster/shared/scripts/run-27b-256k.slurm"
+ssh root@10.0.0.20 "sbatch /cluster/shared/scripts/run-122b-rpc.slurm"
 ```
 
 **Cloud proxy:** CLIAPIProxy runs on ai-proxy (localhost:8317). Uses `x-api-key` header (not Bearer). API key set via `SWARM_CLOUD_API_KEY` env var.
@@ -113,16 +113,12 @@ Set by `scripts/run-swarm.sh` (overrides config.rs defaults). See `crates/swarm-
 
 ### Tier Endpoints
 
-All tiers default to Qwen3.5-397B-A17B. run-swarm.sh and config.rs are now aligned.
+Tiers use task-specialized models (March 2026 upgrade).
 
-| Variable | Default |
-|----------|---------|
-| `SWARM_FAST_URL` | `http://vasp-03:8081/v1` |
-| `SWARM_FAST_MODEL` | `Qwen3.5-397B-A17B` |
-| `SWARM_CODER_URL` | `http://vasp-01:8081/v1` |
-| `SWARM_CODER_MODEL` | `Qwen3.5-397B-A17B` |
-| `SWARM_REASONING_URL` | `http://vasp-02:8081/v1` |
-| `SWARM_REASONING_MODEL` | `Qwen3.5-397B-A17B` |
+| Variable | Default | Model |
+|----------|---------|-------|
+| `SWARM_FAST_URL` | `http://vasp-03:8081/v1` | `Qwen3.5-27B-Distilled` |
+| `SWARM_CODER_URL` | `http://vasp-01:8081/v1` | `Qwen3.5-122B-A10B` |
 
 ### Cloud Endpoint
 
@@ -141,7 +137,7 @@ All tiers default to Qwen3.5-397B-A17B. run-swarm.sh and config.rs are now align
 |----------|---------|-------|
 | `SWARM_MAX_RETRIES` | `10` | Max iterations per issue |
 | `SWARM_CLOUD_MAX_RETRIES` | `3` | Cloud-specific retry limit |
-| `SWARM_MAX_NO_CHANGE` | `3` | Circuit breaker for stuck iterations |
+| `SWARM_MAX_NO_CHANGE` | `2` | Circuit breaker for stuck iterations |
 | `SWARM_CLOUD_ONLY` | `false` | Route all work through cloud (skip local) |
 | `SWARM_VERIFIER_PACKAGES` | *(empty)* | Comma-separated; empty = entire workspace |
 | `SWARM_MIN_OBJECTIVE_LEN` | `10` | Minimum issue title length |

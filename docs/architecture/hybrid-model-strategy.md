@@ -1,7 +1,11 @@
 # Updated Deployment Strategy - Hybrid Model Approach
 
+**WARNING: DEPRECATED**
+*This strategy (OR1-Behemoth/DeepSeek V3) has been superseded by the March 2026 Qwen3.5 Ensemble Upgrade.*
+*Please refer to [2026-MODEL-ENSEMBLE-UPGRADE.md](./2026-MODEL-ENSEMBLE-UPGRADE.md) for the active production strategy.*
+
 **Date**: January 16, 2026
-**Status**: Plan Updated Based on Agentic Rust Model Analysis
+**Status**: DEPRECATED (Archival)
 
 ## Overview
 

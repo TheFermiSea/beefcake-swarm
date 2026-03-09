@@ -114,10 +114,9 @@ tail -f ~/code/beefcake-swarm/logs/dogfood/run-N-<issue>-*.log
 # Tool call distribution (requires RUST_LOG=debug)
 grep -o 'gen_ai.tool.name[^"]*"[^"]*"' logs/dogfood/run-*.log | sort | uniq -c | sort -rn
 
-# Check endpoint health (all Qwen3.5-397B)
-curl -s http://vasp-03:8081/health  # fast
-curl -s http://vasp-01:8081/health  # coder
-curl -s http://vasp-02:8081/health  # reasoning
+# Check endpoint health (2026 RPC Ensemble)
+curl -s http://vasp-03:8081/health  # Scout/Reviewer (27B, 256K)
+curl -s http://vasp-01:8081/health  # Integrator (122B RPC Head)
 ```
 
 ### Swarm Behavior Insights
@@ -130,23 +129,26 @@ curl -s http://vasp-02:8081/health  # reasoning
 ## Swarm Architecture Quick Reference
 
 ```text
-┌─────────────────────────────────────────────────┐
-│  Cloud Manager (Claude Opus 4.6 thinking)       │
-│  via CLIAPIProxy on ai-proxy:8317               │
-│  ─────────────────────────────────              │
-│  Plans work, delegates to local workers,        │
-│  reads/analyzes code, runs verifier             │
-├─────────────────────────────────────────────────┤
-│  Local Workers (all Qwen3.5-397B, proxy_ tools) │
-│  ┌──────────────┬───────────────┬─────────────┐ │
-│  │ vasp-03:8081 │ vasp-01:8081  │ vasp-02:8081│ │
-│  │ Fast/Scout   │ Coder         │ Reasoning   │ │
-│  │ review,break │ code gen      │ plan,analyze│ │
-│  └──────────────┴───────────────┴─────────────┘ │
-├─────────────────────────────────────────────────┤
-│  Verifier (deterministic quality gates)         │
-│  cargo fmt → clippy → cargo check → cargo test  │
-└─────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────┐
+│  Cloud Manager (Claude Opus 4.6 thinking)           │
+│  via CLIAPIProxy on ai-proxy:8317                   │
+│  ────────────────────────────────────               │
+│  Plans work, delegates to local workers,            │
+│  reads/analyzes code, runs verifier                 │
+├─────────────────────────────────────────────────────┤
+│  Local Workers (2026 VRAM-Resident RPC)             │
+│  ┌─────────────────┬────────────────────────────────┐ │
+│  │ vasp-03:8081    │ vasp-01:8081 (Head)            │ │
+│  │ Scout / Reviewer│ Integrator (RPC)               │ │
+│  │ (27B, 256K CTX) │ (122B, 128K CTX)               │ │
+│  └─────────────────┴────────────────────────────────┘ │
+│                    │ vasp-02:50052 (Worker)         │ │
+│                    │ RPC Shard (27 layers)          │ │
+│                    └────────────────────────────────┘ │
+├─────────────────────────────────────────────────────┤
+│  Verifier (deterministic quality gates)             │
+│  cargo fmt → clippy → cargo check → cargo test      │
+└─────────────────────────────────────────────────────┘
 ```
 
 ## Common Gotchas

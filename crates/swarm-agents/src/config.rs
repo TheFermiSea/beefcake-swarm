@@ -320,7 +320,7 @@ impl Default for SwarmConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .filter(|v| *v > 0)
-                .unwrap_or(3),
+                .unwrap_or(2),
             min_objective_len: std::env::var("SWARM_MIN_OBJECTIVE_LEN")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -392,7 +392,7 @@ impl SwarmConfig {
             cloud_max_retries: 3,
             cloud_only: false,
             cloud_fallback_matrix: CloudFallbackMatrix::default_matrix(),
-            max_consecutive_no_change: 3,
+            max_consecutive_no_change: 2,
             min_objective_len: 10,
             max_cost_per_issue: 0.0,
             prune_after_iteration: 3,

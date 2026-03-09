@@ -12,7 +12,9 @@ Rig agents → Gastown worktrees → Beads tracking → SLURM dispatch
 
 ```
 Cloud Manager (Opus 4.6 via CLIAPIProxy)
-    → delegates to local workers: Qwen3.5-397B (vasp-01, vasp-02)
+    → delegates to local workers: 
+        - Scout/Reviewer (27B, 256K context on vasp-03)
+        - Integrator (122B RPC, 128K context on vasp-01+02)
     → runs verifier after each worker completes
     ↓ all budgets exhausted
 Human Intervention (blocking beads issue)

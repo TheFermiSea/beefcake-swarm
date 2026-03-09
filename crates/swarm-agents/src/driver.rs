@@ -9,7 +9,6 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use anyhow::Result;
-use rig::completion::Prompt;
 use tracing::{debug, error, info, warn};
 
 use crate::acceptance::{self, AcceptancePolicy};
@@ -653,9 +652,12 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                     });
                     let result = match tokio::time::timeout(
                         ctx.worker_timeout,
-                        ctx.rust_coder
-                            .prompt(&task_prompt)
-                            .with_hook(adapter.clone()),
+                        crate::orchestrator::prompt_with_hook_and_retry(
+                            &ctx.rust_coder,
+                            &task_prompt,
+                            2,
+                            adapter.clone(),
+                        ),
                     )
                     .await
                     {
@@ -681,9 +683,12 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                     });
                     let result = match tokio::time::timeout(
                         ctx.worker_timeout,
-                        ctx.general_coder
-                            .prompt(&task_prompt)
-                            .with_hook(adapter.clone()),
+                        crate::orchestrator::prompt_with_hook_and_retry(
+                            &ctx.general_coder,
+                            &task_prompt,
+                            2,
+                            adapter.clone(),
+                        ),
                     )
                     .await
                     {

@@ -2215,7 +2215,12 @@ pub async fn process_issue(
                         });
                         let result = match tokio::time::timeout(
                             worker_timeout,
-                            rust_coder.prompt(&task_prompt).with_hook(adapter.clone()),
+                            prompt_with_hook_and_retry(
+                                &rust_coder,
+                                &task_prompt,
+                                2, // retry transient HTTP errors up to 2x
+                                adapter.clone(),
+                            ),
                         )
                         .await
                         {
@@ -2245,9 +2250,12 @@ pub async fn process_issue(
                         });
                         let result = match tokio::time::timeout(
                             worker_timeout,
-                            general_coder
-                                .prompt(&task_prompt)
-                                .with_hook(adapter.clone()),
+                            prompt_with_hook_and_retry(
+                                &general_coder,
+                                &task_prompt,
+                                2, // retry transient HTTP errors up to 2x
+                                adapter.clone(),
+                            ),
                         )
                         .await
                         {
@@ -2632,7 +2640,41 @@ pub async fn process_issue(
                 break;
             }
 
-            // engine.decide() records the iteration internally — don't double-count
+            // Skip verifier when no files changed — running cargo check/test
+            // on unchanged code wastes 5-15 min per iteration and provides no
+            // new signal. Just re-use the previous verifier report and let the
+            // escalation engine decide next steps.
+            if let Some(ref prev_report) = last_report {
+                let decision = engine.decide(&mut escalation, prev_report);
+                metrics.finish_iteration();
+
+                if decision.stuck {
+                    error!(iteration, "Escalation engine: stuck (no changes)");
+                    create_stuck_intervention(
+                        &mut session,
+                        &progress,
+                        &wt_path,
+                        iteration,
+                        &decision.reason,
+                    );
+                    break;
+                }
+                let next = decision.target_tier;
+                if decision.escalated || matches!(tier, SwarmTier::Council | SwarmTier::Human) {
+                    warn!(
+                        iteration,
+                        ?next,
+                        "No-change response; engine routes to {next:?} (verifier skipped)"
+                    );
+                } else {
+                    warn!(iteration, ?next, "No-change response; staying on {next:?} (verifier skipped)");
+                }
+                escalation.current_tier = next;
+                continue;
+            }
+
+            // First iteration with no changes and no previous report — run
+            // verifier to establish baseline.
             let current_verifier_config = if config.verifier_packages.is_empty() {
                 VerifierConfig {
                     packages: detect_changed_packages(&wt_path),
