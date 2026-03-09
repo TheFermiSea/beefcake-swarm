@@ -1191,5 +1191,51 @@
 {"actor":"TheFermiSea","comment":null,"created_at":"2026-03-08T11:57:28Z","event_type":"created","id":1234,"issue_id":"beefcake-bkjs","new_value":"","old_value":""}
 {"actor":"TheFermiSea","comment":null,"created_at":"2026-03-08T11:57:29Z","event_type":"created","id":1235,"issue_id":"beefcake-pl2l","new_value":"","old_value":""}
 {"actor":"TheFermiSea","comment":null,"created_at":"2026-03-08T11:57:35Z","event_type":"created","id":1236,"issue_id":"beefcake-0c27","new_value":"","old_value":""}
-{"actor":"Brian Squires","comment":null,"created_at":"2026-03-08T17:00:08Z","event_type":"status_changed","id":1237,"issue_id":"beefcake-sf0m","new_value":"{\"status\":\"open\"}","old_value":"{\"id\":\"beefcake-sf0m\",\"title\":\"D2: Run clippy --fix on notebook_bridge.rs\",\"description\":\"File: crates/swarm-agents/src/notebook_bridge.rs. Change: Fix match to if let, unnecessary else after return, redundant patterns. Acceptance: cargo clippy passes. Constraints: Do NOT modify any other file.\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"owner\":\"squires.b@gmail.com\",\"created_at\":\"2026-03-03T16:35:44Z\",\"created_by\":\"claude-code\",\"updated_at\":\"2026-03-03T16:35:44Z\"}"}
-{"actor":"Brian Squires","comment":null,"created_at":"2026-03-08T17:00:08Z","event_type":"status_changed","id":1238,"issue_id":"beefcake-tu3q","new_value":"{\"status\":\"open\"}","old_value":"{\"id\":\"beefcake-tu3q\",\"title\":\"D3: Run clippy --fix on worktree_bridge.rs\",\"description\":\"File: crates/swarm-agents/src/worktree_bridge.rs. Change: Fix complex booleans, redundant closures, map().unwrap_or() to map_or(). Acceptance: cargo clippy passes. Constraints: Do NOT modify any other file.\",\"status\":\"open\",\"priority\":3,\"issue_type\":\"task\",\"owner\":\"squires.b@gmail.com\",\"created_at\":\"2026-03-03T16:35:44Z\",\"created_by\":\"claude-code\",\"updated_at\":\"2026-03-03T16:35:44Z\"}"}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T08:02:39Z","event_type":"created","id":1237,"issue_id":"beefcake-p4ij","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T08:02:45Z","event_type":"closed","id":1238,"issue_id":"beefcake-p4ij","new_value":"Fixed in PR #52. Four changes: P0-A line-number prefix stripping in edit_file, P0-B objective-based prompts replacing turn-based phases, P0-C edit nudge on retry, P1-A max_tokens 4096→8192.","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:01:44Z","event_type":"created","id":1239,"issue_id":"beefcake-iwr8","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:01:49Z","event_type":"status_changed","id":1240,"issue_id":"beefcake-iwr8","new_value":"{\"status\":\"in_progress\"}","old_value":"{\"id\":\"beefcake-iwr8\",\"title\":\"Harness-first swarm reliability: autoexp + AutoHarness + hashline\",\"description\":\"5-phase plan to increase swarm edit success rate from ~12% to \\u003e50%. Phase 1: checkpoint/revert hill-climbing. Phase 2: hashline anchors. Phase 3: action validators. Phase 4: prompt compaction. Phase 5: self-correction pipeline.\",\"status\":\"open\",\"priority\":1,\"issue_type\":\"feature\",\"owner\":\"squires.b@gmail.com\",\"created_at\":\"2026-03-09T16:01:44Z\",\"created_by\":\"TheFermiSea\",\"updated_at\":\"2026-03-09T16:01:44Z\"}"}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:16Z","event_type":"created","id":1241,"issue_id":"beefcake-i3fm","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:17Z","event_type":"created","id":1242,"issue_id":"beefcake-iv5t","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:20Z","event_type":"created","id":1243,"issue_id":"beefcake-6hzr","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:21Z","event_type":"created","id":1244,"issue_id":"beefcake-83z2","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:25Z","event_type":"created","id":1245,"issue_id":"beefcake-hrxr","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:25Z","event_type":"created","id":1246,"issue_id":"beefcake-5sf3","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:26Z","event_type":"created","id":1247,"issue_id":"beefcake-tuuk","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:32Z","event_type":"created","id":1248,"issue_id":"beefcake-7t2q","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:33Z","event_type":"created","id":1249,"issue_id":"beefcake-cc66","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:38Z","event_type":"created","id":1250,"issue_id":"beefcake-89us","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:39Z","event_type":"created","id":1251,"issue_id":"beefcake-u5dl","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:44Z","event_type":"created","id":1252,"issue_id":"beefcake-hknc","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:03:45Z","event_type":"created","id":1253,"issue_id":"beefcake-hfwq","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:04:42Z","event_type":"created","id":1254,"issue_id":"beefcake-pumw","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:04:48Z","event_type":"created","id":1255,"issue_id":"beefcake-45xq","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:04:53Z","event_type":"created","id":1256,"issue_id":"beefcake-23fo","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:04:59Z","event_type":"created","id":1257,"issue_id":"beefcake-zu8u","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:05:04Z","event_type":"created","id":1258,"issue_id":"beefcake-ulai","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:05:13Z","event_type":"created","id":1259,"issue_id":"beefcake-yj2v","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:05:21Z","event_type":"created","id":1260,"issue_id":"beefcake-x98c","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:05:27Z","event_type":"created","id":1261,"issue_id":"beefcake-t7h4","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:05:32Z","event_type":"created","id":1262,"issue_id":"beefcake-30et","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:05:37Z","event_type":"created","id":1263,"issue_id":"beefcake-i24f","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1264,"issue_id":"beefcake-iv5t","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1265,"issue_id":"beefcake-83z2","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1266,"issue_id":"beefcake-hrxr","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1267,"issue_id":"beefcake-tuuk","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1268,"issue_id":"beefcake-cc66","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1269,"issue_id":"beefcake-89us","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1270,"issue_id":"beefcake-hknc","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1271,"issue_id":"beefcake-i3fm","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1272,"issue_id":"beefcake-6hzr","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1273,"issue_id":"beefcake-5sf3","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1274,"issue_id":"beefcake-7t2q","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1275,"issue_id":"beefcake-u5dl","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:53:16Z","event_type":"closed","id":1276,"issue_id":"beefcake-hfwq","new_value":"Closed","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:56:57Z","event_type":"created","id":1277,"issue_id":"beefcake-g8wt","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:57:08Z","event_type":"created","id":1278,"issue_id":"beefcake-qe6i","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:57:14Z","event_type":"created","id":1279,"issue_id":"beefcake-2lym","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:57:19Z","event_type":"created","id":1280,"issue_id":"beefcake-7imi","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:57:24Z","event_type":"created","id":1281,"issue_id":"beefcake-2eyr","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:57:29Z","event_type":"created","id":1282,"issue_id":"beefcake-rbem","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:57:34Z","event_type":"created","id":1283,"issue_id":"beefcake-oyz2","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-09T11:57:39Z","event_type":"created","id":1284,"issue_id":"beefcake-xxr7","new_value":"","old_value":""}
