@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "5.14.0";
+pub const PROMPT_VERSION: &str = "5.14.1";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -250,13 +250,14 @@ Only modify files relevant to your task.
 3. Call **edit_file** with old_content (the exact text to find) and new_content \
    (the replacement). Include 3-5 lines of surrounding context in old_content \
    for uniqueness.
-4. If you cannot make progress, add a `// TODO: BLOCKED — <reason>` comment to \
-   the most relevant file, then return.
+4. If you truly cannot make progress (missing information, architectural blocker), \
+   return a text explanation starting with `BLOCKED:` and the reason. Do NOT write \
+   placeholder comments or fake edits — the orchestrator needs the no-write signal \
+   to escalate properly.
 
-**CRITICAL**: You MUST call edit_file or write_file before finishing. Text-only \
-responses with no file edits are INVALID and waste compute time. Every response \
-must include at least one tool call. Never say \"I'll edit\" without calling the \
-tool in the same response.
+**CRITICAL**: You MUST call edit_file or write_file in every response where you \
+can make progress. Text-only responses waste compute time. Never say \"I'll edit\" \
+without calling the tool in the same response.
 
 ## Important: old_content Must Match Raw File
 When using edit_file, the old_content must match the **raw file content** on disk — \
@@ -323,13 +324,14 @@ If you find a bug or missing test unrelated to your current task, create a track
 3. Call **edit_file** (existing files) or **write_file** (new files only) to apply \
    each change. Include 3-5 lines of surrounding context in old_content for uniqueness.
 4. Update mod.rs / lib.rs when adding or removing modules.
-5. If you cannot make progress, add a `// TODO: BLOCKED — <reason>` comment to \
-   the most relevant file, then return.
+5. If you truly cannot make progress (missing information, architectural blocker), \
+   return a text explanation starting with `BLOCKED:` and the reason. Do NOT write \
+   placeholder comments or fake edits — the orchestrator needs the no-write signal \
+   to escalate properly.
 
-**CRITICAL**: You MUST call edit_file or write_file before finishing. Text-only \
-responses with no file edits are INVALID and waste compute time. Every response \
-must include at least one tool call. Never say \"I'll edit\" without calling the \
-tool in the same response.
+**CRITICAL**: You MUST call edit_file or write_file in every response where you \
+can make progress. Text-only responses waste compute time. Never say \"I'll edit\" \
+without calling the tool in the same response.
 
 ## Important: old_content Must Match Raw File
 When using edit_file, the old_content must match the **raw file content** on disk — \
@@ -429,8 +431,9 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
   Do NOT write any text analysis before calling a tool. Call the tool immediately.
 - **READ PHASE** (turns 1-3): Read the relevant files to understand the full context and error chain.
 - **WRITE PHASE** (turns 4+): You MUST call edit_file or write_file. Analysis-only \
-  replies with no file edits are INVALID. If you cannot make progress, add a \
-  `// TODO: BLOCKED — <reason>` comment to the most relevant file, then return.
+  replies with no file edits are INVALID. If you truly cannot make progress, return \
+  a text explanation starting with `BLOCKED:` and the reason. Do NOT write placeholder \
+  comments or fake edits.
 - Always read files before editing them.
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
 - Consider full implications of changes across the codebase.

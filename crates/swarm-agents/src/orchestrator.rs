@@ -2388,10 +2388,20 @@ pub async fn process_issue(
                 if let Some(ref reason) = adapter_report.termination_reason {
                     warn!(iteration, reason = %reason, "Agent terminated early by adapter");
                 }
+                // adapter_report.has_written reflects tool-call intent (set in
+                // on_tool_call before the tool runs). Cross-check with git to
+                // detect failed edits that set the flag but didn't change files.
+                let git_has_changes = std::process::Command::new("git")
+                    .args(["status", "--porcelain"])
+                    .current_dir(&wt_path)
+                    .output()
+                    .map(|o| !o.stdout.is_empty())
+                    .unwrap_or(false);
+                let actually_written = adapter_report.has_written && git_has_changes;
                 let terminated_without_writing =
-                    adapter_report.terminated_early && !adapter_report.has_written;
-                agent_has_written_prev = adapter_report.has_written;
-                (adapter_report.has_written, terminated_without_writing)
+                    adapter_report.terminated_early && !actually_written;
+                agent_has_written_prev = actually_written;
+                (actually_written, terminated_without_writing)
             }
             Err(e) => {
                 warn!(iteration, error = %e, "Failed to extract runtime adapter report");

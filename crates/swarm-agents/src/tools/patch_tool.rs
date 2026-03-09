@@ -278,11 +278,29 @@ impl Tool for EditFileTool {
         let old_content = unescape_if_double_encoded(&args.old_content);
         let new_content = unescape_if_double_encoded(&args.new_content);
 
-        // Strip line-number prefixes from read_file ranged output
-        let old_content = strip_line_number_prefixes(&old_content);
+        // Try exact match first (raw old_content as provided by the model)
+        let mut occurrences = find_all(&content, &old_content);
 
-        // Try exact match first
-        let occurrences = find_all(&content, &old_content);
+        // Fallback: strip read_file line-number prefixes and header, then retry.
+        // Models often copy `   42: fn main()` from read_file output into
+        // old_content, but the file on disk has `fn main()` without the prefix.
+        // We only strip as a fallback to avoid corrupting legitimate content
+        // that starts with digits followed by `: `.
+        let old_content = if occurrences.is_empty() {
+            let stripped = strip_line_number_prefixes(&old_content);
+            if stripped != old_content {
+                tracing::info!(
+                    path = %args.path,
+                    "edit_file: exact match failed, retrying after stripping line-number prefixes"
+                );
+                occurrences = find_all(&content, &stripped);
+                stripped
+            } else {
+                old_content
+            }
+        } else {
+            old_content
+        };
 
         // `actual_replacement` is what was written at the match site.
         // For exact matches this equals new_content; for fuzzy matches it is
@@ -602,6 +620,24 @@ mod tests {
         assert_eq!(strip_line_number_prefixes(""), "");
     }
 
+    #[test]
+    fn test_strip_read_file_header() {
+        // read_file ranged output includes a [Lines X-Y of Z total] header
+        let input = "[Lines 42-44 of 100 total]\n   42: fn main() {\n   43:     println!(\"hi\");\n   44: }";
+        let result = strip_line_number_prefixes(input);
+        assert_eq!(result, "fn main() {\n    println!(\"hi\");\n}");
+    }
+
+    #[test]
+    fn test_no_strip_legitimate_numeric_content() {
+        // Content that legitimately starts with "N: " patterns (e.g., an enum
+        // list or numbered items) should NOT be stripped. Only 2 of 4 non-empty
+        // lines match the prefix pattern — below the 80% threshold.
+        let input = "Error codes:\n1: connection refused\n2: timeout\nSee docs for more.";
+        let result = strip_line_number_prefixes(input);
+        assert_eq!(result, input);
+    }
+
     // --- unescape_if_double_encoded ---
 
     #[test]
@@ -678,6 +714,17 @@ mod tests {
 /// mismatches). Returns the original string if line-number prefixes aren't
 /// detected.
 fn strip_line_number_prefixes(s: &str) -> String {
+    // First, strip the `[Lines X-Y of Z total]` header that read_file
+    // includes with ranged reads.
+    let s = if s.starts_with("[Lines ") {
+        match s.find('\n') {
+            Some(pos) => &s[pos + 1..],
+            None => return String::new(),
+        }
+    } else {
+        s
+    };
+
     let lines: Vec<&str> = s.lines().collect();
     let non_empty: Vec<&&str> = lines.iter().filter(|l| !l.trim().is_empty()).collect();
     if non_empty.is_empty() {
