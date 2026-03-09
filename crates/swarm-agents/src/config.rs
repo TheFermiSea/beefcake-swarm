@@ -8,11 +8,11 @@ use std::time::Duration;
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
 pub enum Tier {
-    /// Qwen3.5-397B on vasp-03 — fast/scout tier (~6 tok/s, 2 parallel)
+    /// Qwen3.5-27B-Distilled on vasp-03 — Scout/Reviewer tier (256K context, blazing speed)
     Fast,
-    /// Qwen3.5-397B on vasp-01 — coder tier (~6 tok/s, 2 parallel)
+    /// Qwen3.5-122B-A10B on vasp-01 — Integrator tier (128K context, distributed VRAM)
     Coder,
-    /// Qwen3.5-397B on vasp-02 — reasoning/review (~6 tok/s, 2 parallel)
+    /// Qwen3.5-122B-A10B on vasp-01 — Integrator tier (fallback for reasoning)
     Reasoning,
     /// Cloud models via CLIAPIProxy
     Cloud,
@@ -210,11 +210,11 @@ impl CloudFallbackMatrix {
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
-    /// Qwen3.5-397B on vasp-03 :8081 (fast/scout, 2 slots @ 64K, ~6 tok/s)
+    /// Qwen3.5-27B-Distilled on vasp-03 :8081 (Scout/Reviewer, 100% VRAM-resident, 192K context)
     pub fast_endpoint: Endpoint,
-    /// Qwen3.5-397B on vasp-01 :8081 (coder, 2 slots @ 64K, ~6 tok/s)
+    /// Qwen3.5-122B-A10B on vasp-01 :8081 (Integrator/RPC head, layer-split with vasp-02, 128K context)
     pub coder_endpoint: Endpoint,
-    /// Qwen3.5-397B on vasp-02 :8081 (reasoning, 2 slots @ 64K, ~6 tok/s)
+    /// Qwen3.5-122B-A10B on vasp-01 :8081 (same endpoint — vasp-02 is RPC worker shard, no independent HTTP)
     pub reasoning_endpoint: Endpoint,
     /// CLIAPIProxy cloud escalation (optional)
     pub cloud_endpoint: Option<CloudEndpoint>,
@@ -272,7 +272,7 @@ impl Default for SwarmConfig {
                 url: std::env::var("SWARM_FAST_URL")
                     .unwrap_or_else(|_| "http://vasp-03:8081/v1".into()),
                 model: std::env::var("SWARM_FAST_MODEL")
-                    .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-27B-Distilled".into()),
                 tier: Tier::Fast,
                 api_key: std::env::var("SWARM_FAST_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
@@ -281,16 +281,16 @@ impl Default for SwarmConfig {
                 url: std::env::var("SWARM_CODER_URL")
                     .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
                 model: std::env::var("SWARM_CODER_MODEL")
-                    .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-122B-A10B".into()),
                 tier: Tier::Coder,
                 api_key: std::env::var("SWARM_CODER_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
             },
             reasoning_endpoint: Endpoint {
                 url: std::env::var("SWARM_REASONING_URL")
-                    .unwrap_or_else(|_| "http://vasp-02:8081/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
                 model: std::env::var("SWARM_REASONING_MODEL")
-                    .unwrap_or_else(|_| "Qwen3.5-397B-A17B".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-122B-A10B".into()),
                 tier: Tier::Reasoning,
                 api_key: std::env::var("SWARM_REASONING_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
@@ -404,16 +404,16 @@ impl SwarmConfig {
 /// Pre-built rig CompletionsClients for the three-node inference cluster.
 ///
 /// Each tier maps to a different node/model:
-/// - `local`     -> vasp-03:8080 (HydraCoder 30B, fast tier)
-/// - `coder`     -> vasp-01:8081 (Qwen3-Coder-Next 80B, code generation)
-/// - `reasoning` -> vasp-02:8081 (Qwen3.5-397B, deep analysis)
+/// - `local`     -> vasp-03:8081 (Qwen3.5-27B-Distilled, Scout tier)
+/// - `coder`     -> vasp-01:8081 (Qwen3.5-122B-A10B, Integrator tier)
+/// - `reasoning` -> vasp-01:8081 (Qwen3.5-122B-A10B, fallback reasoning)
 #[derive(Clone)]
 pub struct ClientSet {
-    /// Client for vasp-03:8080 (HydraCoder -- fast tier: analysis, routing, review)
+    /// Client for vasp-03:8081 (Qwen3.5-27B-Distilled -- fast tier: analysis, routing, review)
     pub local: openai::CompletionsClient,
-    /// Client for vasp-01:8081 (Qwen3-Coder-Next -- coder tier: general code generation)
+    /// Client for vasp-01:8081 (Qwen3.5-122B-A10B -- coder tier: general code generation)
     pub coder: openai::CompletionsClient,
-    /// Client for vasp-02:8081 (Qwen3.5-397B -- reasoning tier: deep analysis, planning)
+    /// Client for vasp-01:8081 (Qwen3.5-122B-A10B -- reasoning tier: deep analysis, planning)
     pub reasoning: openai::CompletionsClient,
     /// Client for CLIAPIProxy (cloud models: Opus 4.6, G3-Pro, etc.)
     /// Used as the Manager tier when available.
@@ -606,7 +606,7 @@ mod tests {
         let config = SwarmConfig::default();
         assert_eq!(config.max_retries, 10);
         assert!(config.fast_endpoint.url.contains("vasp-03"));
-        assert!(config.reasoning_endpoint.url.contains("vasp-02"));
+        assert!(config.reasoning_endpoint.url.contains("vasp-01"));
         assert!(config.fast_endpoint.model.contains("Qwen3.5"));
         assert_eq!(config.fast_endpoint.api_key, "not-needed");
     }

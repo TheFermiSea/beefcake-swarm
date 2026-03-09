@@ -1,15 +1,15 @@
 //! Agent builders for the Manager-Worker swarm.
 //!
-//! All three compute nodes run Qwen3.5-397B-A17B (Q4_K_M, --parallel 2, 6 total slots):
-//!   vasp-03:8081 — fast/scout tier
-//!   vasp-01:8081 — coder tier
-//!   vasp-02:8081 — reasoning tier
+//! Specialized ensemble topology:
+//!   vasp-03:8081 — Scout/Reviewer (Qwen3.5-27B-Distilled, 100% VRAM-resident, 192K context)
+//!   vasp-01:8081 — Integrator/RPC head (Qwen3.5-122B-A10B MoE, layer-split with vasp-02, 128K context)
+//!   vasp-02     — RPC worker shard for vasp-01 (NO independent HTTP endpoint)
 //!
 //! Hierarchy (when cloud available):
-//!   Cloud Manager (Opus 4.6) → Local Workers (Qwen3.5-397B on all 3 nodes)
+//!   Cloud Manager (Opus 4.6) → Local Workers (Qwen3.5-122B-A10B on vasp-01, Qwen3.5-27B on vasp-03)
 //!
 //! Fallback (no cloud):
-//!   Local Manager (Qwen3.5-397B on vasp-02) → Local Workers (Qwen3.5-397B on vasp-01/03)
+//!   Local Manager (Qwen3.5-122B-A10B on vasp-01) → Local Workers (Qwen3.5-27B on vasp-03)
 
 pub mod adversary;
 pub mod cloud;
@@ -129,7 +129,7 @@ impl AgentFactory {
         self
     }
 
-    /// Build the Rust specialist coder (Qwen3.5-397B on vasp-02, Rust system prompt).
+    /// Build the Rust specialist coder (Qwen3.5-122B-A10B on vasp-01, Rust system prompt).
     ///
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
@@ -143,7 +143,7 @@ impl AgentFactory {
         )
     }
 
-    /// Build the general coder (Qwen3-Coder-Next on vasp-01, general coding system prompt).
+    /// Build the general coder (Qwen3.5-122B-A10B on vasp-01, general coding system prompt).
     ///
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
@@ -172,7 +172,7 @@ impl AgentFactory {
         (rust_coder, general_coder)
     }
 
-    /// Build the reasoning worker (Qwen3.5-397B on vasp-01, Architect node).
+    /// Build the reasoning worker (Qwen3.5-122B-A10B on vasp-01, Architect node).
     ///
     /// Tool-equipped agent for deep analysis and complex fixes.
     /// Used as a worker tool by the cloud manager.
@@ -187,7 +187,7 @@ impl AgentFactory {
         )
     }
 
-    /// Build the blind reviewer (Qwen3.5-397B on vasp-02).
+    /// Build the blind reviewer (Qwen3.5-27B-Distilled on vasp-03).
     pub fn build_reviewer(&self) -> OaiAgent {
         reviewer::build_reviewer(&self.clients.local, &self.config.fast_endpoint.model)
     }

@@ -8,28 +8,28 @@
 //!
 //! 1. Environment variable overrides (e.g. `SWARM_GENERATOR_MODEL`)
 //! 2. Values in this struct
-//! 3. Built-in defaults (Qwen3.5-397B on vasp-02:8081)
+//! 3. Built-in defaults (Qwen3.5-122B-A10B on vasp-01:8081)
 //!
 //! ## Model roles
 //!
-//! | Role       | Used by                | Default                       |
-//! |------------|------------------------|-------------------------------|
-//! | generator  | Contextual, Agentic    | Qwen3.5-397B on vasp-02:8081  |
-//! | critique   | Contextual             | Qwen3.5-397B on vasp-02:8081  |
-//! | strategy   | Deepthink phase 1      | Qwen3.5-397B on vasp-02:8081  |
-//! | worker     | Deepthink phase 2      | Qwen3.5-397B on vasp-02:8081  |
-//! | judge      | Deepthink phase 3      | Qwen3.5-397B on vasp-02:8081  |
-//! | compactor  | Memory manager         | Qwen3.5-397B on vasp-02:8081  |
+//! | Role       | Used by                | Default                          |
+//! |------------|------------------------|----------------------------------|
+//! | generator  | Contextual, Agentic    | Qwen3.5-122B-A10B on vasp-01:8081 |
+//! | critique   | Contextual             | Qwen3.5-122B-A10B on vasp-01:8081 |
+//! | strategy   | Deepthink phase 1      | Qwen3.5-122B-A10B on vasp-01:8081 |
+//! | worker     | Deepthink phase 2      | Qwen3.5-122B-A10B on vasp-01:8081 |
+//! | judge      | Deepthink phase 3      | Qwen3.5-122B-A10B on vasp-01:8081 |
+//! | compactor  | Memory manager         | Qwen3.5-122B-A10B on vasp-01:8081 |
 
 use std::env;
 
 use serde::{Deserialize, Serialize};
 
-/// Default local inference base URL (Qwen3.5-397B on vasp-02).
-const DEFAULT_LOCAL_BASE_URL: &str = "http://vasp-02:8081/v1";
-/// Default model alias (Qwen3.5-397B-A17B — primary reasoning model).
-const DEFAULT_LOCAL_MODEL: &str = "Qwen3.5-397B-A17B";
-/// Maximum number of parallel worker slots on vasp-02.
+/// Default local inference base URL (Qwen3.5-122B-A10B on vasp-01).
+const DEFAULT_LOCAL_BASE_URL: &str = "http://vasp-01:8081/v1";
+/// Default model alias (Qwen3.5-122B-A10B — integrator/RPC head, layer-split with vasp-02).
+const DEFAULT_LOCAL_MODEL: &str = "Qwen3.5-122B-A10B";
+/// Maximum number of parallel worker slots on vasp-01.
 const DEFAULT_MAX_PARALLEL_WORKERS: usize = 4;
 /// Default context window size (tokens) for compaction trigger.
 const DEFAULT_CONTEXT_WINDOW: u64 = 32_768;
@@ -46,7 +46,7 @@ const ENV_COMPACTOR_MODEL: &str = "SWARM_COMPACTOR_MODEL";
 const ENV_LOCAL_BASE_URL: &str = "SWARM_LOCAL_BASE_URL";
 const ENV_LOCAL_API_KEY: &str = "SWARM_LOCAL_API_KEY";
 
-/// Per-role model assignment.  All roles default to the local Qwen3.5-397B endpoint.
+/// Per-role model assignment.  All roles default to the local Qwen3.5-122B-A10B endpoint.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ModeModelConfig {
     /// Generator agent — produces code artifacts.

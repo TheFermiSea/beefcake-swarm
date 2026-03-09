@@ -52,9 +52,9 @@ use coordination::{
 /// Coder routing decision with confidence level.
 #[derive(Debug, PartialEq, Eq)]
 pub enum CoderRoute {
-    /// Qwen3.5-397B with Rust specialist system prompt
+    /// Qwen3.5-122B-A10B with Rust specialist system prompt
     RustCoder,
-    /// Qwen3.5-397B with general coder system prompt (multi-file scaffolding)
+    /// Qwen3.5-122B-A10B with general coder system prompt (multi-file scaffolding)
     GeneralCoder,
 }
 
@@ -82,7 +82,7 @@ pub(crate) fn query_kb_with_failsafe(kb: &dyn KnowledgeBase, role: &str, questio
 /// - Mixed errors with majority Rust → RustCoder; majority structural → GeneralCoder
 /// - No errors (first iteration) → general coder for scaffolding
 ///
-/// Both routes use Qwen3.5-397B on vasp-02 — differentiation is by system prompt only.
+/// Both routes use Qwen3.5-122B-A10B on vasp-01 — differentiation is by system prompt only.
 pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
     if error_cats.is_empty() {
         // First iteration — use general coder for scaffolding/multi-file work
