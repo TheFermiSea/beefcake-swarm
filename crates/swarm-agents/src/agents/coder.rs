@@ -28,6 +28,14 @@ const DEFAULT_REASONING_MAX_TURNS: usize = 15;
 /// (Opus 4.6) handle higher temperatures fine, so this is overridable.
 const DEFAULT_WORKER_TEMPERATURE: f64 = 0.05;
 
+/// Returns the temperature for worker agents.
+///
+/// Reads from `SWARM_WORKER_TEMPERATURE` environment variable, or falls back to
+/// [`DEFAULT_WORKER_TEMPERATURE`] (0.05). The default of 0.05 provides slight
+/// jitter above 0.0 to escape deterministic text-analysis loops while maintaining
+/// high tool-call reliability (~90%+). At temp=0.0, models like HydraCoder (30B MoE)
+/// produce the same unproductive text responses repeatedly; at 0.05 they reliably
+/// pick tool calls without losing reliability.
 pub fn worker_temperature() -> f64 {
     std::env::var("SWARM_WORKER_TEMPERATURE")
         .ok()
