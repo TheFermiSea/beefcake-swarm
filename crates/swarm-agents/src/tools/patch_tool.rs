@@ -278,6 +278,9 @@ impl Tool for EditFileTool {
         let old_content = unescape_if_double_encoded(&args.old_content);
         let new_content = unescape_if_double_encoded(&args.new_content);
 
+        // Strip line-number prefixes from read_file ranged output
+        let old_content = strip_line_number_prefixes(&old_content);
+
         // Try exact match first
         let occurrences = find_all(&content, &old_content);
 
@@ -563,6 +566,42 @@ mod tests {
         assert!(result.contains("    hello();"));
     }
 
+    // --- strip_line_number_prefixes ---
+
+    #[test]
+    fn test_strip_line_numbers_from_ranged_read() {
+        let input = "   42: fn main() {\n   43:     println!(\"hi\");\n   44: }";
+        let result = strip_line_number_prefixes(input);
+        assert_eq!(result, "fn main() {\n    println!(\"hi\");\n}");
+    }
+
+    #[test]
+    fn test_strip_line_numbers_single_digit() {
+        let input = "1: use std::io;\n2: \n3: fn main() {}";
+        let result = strip_line_number_prefixes(input);
+        assert_eq!(result, "use std::io;\n\nfn main() {}");
+    }
+
+    #[test]
+    fn test_no_strip_when_no_prefixes() {
+        let input = "fn main() {\n    println!(\"hi\");\n}";
+        let result = strip_line_number_prefixes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_no_strip_when_few_prefixes() {
+        // Only 1 out of 3 lines has a prefix — below 80% threshold
+        let input = "42: fn main() {\n    println!(\"hi\");\n}";
+        let result = strip_line_number_prefixes(input);
+        assert_eq!(result, input);
+    }
+
+    #[test]
+    fn test_strip_empty_input() {
+        assert_eq!(strip_line_number_prefixes(""), "");
+    }
+
     // --- unescape_if_double_encoded ---
 
     #[test]
@@ -625,6 +664,64 @@ mod tests {
         let bytes = b"a\nb\nc";
         assert_eq!(memchr_newline(bytes, 2), Some(3));
     }
+}
+
+/// Strip line-number prefixes added by `read_file` ranged output.
+///
+/// When `read_file` is called with `start_line`/`end_line`, the output has
+/// `{:>5}: ` prefixes (e.g., `   42: fn main() {`). If the model copies this
+/// into `old_content`, the exact match fails because the file on disk doesn't
+/// have these prefixes. This function detects and strips them.
+///
+/// Detection heuristic: if ≥80% of non-empty lines match `^\s*\d+: `, strip
+/// the prefix from ALL lines (don't strip selectively to avoid partial
+/// mismatches). Returns the original string if line-number prefixes aren't
+/// detected.
+fn strip_line_number_prefixes(s: &str) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    let non_empty: Vec<&&str> = lines.iter().filter(|l| !l.trim().is_empty()).collect();
+    if non_empty.is_empty() {
+        return s.to_string();
+    }
+
+    // Count lines matching the read_file line-number format: optional whitespace,
+    // digits, colon, space (e.g., "   42: code here" or "1: code here")
+    let prefix_count = non_empty
+        .iter()
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            // Must start with a digit
+            if !trimmed.starts_with(|c: char| c.is_ascii_digit()) {
+                return false;
+            }
+            // Find the ": " separator after digits
+            if let Some(colon_pos) = trimmed.find(": ") {
+                trimmed[..colon_pos].chars().all(|c| c.is_ascii_digit())
+            } else {
+                false
+            }
+        })
+        .count();
+
+    // Only strip if ≥80% of non-empty lines have the prefix
+    if prefix_count * 5 < non_empty.len() * 4 {
+        return s.to_string();
+    }
+
+    // Strip the prefix: everything up to and including the first ": "
+    lines
+        .iter()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if let Some(colon_pos) = trimmed.find(": ") {
+                if trimmed[..colon_pos].chars().all(|c| c.is_ascii_digit()) {
+                    return &trimmed[colon_pos + 2..];
+                }
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// Detect and unescape double-JSON-encoded content from local models.

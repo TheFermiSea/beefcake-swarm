@@ -84,12 +84,13 @@ fn worker_tool_choice() -> ToolChoice {
 /// into the request body.
 /// Default max_tokens for local workers.
 ///
-/// 4096 tokens caps each LLM turn to ~15 minutes at 4.5 tok/s.
-/// Qwen3.5 without thinking mode still dumps analysis text instead of
-/// tool calls (4500+ tokens observed). With 4096 cap and 10 max turns,
-/// the agentic loop will re-prompt the model if it wastes a turn on text.
-/// Override with SWARM_WORKER_MAX_TOKENS for larger responses.
-const DEFAULT_WORKER_MAX_TOKENS: u64 = 4096;
+/// 8192 tokens allows the model to generate both analysis AND edit_file
+/// tool call JSON in a single response. At 4096, models frequently
+/// truncate mid-tool-call: they start with analysis text, then begin
+/// the edit_file JSON, but hit the token limit before closing the JSON.
+/// The result is no valid tool call → the agent loop ends the turn.
+/// Override with SWARM_WORKER_MAX_TOKENS.
+const DEFAULT_WORKER_MAX_TOKENS: u64 = 8192;
 
 pub fn worker_sampling_params() -> Value {
     let max_tokens = std::env::var("SWARM_WORKER_MAX_TOKENS")

@@ -1739,6 +1739,9 @@ pub async fn process_issue(
     let mut worker_chat_messages: Option<String> = None;
     let mut span_summary = SpanSummary::new();
     let mut consecutive_validator_failures: u32 = 0;
+    // Tracks whether the previous iteration's agent called edit_file/write_file.
+    // Used to inject an edit nudge into the next iteration's task prompt.
+    let mut agent_has_written_prev = true; // assume true for first iteration
 
     // Scope verifier to changed packages.
     // If explicit packages are configured (CLI --package or SWARM_VERIFIER_PACKAGES), use those.
@@ -2109,6 +2112,18 @@ pub async fn process_issue(
             format_task_prompt(&packet)
         };
 
+        // --- Edit nudge: remind workers they MUST call edit_file ---
+        // When a previous iteration ended without writes, append a strong
+        // system reminder. This implements OpenDev's "Event-Driven System
+        // Reminders" pattern to counter instruction fade-out.
+        if iteration > 1 && !agent_has_written_prev && tier == SwarmTier::Worker {
+            task_prompt.push_str(
+                "\n\n**⚠ SYSTEM REMINDER**: The previous iteration produced NO file edits. \
+                 You MUST call edit_file in this iteration. Do NOT just read files and analyze — \
+                 apply your changes with edit_file now. Text-only responses are invalid.\n",
+            );
+        }
+
         debug!(
             iteration,
             prompt_len = task_prompt.len(),
@@ -2375,6 +2390,7 @@ pub async fn process_issue(
                 }
                 let terminated_without_writing =
                     adapter_report.terminated_early && !adapter_report.has_written;
+                agent_has_written_prev = adapter_report.has_written;
                 (adapter_report.has_written, terminated_without_writing)
             }
             Err(e) => {
