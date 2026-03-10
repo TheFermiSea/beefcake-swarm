@@ -34,6 +34,7 @@ MODEL_PATH="${MODEL_PATH:-/scratch/ai/models/Qwen3.5-27B-Distilled-Q4_K_M.gguf}"
 LLAMA_BIN="${LLAMA_BIN:-/cluster/shared/llama-cpp/bin}"
 CUDA_LIB="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/targets/x86_64-linux/lib"
 CUDA_COMPAT="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/compat"
+MATH_LIB="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/math_libs/12.6/targets/x86_64-linux/lib"
 PORT="${PORT:-8081}"
 CTX_SIZE="${CTX_SIZE:-196608}"
 THREADS="${THREADS:-16}"
@@ -91,10 +92,7 @@ echo "[$(date)] Endpoint registered: $ENDPOINT_FILE"
 echo "[$(date)] Starting llama-server..."
 
 # LD_LIBRARY_PATH for native binary
-export LD_LIBRARY_PATH="$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
-
-# Optimization: Force MMQ for V100
-export GGML_CUDA_FORCE_MMQ=1
+export LD_LIBRARY_PATH="$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB:$MATH_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
 # Check if numactl is available
 NUMA_CMD=""

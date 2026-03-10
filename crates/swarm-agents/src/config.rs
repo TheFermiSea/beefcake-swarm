@@ -8,11 +8,11 @@ use std::time::Duration;
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
 pub enum Tier {
-    /// Qwen3.5-27B-Distilled on vasp-03 — Scout/Reviewer tier (256K context, blazing speed)
+    /// Qwen3.5-122B-A10B on vasp-01 — Fast tier (65K context, expert-offload single-node)
     Fast,
-    /// Qwen3.5-122B-A10B on vasp-01 — Integrator tier (128K context, distributed VRAM)
+    /// Qwen3.5-122B-A10B on vasp-02 — Coder tier (65K context, expert-offload single-node)
     Coder,
-    /// Qwen3.5-122B-A10B on vasp-01 — Integrator tier (fallback for reasoning)
+    /// Qwen3.5-122B-A10B on vasp-01 — Reasoning tier (same model, round-robin with fast)
     Reasoning,
     /// Cloud models via CLIAPIProxy
     Cloud,
@@ -210,11 +210,11 @@ impl CloudFallbackMatrix {
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
-    /// Qwen3.5-27B-Distilled on vasp-03 :8081 (Scout/Reviewer, 100% VRAM-resident, 192K context)
+    /// Qwen3.5-122B-A10B on vasp-01 :8081 (Fast tier, expert-offload single-node, 65K context)
     pub fast_endpoint: Endpoint,
-    /// Qwen3.5-122B-A10B on vasp-01 :8081 (Integrator/RPC head, layer-split with vasp-02, 128K context)
+    /// Qwen3.5-122B-A10B on vasp-02 :8081 (Coder tier, expert-offload single-node, 65K context)
     pub coder_endpoint: Endpoint,
-    /// Qwen3.5-122B-A10B on vasp-01 :8081 (same endpoint — vasp-02 is RPC worker shard, no independent HTTP)
+    /// Qwen3.5-122B-A10B on vasp-01 :8081 (Reasoning tier, same model as fast)
     pub reasoning_endpoint: Endpoint,
     /// CLIAPIProxy cloud escalation (optional)
     pub cloud_endpoint: Option<CloudEndpoint>,
@@ -270,16 +270,16 @@ impl Default for SwarmConfig {
         Self {
             fast_endpoint: Endpoint {
                 url: std::env::var("SWARM_FAST_URL")
-                    .unwrap_or_else(|_| "http://vasp-03:8081/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
                 model: std::env::var("SWARM_FAST_MODEL")
-                    .unwrap_or_else(|_| "Qwen3.5-27B-Distilled".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-122B-A10B".into()),
                 tier: Tier::Fast,
                 api_key: std::env::var("SWARM_FAST_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
             },
             coder_endpoint: Endpoint {
                 url: std::env::var("SWARM_CODER_URL")
-                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-02:8081/v1".into()),
                 model: std::env::var("SWARM_CODER_MODEL")
                     .unwrap_or_else(|_| "Qwen3.5-122B-A10B".into()),
                 tier: Tier::Coder,
