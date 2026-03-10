@@ -1,0 +1,126 @@
+#!/bin/bash
+#SBATCH --job-name=llama-27b
+#SBATCH --partition=gpu_ai
+#SBATCH --qos=ai_opportunistic
+#SBATCH --nodes=1
+#SBATCH --ntasks=1
+#SBATCH --nodelist=vasp-03
+#SBATCH --gres=gpu:v100s:1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=128G
+#SBATCH --time=24:00:00
+#SBATCH --requeue
+#SBATCH --signal=B:SIGTERM@30
+#SBATCH --output=/scratch/ai/logs/llama-27b-%j.log
+#SBATCH --error=/scratch/ai/logs/llama-27b-%j.err
+
+###############################################################################
+# Scout/Reviewer Tier (Qwen3.5-27B-Distilled)
+#
+# Model: Qwen3.5-27B-Claude-4.6-Opus-Reasoning-Distilled (~16GB Q4_K_M)
+# Context: 192K tokens (Optimized for 32GB VRAM resident KV cache)
+# Hardware: V100S 32GB
+#
+# Features:
+# - Full GPU Offload: Blazing fast TTFT (900 GB/s bandwidth)
+# - Prompt Caching: Zero-latency turns for large codebase context
+# - Distilled Reasoning: High reliability for tool-calling/edit_file
+###############################################################################
+
+set -euo pipefail
+
+# Configuration
+MODEL_PATH="${MODEL_PATH:-/scratch/ai/models/Qwen3.5-27B-Distilled-Q4_K_M.gguf}"
+LLAMA_BIN="${LLAMA_BIN:-/cluster/shared/llama-cpp/bin}"
+CUDA_LIB="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/targets/x86_64-linux/lib"
+CUDA_COMPAT="/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/cuda/12.6/compat"
+PORT="${PORT:-8081}"
+CTX_SIZE="${CTX_SIZE:-196608}"
+THREADS="${THREADS:-16}"
+
+# Endpoint registration
+ENDPOINT_DIR="/cluster/shared/ai/endpoints"
+ENDPOINT_FILE="${ENDPOINT_DIR}/${SLURM_JOB_ID}-27b.json"
+
+# Ensure log directory exists
+mkdir -p /scratch/ai/logs
+
+# Graceful shutdown handler
+SERVER_PID=""
+SHUTTING_DOWN=false
+
+cleanup() {
+    if $SHUTTING_DOWN; then
+        return
+    fi
+    SHUTTING_DOWN=true
+    echo "[$(date)] SIGTERM received - initiating graceful shutdown"
+    if [[ -n "$SERVER_PID" ]]; then
+        kill -TERM "$SERVER_PID" 2>/dev/null || true
+    fi
+    wait
+    rm -f "$ENDPOINT_FILE" 2>/dev/null || true
+    echo "[$(date)] Graceful shutdown complete"
+}
+trap cleanup SIGTERM SIGINT
+
+# Validate model exists
+if [[ ! -f "$MODEL_PATH" ]]; then
+    echo "ERROR: Model not found at $MODEL_PATH"
+    exit 1
+fi
+
+# Register endpoint
+mkdir -p "${ENDPOINT_DIR}"
+cat > "$ENDPOINT_FILE" <<EOF
+{
+    "job_id": "${SLURM_JOB_ID}",
+    "model": "Qwen3.5-27B-Distilled",
+    "tier": "scout",
+    "node": "${SLURM_NODELIST}",
+    "host": "$(hostname -f)",
+    "port": ${PORT},
+    "context_size": ${CTX_SIZE},
+    "endpoint": "http://$(hostname -f):${PORT}/v1/chat/completions",
+    "started_at": "$(date -Iseconds)",
+    "notes": "27B Distilled Reasoning, 192K VRAM-Resident Context"
+}
+EOF
+echo "[$(date)] Endpoint registered: $ENDPOINT_FILE"
+
+echo "[$(date)] Starting llama-server..."
+
+# LD_LIBRARY_PATH for native binary
+export LD_LIBRARY_PATH="$CUDA_COMPAT:$LLAMA_BIN:$CUDA_LIB${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+
+# Optimization: Force MMQ for V100
+export GGML_CUDA_FORCE_MMQ=1
+
+# Check if numactl is available
+NUMA_CMD=""
+if command -v numactl >/dev/null 2>&1; then
+    NUMA_CMD="numactl --interleave=all"
+fi
+
+$NUMA_CMD "$LLAMA_BIN/llama-server" \
+    --model "$MODEL_PATH" \
+    --alias "Qwen3.5-27B-Distilled" \
+    --host 0.0.0.0 \
+    --port "$PORT" \
+    --ctx-size "$CTX_SIZE" \
+    --n-gpu-layers 99 \
+    --threads "$THREADS" \
+    --batch-size 512 \
+    --ubatch-size 512 \
+    --cache-type-k q4_0 \
+    --cache-type-v q4_0 \
+    --prompt-cache "/scratch/ai/models/27b-prompt-cache.bin" \
+    --prompt-cache-all \
+    --cont-batching \
+    --metrics \
+    --jinja \
+    --chat-template-kwargs '{"enable_thinking": false}' &
+SERVER_PID=$!
+
+echo "[$(date)] Server started (PID $SERVER_PID)"
+wait
