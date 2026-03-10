@@ -605,7 +605,7 @@ mod tests {
         std::env::remove_var("SWARM_MAX_RETRIES");
         let config = SwarmConfig::default();
         assert_eq!(config.max_retries, 10);
-        assert!(config.fast_endpoint.url.contains("vasp-03"));
+        assert!(config.fast_endpoint.url.contains("vasp-01"));
         assert!(config.reasoning_endpoint.url.contains("vasp-01"));
         assert!(config.fast_endpoint.model.contains("Qwen3.5"));
         assert_eq!(config.fast_endpoint.api_key, "not-needed");
