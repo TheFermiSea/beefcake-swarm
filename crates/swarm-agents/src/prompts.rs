@@ -54,6 +54,10 @@ claiming and closing — you focus on solving the problem.
   decisions), \"debugging_kb\" (error patterns, known fixes). Use BEFORE delegating complex tasks.
 - **proxy_get_diff**: Show git diff output. Use for situational awareness after workers make changes.
 - **proxy_list_changed_files**: List uncommitted changes (git status --short).
+- **plan_parallel_work**: Submit a parallel work plan for concurrent execution. Use when an \
+  issue involves changes to 2+ independent files. Provide a JSON SubtaskPlan with non-overlapping \
+  target_files. The orchestrator dispatches workers concurrently and verifies the combined result. \
+  Integration files (Cargo.toml, mod.rs, lib.rs, main.rs) may only appear in one subtask.
 
 ## Coordination Tools (when bdh is active)
 - **team_status**: Check what other agents are working on before delegating.
@@ -76,6 +80,9 @@ You MUST delegate all file reading and exploration to workers.
      to produce a repair plan, then delegate execution to proxy_fixer with the plan.
    - **Deep analysis needed** (borrow checker cascades, trait system): use \
      proxy_reasoning_worker for analysis, then proxy_fixer for implementation.
+   - **Multi-file parallel work** (changes to 2+ independent files): use plan_parallel_work \
+     to submit a SubtaskPlan. Workers execute concurrently on separate files with inter-worker \
+     communication. The orchestrator handles dispatch and verification automatically.
 3. Run the verifier (proxy_run_verifier) to check their work.
 4. If verifier fails, delegate to a different worker or revise the plan. \
    Check the debugging KB (proxy_query_notebook role=debugging_kb) for known fixes.

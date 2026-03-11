@@ -27,6 +27,7 @@ use tracing::info;
 use crate::config::{ClientSet, SwarmConfig};
 use crate::endpoint_pool::EndpointPool;
 use crate::notebook_bridge::KnowledgeBase;
+use crate::tools::plan_parallel_tool::PlanSlot;
 use crate::tools::shared::ToolFactory;
 use coder::OaiAgent;
 
@@ -55,6 +56,10 @@ pub struct AgentFactory {
     /// Cloning `AgentFactory` shares this pool's `Arc<AtomicUsize>` counter,
     /// so parallel issue tasks automatically cycle across different nodes.
     pub endpoint_pool: EndpointPool,
+    /// Shared slot where the manager deposits a parallel work plan.
+    /// Set via [`AgentFactory::with_plan_slot`] before building the manager.
+    /// The orchestrator checks this after each manager invocation.
+    pub plan_slot: Option<PlanSlot>,
 }
 
 impl AgentFactory {
@@ -69,6 +74,7 @@ impl AgentFactory {
             notebook_bridge: None,
             tool_factory: None,
             endpoint_pool,
+            plan_slot: None,
         })
     }
 
@@ -97,6 +103,16 @@ impl AgentFactory {
                 self.notebook_bridge.clone(),
             ));
         }
+        self
+    }
+
+    /// Set a shared plan slot for manager-guided parallel work planning.
+    ///
+    /// When set, `build_manager()` includes the `plan_parallel_work` tool.
+    /// The orchestrator checks this slot after each manager invocation for
+    /// a submitted subtask plan.
+    pub fn with_plan_slot(mut self, slot: PlanSlot) -> Self {
+        self.plan_slot = Some(slot);
         self
     }
 
@@ -300,6 +316,7 @@ impl AgentFactory {
                 fixer,
                 reasoning_worker: Some(reasoning_worker),
                 notebook_bridge: self.notebook_bridge.clone(),
+                plan_slot: self.plan_slot.clone(),
             };
             manager::build_cloud_manager(
                 cloud_client,
@@ -327,6 +344,7 @@ impl AgentFactory {
                 fixer,
                 reasoning_worker: None,
                 notebook_bridge: self.notebook_bridge.clone(),
+                plan_slot: self.plan_slot.clone(),
             };
             manager::build_local_manager(
                 &self.clients.reasoning,
@@ -397,6 +415,7 @@ impl AgentFactory {
             fixer,
             reasoning_worker: Some(reasoning_worker),
             notebook_bridge: self.notebook_bridge.clone(),
+            plan_slot: self.plan_slot.clone(),
         };
         Some(manager::build_cloud_manager(
             cloud_client,

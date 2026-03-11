@@ -1680,6 +1680,12 @@ pub async fn process_issue(
     // Round-robin: each concurrent issue's factory clone selects the next node.
     let (rust_coder, general_coder) = factory.build_worker_pair(&wt_path);
     let reviewer = factory.build_reviewer();
+
+    // Create a plan slot for manager-guided parallel work planning.
+    // The manager's `plan_parallel_work` tool deposits a validated SubtaskPlan
+    // here; the orchestrator checks it after each manager invocation.
+    let plan_slot = crate::tools::plan_parallel_tool::new_plan_slot();
+    let factory = factory.clone().with_plan_slot(plan_slot.clone());
     let manager = factory.build_manager(&wt_path);
 
     // --- Escalation state ---
@@ -1771,8 +1777,8 @@ pub async fn process_issue(
     // When enabled, the planner decomposes the issue into non-overlapping subtasks,
     // then multiple workers execute them concurrently in the same worktree.
     // After all workers finish, the verifier runs on the combined result.
-    if bool_from_env("SWARM_CONCURRENT_SUBTASKS", false) {
-        info!(id = %issue.id, "Using concurrent subtask dispatch (SWARM_CONCURRENT_SUBTASKS=1)");
+    if config.concurrent_subtasks {
+        info!(id = %issue.id, "Using concurrent subtask dispatch");
 
         // Prefer local reasoning tier for planning (escalation ladder compliance).
         // Only fall back to cloud if reasoning endpoint is unavailable.
@@ -1812,6 +1818,11 @@ pub async fn process_issue(
                     plan.subtasks.len()
                 );
 
+                // Initialize workpad for inter-worker communication.
+                if let Err(e) = crate::tools::workpad_tool::init_workpad(&wt_path) {
+                    warn!(id = %issue.id, error = %e, "Failed to init workpad — workers proceed without comms");
+                }
+
                 // Dispatch workers concurrently, bounded by endpoint pool capacity
                 // (number of inference nodes, not parallel_issues which is a separate concern).
                 let max_concurrent = factory.endpoint_pool.capacity();
@@ -1826,69 +1837,228 @@ pub async fn process_issue(
                 )
                 .await;
 
-                info!(
-                    id = %issue.id,
-                    succeeded = outcome.success_count(),
-                    total = outcome.results.len(),
-                    tool_calls = outcome.total_tool_calls(),
-                    elapsed_ms = outcome.total_elapsed.as_millis() as u64,
-                    "All subtask workers completed"
-                );
+                let succeeded = outcome.success_count();
+                let total = outcome.results.len();
 
-                // Run verifier on the combined result.
-                let verifier = Verifier::new(&wt_path, verifier_config.clone());
-                let report = verifier.run_pipeline().await;
+                // Structured observability: per-worker breakdown + speedup estimate.
+                outcome.log_summary();
 
-                if report.all_green {
-                    info!(
-                        id = %issue.id,
-                        summary = %report.summary(),
-                        "Concurrent subtask dispatch: verifier PASSED"
-                    );
-
-                    // Commit the concurrent workers' edits before merge.
-                    if let Err(e) = git_commit_changes(&wt_path, 0).await {
-                        warn!(id = %issue.id, "Failed to commit concurrent edits: {e}");
+                // Log workpad announcements for debugging.
+                if let Ok(announcements) = crate::tools::workpad_tool::read_workpad(&wt_path) {
+                    if !announcements.is_empty() {
+                        info!(
+                            id = %issue.id,
+                            announcement_count = announcements.len(),
+                            "Workers posted announcements to workpad"
+                        );
                     }
-
-                    // Session bookkeeping (mirrors the normal success path).
-                    session.complete();
-                    let _ = progress.log_session_end(
-                        session.session_id(),
-                        session.iteration(),
-                        format!(
-                            "Issue {} resolved via concurrent subtask dispatch",
-                            issue.id
-                        ),
-                    );
-
-                    info!(
-                        id = %issue.id,
-                        session_id = session.short_id(),
-                        elapsed = %session.elapsed_human(),
-                        "Issue resolved — merging worktree"
-                    );
-
-                    // Try to merge and close.
-                    if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
-                        error!(id = %issue.id, "Merge failed: {e}");
-                        let _ = worktree_bridge.cleanup(&issue.id);
-                        let _ = beads.update_status(&issue.id, "open");
-                        return Err(e);
-                    }
-                    beads.close(&issue.id, Some("Resolved by concurrent subtask dispatch"))?;
-                    clear_resume_file(worktree_bridge.repo_root());
-                    return Ok(true);
                 }
 
-                // Verifier failed — fall through to the normal loop for retry.
-                warn!(
-                    id = %issue.id,
-                    errors = report.failure_signals.len(),
-                    summary = %report.summary(),
-                    "Concurrent subtask dispatch: verifier FAILED — falling through to retry loop"
+                // --- Failed subtask serial retry ---
+                // If some subtasks succeeded and some failed, retry only the failed ones
+                // serially. Successful workers' changes are already in the worktree.
+                if succeeded > 0 && succeeded < total {
+                    let failed_ids: Vec<String> = outcome
+                        .results
+                        .iter()
+                        .filter(|r| !r.success)
+                        .map(|r| r.subtask_id.clone())
+                        .collect();
+                    info!(
+                        id = %issue.id,
+                        failed = ?failed_ids,
+                        "Retrying failed subtasks serially (preserving successful workers' changes)"
+                    );
+
+                    // Collect announcements from successful workers as extra context.
+                    let announcements =
+                        crate::tools::workpad_tool::read_workpad(&wt_path).unwrap_or_default();
+                    let announcement_context = if announcements.is_empty() {
+                        String::new()
+                    } else {
+                        let lines: Vec<String> = announcements
+                            .iter()
+                            .map(|a| {
+                                format!(
+                                    "- [{}] {} in {}: {}",
+                                    a.worker, a.entry_type, a.file, a.detail
+                                )
+                            })
+                            .collect();
+                        format!("\n\n## Changes by other workers\n{}", lines.join("\n"))
+                    };
+
+                    for failed_id in &failed_ids {
+                        if let Some(subtask) = plan.subtasks.iter().find(|s| &s.id == failed_id) {
+                            info!(id = %issue.id, subtask_id = %failed_id, "Retrying failed subtask serially");
+                            let (client, model) = factory.endpoint_pool.next();
+                            let mut retry_subtask = subtask.clone();
+                            retry_subtask.objective =
+                                format!("{}{announcement_context}", retry_subtask.objective);
+                            let result = crate::subtask::run_subtask_worker_public(
+                                client,
+                                model,
+                                &wt_path,
+                                &issue.id,
+                                &retry_subtask,
+                                timeout,
+                            )
+                            .await;
+                            info!(
+                                id = %issue.id,
+                                subtask_id = %failed_id,
+                                success = result.success,
+                                elapsed_ms = result.elapsed.as_millis() as u64,
+                                "Serial retry of failed subtask completed"
+                            );
+                        }
+                    }
+                } else if succeeded == 0 {
+                    warn!(
+                        id = %issue.id,
+                        "All subtasks failed — falling through to sequential retry loop"
+                    );
+                    last_report = None;
+                    // Fall through to main loop — skip verifier since no work was done
+                }
+
+                // Run verifier on the combined result (skip if all subtasks failed).
+                let report = if succeeded > 0 {
+                    let verifier = Verifier::new(&wt_path, verifier_config.clone());
+                    Some(verifier.run_pipeline().await)
+                } else {
+                    None
+                };
+
+                if let Some(report) = report {
+                    if report.all_green {
+                        info!(
+                            id = %issue.id,
+                            summary = %report.summary(),
+                            "Concurrent subtask dispatch: verifier PASSED"
+                        );
+
+                        // Commit the concurrent workers' edits before merge.
+                        if let Err(e) = git_commit_changes(&wt_path, 0).await {
+                            warn!(id = %issue.id, "Failed to commit concurrent edits: {e}");
+                        }
+
+                        // Session bookkeeping (mirrors the normal success path).
+                        session.complete();
+                        let _ = progress.log_session_end(
+                            session.session_id(),
+                            session.iteration(),
+                            format!(
+                                "Issue {} resolved via concurrent subtask dispatch",
+                                issue.id
+                            ),
+                        );
+
+                        info!(
+                            id = %issue.id,
+                            session_id = session.short_id(),
+                            elapsed = %session.elapsed_human(),
+                            "Issue resolved — merging worktree"
+                        );
+
+                        // Try to merge and close.
+                        if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
+                            error!(id = %issue.id, "Merge failed: {e}");
+                            let _ = worktree_bridge.cleanup(&issue.id);
+                            let _ = beads.update_status(&issue.id, "open");
+                            return Err(e);
+                        }
+                        beads.close(&issue.id, Some("Resolved by concurrent subtask dispatch"))?;
+                        clear_resume_file(worktree_bridge.repo_root());
+                        return Ok(true);
+                    }
+
+                    // Verifier failed — attempt serial fixer post-pass on integration files
+                    // before falling through to the main loop.
+                    info!(
+                        id = %issue.id,
+                        errors = report.failure_signals.len(),
+                        "Concurrent dispatch verifier failed — attempting serial fixer post-pass"
+                    );
+
+                    let fixer = factory.build_fixer(&wt_path);
+                    let fixer_prompt = format!(
+                    "The concurrent workers completed their subtasks but the verifier found errors.\n\n\
+                     Verifier summary: {}\n\n\
+                     Fix the compilation/test errors. Focus on integration files \
+                     (Cargo.toml, mod.rs, lib.rs, main.rs) and any cross-file issues \
+                     between the workers' changes. Read the error messages carefully and \
+                     make targeted fixes.",
+                    report.summary()
                 );
-                last_report = Some(report);
+
+                    match rig::completion::Prompt::prompt(&fixer, &fixer_prompt).await {
+                        Ok(_response) => {
+                            info!(id = %issue.id, "Serial fixer post-pass completed — re-running verifier");
+                            let verifier2 = Verifier::new(&wt_path, verifier_config.clone());
+                            let report2 = verifier2.run_pipeline().await;
+
+                            if report2.all_green {
+                                info!(
+                                    id = %issue.id,
+                                    summary = %report2.summary(),
+                                    "Concurrent dispatch + fixer post-pass: verifier PASSED"
+                                );
+
+                                if let Err(e) = git_commit_changes(&wt_path, 0).await {
+                                    warn!(id = %issue.id, "Failed to commit fixer edits: {e}");
+                                }
+
+                                session.complete();
+                                let _ = progress.log_session_end(
+                                    session.session_id(),
+                                    session.iteration(),
+                                    format!(
+                                    "Issue {} resolved via concurrent dispatch + fixer post-pass",
+                                    issue.id
+                                ),
+                                );
+
+                                info!(
+                                    id = %issue.id,
+                                    session_id = session.short_id(),
+                                    elapsed = %session.elapsed_human(),
+                                    "Issue resolved — merging worktree"
+                                );
+
+                                if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
+                                    error!(id = %issue.id, "Merge failed: {e}");
+                                    let _ = worktree_bridge.cleanup(&issue.id);
+                                    let _ = beads.update_status(&issue.id, "open");
+                                    return Err(e);
+                                }
+                                beads.close(
+                                    &issue.id,
+                                    Some("Resolved by concurrent dispatch + fixer post-pass"),
+                                )?;
+                                clear_resume_file(worktree_bridge.repo_root());
+                                return Ok(true);
+                            }
+
+                            // Fixer post-pass didn't fix everything — fall through
+                            warn!(
+                                id = %issue.id,
+                                errors = report2.failure_signals.len(),
+                                summary = %report2.summary(),
+                                "Fixer post-pass: verifier still FAILED — falling through to retry loop"
+                            );
+                            last_report = Some(report2);
+                        }
+                        Err(e) => {
+                            warn!(
+                                id = %issue.id,
+                                error = %e,
+                                "Serial fixer post-pass failed — falling through to retry loop"
+                            );
+                            last_report = Some(report);
+                        }
+                    }
+                } // end if let Some(report)
             }
             Ok(plan) => {
                 info!(
@@ -2395,6 +2565,119 @@ pub async fn process_issue(
                 (result, adapter)
             }
         };
+
+        // --- Manager-guided parallel dispatch ---
+        // If the manager called `plan_parallel_work`, a SubtaskPlan is waiting
+        // in the plan slot. Take it and dispatch concurrent workers.
+        if let Some(manager_plan) = plan_slot.lock().ok().and_then(|mut s| s.take()) {
+            if manager_plan.subtasks.len() >= 2 && config.concurrent_subtasks {
+                info!(
+                    iteration,
+                    id = %issue.id,
+                    subtask_count = manager_plan.subtasks.len(),
+                    summary = %manager_plan.summary,
+                    "Manager submitted parallel work plan — dispatching concurrent workers"
+                );
+
+                // Initialize workpad for inter-worker communication.
+                if let Err(e) = crate::tools::workpad_tool::init_workpad(&wt_path) {
+                    warn!(id = %issue.id, error = %e, "Failed to init workpad");
+                }
+
+                let max_concurrent = factory.endpoint_pool.capacity();
+                let timeout = timeout_from_env("SWARM_LOCAL_HTTP_TIMEOUT_SECS", 900).as_secs();
+                let outcome = crate::subtask::dispatch_subtasks(
+                    &manager_plan,
+                    &factory.endpoint_pool,
+                    &wt_path,
+                    &issue.id,
+                    max_concurrent,
+                    timeout,
+                )
+                .await;
+
+                outcome.log_summary();
+
+                // Log workpad announcements.
+                if let Ok(announcements) = crate::tools::workpad_tool::read_workpad(&wt_path) {
+                    if !announcements.is_empty() {
+                        info!(
+                            id = %issue.id,
+                            announcement_count = announcements.len(),
+                            "Workers posted announcements to workpad"
+                        );
+                    }
+                }
+
+                // Run verifier on the concurrent workers' combined result.
+                if outcome.success_count() > 0 {
+                    let current_verifier_config = if config.verifier_packages.is_empty() {
+                        VerifierConfig {
+                            packages: detect_changed_packages(&wt_path),
+                            ..verifier_config.clone()
+                        }
+                    } else {
+                        verifier_config.clone()
+                    };
+                    let verifier = Verifier::new(&wt_path, current_verifier_config);
+                    let report = verifier.run_pipeline().await;
+
+                    if report.all_green {
+                        info!(
+                            iteration,
+                            id = %issue.id,
+                            "Manager-guided parallel dispatch: verifier PASSED"
+                        );
+
+                        if let Err(e) = git_commit_changes(&wt_path, iteration as u32).await {
+                            warn!(id = %issue.id, "Failed to commit concurrent edits: {e}");
+                        }
+
+                        session.complete();
+                        let _ = progress.log_session_end(
+                            session.session_id(),
+                            session.iteration(),
+                            format!(
+                                "Issue {} resolved via manager-guided parallel dispatch",
+                                issue.id
+                            ),
+                        );
+
+                        info!(
+                            id = %issue.id,
+                            session_id = session.short_id(),
+                            elapsed = %session.elapsed_human(),
+                            "Issue resolved — merging worktree"
+                        );
+
+                        if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
+                            error!(id = %issue.id, "Merge failed: {e}");
+                            let _ = worktree_bridge.cleanup(&issue.id);
+                            let _ = beads.update_status(&issue.id, "open");
+                            return Err(e);
+                        }
+                        beads.close(
+                            &issue.id,
+                            Some("Resolved by manager-guided parallel dispatch"),
+                        )?;
+                        clear_resume_file(worktree_bridge.repo_root());
+                        return Ok(true);
+                    }
+
+                    // Verifier failed — try fixer post-pass, then fall through to next iteration.
+                    info!(
+                        iteration,
+                        id = %issue.id,
+                        errors = report.failure_signals.len(),
+                        "Manager-guided parallel dispatch: verifier FAILED — will retry"
+                    );
+                    last_report = Some(report);
+                }
+
+                agent_has_written_prev = outcome.success_count() > 0;
+                continue;
+            }
+        }
 
         // Log runtime adapter report for tool-event visibility
         let (agent_has_written, agent_terminated_without_writing) = match adapter.report() {

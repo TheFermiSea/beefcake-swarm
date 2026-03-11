@@ -28,6 +28,7 @@ use super::proxy_wrappers::{
     ProxyReadFile, ProxyRunCommand, ProxyRunVerifier, ProxyWriteFile,
 };
 use super::verifier_tool::RunVerifierTool;
+use super::workpad_tool::{AnnounceTool, CheckAnnouncementsTool};
 use crate::notebook_bridge::KnowledgeBase;
 
 /// Which set of tools a worker agent receives.
@@ -103,10 +104,15 @@ pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dy
 /// Like `worker_tools`, but `edit_file` and `write_file` will reject writes
 /// to paths outside `target_files`, enforcing the non-overlap constraint at
 /// the tool layer (not just the prompt).
+///
+/// Includes workpad tools (`announce` + `check_announcements`) for inter-worker
+/// communication during concurrent execution. Workers announce interface changes
+/// so other workers can adapt before their final edits.
 pub fn subtask_worker_tools(
     wt_path: &Path,
     role: WorkerRole,
     target_files: &[String],
+    worker_id: &str,
 ) -> Vec<Box<dyn ToolDyn>> {
     let allowlist: std::collections::HashSet<String> = target_files.iter().cloned().collect();
 
@@ -123,6 +129,10 @@ pub fn subtask_worker_tools(
     if role == WorkerRole::General {
         tools.push(Box::new(ListFilesTool::new(wt_path)));
     }
+
+    // Workpad tools for inter-worker communication during concurrent dispatch.
+    tools.push(Box::new(AnnounceTool::new(wt_path, worker_id)));
+    tools.push(Box::new(CheckAnnouncementsTool::new(wt_path, worker_id)));
 
     tools
 }

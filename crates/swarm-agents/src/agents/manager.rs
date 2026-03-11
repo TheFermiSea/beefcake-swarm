@@ -15,6 +15,7 @@ use rig::providers::openai;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::prompts;
 use crate::tools::bundles;
+use crate::tools::plan_parallel_tool::{PlanParallelWorkTool, PlanSlot};
 
 use super::coder::OaiAgent;
 
@@ -43,6 +44,10 @@ pub struct ManagerWorkers {
     pub reasoning_worker: Option<OaiAgent>,
     /// Optional knowledge base for the query_notebook tool.
     pub notebook_bridge: Option<Arc<dyn KnowledgeBase>>,
+    /// Shared slot where the manager deposits a parallel work plan.
+    /// When the manager calls `plan_parallel_work`, the validated plan
+    /// is stored here for the orchestrator to pick up and dispatch.
+    pub plan_slot: Option<PlanSlot>,
 }
 
 /// Build the cloud-backed Manager with reasoning_worker and coders as tools.
@@ -80,6 +85,11 @@ pub fn build_cloud_manager(
 
     // Deterministic tools — proxy-prefixed for CLIAPIProxy compatibility.
     builder = builder.tools(bundles::manager_tools(wt_path, verifier_packages, true));
+
+    // Parallel work planning tool (optional — enables manager-guided decomposition).
+    if let Some(plan_slot) = workers.plan_slot {
+        builder = builder.tool(PlanParallelWorkTool::new(plan_slot));
+    }
 
     // Knowledge base tool (optional — gracefully absent if not configured)
     let kb_tools = bundles::notebook_tool(workers.notebook_bridge, true);
@@ -121,6 +131,11 @@ pub fn build_local_manager(
         .tool(workers.reviewer)
         // Deterministic tools — no proxy prefix for local models
         .tools(bundles::manager_tools(wt_path, verifier_packages, false));
+
+    // Parallel work planning tool (optional).
+    if let Some(plan_slot) = workers.plan_slot {
+        builder = builder.tool(PlanParallelWorkTool::new(plan_slot));
+    }
 
     // Knowledge base tool (optional)
     let kb_tools = bundles::notebook_tool(workers.notebook_bridge, false);

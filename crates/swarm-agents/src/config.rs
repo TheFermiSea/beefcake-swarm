@@ -263,6 +263,12 @@ pub struct SwarmConfig {
     /// Each issue gets its own worktree and uses the next node in round-robin order.
     /// Populated from `SWARM_PARALLEL_ISSUES` env var (default: 3 = one per node).
     pub parallel_issues: usize,
+    /// Enable concurrent subtask dispatch for multi-file issues.
+    /// When true, the planner decomposes issues into non-overlapping subtasks
+    /// and workers execute them concurrently on the 2-node 122B cluster.
+    /// Single-subtask plans fall through to the sequential loop.
+    /// Populated from `SWARM_CONCURRENT_SUBTASKS` env var (default: true).
+    pub concurrent_subtasks: bool,
 }
 
 impl Default for SwarmConfig {
@@ -338,6 +344,9 @@ impl Default for SwarmConfig {
                 .and_then(|s| s.parse().ok())
                 .filter(|v: &usize| *v > 0)
                 .unwrap_or(3),
+            concurrent_subtasks: std::env::var("SWARM_CONCURRENT_SUBTASKS")
+                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                .unwrap_or(true),
         }
     }
 }
@@ -397,6 +406,7 @@ impl SwarmConfig {
             max_cost_per_issue: 0.0,
             prune_after_iteration: 3,
             parallel_issues: 1,
+            concurrent_subtasks: true,
         }
     }
 }
