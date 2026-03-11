@@ -1916,10 +1916,13 @@ pub async fn process_issue(
                 } else if succeeded == 0 {
                     warn!(
                         id = %issue.id,
-                        "All subtasks failed — falling through to sequential retry loop"
+                        "All subtasks failed — escalating to Council for sequential retry"
                     );
                     last_report = None;
-                    // Fall through to main loop — skip verifier since no work was done
+                    // Concurrent workers already failed — don't waste iterations retrying
+                    // at Worker tier. Force escalation to Council so the cloud manager
+                    // can tackle it directly.
+                    escalation.current_tier = SwarmTier::Council;
                 }
 
                 // Run verifier on the combined result (skip if all subtasks failed).
@@ -2704,7 +2707,15 @@ pub async fn process_issue(
                     .output()
                     .map(|o| !o.stdout.is_empty())
                     .unwrap_or(false);
-                let actually_written = adapter_report.has_written && git_has_changes;
+                // For manager (Council tier): sub-workers are agent-as-tool, so the
+                // manager's adapter never sees edit_file/write_file calls — only tool
+                // names like "proxy_rust_coder". If git shows changes AND the manager
+                // delegated to worker tools, trust git as the source of truth.
+                let manager_delegated = tier == SwarmTier::Council
+                    && git_has_changes
+                    && adapter_report.total_tool_calls > 0;
+                let actually_written =
+                    (adapter_report.has_written || manager_delegated) && git_has_changes;
                 let terminated_without_writing =
                     adapter_report.terminated_early && !actually_written;
                 agent_has_written_prev = actually_written;
