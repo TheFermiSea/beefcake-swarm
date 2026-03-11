@@ -118,6 +118,12 @@ impl ActionValidator for MinContextValidator {
         if base != "edit_file" {
             return Ok(());
         }
+        // Skip validation when anchors are present — anchor mode doesn't need old_content
+        let has_anchors = extract_field(args_json, "anchor_start").is_some()
+            && extract_field(args_json, "anchor_end").is_some();
+        if has_anchors {
+            return Ok(());
+        }
         let old = extract_field(args_json, "old_content");
         if let Some(ref content) = old {
             let non_empty_lines = content.lines().filter(|l| !l.trim().is_empty()).count();
@@ -426,6 +432,23 @@ mod tests {
         let v = MinContextValidator;
         let state = ValidatorState::new();
         let args = r#"{"path": "x.rs", "old_content": "fn main() {\n    hello();\n}", "new_content": "fn foo()"}"#;
+        assert!(v.validate("edit_file", args, &state).is_ok());
+    }
+
+    #[test]
+    fn test_min_context_skipped_for_anchor_mode() {
+        let v = MinContextValidator;
+        let state = ValidatorState::new();
+        // Single-line old_content would normally fail, but anchors are present
+        let args = r#"{"path": "x.rs", "old_content": "fn main()", "new_content": "fn foo()", "anchor_start": "1:ab", "anchor_end": "3:cd"}"#;
+        assert!(v.validate("edit_file", args, &state).is_ok());
+    }
+
+    #[test]
+    fn test_min_context_skipped_for_anchor_no_old_content() {
+        let v = MinContextValidator;
+        let state = ValidatorState::new();
+        let args = r#"{"path": "x.rs", "new_content": "fn foo()", "anchor_start": "1:ab", "anchor_end": "3:cd"}"#;
         assert!(v.validate("edit_file", args, &state).is_ok());
     }
 

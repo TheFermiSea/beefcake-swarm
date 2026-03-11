@@ -262,13 +262,12 @@ Do NOT run cargo check/test yourself. Do NOT commit.
 can make progress. Text-only responses waste compute time. Never say \"I'll edit\" \
 without calling the tool in the same response.
 
-## Hashline Editing (Preferred)
-read_file returns lines as `{line}:{hash}|{content}`. Use anchor_start/anchor_end \
-in edit_file (e.g. anchor_start=\"42:a3\", anchor_end=\"44:0e\") instead of copying \
-old_content. This prevents match failures from whitespace/prefix differences.
-
-Fallback: if anchors aren't available, old_content must match the raw file on disk — \
-NOT the annotated output. Strip `{line}:{hash}|` prefixes before using as old_content.
+## Editing Files (IMPORTANT)
+1. Read the file with read_file to get hashline output (e.g. `42:a3|fn main()`)
+2. Use anchor_start=\"42:a3\" and anchor_end=\"55:0e\" with new_content for reliable edits. \
+   old_content is OPTIONAL when using anchors.
+3. FALLBACK: old_content must match raw file exactly — no line numbers, no hashes.
+4. If file was truncated, use start_line/end_line to read exact range first.
 
 ## Rules
 - Always read the file BEFORE editing it (unless content is provided in the task).
@@ -343,13 +342,12 @@ If you find a bug or missing test unrelated to your current task, create a track
 can make progress. Text-only responses waste compute time. Never say \"I'll edit\" \
 without calling the tool in the same response.
 
-## Hashline Editing (Preferred)
-read_file returns lines as `{line}:{hash}|{content}`. Use anchor_start/anchor_end \
-in edit_file (e.g. anchor_start=\"42:a3\", anchor_end=\"44:0e\") instead of copying \
-old_content. This prevents match failures from whitespace/prefix differences.
-
-Fallback: if anchors aren't available, old_content must match the raw file on disk — \
-NOT the annotated output. Strip `{line}:{hash}|` prefixes before using as old_content.
+## Editing Files (IMPORTANT)
+1. Read the file with read_file to get hashline output (e.g. `42:a3|fn main()`)
+2. Use anchor_start=\"42:a3\" and anchor_end=\"55:0e\" with new_content for reliable edits. \
+   old_content is OPTIONAL when using anchors.
+3. FALLBACK: old_content must match raw file exactly — no line numbers, no hashes.
+4. If file was truncated, use start_line/end_line to read exact range first.
 
 ## Rules
 - Always read before editing (unless content is provided in the task).
@@ -439,10 +437,12 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
 `bd dep add <new-id> <current-issue-id> --type discovered-from` \
 (the issue ID is in the task header). Focus on the assigned task.
 
-## Hashline Editing (Preferred)
-read_file returns lines as `{line}:{hash}|{content}`. Use anchor_start/anchor_end \
-in edit_file (e.g. anchor_start=\"42:a3\", anchor_end=\"44:0e\") instead of copying \
-old_content. This prevents match failures from whitespace/prefix differences.
+## Editing Files (IMPORTANT)
+1. Read the file with read_file to get hashline output (e.g. `42:a3|fn main()`)
+2. Use anchor_start=\"42:a3\" and anchor_end=\"55:0e\" with new_content for reliable edits. \
+   old_content is OPTIONAL when using anchors.
+3. FALLBACK: old_content must match raw file exactly — no line numbers, no hashes.
+4. If file was truncated, use start_line/end_line to read exact range first.
 
 ## Rules
 - Read files before editing. Use edit_file for targeted changes.
@@ -529,10 +529,12 @@ Only modify files specified in the plan. Do NOT run cargo check/test or commit.
   context to ensure uniqueness.
 - **write_file**: Use ONLY for creating new files.
 
-## Hashline Editing (Preferred)
-read_file returns lines as `{line}:{hash}|{content}`. Use anchor_start/anchor_end \
-in edit_file (e.g. anchor_start=\"42:a3\", anchor_end=\"44:0e\") instead of copying \
-old_content. This prevents match failures from whitespace/prefix differences.
+## Editing Files (IMPORTANT)
+1. Read the file with read_file to get hashline output (e.g. `42:a3|fn main()`)
+2. Use anchor_start=\"42:a3\" and anchor_end=\"55:0e\" with new_content for reliable edits. \
+   old_content is OPTIONAL when using anchors.
+3. FALLBACK: old_content must match raw file exactly — no line numbers, no hashes.
+4. If file was truncated, use start_line/end_line to read exact range first.
 
 ## Rules
 - Read files before editing. Follow the plan steps in order.

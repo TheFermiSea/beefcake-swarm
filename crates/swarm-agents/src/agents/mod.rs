@@ -60,7 +60,9 @@ pub struct AgentFactory {
 impl AgentFactory {
     pub fn new(config: &SwarmConfig) -> Result<Self> {
         let clients = ClientSet::from_config(config)?;
-        let endpoint_pool = EndpointPool::new(&clients, config);
+        // Worker pool: only coder + reasoning (both 122B).
+        // Excludes the 27B scout which is not tuned for code generation tool calling.
+        let endpoint_pool = EndpointPool::new_workers(&clients, config);
         Ok(Self {
             clients,
             config: config.clone(),

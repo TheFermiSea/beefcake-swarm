@@ -383,7 +383,7 @@ async fn test_edit_file_exact_match() {
             anchor_start: None,
             anchor_end: None,
             path: "lib.rs".into(),
-            old_content: "    println!(\"hello\");".into(),
+            old_content: Some("    println!(\"hello\");".into()),
             new_content: "    println!(\"world\");".into(),
         })
         .await;
@@ -408,7 +408,7 @@ async fn test_edit_file_no_match() {
             anchor_start: None,
             anchor_end: None,
             path: "lib.rs".into(),
-            old_content: "fn bar() {}".into(),
+            old_content: Some("fn bar() {}".into()),
             new_content: "fn baz() {}".into(),
         })
         .await;
@@ -431,7 +431,7 @@ async fn test_edit_file_ambiguous_match() {
             anchor_start: None,
             anchor_end: None,
             path: "lib.rs".into(),
-            old_content: "let x = 1;".into(),
+            old_content: Some("let x = 1;".into()),
             new_content: "let x = 99;".into(),
         })
         .await;
@@ -457,7 +457,7 @@ async fn test_edit_file_whitespace_fuzzy_match() {
             anchor_start: None,
             anchor_end: None,
             path: "lib.rs".into(),
-            old_content: "fn foo() {\n  let x = 1;\n}".into(),
+            old_content: Some("fn foo() {\n  let x = 1;\n}".into()),
             new_content: "fn foo() {\n    let x = 2;\n}".into(),
         })
         .await;
@@ -479,7 +479,7 @@ async fn test_edit_file_delete_block() {
             anchor_start: None,
             anchor_end: None,
             path: "lib.rs".into(),
-            old_content: "\nfn bar() {}\n".into(),
+            old_content: Some("\nfn bar() {}\n".into()),
             new_content: "".into(),
         })
         .await;
@@ -500,7 +500,7 @@ async fn test_edit_file_sandbox_escape_blocked() {
             anchor_start: None,
             anchor_end: None,
             path: "../../../etc/passwd".into(),
-            old_content: "root".into(),
+            old_content: Some("root".into()),
             new_content: "hacked".into(),
         })
         .await;
@@ -524,7 +524,7 @@ async fn test_edit_file_multiline_replace() {
             anchor_start: None,
             anchor_end: None,
             path: "main.rs".into(),
-            old_content: "    println!(\"v1\");\n    println!(\"v2\");".into(),
+            old_content: Some("    println!(\"v1\");\n    println!(\"v2\");".into()),
             new_content: "    println!(\"v3\");".into(),
         })
         .await;

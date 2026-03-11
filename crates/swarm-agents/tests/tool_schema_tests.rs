@@ -163,7 +163,7 @@ fn test_edit_file_args_compat() {
     }"#;
     let args: EditFileArgs = serde_json::from_str(json).unwrap();
     assert_eq!(args.path, "src/lib.rs");
-    assert_eq!(args.old_content, "fn old() {}");
+    assert_eq!(args.old_content, Some("fn old() {}".to_string()));
     assert_eq!(args.new_content, "fn new() {}");
 }
 

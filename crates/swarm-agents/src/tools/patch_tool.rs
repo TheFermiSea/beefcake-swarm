@@ -23,7 +23,9 @@ pub struct EditFileArgs {
     /// Relative path within the workspace.
     pub path: String,
     /// The exact text to find in the file. Must match exactly once.
-    pub old_content: String,
+    /// Optional when using anchor_start/anchor_end.
+    #[serde(default)]
+    pub old_content: Option<String>,
     /// The replacement text.
     pub new_content: String,
     /// Anchor start: "line:hash" from read_file hashline output (e.g. "42:a3").
@@ -387,7 +389,7 @@ impl Tool for EditFileTool {
                         "description": "End anchor from read_file hashline output (e.g. '44:0e'). Used with anchor_start."
                     }
                 },
-                "required": ["path", "old_content", "new_content"]
+                "required": ["path", "new_content"]
             }),
         }
     }
@@ -411,8 +413,6 @@ impl Tool for EditFileTool {
             ))
         })?;
 
-        // Heuristic: unescape double-encoded content from local models
-        let old_content = unescape_if_double_encoded(&args.old_content);
         let new_content = unescape_if_double_encoded(&args.new_content);
 
         // --- Anchor-based edit path (preferred when anchors are provided) ---
@@ -428,6 +428,20 @@ impl Tool for EditFileTool {
                 &new_content,
             );
         }
+
+        // old_content is required for non-anchor str_replace path
+        let old_content_raw = match args.old_content {
+            Some(ref oc) => oc.clone(),
+            None => {
+                return Err(ToolError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    "edit_file: either old_content or both anchor_start and anchor_end required.",
+                )));
+            }
+        };
+        let old_content = unescape_if_double_encoded(&old_content_raw);
+        // Strip truncation markers that models copy from read_file output.
+        let old_content = strip_truncation_markers(&old_content);
 
         // Try exact match first (raw old_content as provided by the model)
         let mut occurrences = find_all(&content, &old_content);
@@ -446,6 +460,26 @@ impl Tool for EditFileTool {
                 );
                 occurrences = find_all(&content, &stripped);
                 stripped
+            } else {
+                old_content
+            }
+        } else {
+            old_content
+        };
+
+        // Tier 3: Per-line selective strip — strip hashline/line-number prefixes
+        // from individual lines that have them, even if <80% of lines have prefixes.
+        // This handles mixed content where some lines were copied from read_file
+        // output and others were typed manually.
+        let old_content = if occurrences.is_empty() {
+            let selectively_stripped = strip_line_number_prefixes_selective(&old_content);
+            if selectively_stripped != old_content {
+                tracing::info!(
+                    path = %args.path,
+                    "edit_file: retrying after per-line selective prefix strip"
+                );
+                occurrences = find_all(&content, &selectively_stripped);
+                selectively_stripped
             } else {
                 old_content
             }
@@ -484,20 +518,30 @@ impl Tool for EditFileTool {
                         (result, reindented)
                     }
                     None => {
-                        // Provide helpful error: show what's in the file near where
-                        // the match might have been
                         let preview = if content.len() > 500 {
                             format!("{}...", &content[..500])
                         } else {
                             content.clone()
+                        };
+                        // Check if the file was likely truncated during read
+                        let max_chars: usize = std::env::var("SWARM_READ_FILE_MAX_CHARS")
+                            .ok()
+                            .and_then(|v| v.parse().ok())
+                            .unwrap_or(6000);
+                        let truncation_hint = if content.len() > max_chars {
+                            "\n\nThis file was truncated during read. Use read_file with \
+                             start_line/end_line to see exact content, then use \
+                             anchor_start/anchor_end for reliable edits."
+                        } else {
+                            ""
                         };
                         return Err(ToolError::Io(std::io::Error::new(
                             std::io::ErrorKind::NotFound,
                             format!(
                                 "old_content not found in {}. \
                                  Read the file first to see current content. \
-                                 First 500 chars:\n{}",
-                                args.path, preview
+                                 First 500 chars:\n{}{}",
+                                args.path, preview, truncation_hint
                             ),
                         )));
                     }
@@ -828,7 +872,7 @@ mod tests {
             r#"{"path": "src/lib.rs", "old_content": "fn old()", "new_content": "fn new()"}"#;
         let args: EditFileArgs = serde_json::from_str(json).unwrap();
         assert_eq!(args.path, "src/lib.rs");
-        assert_eq!(args.old_content, "fn old()");
+        assert_eq!(args.old_content, Some("fn old()".to_string()));
         assert_eq!(args.new_content, "fn new()");
     }
 
@@ -885,6 +929,57 @@ mod tests {
         let args: EditFileArgs = serde_json::from_str(json).unwrap();
         assert!(args.anchor_start.is_none());
         assert!(args.anchor_end.is_none());
+    }
+
+    #[test]
+    fn test_edit_file_args_old_content_optional() {
+        let json = r#"{"path": "src/lib.rs", "new_content": "fn new()"}"#;
+        let args: EditFileArgs = serde_json::from_str(json).unwrap();
+        assert_eq!(args.path, "src/lib.rs");
+        assert!(args.old_content.is_none());
+        assert_eq!(args.new_content, "fn new()");
+    }
+
+    #[test]
+    fn test_edit_file_args_anchor_only() {
+        let json =
+            r#"{"path": "x.rs", "new_content": "y", "anchor_start": "1:ab", "anchor_end": "3:cd"}"#;
+        let args: EditFileArgs = serde_json::from_str(json).unwrap();
+        assert!(args.old_content.is_none());
+        assert_eq!(args.anchor_start, Some("1:ab".to_string()));
+    }
+
+    // --- strip_truncation_markers ---
+
+    #[test]
+    fn test_strip_truncation_marker() {
+        let input = "fn main() {\n    hello();\n[...386 more lines truncated. Use start_line/end_line to read a specific range.]\n}";
+        let result = strip_truncation_markers(input);
+        assert_eq!(result, "fn main() {\n    hello();\n}");
+    }
+
+    #[test]
+    fn test_strip_truncation_marker_none_present() {
+        let input = "fn main() {\n    hello();\n}";
+        let result = strip_truncation_markers(input);
+        assert_eq!(result, input);
+    }
+
+    // --- strip_line_number_prefixes_selective ---
+
+    #[test]
+    fn test_selective_strip_mixed_content() {
+        // Some lines have hashline prefix, others don't
+        let input = "42:a3|fn main() {\n    println!(\"hi\");\n44:ff|}";
+        let result = strip_line_number_prefixes_selective(input);
+        assert_eq!(result, "fn main() {\n    println!(\"hi\");\n}");
+    }
+
+    #[test]
+    fn test_selective_strip_no_prefixes() {
+        let input = "fn main() {\n    println!(\"hi\");\n}";
+        let result = strip_line_number_prefixes_selective(input);
+        assert_eq!(result, input);
     }
 }
 
@@ -1007,4 +1102,64 @@ fn unescape_if_double_encoded(s: &str) -> String {
         }
     }
     s.to_string()
+}
+
+/// Strip truncation markers that models copy from read_file output.
+/// Removes lines like `[...386 more lines truncated...]` or `[...N lines truncated. DO NOT...]`.
+fn strip_truncation_markers(s: &str) -> String {
+    let filtered: Vec<&str> = s
+        .lines()
+        .filter(|line| {
+            let trimmed = line.trim();
+            !(trimmed.starts_with("[...")
+                && (trimmed.contains("truncated") || trimmed.contains("lines"))
+                && trimmed.ends_with(']'))
+        })
+        .collect();
+    if filtered.len() == s.lines().count() {
+        // No markers removed — return original to avoid allocating
+        return s.to_string();
+    }
+    filtered.join("\n")
+}
+
+/// Per-line selective prefix stripping: strip hashline/line-number prefixes
+/// from individual lines that match the pattern, regardless of what percentage
+/// of lines have the prefix. Unlike `strip_line_number_prefixes` which requires
+/// ≥80% of lines to match, this strips each line independently.
+fn strip_line_number_prefixes_selective(s: &str) -> String {
+    let lines: Vec<&str> = s.lines().collect();
+    let mut any_stripped = false;
+    let result: Vec<&str> = lines
+        .iter()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if let Some(colon_pos) = trimmed.find(':') {
+                let before_colon = &trimmed[..colon_pos];
+                if before_colon.chars().all(|c| c.is_ascii_digit()) && !before_colon.is_empty() {
+                    let after_colon = &trimmed[colon_pos + 1..];
+                    // Old format: "42: code"
+                    if let Some(stripped) = after_colon.strip_prefix(' ') {
+                        any_stripped = true;
+                        return stripped;
+                    }
+                    // Hashline format: "42:a3|code"
+                    if let Some(pipe_pos) = after_colon.find('|') {
+                        if after_colon[..pipe_pos]
+                            .chars()
+                            .all(|c| c.is_ascii_hexdigit())
+                        {
+                            any_stripped = true;
+                            return &after_colon[pipe_pos + 1..];
+                        }
+                    }
+                }
+            }
+            line
+        })
+        .collect();
+    if !any_stripped {
+        return s.to_string();
+    }
+    result.join("\n")
 }

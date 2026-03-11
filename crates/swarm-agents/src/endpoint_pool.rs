@@ -16,16 +16,22 @@ use tracing::debug;
 use crate::cluster_health::ClusterHealth;
 use crate::config::{ClientSet, SwarmConfig};
 
-/// Tier names matching ClusterHealth's status map keys.
-const TIER_NAMES: [&str; 3] = ["fast", "coder", "reasoning"];
+/// Tier names matching ClusterHealth's status map keys (all 3 nodes).
+const TIER_NAMES_ALL: [&str; 3] = ["fast", "coder", "reasoning"];
+
+/// Tier names for the worker-only pool (excludes 27B scout).
+const TIER_NAMES_WORKERS: [&str; 2] = ["coder", "reasoning"];
 
 pub struct EndpointPool {
     workers: Vec<(openai::CompletionsClient, String)>, // (client, model_name)
+    tier_names: Vec<&'static str>,
     counter: Arc<AtomicUsize>,
     health: Option<ClusterHealth>,
 }
 
 impl EndpointPool {
+    /// Create a pool with all 3 nodes (fast + coder + reasoning).
+    /// Use for health monitoring and non-code-generation tasks.
     pub fn new(clients: &ClientSet, config: &SwarmConfig) -> Self {
         Self {
             workers: vec![
@@ -36,6 +42,24 @@ impl EndpointPool {
                     config.reasoning_endpoint.model.clone(),
                 ),
             ],
+            tier_names: TIER_NAMES_ALL.to_vec(),
+            counter: Arc::new(AtomicUsize::new(0)),
+            health: None,
+        }
+    }
+
+    /// Create a worker-only pool with coder + reasoning (both 122B).
+    /// Excludes the 27B scout/reviewer which is not tuned for code generation.
+    pub fn new_workers(clients: &ClientSet, config: &SwarmConfig) -> Self {
+        Self {
+            workers: vec![
+                (clients.coder.clone(), config.coder_endpoint.model.clone()),
+                (
+                    clients.reasoning.clone(),
+                    config.reasoning_endpoint.model.clone(),
+                ),
+            ],
+            tier_names: TIER_NAMES_WORKERS.to_vec(),
             counter: Arc::new(AtomicUsize::new(0)),
             health: None,
         }
@@ -82,7 +106,7 @@ impl EndpointPool {
         // Try each candidate in round-robin order, skipping down nodes.
         for offset in 0..n {
             let idx = (base + offset) % n;
-            let tier_name = TIER_NAMES[idx];
+            let tier_name = self.tier_names[idx];
             let is_usable = status_guard
                 .get(tier_name)
                 .map(|s| s.is_usable())
@@ -122,6 +146,7 @@ impl Clone for EndpointPool {
     fn clone(&self) -> Self {
         Self {
             workers: self.workers.clone(), // clones CompletionsClient (cheap Arc)
+            tier_names: self.tier_names.clone(),
             counter: Arc::clone(&self.counter), // shares the counter — key for round-robin
             health: self.health.clone(),
         }
@@ -151,6 +176,20 @@ mod tests {
         assert_eq!(indices[0], indices[3]);
         // Adjacent positions differ
         assert_ne!(indices[0], indices[1]);
+    }
+
+    /// Verify worker-only pool cycles across 2 nodes (coder, reasoning).
+    #[test]
+    fn worker_pool_cycles_two_nodes() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let n = 2usize;
+
+        let indices: Vec<usize> = (0..6)
+            .map(|_| counter.fetch_add(1, Ordering::Relaxed) % n)
+            .collect();
+
+        // Should cycle: 0, 1, 0, 1, 0, 1
+        assert_eq!(indices, vec![0, 1, 0, 1, 0, 1]);
     }
 
     #[test]

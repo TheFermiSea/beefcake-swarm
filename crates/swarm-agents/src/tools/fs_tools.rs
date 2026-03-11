@@ -161,7 +161,8 @@ impl Tool for ReadFileTool {
             }
             let remaining = total_lines - included_lines;
             truncated.push_str(&format!(
-                "\n[...{remaining} more lines truncated. Use start_line/end_line to read a specific range.]\n"
+                "\n[...{remaining} lines truncated. DO NOT paste truncated content into edit_file. \
+Use read_file with start_line/end_line to read the exact range, then use anchor_start/anchor_end.]\n"
             ));
             Ok(truncated)
         } else {

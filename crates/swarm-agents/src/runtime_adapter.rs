@@ -109,6 +109,14 @@ pub struct AdapterReport {
     pub termination_reason: Option<String>,
     /// Whether edit_file or write_file was called at least once during this session.
     pub has_written: bool,
+    /// Files successfully read during this session.
+    pub files_read: Vec<String>,
+    /// Files successfully modified during this session.
+    pub files_modified: Vec<String>,
+    /// Count of successful write operations.
+    pub successful_writes: u32,
+    /// Last failed edit attempts: (file_path, error_snippet).
+    pub last_failed_edits: Vec<(String, String)>,
 }
 
 /// In-flight tool call tracking.
@@ -131,6 +139,13 @@ struct AdapterState {
     consecutive_reads: usize,
     /// Whether edit_file or write_file has been called at least once.
     has_written: bool,
+    /// Consecutive edit_file failure count per file path.
+    /// Resets on successful edit or different file.
+    edit_failure_counts: HashMap<String, u32>,
+    /// Unique files read (for hybrid progress tracking).
+    files_read_set: std::collections::HashSet<String>,
+    /// Count of successful write operations.
+    successful_writes: u32,
     /// Validator state for pre-tool-call validation.
     validator_state: ValidatorState,
 }
@@ -161,6 +176,9 @@ impl RuntimeAdapter {
                 termination_reason: None,
                 consecutive_reads: 0,
                 has_written: false,
+                edit_failure_counts: HashMap::new(),
+                files_read_set: std::collections::HashSet::new(),
+                successful_writes: 0,
                 validator_state: ValidatorState::new(),
             })),
             config: Arc::new(config),
@@ -184,6 +202,9 @@ impl RuntimeAdapter {
                 termination_reason: None,
                 consecutive_reads: 0,
                 has_written: false,
+                edit_failure_counts: HashMap::new(),
+                files_read_set: std::collections::HashSet::new(),
+                successful_writes: 0,
                 validator_state: ValidatorState::new(),
             })),
             config: Arc::new(config),
@@ -210,6 +231,31 @@ impl RuntimeAdapter {
             terminated_early: state.terminated_early,
             termination_reason: state.termination_reason.clone(),
             has_written: state.has_written,
+            files_read: state.files_read_set.iter().cloned().collect(),
+            files_modified: state
+                .validator_state
+                .files_written
+                .iter()
+                .cloned()
+                .collect(),
+            successful_writes: state.successful_writes,
+            last_failed_edits: state
+                .tool_events
+                .iter()
+                .rev()
+                .take(5)
+                .filter(|e| {
+                    let base = e.tool_name.strip_prefix("proxy_").unwrap_or(&e.tool_name);
+                    base == "edit_file" && e.outcome == ToolOutcome::Error
+                })
+                .map(|e| {
+                    let path = serde_json::from_str::<serde_json::Value>(&e.args_preview)
+                        .ok()
+                        .and_then(|v| v.get("path")?.as_str().map(String::from))
+                        .unwrap_or_default();
+                    (path, e.result_preview.clone())
+                })
+                .collect(),
         })
     }
 
@@ -409,11 +455,6 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 ToolClass::Neutral => {}
             }
 
-            // Track writes for write-deadline enforcement
-            if Self::is_write_tool(&tool_name) {
-                s.has_written = true;
-            }
-
             // Enforce read budget
             if let Some(max_reads) = config.max_reads_without_action {
                 if s.consecutive_reads > max_reads {
@@ -469,7 +510,11 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
         let internal_call_id = internal_call_id.to_string();
         let result_preview = Self::truncate(result, config.preview_len);
         let result_len = result.len();
-        let is_error = result.starts_with("Error") || result.starts_with("error");
+        let is_error = result.starts_with("Error")
+            || result.starts_with("error")
+            || result.contains("old_content not found")
+            || result.contains("ToolCallError")
+            || result.contains("Toolset error");
         let args_for_path = args.to_string();
 
         async move {
@@ -501,6 +546,14 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 ToolOutcome::Success
             };
 
+            // Track successful writes for write-deadline enforcement.
+            // Only set has_written when the tool actually succeeded — failed edits
+            // (e.g., "old_content not found") must not satisfy the write deadline.
+            if Self::is_write_tool(&tool_name) && outcome == ToolOutcome::Success {
+                s.has_written = true;
+                s.successful_writes += 1;
+            }
+
             let duration_ms = duration.as_millis() as u64;
 
             info!(
@@ -519,6 +572,45 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 duration_ms,
                 outcome,
             });
+
+            // Track edit failures for repeated-failure early termination
+            let base_name = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
+            if base_name == "edit_file" {
+                if let Some(path) = extract_path_from_args(&args_for_path) {
+                    if is_error {
+                        let count = s.edit_failure_counts.entry(path.clone()).or_insert(0);
+                        *count += 1;
+                        let count_val = *count;
+                        if count_val >= 2 {
+                            warn!(
+                                agent = %config.agent_name,
+                                path = %path,
+                                consecutive_failures = count_val,
+                                "Repeated edit_file failure on same file — terminating"
+                            );
+                            s.terminated_early = true;
+                            s.termination_reason = Some(format!(
+                                "Repeated edit_file failure: {count_val} consecutive failures on '{path}'. \
+                                 Re-read the file with start_line/end_line to see exact content, \
+                                 then use anchor_start/anchor_end for reliable edits."
+                            ));
+                            return HookAction::terminate(format!(
+                                "Runtime adapter: repeated edit failure on {path}"
+                            ));
+                        }
+                    } else {
+                        // Successful edit — reset failure counter for this file
+                        s.edit_failure_counts.remove(&path);
+                    }
+                }
+            }
+
+            // Track file reads for progress monitoring
+            if base_name == "read_file" {
+                if let Some(path) = extract_path_from_args(&args_for_path) {
+                    s.files_read_set.insert(path);
+                }
+            }
 
             // Update validator state: track file reads/writes for pre-call validators.
             let base = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
@@ -771,6 +863,10 @@ mod tests {
             terminated_early: false,
             termination_reason: None,
             has_written: false,
+            files_read: vec![],
+            files_modified: vec![],
+            successful_writes: 0,
+            last_failed_edits: vec![],
         };
 
         let json = serde_json::to_string(&report).unwrap();
@@ -927,6 +1023,50 @@ mod tests {
         assert!(!report.terminated_early);
     }
 
+    #[tokio::test]
+    async fn test_failed_edit_does_not_satisfy_write_deadline() {
+        let adapter = RuntimeAdapter::new(AdapterConfig {
+            agent_name: "test-worker".into(),
+            max_turns_without_write: Some(3),
+            ..Default::default()
+        });
+
+        // Turn 1: failed edit_file (old_content not found)
+        simulate_turn(&adapter).await;
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(&adapter, "edit_file", None, "w-fail", "{}")
+        .await;
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_result(
+            &adapter,
+            "edit_file",
+            None,
+            "w-fail",
+            "{}",
+            "Error: old_content not found in src/main.rs",
+        )
+        .await;
+
+        // Turns 2-3
+        simulate_turn(&adapter).await;
+        simulate_turn(&adapter).await;
+
+        // Turn 4 should terminate because has_written is still false
+        let action = simulate_turn(&adapter).await;
+        assert!(
+            matches!(action, HookAction::Terminate { .. }),
+            "Expected Terminate — failed edit should not satisfy write deadline, got {action:?}"
+        );
+
+        let report = adapter.report().unwrap();
+        assert!(
+            !report.has_written,
+            "has_written should be false after failed edits"
+        );
+    }
+
     #[test]
     fn test_tool_classification() {
         // Read-only tools
@@ -982,6 +1122,151 @@ mod tests {
         assert_eq!(
             RuntimeAdapter::classify_tool("unknown_tool"),
             ToolClass::Neutral
+        );
+    }
+
+    #[tokio::test]
+    async fn test_repeated_edit_failure_terminates() {
+        let adapter = RuntimeAdapter::new(AdapterConfig {
+            agent_name: "test-worker".into(),
+            ..Default::default()
+        });
+
+        // First failed edit on same file
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(
+            &adapter,
+            "edit_file",
+            None,
+            "e-0",
+            r#"{"path":"src/main.rs"}"#,
+        )
+        .await;
+        let action1 = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_result(
+            &adapter,
+            "edit_file",
+            None,
+            "e-0",
+            r#"{"path":"src/main.rs"}"#,
+            "Error: old_content not found in src/main.rs",
+        )
+        .await;
+        assert_eq!(
+            action1,
+            HookAction::cont(),
+            "First failure should not terminate"
+        );
+
+        // Second failed edit on same file → terminate
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(
+            &adapter,
+            "edit_file",
+            None,
+            "e-1",
+            r#"{"path":"src/main.rs"}"#,
+        )
+        .await;
+        let action2 = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_result(
+            &adapter,
+            "edit_file",
+            None,
+            "e-1",
+            r#"{"path":"src/main.rs"}"#,
+            "Error: old_content not found in src/main.rs",
+        )
+        .await;
+        assert!(
+            matches!(action2, HookAction::Terminate { .. }),
+            "Expected terminate after 2 consecutive failures, got {action2:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_successful_edit_resets_failure_counter() {
+        let adapter = RuntimeAdapter::new(AdapterConfig {
+            agent_name: "test-worker".into(),
+            ..Default::default()
+        });
+
+        // First failed edit
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(
+            &adapter,
+            "edit_file",
+            None,
+            "e-0",
+            r#"{"path":"src/main.rs"}"#,
+        )
+        .await;
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_result(
+            &adapter,
+            "edit_file",
+            None,
+            "e-0",
+            r#"{"path":"src/main.rs"}"#,
+            "Error: old_content not found in src/main.rs",
+        )
+        .await;
+
+        // Successful edit resets counter
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(
+            &adapter,
+            "edit_file",
+            None,
+            "e-1",
+            r#"{"path":"src/main.rs"}"#,
+        )
+        .await;
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_result(
+            &adapter,
+            "edit_file",
+            None,
+            "e-1",
+            r#"{"path":"src/main.rs"}"#,
+            "Edited src/main.rs: replaced 3 lines with 5 lines (+2)",
+        )
+        .await;
+
+        // Another failure — should be counted as first, not second
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(
+            &adapter,
+            "edit_file",
+            None,
+            "e-2",
+            r#"{"path":"src/main.rs"}"#,
+        )
+        .await;
+        let action = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_result(
+            &adapter,
+            "edit_file",
+            None,
+            "e-2",
+            r#"{"path":"src/main.rs"}"#,
+            "Error: old_content not found in src/main.rs",
+        )
+        .await;
+        assert_eq!(
+            action,
+            HookAction::cont(),
+            "Should not terminate — counter was reset"
         );
     }
 }
