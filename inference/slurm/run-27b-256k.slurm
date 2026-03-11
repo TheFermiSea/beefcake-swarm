@@ -112,8 +112,6 @@ $NUMA_CMD "$LLAMA_BIN/llama-server" \
     --ubatch-size 512 \
     --cache-type-k q4_0 \
     --cache-type-v q4_0 \
-    --prompt-cache "/scratch/ai/models/27b-prompt-cache.bin" \
-    --prompt-cache-all \
     --cont-batching \
     --metrics \
     --jinja \

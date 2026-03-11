@@ -2667,7 +2667,11 @@ pub async fn process_issue(
                         "No-change response; engine routes to {next:?} (verifier skipped)"
                     );
                 } else {
-                    warn!(iteration, ?next, "No-change response; staying on {next:?} (verifier skipped)");
+                    warn!(
+                        iteration,
+                        ?next,
+                        "No-change response; staying on {next:?} (verifier skipped)"
+                    );
                 }
                 escalation.current_tier = next;
                 continue;

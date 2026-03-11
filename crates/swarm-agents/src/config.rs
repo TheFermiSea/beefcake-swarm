@@ -8,11 +8,11 @@ use std::time::Duration;
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
 pub enum Tier {
-    /// Qwen3.5-122B-A10B on vasp-01 — Fast tier (65K context, expert-offload single-node)
+    /// Qwen3.5-27B-Distilled on vasp-03 — Scout/fast tier (192K context, VRAM-resident)
     Fast,
-    /// Qwen3.5-122B-A10B on vasp-02 — Coder tier (65K context, expert-offload single-node)
+    /// Qwen3.5-122B-A10B on vasp-01 — Coder/integrator tier (65K context, expert-offload)
     Coder,
-    /// Qwen3.5-122B-A10B on vasp-01 — Reasoning tier (same model, round-robin with fast)
+    /// Qwen3.5-122B-A10B on vasp-02 — Reasoning/integrator tier (65K context, expert-offload)
     Reasoning,
     /// Cloud models via CLIAPIProxy
     Cloud,
@@ -210,11 +210,11 @@ impl CloudFallbackMatrix {
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
-    /// Qwen3.5-122B-A10B on vasp-01 :8081 (Fast tier, expert-offload single-node, 65K context)
+    /// Qwen3.5-27B-Distilled on vasp-03:8081 (Scout/fast tier, 192K context, VRAM-resident)
     pub fast_endpoint: Endpoint,
-    /// Qwen3.5-122B-A10B on vasp-02 :8081 (Coder tier, expert-offload single-node, 65K context)
+    /// Qwen3.5-122B-A10B on vasp-01:8081 (Coder/integrator, 65K context, expert-offload)
     pub coder_endpoint: Endpoint,
-    /// Qwen3.5-122B-A10B on vasp-01 :8081 (Reasoning tier, same model as fast)
+    /// Qwen3.5-122B-A10B on vasp-02:8081 (Reasoning/integrator, 65K context, expert-offload)
     pub reasoning_endpoint: Endpoint,
     /// CLIAPIProxy cloud escalation (optional)
     pub cloud_endpoint: Option<CloudEndpoint>,
@@ -270,16 +270,16 @@ impl Default for SwarmConfig {
         Self {
             fast_endpoint: Endpoint {
                 url: std::env::var("SWARM_FAST_URL")
-                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-03:8081/v1".into()),
                 model: std::env::var("SWARM_FAST_MODEL")
-                    .unwrap_or_else(|_| "Qwen3.5-122B-A10B".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-27B-Distilled".into()),
                 tier: Tier::Fast,
                 api_key: std::env::var("SWARM_FAST_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
             },
             coder_endpoint: Endpoint {
                 url: std::env::var("SWARM_CODER_URL")
-                    .unwrap_or_else(|_| "http://vasp-02:8081/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
                 model: std::env::var("SWARM_CODER_MODEL")
                     .unwrap_or_else(|_| "Qwen3.5-122B-A10B".into()),
                 tier: Tier::Coder,
@@ -288,7 +288,7 @@ impl Default for SwarmConfig {
             },
             reasoning_endpoint: Endpoint {
                 url: std::env::var("SWARM_REASONING_URL")
-                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-02:8081/v1".into()),
                 model: std::env::var("SWARM_REASONING_MODEL")
                     .unwrap_or_else(|_| "Qwen3.5-122B-A10B".into()),
                 tier: Tier::Reasoning,
@@ -404,16 +404,16 @@ impl SwarmConfig {
 /// Pre-built rig CompletionsClients for the three-node inference cluster.
 ///
 /// Each tier maps to a different node/model:
-/// - `local`     -> vasp-03:8081 (Qwen3.5-27B-Distilled, Scout tier)
-/// - `coder`     -> vasp-01:8081 (Qwen3.5-122B-A10B, Integrator tier)
-/// - `reasoning` -> vasp-01:8081 (Qwen3.5-122B-A10B, fallback reasoning)
+/// - `local`     -> vasp-03:8081 (Qwen3.5-27B-Distilled, Scout/fast tier, 192K context)
+/// - `coder`     -> vasp-01:8081 (Qwen3.5-122B-A10B, Integrator/coder tier, 65K context)
+/// - `reasoning` -> vasp-02:8081 (Qwen3.5-122B-A10B, Integrator/reasoning tier, 65K context)
 #[derive(Clone)]
 pub struct ClientSet {
-    /// Client for vasp-03:8081 (Qwen3.5-27B-Distilled -- fast tier: analysis, routing, review)
+    /// Client for vasp-03:8081 (Qwen3.5-27B-Distilled -- scout/fast tier: analysis, routing, review)
     pub local: openai::CompletionsClient,
-    /// Client for vasp-01:8081 (Qwen3.5-122B-A10B -- coder tier: general code generation)
+    /// Client for vasp-01:8081 (Qwen3.5-122B-A10B -- coder/integrator tier: code generation)
     pub coder: openai::CompletionsClient,
-    /// Client for vasp-01:8081 (Qwen3.5-122B-A10B -- reasoning tier: deep analysis, planning)
+    /// Client for vasp-02:8081 (Qwen3.5-122B-A10B -- reasoning/integrator tier: deep analysis)
     pub reasoning: openai::CompletionsClient,
     /// Client for CLIAPIProxy (cloud models: Opus 4.6, G3-Pro, etc.)
     /// Used as the Manager tier when available.
@@ -568,8 +568,12 @@ pub async fn check_endpoint_with_model(
                 }
                 has_model
             } else {
-                // Couldn't parse body but endpoint is reachable
-                true
+                tracing::warn!(
+                    endpoint = url,
+                    expected_model = expected,
+                    "Endpoint reachable but /v1/models response could not be parsed"
+                );
+                false
             }
         }
         Ok(resp) => {
@@ -605,9 +609,12 @@ mod tests {
         std::env::remove_var("SWARM_MAX_RETRIES");
         let config = SwarmConfig::default();
         assert_eq!(config.max_retries, 10);
-        assert!(config.fast_endpoint.url.contains("vasp-01"));
-        assert!(config.reasoning_endpoint.url.contains("vasp-01"));
-        assert!(config.fast_endpoint.model.contains("Qwen3.5"));
+        assert!(config.fast_endpoint.url.contains("vasp-03"));
+        assert!(config.coder_endpoint.url.contains("vasp-01"));
+        assert!(config.reasoning_endpoint.url.contains("vasp-02"));
+        assert_eq!(config.fast_endpoint.model, "Qwen3.5-27B-Distilled");
+        assert_eq!(config.coder_endpoint.model, "Qwen3.5-122B-A10B");
+        assert_eq!(config.reasoning_endpoint.model, "Qwen3.5-122B-A10B");
         assert_eq!(config.fast_endpoint.api_key, "not-needed");
     }
 

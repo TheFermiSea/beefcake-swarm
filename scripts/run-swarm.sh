@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export RUST_LOG="${RUST_LOG:-info}"
-# All three tiers use Qwen3.5-397B-A17B (Q4_K_M, --parallel 2 each, 6 total slots)
-# Fast tier: Qwen3.5-397B on vasp-03
+# Scout/Fast tier: Qwen3.5-27B-Distilled on vasp-03 (VRAM-resident, 192K context)
 export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-03:8081/v1}"
-export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3.5-397B-A17B}"
-# Coder tier: Qwen3.5-397B on vasp-01
+export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3.5-27B-Distilled}"
+# Coder/Integrator tier: Qwen3.5-122B-A10B MoE on vasp-01 (expert-offload, 65K context)
 export SWARM_CODER_URL="${SWARM_CODER_URL:-http://vasp-01:8081/v1}"
-export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-397B-A17B}"
-# Reasoning tier: Qwen3.5-397B on vasp-02
+export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-122B-A10B}"
+# Reasoning/Integrator tier: Qwen3.5-122B-A10B MoE on vasp-02 (expert-offload, 65K context)
 export SWARM_REASONING_URL="${SWARM_REASONING_URL:-http://vasp-02:8081/v1}"
-export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-Qwen3.5-397B-A17B}"
+export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-Qwen3.5-122B-A10B}"
 # Cloud manager via CLIAPIProxy
 # Set SWARM_CLOUD_URL="" (empty) to run in worker-first mode (local models only).
 # Default to localhost when running on ai-proxy (where the proxy lives).

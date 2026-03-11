@@ -141,35 +141,44 @@ async fn main() -> Result<()> {
         .await;
         info!(local_ok, coder_ok, reasoning_ok, "Endpoint health check");
         if !local_ok {
-            warn!(
+            error!(
                 url = %config.fast_endpoint.url,
                 model = %config.fast_endpoint.model,
-                "Fast endpoint not ready (vasp-03). Start: bash /tmp/start-hydracoder.sh"
+                "Fast/scout endpoint not ready (vasp-03). sbatch run-27b-256k.slurm"
             );
         }
         if !coder_ok {
-            warn!(
+            error!(
                 url = %config.coder_endpoint.url,
                 model = %config.coder_endpoint.model,
-                "Coder endpoint not ready (vasp-01). Start: bash /tmp/start-coder-next.sh"
+                "Coder/integrator endpoint not ready (vasp-01). sbatch run-122b-rpc.slurm"
             );
         }
         if !reasoning_ok {
-            warn!(
+            error!(
                 url = %config.reasoning_endpoint.url,
                 model = %config.reasoning_endpoint.model,
-                "Reasoning endpoint not ready (vasp-02). Start: bash /tmp/start-qwen35-q4km.sh"
+                "Reasoning/integrator endpoint not ready (vasp-02). sbatch --nodelist=vasp-02 run-122b-rpc.slurm"
             );
         }
 
         if !local_ok && !coder_ok && !reasoning_ok {
             if config.cloud_endpoint.is_some() {
-                warn!("Local endpoints down — will attempt cloud-only mode");
+                warn!("All local endpoints down — will attempt cloud-only mode");
                 config.cloud_only = true;
             } else {
                 error!("All endpoints unreachable and no cloud configured — exiting");
                 anyhow::bail!("No inference endpoints available");
             }
+        } else if !local_ok || !coder_ok || !reasoning_ok {
+            // At least one local endpoint is down but not all — warn loudly.
+            // Workers routed to failed endpoints will get 502 errors and waste iterations.
+            warn!(
+                local_ok,
+                coder_ok,
+                reasoning_ok,
+                "Some local endpoints are down — workers may fail. Fix before running dogfood."
+            );
         }
     }
 
