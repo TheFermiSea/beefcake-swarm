@@ -7,6 +7,7 @@ use rig::tool::Tool;
 use serde::Deserialize;
 
 use super::{run_command_with_timeout, ToolError};
+use crate::git_ops::{filter_meaningful_diff_output, filter_meaningful_status};
 
 // ── GetDiffTool ──────────────────────────────────────────────────────────
 
@@ -68,6 +69,7 @@ impl Tool for GetDiffTool {
         let args = ["diff", base, stat_arg];
 
         let output = run_command_with_timeout("git", &args, &self.working_dir, 30).await?;
+        let output = filter_meaningful_diff_output(&output, name_only);
 
         if output.trim().is_empty() {
             Ok("No changes".to_string())
@@ -118,6 +120,7 @@ impl Tool for ListChangedFilesTool {
     async fn call(&self, _args: Self::Args) -> Result<Self::Output, Self::Error> {
         let output =
             run_command_with_timeout("git", &["status", "--short"], &self.working_dir, 10).await?;
+        let output = filter_meaningful_status(&output);
 
         if output.trim().is_empty() {
             Ok("No changes (working tree clean)".to_string())

@@ -11,6 +11,135 @@ use crate::telemetry;
 /// Backoff delays for transient git retries (milliseconds).
 pub(crate) const ASYNC_RETRY_DELAYS_MS: &[u64] = &[100, 500, 2000];
 
+/// Return true when the path is swarm/beads bookkeeping noise rather than code.
+pub(crate) fn is_operational_artifact_path(path: &str) -> bool {
+    let path = path.trim();
+    path == ".beads" || path.starts_with(".beads/") || path.starts_with(".swarm-")
+}
+
+fn parse_status_path(line: &str) -> Option<&str> {
+    let line = line.trim_end();
+    if line.len() < 4 {
+        return None;
+    }
+
+    let payload = line[3..].trim();
+    if payload.is_empty() {
+        return None;
+    }
+
+    payload
+        .rsplit_once(" -> ")
+        .map(|(_, new_path)| new_path.trim())
+        .or(Some(payload))
+}
+
+/// Remove operational-artifact lines from `git status --short` output.
+pub(crate) fn filter_meaningful_status(output: &str) -> String {
+    output
+        .lines()
+        .filter(|line| {
+            parse_status_path(line)
+                .map(|path| !is_operational_artifact_path(path))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Remove operational-artifact lines from `git diff --stat` / `--name-only`.
+pub(crate) fn filter_meaningful_diff_output(output: &str, name_only: bool) -> String {
+    output
+        .lines()
+        .filter(|line| {
+            let path = if name_only {
+                Some(line.trim())
+            } else {
+                line.split_once('|').map(|(path, _)| path.trim())
+            };
+
+            path.map(|path| !path.is_empty() && !is_operational_artifact_path(path))
+                .unwrap_or(false)
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Check whether the worktree has any meaningful (non-artifact) pending changes.
+pub(crate) async fn git_has_meaningful_changes(wt_path: &Path) -> bool {
+    tokio::process::Command::new("git")
+        .args(["status", "--short"])
+        .current_dir(wt_path)
+        .output()
+        .await
+        .map(|output| {
+            output.status.success()
+                && !filter_meaningful_status(&String::from_utf8_lossy(&output.stdout))
+                    .trim()
+                    .is_empty()
+        })
+        .unwrap_or(false)
+}
+
+async fn unstage_operational_artifacts(wt_path: &Path) -> Result<()> {
+    let staged = tokio::process::Command::new("git")
+        .args(["diff", "--cached", "--name-only", "-z"])
+        .current_dir(wt_path)
+        .output()
+        .await
+        .context("Failed to inspect staged paths")?;
+
+    if !staged.status.success() {
+        let stderr = String::from_utf8_lossy(&staged.stderr);
+        anyhow::bail!("git diff --cached --name-only failed: {stderr}");
+    }
+
+    for raw_path in staged.stdout.split(|byte| *byte == b'\0') {
+        if raw_path.is_empty() {
+            continue;
+        }
+
+        let path = String::from_utf8_lossy(raw_path).trim().to_string();
+        if !is_operational_artifact_path(&path) {
+            continue;
+        }
+
+        if path == ".beads" {
+            let _ = tokio::process::Command::new("git")
+                .args(["restore", "--staged", ".beads"])
+                .current_dir(wt_path)
+                .output()
+                .await;
+
+            let force_remove =
+                retry_git_command_async(&["update-index", "--force-remove", ".beads"], wt_path, 3)
+                    .await?;
+            if !force_remove.status.success() {
+                let stderr = String::from_utf8_lossy(&force_remove.stderr);
+                anyhow::bail!("git update-index --force-remove .beads failed: {stderr}");
+            }
+            continue;
+        }
+
+        let restore = tokio::process::Command::new("git")
+            .args(["restore", "--staged", "--", &path])
+            .current_dir(wt_path)
+            .output()
+            .await
+            .with_context(|| format!("Failed to unstage operational artifact: {path}"))?;
+
+        if !restore.status.success() {
+            warn!(
+                path = %path,
+                stderr = %String::from_utf8_lossy(&restore.stderr).trim(),
+                "Failed to unstage operational artifact"
+            );
+        }
+    }
+
+    Ok(())
+}
+
 /// Stage and commit all changes in the given worktree, avoiding accidental commits of worktree symlinks.
 ///
 /// Stages changes using `git add .` (so `.gitignore` is respected), then commits with the message
@@ -45,31 +174,9 @@ pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> 
         anyhow::bail!("git add failed (iteration {iteration}): {stderr}");
     }
 
-    // Best-effort: unstage .beads if it was accidentally staged via the worktree symlink.
-    // WorktreeBridge::create() replaces .beads/ with a symlink to the main repo's .beads/
-    // so that `bd` commands connect to the shared Dolt server. `git add .` in a worktree
-    // would stage this symlink (as a mode-120000 blob) and simultaneously delete the
-    // tracked .beads/backup/ paths from the index — falsely appearing as a code change.
-    // `git restore --staged .beads` is a no-op when .beads is not staged.
-    let _ = tokio::process::Command::new("git")
-        .args(["restore", "--staged", ".beads"])
-        .current_dir(wt_path)
-        .output()
-        .await;
-
-    // Belt-and-suspenders: force-remove the .beads blob entry from the index.
-    // `git restore --staged` restores tracked paths from HEAD, but when `git add .`
-    // stages a directory→symlink type change it may not fully undo the mode-120000 entry.
-    // `update-index --force-remove` removes only the exact path '.beads' (not '.beads/<files>'),
-    // ensuring the symlink is never committed to the branch even if restore didn't fully work.
-    // Exit code is 0 whether the path was present (removed) or absent (no-op), so a
-    // non-zero exit always indicates a real git error — fail-closed to prevent a dirty commit.
-    let force_remove =
-        retry_git_command_async(&["update-index", "--force-remove", ".beads"], wt_path, 3).await?;
-    if !force_remove.status.success() {
-        let stderr = String::from_utf8_lossy(&force_remove.stderr);
-        anyhow::bail!("git update-index --force-remove .beads failed: {stderr}");
-    }
+    // Drop bookkeeping artifacts (shared .beads symlink, .swarm-* files) from the
+    // index before we decide whether there's anything worth committing.
+    unstage_operational_artifacts(wt_path).await?;
 
     // Check if there are staged changes
     let status = tokio::process::Command::new("git")
@@ -212,4 +319,61 @@ pub(crate) fn collect_artifacts_from_diff(
             })
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        filter_meaningful_diff_output, filter_meaningful_status, is_operational_artifact_path,
+    };
+
+    #[test]
+    fn operational_artifact_detection_covers_beads_and_swarm_files() {
+        assert!(is_operational_artifact_path(".beads"));
+        assert!(is_operational_artifact_path(".beads/backup/issues.jsonl"));
+        assert!(is_operational_artifact_path(".swarm-metrics.json"));
+        assert!(is_operational_artifact_path(
+            ".swarm-artifacts/session-1/report.json"
+        ));
+        assert!(!is_operational_artifact_path(
+            "crates/swarm-agents/src/orchestrator.rs"
+        ));
+    }
+
+    #[test]
+    fn status_filter_drops_operational_artifacts() {
+        let output = "\
+?? .beads
+?? .swarm-metrics.json
+ M crates/swarm-agents/src/orchestrator.rs";
+
+        assert_eq!(
+            filter_meaningful_status(output),
+            " M crates/swarm-agents/src/orchestrator.rs"
+        );
+    }
+
+    #[test]
+    fn diff_filter_drops_operational_artifacts() {
+        let output = "\
+ .beads | 1 -
+ .swarm-metrics.json | 12 ++++++++++++
+ crates/swarm-agents/src/orchestrator.rs | 2 +-
+ 3 files changed, 13 insertions(+), 2 deletions(-)";
+
+        assert_eq!(
+            filter_meaningful_diff_output(output, false),
+            " crates/swarm-agents/src/orchestrator.rs | 2 +-"
+        );
+    }
+
+    #[test]
+    fn name_only_diff_filter_drops_operational_artifacts() {
+        let output = "\
+.beads
+.swarm-metrics.json
+src/lib.rs";
+
+        assert_eq!(filter_meaningful_diff_output(output, true), "src/lib.rs");
+    }
 }

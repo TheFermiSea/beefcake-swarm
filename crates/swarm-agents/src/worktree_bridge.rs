@@ -234,7 +234,7 @@ impl WorktreeBridge {
                     .open(&exclude_file)
                 {
                     let _ = f.write_all(
-                        b"\n# Orchestrator artifacts\n.swarm-progress.txt\n.swarm-session.json\n# Beads data (auto-modified by bd, not real code changes)\n# .beads (no slash) matches the symlink; .beads/ matches the directory fallback\n.beads\n.beads/\n",
+                        b"\n# Orchestrator artifacts\n.swarm-progress.txt\n.swarm-session.json\n.swarm-*\n.swarm-*/\n# Beads data (auto-modified by bd, not real code changes)\n# .beads (no slash) matches the symlink; .beads/ matches the directory fallback\n.beads\n.beads/\n",
                     );
                 }
             }

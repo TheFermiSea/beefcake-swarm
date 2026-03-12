@@ -126,7 +126,7 @@ impl Tool for RunCommandTool {
             }
 
             // Validate every pipeline segment's program against the allowlist.
-            for segment in args.command.split('|') {
+            for segment in split_pipeline_segments(&args.command)? {
                 let seg = segment.trim();
                 if seg.is_empty() {
                     continue;
@@ -237,6 +237,63 @@ impl Tool for RunCommandTool {
     }
 }
 
+fn split_pipeline_segments(command: &str) -> Result<Vec<String>, ToolError> {
+    let mut segments = Vec::new();
+    let mut current = String::new();
+    let mut quote: Option<char> = None;
+    let mut escaped = false;
+
+    for ch in command.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        match ch {
+            '\\' => {
+                current.push(ch);
+                escaped = true;
+            }
+            '\'' | '"' => {
+                if quote == Some(ch) {
+                    quote = None;
+                } else if quote.is_none() {
+                    quote = Some(ch);
+                }
+                current.push(ch);
+            }
+            '|' if quote.is_none() => {
+                let segment = current.trim();
+                if segment.is_empty() {
+                    return Err(ToolError::CommandNotAllowed {
+                        command: "empty pipeline segment".to_string(),
+                    });
+                }
+                segments.push(segment.to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+
+    if escaped || quote.is_some() {
+        return Err(ToolError::CommandNotAllowed {
+            command: "invalid quoting in pipeline segment".to_string(),
+        });
+    }
+
+    let tail = current.trim();
+    if tail.is_empty() {
+        return Err(ToolError::CommandNotAllowed {
+            command: "empty pipeline segment".to_string(),
+        });
+    }
+    segments.push(tail.to_string());
+
+    Ok(segments)
+}
+
 /// Format command output into a string for the agent.
 fn format_output(
     output: Result<std::process::Output, std::io::Error>,
@@ -256,5 +313,45 @@ fn format_output(
             }
         }
         Err(e) => Err(ToolError::Io(e)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_pipeline_segments;
+
+    #[test]
+    fn pipeline_splitter_keeps_quoted_regex_pipes() {
+        let command = r#"cargo test --lib 2>&1 | grep -E "FAILED|failures:""#;
+        let segments = split_pipeline_segments(command).expect("split quoted pipeline");
+        assert_eq!(
+            segments,
+            vec![
+                "cargo test --lib 2>&1".to_string(),
+                r#"grep -E "FAILED|failures:""#.to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn pipeline_splitter_keeps_escaped_pipe_literals() {
+        let command = r#"printf FAILED\|failures: | head -n 1"#;
+        let segments = split_pipeline_segments(command).expect("split escaped pipe");
+        assert_eq!(
+            segments,
+            vec![
+                r#"printf FAILED\|failures:"#.to_string(),
+                "head -n 1".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn pipeline_splitter_rejects_unterminated_quotes() {
+        let err = split_pipeline_segments(r#"grep "FAILED|failures:"#).unwrap_err();
+        assert!(
+            format!("{err:?}").contains("invalid quoting"),
+            "unexpected error: {err:?}"
+        );
     }
 }

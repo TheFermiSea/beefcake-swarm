@@ -455,7 +455,9 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
 // Git commit, retry, diff-counting, and artifact-collection helpers live in
 // `crate::git_ops` and are re-exported here for backward compatibility.
 pub use crate::git_ops::git_commit_changes;
-pub(crate) use crate::git_ops::{collect_artifacts_from_diff, count_diff_lines};
+pub(crate) use crate::git_ops::{
+    collect_artifacts_from_diff, count_diff_lines, git_has_meaningful_changes,
+};
 
 /// Result of a single cloud model validation.
 pub(crate) struct CloudValidationResult {
@@ -2169,12 +2171,7 @@ pub async fn process_issue(
                 // adapter_report.has_written reflects tool-call intent (set in
                 // on_tool_call before the tool runs). Cross-check with git to
                 // detect failed edits that set the flag but didn't change files.
-                let git_has_changes = std::process::Command::new("git")
-                    .args(["status", "--porcelain"])
-                    .current_dir(&wt_path)
-                    .output()
-                    .map(|o| !o.stdout.is_empty())
-                    .unwrap_or(false);
+                let git_has_changes = git_has_meaningful_changes(&wt_path).await;
                 // For manager (Council tier): sub-workers are agent-as-tool, so the
                 // manager's adapter never sees edit_file/write_file calls — only tool
                 // names like "proxy_rust_coder". If git shows changes AND the manager
