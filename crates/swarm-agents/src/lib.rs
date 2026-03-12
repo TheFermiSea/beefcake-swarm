@@ -1,7 +1,7 @@
 pub mod acceptance;
 pub mod action_validator;
-pub mod auto_fix;
 pub mod agents;
+pub mod auto_fix;
 pub mod bdh_bridge;
 pub mod beads_bridge;
 pub mod cluster_health;
@@ -11,8 +11,8 @@ pub mod dashboard;
 pub mod driver;
 pub mod endpoint_pool;
 pub mod file_lock;
-pub mod git_ops;
 pub mod file_targeting;
+pub mod git_ops;
 pub mod kb_refresh;
 pub mod knowledge_sync;
 pub mod modes;
