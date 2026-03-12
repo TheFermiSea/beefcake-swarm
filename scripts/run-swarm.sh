@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export RUST_LOG="${RUST_LOG:-info}"
+export SWARM_USE_BDH="${SWARM_USE_BDH:-1}"
+export SWARM_BDH_BIN="${SWARM_BDH_BIN:-bdh}"
 # Scout/Fast tier: Qwen3.5-27B-Distilled on vasp-03 (VRAM-resident, 192K context)
 export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-03:8081/v1}"
 export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3.5-27B-Distilled}"

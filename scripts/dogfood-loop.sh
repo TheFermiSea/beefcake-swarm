@@ -2,7 +2,7 @@
 # dogfood-loop.sh — Run swarm-agents on beads issues, optionally in parallel.
 #
 # Usage:
-#   ./scripts/dogfood-loop.sh                    # Pick from bd ready (default)
+#   ./scripts/dogfood-loop.sh                    # Pick from bdh ready (default)
 #   ./scripts/dogfood-loop.sh --max-runs 5       # Stop after 5 runs
 #   ./scripts/dogfood-loop.sh --cooldown 120     # 2-minute cooldown between runs
 #   ./scripts/dogfood-loop.sh --parallel 3       # Run up to 3 issues concurrently
@@ -32,6 +32,7 @@ COOLDOWN="${DOGFOOD_COOLDOWN:-60}"
 LOG_DIR="${DOGFOOD_LOG_DIR:-${REPO_ROOT}/logs/dogfood}"
 ISSUE_LIST="${DOGFOOD_ISSUE_LIST:-}"
 PARALLEL="${DOGFOOD_PARALLEL:-1}"
+ISSUE_QUERY_BIN="${DOGFOOD_BEADS_BIN:-bdh}"
 
 # CLI overrides
 while [[ $# -gt 0 ]]; do
@@ -93,7 +94,7 @@ if [[ -n "$ISSUE_LIST" ]]; then
   log "  Issues:   ${ISSUES[*]} (${#ISSUES[@]} total)"
 else
   ISSUES=()
-  log "  Issues:   auto (from bd ready)"
+  log "  Issues:   auto (from bdh ready)"
 fi
 
 # Verify toolchain
@@ -101,9 +102,34 @@ if ! command -v cargo &>/dev/null; then
   echo "ERROR: cargo not found. Install Rust toolchain first." >&2
   exit 1
 fi
-if ! command -v bd &>/dev/null; then
-  echo "WARNING: bd not found. Swarm will use NoOpTracker." >&2
+if ! command -v "$ISSUE_QUERY_BIN" &>/dev/null; then
+  echo "WARNING: $ISSUE_QUERY_BIN not found. Issue objectives will fall back to issue IDs." >&2
 fi
+
+parse_bdh_json() {
+  python3 -c '
+import json, sys
+
+doc = json.load(sys.stdin)
+payload = doc.get("bd_stdout", doc) if isinstance(doc, dict) else doc
+
+if sys.argv[1] == "field":
+    item = payload[0] if isinstance(payload, list) and payload else {}
+    value = item.get(sys.argv[2], "") if isinstance(item, dict) else ""
+    limit = int(sys.argv[3])
+    if isinstance(value, str):
+        print(value[:limit])
+    else:
+        print(value)
+elif sys.argv[1] == "count":
+    print(len(payload) if isinstance(payload, list) else 0)
+elif sys.argv[1] == "ids":
+    if isinstance(payload, list):
+        for item in payload:
+            if isinstance(item, dict) and item.get("id"):
+                print(item["id"])
+' "$@"
+}
 
 # --- Run a single issue (called from parallel dispatch) ---
 run_issue() {
@@ -115,8 +141,8 @@ run_issue() {
   # Fetch title + description from beads for the objective
   # Including the description gives find_target_files_by_grep more identifiers
   # to search for (e.g., "edit_file", "verifier") beyond just the title.
-  issue_title=$(bd show "$issue_id" --json --allow-stale 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin)[0]; print(d.get('title',''))" 2>/dev/null || echo "Issue $issue_id")
-  issue_desc=$(bd show "$issue_id" --json --allow-stale 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin)[0]; print(d.get('description','')[:300])" 2>/dev/null || echo "")
+  issue_title=$("$ISSUE_QUERY_BIN" show "$issue_id" --json 2>/dev/null | parse_bdh_json field title 1000 2>/dev/null || echo "Issue $issue_id")
+  issue_desc=$("$ISSUE_QUERY_BIN" show "$issue_id" --json 2>/dev/null | parse_bdh_json field description 300 2>/dev/null || echo "")
   if [[ -n "$issue_desc" ]]; then
     issue_objective="${issue_title}. ${issue_desc}"
   else
@@ -194,12 +220,12 @@ if [[ "$PARALLEL" -le 1 ]]; then
 
     # Check if more work exists
     if [[ ${#ISSUES[@]} -eq 0 ]]; then
-      READY_COUNT=$(bd ready 2>/dev/null | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>/dev/null || echo "0")
+      READY_COUNT=$("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json count 2>/dev/null || echo "0")
       if [[ "$READY_COUNT" -eq 0 ]]; then
         log "No more ready issues. Stopping."
         break
       fi
-      log "  $READY_COUNT issues remaining in bd ready"
+      log "  $READY_COUNT issues remaining in bdh ready"
     fi
 
     # Cooldown (unless done)
@@ -216,12 +242,7 @@ else
   # Build the issue queue
   if [[ ${#ISSUES[@]} -eq 0 ]]; then
     # Auto mode: fetch ready issues from beads
-    mapfile -t ISSUES < <(bd ready 2>/dev/null | python3 -c "
-import json, sys
-issues = json.load(sys.stdin)
-for i in issues:
-    print(i.get('id', ''))
-" 2>/dev/null || true)
+    mapfile -t ISSUES < <("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
     if [[ ${#ISSUES[@]} -eq 0 ]]; then
       log "No ready issues found. Stopping."
       exit 0

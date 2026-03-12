@@ -7,6 +7,8 @@
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use serde::de::DeserializeOwned;
+use serde_json::Value;
 use std::path::Path;
 use std::process::Command;
 
@@ -58,6 +60,13 @@ impl Default for BdhBridge {
 }
 
 impl BdhBridge {
+    fn parse_bdh_json<T: DeserializeOwned>(&self, stdout: &str, context: &str) -> Result<T> {
+        let value: Value =
+            serde_json::from_str(stdout).with_context(|| format!("Failed to parse {context}"))?;
+        let payload = value.get("bd_stdout").cloned().unwrap_or(value);
+        serde_json::from_value(payload).with_context(|| format!("Failed to decode {context}"))
+    }
+
     /// Create a new BdhBridge using the default binary name.
     pub fn new() -> Self {
         Self {
@@ -105,9 +114,9 @@ impl BdhBridge {
     pub fn show(&self, id: &str) -> Result<BeadsIssue> {
         let stdout = self.run_bdh_ok(&["show", id, "--json"])?;
 
-        // `bdh show --json` returns an array with one element (same as `bd show --json`)
-        let issues: Vec<BeadsIssue> =
-            serde_json::from_str(&stdout).context("Failed to parse bdh show output")?;
+        // Modern `bdh show --json` wraps the underlying bd payload in a
+        // coordination envelope with `bd_stdout`.
+        let issues: Vec<BeadsIssue> = self.parse_bdh_json(&stdout, "bdh show output")?;
 
         issues
             .into_iter()
@@ -226,8 +235,7 @@ impl IssueTracker for BdhBridge {
     /// List ready issues (open and not blocked), sorted by priority.
     fn list_ready(&self) -> Result<Vec<BeadsIssue>> {
         let stdout = self.run_bdh_ok(&["ready", "--json"])?;
-        let issues: Vec<BeadsIssue> =
-            serde_json::from_str(&stdout).context("Failed to parse bdh ready output")?;
+        let issues: Vec<BeadsIssue> = self.parse_bdh_json(&stdout, "bdh ready output")?;
         Ok(issues)
     }
 
@@ -295,5 +303,31 @@ mod tests {
         assert_eq!(status.members.len(), 1);
         assert_eq!(status.members[0].alias, "worker-1");
         assert_eq!(status.my_alias.unwrap(), "worker-1");
+    }
+
+    #[test]
+    fn test_parse_bdh_json_raw_payload() {
+        let bridge = BdhBridge::new();
+        let issues: Vec<BeadsIssue> = bridge
+            .parse_bdh_json(
+                r#"[{"id":"beefcake-1","title":"One","status":"open","priority":2,"type":"task","labels":[],"description":"desc"}]"#,
+                "raw payload",
+            )
+            .unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].id, "beefcake-1");
+    }
+
+    #[test]
+    fn test_parse_bdh_json_wrapped_payload() {
+        let bridge = BdhBridge::new();
+        let issues: Vec<BeadsIssue> = bridge
+            .parse_bdh_json(
+                r#"{"rejected":false,"bd_stdout":[{"id":"beefcake-2","title":"Two","status":"open","priority":1,"type":"task","labels":[],"description":"desc"}]}"#,
+                "wrapped payload",
+            )
+            .unwrap();
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].id, "beefcake-2");
     }
 }
