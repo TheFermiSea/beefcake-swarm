@@ -8,23 +8,30 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use rig::completion::Prompt;
 use rig::providers::openai;
 use tracing::{debug, error, info, warn};
 
 use crate::cluster_health::ClusterHealth;
+use crate::file_targeting::{detect_changed_packages, find_target_files_by_grep};
 use crate::modes::errors::OrchestrationError;
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 
 /// Default timeout for each cloud validation call.
 const DEFAULT_VALIDATION_TIMEOUT_SECS: u64 = 120; // 2 minutes
 
+/// Worker write deadline budget. Allows enough read turns to gather context
+/// before forcing an edit_file/write_file action.
+const WORKER_MAX_TURNS_WITHOUT_WRITE: usize = 8;
+
 /// Error message produced when cooperative cancellation fires inside the main loop.
 ///
 /// Checked in `main.rs` fan-in logic to distinguish graceful shutdown from genuine
 /// failures — import this constant rather than hard-coding the string in both places.
 pub const CANCEL_MSG: &str = "cancelled by shutdown signal";
+
+pub(crate) use crate::auto_fix::{should_reject_auto_fix, try_auto_fix};
 
 use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::reviewer::{self, ReviewResult};
@@ -256,120 +263,6 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
     prompt
 }
 
-/// Search the worktree for .rs files containing CamelCase identifiers from the objective.
-///
-/// Returns `Some(files)` if grep finds matches, `None` otherwise.
-/// This is critical for initial packs where the context packer's file_contexts
-/// (which covers only ~18 files due to token budget) may not include the target file.
-fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Option<Vec<String>> {
-    // Extract CamelCase identifiers (likely struct/type/trait names)
-    let camel: Vec<&str> = objective
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|w| w.len() >= 4 && w.chars().next().is_some_and(|c| c.is_uppercase()))
-        .collect();
-
-    // Also extract snake_case identifiers (e.g., edit_file, cargo_check, work_packet)
-    // These are common in Rust codebases and often appear in issue descriptions.
-    let snake: Vec<&str> = objective
-        .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|w| {
-            w.contains('_')
-                && w.len() >= 5
-                && w.chars()
-                    .all(|c| c.is_lowercase() || c == '_' || c.is_ascii_digit())
-        })
-        .collect();
-
-    let mut patterns: Vec<&str> = Vec::new();
-    // CamelCase first (more specific), then snake_case
-    patterns.extend(camel.iter().take(3));
-    patterns.extend(snake.iter().take(3));
-    patterns.dedup();
-
-    debug!(
-        wt_root = %wt_root.display(),
-        ?patterns,
-        "find_target_files_by_grep: extracted patterns"
-    );
-
-    if patterns.is_empty() {
-        debug!("find_target_files_by_grep: no searchable patterns found");
-        return None;
-    }
-
-    let mut all_files: Vec<String> = Vec::new();
-    for pattern in patterns.iter().take(6) {
-        match std::process::Command::new("grep")
-            .args(["-rl", "--include=*.rs", pattern])
-            .current_dir(wt_root)
-            .output()
-        {
-            Ok(output) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                debug!(
-                    pattern,
-                    success = output.status.success(),
-                    exit_code = output.status.code(),
-                    stdout_lines = stdout.lines().count(),
-                    stderr = %stderr,
-                    "find_target_files_by_grep: grep result"
-                );
-                if output.status.success() {
-                    for line in stdout.lines().take(10) {
-                        let path = line.trim().to_string();
-                        if !all_files.contains(&path) {
-                            all_files.push(path);
-                        }
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(pattern, error = %e, "find_target_files_by_grep: grep command failed");
-            }
-        }
-    }
-
-    debug!(
-        found = all_files.len(),
-        files = ?all_files,
-        "find_target_files_by_grep: grep results"
-    );
-
-    if all_files.is_empty() {
-        return None;
-    }
-
-    // Score files by how many patterns they match, with path-based boosts.
-    // Source files in tools/src/ are more likely implementation targets than
-    // patches/, tests/, or vendored code.
-    let mut scored: Vec<(usize, String)> = all_files
-        .into_iter()
-        .map(|f| {
-            let full = wt_root.join(&f);
-            let content = std::fs::read_to_string(&full).unwrap_or_default();
-            let mut score = patterns.iter().filter(|p| content.contains(*p)).count();
-            // Boost actual source files, penalize vendored/test/patch files
-            if f.contains("/tools/") {
-                score += 2;
-            } else if f.starts_with("patches/") {
-                score = score.saturating_sub(2);
-            } else if f.contains("/tests/") || f.ends_with("_test.rs") || f.ends_with("_tests.rs") {
-                score = score.saturating_sub(1);
-            }
-            (score, f)
-        })
-        .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
-
-    let result: Vec<String> = scored.into_iter().map(|(_, f)| f).take(3).collect();
-    if result.is_empty() {
-        None
-    } else {
-        Some(result)
-    }
-}
-
 /// Format a compact task prompt for small local models (HydraCoder, etc).
 ///
 /// Long structured prompts suppress tool-call generation in small MoE models.
@@ -522,7 +415,7 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
     }
 
     // Inline the first (most relevant) target file content to save read_file turns.
-    // Critical with max_turns_without_write=5: agent must write within 5 turns.
+    // Critical with max_turns_without_write=8: agent must write within 8 turns.
     if !target_files.is_empty() {
         let target_path = wt_root.join(&target_files[0]);
         if let Ok(content) = std::fs::read_to_string(&target_path) {
@@ -559,277 +452,10 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
     prompt
 }
 
-/// Try to auto-fix trivial verifier failures without LLM delegation.
-///
-/// Runs `cargo clippy --fix` for MachineApplicable suggestions and `cargo fmt`
-/// to resolve formatting issues. If fixes are applied, re-runs the verifier
-/// and returns the new report if it's now green.
-///
-/// This is the "Janitor" layer: handle mechanical fixes before involving expensive models.
-pub async fn try_auto_fix(
-    wt_path: &Path,
-    verifier_config: &VerifierConfig,
-    iteration: u32,
-) -> Option<VerifierReport> {
-    // Build package args for scoped commands
-    let mut pkg_args: Vec<&str> = Vec::new();
-    for pkg in &verifier_config.packages {
-        pkg_args.push("-p");
-        pkg_args.push(pkg);
-    }
-
-    // Step 1: Try cargo clippy --fix for MachineApplicable suggestions
-    let mut clippy_args = vec!["clippy", "--fix", "--allow-dirty", "--allow-staged"];
-    clippy_args.extend_from_slice(&pkg_args);
-    clippy_args.extend_from_slice(&["--", "-D", "warnings"]);
-
-    let clippy_fix = tokio::process::Command::new("cargo")
-        .args(&clippy_args)
-        .current_dir(wt_path)
-        .output()
-        .await;
-
-    let clippy_fixed = match clippy_fix {
-        Ok(ref out) if out.status.success() => {
-            info!(iteration, "auto-fix: cargo clippy --fix succeeded");
-            true
-        }
-        Ok(ref out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            // clippy --fix often "fails" because it can't fix everything — that's OK.
-            // It still applies what it can.
-            warn!(
-                iteration,
-                "auto-fix: cargo clippy --fix partial: {}",
-                &stderr[..stderr.len().min(200)]
-            );
-            true // Still worth re-checking
-        }
-        Err(e) => {
-            warn!(iteration, "auto-fix: cargo clippy --fix failed to run: {e}");
-            false
-        }
-    };
-
-    // Step 2: Run cargo fmt to fix formatting
-    let mut fmt_args = vec!["fmt"];
-    for pkg in &verifier_config.packages {
-        fmt_args.push("--package");
-        fmt_args.push(pkg);
-    }
-
-    let fmt_fix = tokio::process::Command::new("cargo")
-        .args(&fmt_args)
-        .current_dir(wt_path)
-        .output()
-        .await;
-
-    let fmt_fixed = match fmt_fix {
-        Ok(ref out) if out.status.success() => {
-            info!(iteration, "auto-fix: cargo fmt succeeded");
-            true
-        }
-        Ok(ref out) => {
-            let stderr = String::from_utf8_lossy(&out.stderr);
-            warn!(
-                iteration,
-                "auto-fix: cargo fmt failed (syntax error?): {}",
-                &stderr[..stderr.len().min(200)]
-            );
-            false
-        }
-        Err(e) => {
-            warn!(iteration, "auto-fix: cargo fmt failed to run: {e}");
-            false
-        }
-    };
-
-    if !clippy_fixed && !fmt_fixed {
-        return None; // Nothing was attempted
-    }
-
-    // Check if there are actual changes to commit
-    let status = tokio::process::Command::new("git")
-        .args(["diff", "--quiet"])
-        .current_dir(wt_path)
-        .output()
-        .await;
-
-    let has_changes = matches!(status, Ok(ref out) if !out.status.success());
-    if !has_changes {
-        info!(iteration, "auto-fix: no changes produced");
-        return None;
-    }
-
-    // Commit auto-fix changes
-    let _ = tokio::process::Command::new("git")
-        .args(["add", "."])
-        .current_dir(wt_path)
-        .output()
-        .await;
-
-    let msg = format!("swarm: auto-fix iteration {iteration} (clippy --fix + fmt)");
-    let _ = tokio::process::Command::new("git")
-        .args(["commit", "-m", &msg])
-        .current_dir(wt_path)
-        .output()
-        .await;
-
-    info!(
-        iteration,
-        "auto-fix: committed changes, re-running verifier"
-    );
-
-    // Re-run the full verifier pipeline
-    let verifier = Verifier::new(wt_path, verifier_config.clone());
-    let report = verifier.run_pipeline().await;
-
-    if report.all_green {
-        info!(
-            iteration,
-            summary = %report.summary(),
-            "auto-fix: verifier now passes! Skipping LLM delegation"
-        );
-        Some(report)
-    } else {
-        info!(
-            iteration,
-            summary = %report.summary(),
-            "auto-fix: verifier still failing after auto-fix"
-        );
-        // Return the updated report so the next iteration uses it
-        Some(report)
-    }
-}
-
-/// Stage and commit all changes in the given worktree, avoiding accidental commits of worktree symlinks.
-///
-/// Stages changes using `git add .` (so `.gitignore` is respected), then commits with the message
-/// `swarm: iteration {iteration} changes`. The implementation retries staging/commit on transient
-/// index.lock errors, performs a best-effort unstage of the special `.beads` entry and forcibly
-/// removes any `.beads` index blob to ensure the worktree symlink is never committed.
-///
-/// # Parameters
-///
-/// - `wt_path`: path to the worktree where git commands will be executed.
-/// - `iteration`: iteration number used to compose the commit message.
-///
-/// # Returns
-///
-/// `true` if a commit was created, `false` if there were no staged changes to commit.
-///
-/// # Examples
-///
-/// ```ignore
-/// use std::path::Path;
-///
-/// # async fn example() -> anyhow::Result<()> {
-/// let committed = git_commit_changes(Path::new("."), 1).await?;
-/// println!("Committed changes: {}", committed);
-/// # Ok(()) }
-/// ```
-pub async fn git_commit_changes(wt_path: &Path, iteration: u32) -> Result<bool> {
-    // Stage changes (respects .gitignore) — retry for transient index.lock errors
-    let add = retry_git_command_async(&["add", "."], wt_path, 3).await?;
-    if !add.status.success() {
-        let stderr = String::from_utf8_lossy(&add.stderr);
-        anyhow::bail!("git add failed (iteration {iteration}): {stderr}");
-    }
-
-    // Best-effort: unstage .beads if it was accidentally staged via the worktree symlink.
-    // WorktreeBridge::create() replaces .beads/ with a symlink to the main repo's .beads/
-    // so that `bd` commands connect to the shared Dolt server. `git add .` in a worktree
-    // would stage this symlink (as a mode-120000 blob) and simultaneously delete the
-    // tracked .beads/backup/ paths from the index — falsely appearing as a code change.
-    // `git restore --staged .beads` is a no-op when .beads is not staged.
-    let _ = tokio::process::Command::new("git")
-        .args(["restore", "--staged", ".beads"])
-        .current_dir(wt_path)
-        .output()
-        .await;
-
-    // Belt-and-suspenders: force-remove the .beads blob entry from the index.
-    // `git restore --staged` restores tracked paths from HEAD, but when `git add .`
-    // stages a directory→symlink type change it may not fully undo the mode-120000 entry.
-    // `update-index --force-remove` removes only the exact path '.beads' (not '.beads/<files>'),
-    // ensuring the symlink is never committed to the branch even if restore didn't fully work.
-    // Exit code is 0 whether the path was present (removed) or absent (no-op), so a
-    // non-zero exit always indicates a real git error — fail-closed to prevent a dirty commit.
-    let force_remove =
-        retry_git_command_async(&["update-index", "--force-remove", ".beads"], wt_path, 3).await?;
-    if !force_remove.status.success() {
-        let stderr = String::from_utf8_lossy(&force_remove.stderr);
-        anyhow::bail!("git update-index --force-remove .beads failed: {stderr}");
-    }
-
-    // Check if there are staged changes
-    let status = tokio::process::Command::new("git")
-        .args(["diff", "--cached", "--quiet"])
-        .current_dir(wt_path)
-        .output()
-        .await?;
-
-    if status.status.success() {
-        // Exit code 0 means no diff — nothing to commit
-        return Ok(false);
-    }
-
-    // Commit — retry for transient index.lock errors
-    let msg = format!("swarm: iteration {iteration} changes");
-    let commit = retry_git_command_async(&["commit", "-m", &msg], wt_path, 3).await?;
-    if !commit.status.success() {
-        let stderr = String::from_utf8_lossy(&commit.stderr);
-        anyhow::bail!("git commit failed: {stderr}");
-    }
-
-    Ok(true)
-}
-
-/// Backoff delays for transient git retries (milliseconds).
-const ASYNC_RETRY_DELAYS_MS: &[u64] = &[100, 500, 2000];
-
-/// Async version of retry_git_command for tokio contexts.
-async fn retry_git_command_async(
-    args: &[&str],
-    working_dir: &Path,
-    max_retries: u32,
-) -> Result<std::process::Output> {
-    for attempt in 0..=max_retries {
-        let output = tokio::process::Command::new("git")
-            .args(args)
-            .current_dir(working_dir)
-            .output()
-            .await
-            .context("Failed to execute git command")?;
-
-        if output.status.success() {
-            return Ok(output);
-        }
-
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        let is_transient = stderr.contains("index.lock") || stderr.contains("Unable to create");
-
-        if attempt < max_retries && is_transient {
-            let delay = ASYNC_RETRY_DELAYS_MS
-                .get(attempt as usize)
-                .copied()
-                .unwrap_or(2000);
-            warn!(
-                attempt = attempt + 1,
-                max_retries,
-                delay_ms = delay,
-                "Transient git failure, retrying: {}",
-                stderr.trim()
-            );
-            tokio::time::sleep(Duration::from_millis(delay)).await;
-            continue;
-        }
-
-        return Ok(output);
-    }
-
-    unreachable!()
-}
+// Git commit, retry, diff-counting, and artifact-collection helpers live in
+// `crate::git_ops` and are re-exported here for backward compatibility.
+pub use crate::git_ops::git_commit_changes;
+pub(crate) use crate::git_ops::{collect_artifacts_from_diff, count_diff_lines};
 
 /// Result of a single cloud model validation.
 pub(crate) struct CloudValidationResult {
@@ -948,92 +574,6 @@ pub(crate) fn bool_from_env(var: &str, default: bool) -> bool {
             )
         })
         .unwrap_or(default)
-}
-
-/// Count lines changed between two commits in the worktree.
-pub(crate) fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
-    let output = std::process::Command::new("git")
-        .args(["diff", "--numstat", from, to])
-        .current_dir(wt_path)
-        .output();
-    match output {
-        Ok(out) if out.status.success() => {
-            let stdout = String::from_utf8_lossy(&out.stdout);
-            stdout.lines().fold(0, |acc, line| {
-                let parts: Vec<&str> = line.split('\t').collect();
-                if parts.len() >= 2 {
-                    let added: usize = parts[0].parse().unwrap_or(0);
-                    let removed: usize = parts[1].parse().unwrap_or(0);
-                    acc + added + removed
-                } else {
-                    acc
-                }
-            })
-        }
-        _ => 0,
-    }
-}
-
-/// Collect artifact records from the git diff between two commits.
-///
-/// Parses `git diff --numstat` to determine which files were added, modified,
-/// or deleted. Files that existed before (`from`) and after (`to`) are
-/// `Modified`; files only in `to` are `Created`; files only in `from` are
-/// `Deleted`. The `size_delta` is approximated as `(added - removed)` lines
-/// (a line-count proxy; byte-level deltas would require `--stat`).
-pub(crate) fn collect_artifacts_from_diff(
-    wt_path: &Path,
-    from: &str,
-    to: &str,
-) -> Vec<telemetry::ArtifactRecord> {
-    let output = std::process::Command::new("git")
-        .args(["diff", "--numstat", from, to])
-        .current_dir(wt_path)
-        .output();
-
-    let stdout = match output {
-        Ok(ref out) if out.status.success() => String::from_utf8_lossy(&out.stdout).to_string(),
-        _ => return Vec::new(),
-    };
-
-    stdout
-        .lines()
-        .filter_map(|line| {
-            // numstat format: "<added>\t<removed>\t<path>"
-            // Binary files show "-\t-\t<path>"
-            let parts: Vec<&str> = line.splitn(3, '\t').collect();
-            if parts.len() < 3 {
-                return None;
-            }
-            let added: i64 = parts[0].parse().unwrap_or(0);
-            let removed: i64 = parts[1].parse().unwrap_or(0);
-            let path = parts[2].trim().to_string();
-
-            let action = if added > 0 && removed == 0 {
-                telemetry::ArtifactAction::Created
-            } else if added == 0 && removed > 0 {
-                telemetry::ArtifactAction::Deleted
-            } else {
-                telemetry::ArtifactAction::Modified
-            };
-
-            Some(telemetry::ArtifactRecord {
-                path,
-                action,
-                line_range: None,
-                size_delta: Some(added - removed),
-            })
-        })
-        .collect()
-}
-
-/// Returns `true` when the auto-fix false-positive guard should apply.
-///
-/// The guard fires only when auto-fix actually ran this iteration AND a minimum
-/// agent diff size is configured. This prevents rejecting legitimate small fixes
-/// that pass the verifier on their own merit (i.e. without auto-fix).
-pub(crate) fn should_reject_auto_fix(auto_fix_applied: bool, policy: &AcceptancePolicy) -> bool {
-    auto_fix_applied && policy.min_diff_lines > 0
 }
 
 pub(crate) fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
@@ -1386,90 +926,6 @@ pub(crate) fn extract_local_validator_feedback(
             }
         })
         .collect()
-}
-
-/// Detect which Cargo packages have been modified in the worktree.
-///
-/// Combines committed changes (git diff main..HEAD) and working-tree
-/// changes (git status --porcelain) to produce a deduplicated list of
-/// package names. Falls back to an empty Vec (= full workspace) on any error.
-pub(crate) fn detect_changed_packages(wt_path: &Path) -> Vec<String> {
-    let mut changed_files: std::collections::HashSet<std::path::PathBuf> = Default::default();
-
-    // Committed changes since branching from main
-    if let Ok(out) = std::process::Command::new("git")
-        .args(["diff", "--name-only", "main"])
-        .current_dir(wt_path)
-        .output()
-    {
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            if !line.trim().is_empty() {
-                changed_files.insert(wt_path.join(line.trim()));
-            }
-        }
-    }
-
-    // Uncommitted working-tree changes (staged + unstaged)
-    if let Ok(out) = std::process::Command::new("git")
-        .args(["status", "--porcelain"])
-        .current_dir(wt_path)
-        .output()
-    {
-        for line in String::from_utf8_lossy(&out.stdout).lines() {
-            // porcelain format: "XY filename" — filename starts at column 3
-            if line.len() > 3 {
-                let path = line[3..].trim();
-                if !path.is_empty() {
-                    changed_files.insert(wt_path.join(path));
-                }
-            }
-        }
-    }
-
-    let mut packages: std::collections::HashSet<String> = Default::default();
-    for file_path in &changed_files {
-        if let Some(pkg) = find_package_name(file_path) {
-            packages.insert(pkg);
-        }
-    }
-
-    let result: Vec<String> = packages.into_iter().collect();
-    if result.is_empty() {
-        tracing::debug!("detect_changed_packages: no changes detected, targeting full workspace");
-    } else {
-        tracing::debug!(packages = ?result, "detect_changed_packages: scoping verifier to changed packages");
-    }
-    result
-}
-
-/// Walk up from `file_path` to find the nearest `Cargo.toml` and return the package `name`.
-fn find_package_name(file_path: &Path) -> Option<String> {
-    let mut dir = file_path.parent()?;
-    loop {
-        let cargo_toml = dir.join("Cargo.toml");
-        if cargo_toml.exists() {
-            if let Ok(content) = std::fs::read_to_string(&cargo_toml) {
-                let mut in_package = false;
-                for line in content.lines() {
-                    let trimmed = line.trim();
-                    if trimmed == "[package]" {
-                        in_package = true;
-                    } else if trimmed.starts_with('[') {
-                        in_package = false;
-                    } else if in_package && trimmed.starts_with("name") {
-                        if let Some(name) = trimmed.split('"').nth(1) {
-                            return Some(name.to_string());
-                        }
-                    }
-                }
-            }
-        }
-        match dir.parent() {
-            Some(parent) if parent != dir => dir = parent,
-            _ => break,
-        }
-    }
-    None
 }
 
 /// Process a single issue through the implement → verify → review → escalate loop.
@@ -2395,7 +1851,7 @@ pub async fn process_issue(
                             agent_name: "Qwen3.5-RustCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(30),
-                            max_turns_without_write: Some(5),
+                            max_turns_without_write: Some(WORKER_MAX_TURNS_WITHOUT_WRITE),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -2430,7 +1886,7 @@ pub async fn process_issue(
                             agent_name: "Qwen3.5-GeneralCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(30),
-                            max_turns_without_write: Some(5),
+                            max_turns_without_write: Some(WORKER_MAX_TURNS_WITHOUT_WRITE),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -2899,7 +2355,7 @@ pub async fn process_issue(
                     EscalationReason::Explicit {
                         reason: format!(
                             "write deadline: worker exhausted {} turns without edit_file/write_file",
-                            5 // max_turns_without_write
+                            WORKER_MAX_TURNS_WITHOUT_WRITE
                         ),
                     },
                 );

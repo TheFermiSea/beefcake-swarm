@@ -7,8 +7,8 @@ export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3.5-27B-Distilled}"
 # Coder/Integrator tier: Qwen3.5-122B-A10B MoE on vasp-01 (expert-offload, 65K context)
 export SWARM_CODER_URL="${SWARM_CODER_URL:-http://vasp-01:8081/v1}"
 export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-122B-A10B}"
-# Reasoning/Integrator tier: Qwen3.5-122B-A10B MoE on vasp-02 (expert-offload, 65K context)
-export SWARM_REASONING_URL="${SWARM_REASONING_URL:-http://vasp-02:8081/v1}"
+# Reasoning tier: route to the vasp-01 RPC head (vasp-02 is a shard, not an HTTP endpoint)
+export SWARM_REASONING_URL="${SWARM_REASONING_URL:-http://vasp-01:8081/v1}"
 export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-Qwen3.5-122B-A10B}"
 # Cloud manager via CLIAPIProxy
 # Set SWARM_CLOUD_URL="" (empty) to run in worker-first mode (local models only).

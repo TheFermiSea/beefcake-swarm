@@ -19,9 +19,10 @@ use crate::cluster_health::ClusterHealth;
 use crate::config::SwarmConfig;
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
+use crate::file_targeting::detect_changed_packages;
 use crate::orchestrator::{
     self, bool_from_env, cloud_validate, collect_artifacts_from_diff, count_diff_lines,
-    create_stuck_intervention, detect_changed_packages, extract_local_validator_feedback,
+    create_stuck_intervention, extract_local_validator_feedback,
     extract_validator_feedback, format_compact_task_prompt, format_task_prompt, git_commit_changes,
     local_validate, prompt_with_hook_and_retry, query_kb_with_failsafe, route_to_coder,
     should_reject_auto_fix, try_auto_fix, try_scaffold_fallback, CoderRoute, SwarmResumeFile,
