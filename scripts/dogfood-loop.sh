@@ -209,6 +209,12 @@ if [[ "$PARALLEL" -le 1 ]]; then
         break
       fi
       ISSUE_ID="${ISSUES[$IDX]}"
+    else
+      ISSUE_ID=$("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null | head -n1 || true)
+      if [[ -z "$ISSUE_ID" ]]; then
+        log "No more ready issues. Stopping."
+        break
+      fi
     fi
 
     log "=== Run $RUN_COUNT: issue=$ISSUE_ID ==="
