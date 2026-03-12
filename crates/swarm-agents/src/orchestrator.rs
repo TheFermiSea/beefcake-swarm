@@ -2066,16 +2066,28 @@ pub async fn process_issue(
             Ok(plan) => {
                 info!(
                     id = %issue.id,
-                    "Planner returned single subtask — falling through to normal loop"
+                    "Planner returned single subtask — routing to manager"
                 );
                 debug!(summary = %plan.summary, "Single-subtask plan");
+                // Single-task issues don't benefit from parallel dispatch.
+                // Skip Worker tier and go straight to Council (cloud manager)
+                // which can delegate to the right specialist directly.
+                if factory.clients.cloud.is_some() {
+                    info!(id = %issue.id, "Cloud available — escalating to Council for single-task issue");
+                    escalation.current_tier = SwarmTier::Council;
+                }
             }
             Err(e) => {
                 warn!(
                     id = %issue.id,
                     error = %e,
-                    "Subtask planning failed — falling through to normal loop"
+                    "Subtask planning failed — routing to manager"
                 );
+                // Planning failed — don't waste iterations at Worker tier.
+                // Route to Council if cloud is available.
+                if factory.clients.cloud.is_some() {
+                    escalation.current_tier = SwarmTier::Council;
+                }
             }
         }
     }
