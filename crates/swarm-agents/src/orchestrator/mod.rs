@@ -37,7 +37,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rig::completion::Prompt;
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info, warn, Instrument};
 
 use crate::cluster_health::ClusterHealth;
 use crate::file_targeting::detect_changed_packages;
@@ -164,15 +164,38 @@ pub async fn process_issue(
         return Ok(success);
     }
 
+    // Instrument the core loop with a root span. Using `Instrument` rather
+    // than `Span::enter()` keeps the future `Send`, enabling `tokio::spawn`
+    // for parallel thread dispatch (Slate Phase 2).
+    let process_span = otel::process_issue_span(&issue.id);
+    process_issue_core(config, factory, worktree_bridge, issue, beads, knowledge_base, cancel)
+        .instrument(process_span)
+        .await
+}
+
+/// Core orchestration loop — implement → verify → review → escalate.
+///
+/// Separated from [`process_issue`] so the future can be wrapped with
+/// [`tracing::Instrument`] for Send-safe span management. The process span
+/// is accessible inside via [`tracing::Span::current()`].
+async fn process_issue_core(
+    config: &SwarmConfig,
+    factory: &AgentFactory,
+    worktree_bridge: &WorktreeBridge,
+    issue: &BeadsIssue,
+    beads: &dyn IssueTracker,
+    knowledge_base: Option<&dyn KnowledgeBase>,
+    cancel: Arc<AtomicBool>,
+) -> Result<bool> {
     let worker_policy = TurnPolicy::for_tier(SwarmTier::Worker);
     let council_policy = TurnPolicy::for_tier(SwarmTier::Council);
     let worker_timeout = timeout_from_env("SWARM_WORKER_TIMEOUT_SECS", worker_policy.timeout_secs);
     let manager_timeout =
         timeout_from_env("SWARM_MANAGER_TIMEOUT_SECS", council_policy.timeout_secs);
 
-    // Root span for the entire issue processing session (OpenTelemetry-compatible)
-    let process_span = otel::process_issue_span(&issue.id);
-    let _process_guard = process_span.enter();
+    // The process span was set by .instrument() in the caller — retrieve it
+    // so we can record fields into it at session end.
+    let process_span = tracing::Span::current();
     let process_start = Instant::now();
 
     // --- Feature flags ---
@@ -259,10 +282,13 @@ pub async fn process_issue(
         .cloned()
         .unwrap_or_else(|| ClusterHealth::from_config(config));
     let healthy_count = cluster_health.check_all_now().await;
+    // Evaluate async summary before the info! macro to avoid holding a
+    // temporary `&dyn tracing::Value` across the .await (which is !Send).
+    let health_summary = cluster_health.summary().await;
     info!(
         healthy = healthy_count,
         total = 3,
-        summary = %cluster_health.summary().await,
+        summary = %health_summary,
         "Preflight endpoint health check"
     );
     if healthy_count == 0 {
@@ -738,7 +764,9 @@ pub async fn process_issue(
         metrics.start_iteration(iteration, &format!("{tier:?}"));
         let tier_str = format!("{tier:?}");
         let iter_span = otel::iteration_span(&issue.id, iteration, &tier_str);
-        let _iter_guard = iter_span.enter();
+        // Note: iter_span is NOT entered with .enter() — holding the Entered
+        // guard across await points would make the future !Send. The span is
+        // still used for field recording via record_iteration_result().
         let iter_start = Instant::now();
         span_summary.record_iteration();
         info!(
@@ -2309,6 +2337,33 @@ pub async fn process_issue(
     }
 
     Ok(success)
+}
+
+/// Compile-time guard: `process_issue_core`'s future must be `Send` so it
+/// can be dispatched via `tokio::spawn` / `JoinSet` in Phase 2 (Thread Weaving).
+/// If someone re-introduces a `Span::enter()` guard held across an `.await`,
+/// this function will fail to compile.
+#[cfg(test)]
+#[allow(dead_code, unused_variables)]
+fn _assert_process_issue_core_is_send(
+    config: &SwarmConfig,
+    factory: &AgentFactory,
+    worktree_bridge: &WorktreeBridge,
+    issue: &BeadsIssue,
+    beads: &dyn IssueTracker,
+    knowledge_base: Option<&dyn KnowledgeBase>,
+    cancel: Arc<AtomicBool>,
+) {
+    fn _require_send<F: std::future::Future + Send>(_f: F) {}
+    _require_send(process_issue_core(
+        config,
+        factory,
+        worktree_bridge,
+        issue,
+        beads,
+        knowledge_base,
+        cancel,
+    ));
 }
 
 /// Saved state for session resume after SLURM preemption or crash.

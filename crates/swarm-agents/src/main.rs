@@ -334,10 +334,9 @@ async fn main() -> Result<()> {
     } else if !args.issues.is_empty() {
         // Branch 1.5: --issues batch → OS-thread parallel dispatch
         //
-        // `process_issue` is !Send (tracing's `dyn Value: !Sync` inside its body),
-        // so JoinSet::spawn won't compile. We use std::thread::spawn +
-        // Handle::block_on instead: each thread runs its own non-Send future
-        // against the same multi-thread Tokio runtime's I/O infrastructure.
+        // `process_issue` is now Send-safe (Slate Phase 0b), but we keep the
+        // OS-thread dispatch pattern: std::thread::spawn + Handle::block_on.
+        // Migration to JoinSet::spawn is tracked as Phase 2 (Thread Weaving).
         //
         // Fetch real issue details from beads, then fan-out. Each thread gets a
         // fresh BeadsBridge for status tracking. The AgentFactory clone shares
@@ -491,10 +490,9 @@ async fn main() -> Result<()> {
 
 /// Fan out a pre-assembled batch of issues across OS threads with cooperative cancellation.
 ///
-/// `process_issue` is `!Send` (tracing's `dyn Value: !Sync` inside its body), so
-/// `JoinSet::spawn` won't compile. Each issue runs on its own OS thread via
-/// `std::thread::spawn` + `Handle::block_on`, sharing the same multi-thread Tokio
-/// runtime's I/O infrastructure.
+/// `process_issue` is now `Send`-safe (Slate Phase 0b), but this function still
+/// uses OS threads via `std::thread::spawn` + `Handle::block_on`. Migration to
+/// `JoinSet::spawn` is tracked as Slate Phase 2 (Thread Weaving).
 ///
 /// A shared `Arc<AtomicBool>` cancel flag is set when SIGTERM/Ctrl-C arrives.
 /// Each thread checks it at iteration boundaries inside `process_issue`, resets the
