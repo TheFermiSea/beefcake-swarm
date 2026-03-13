@@ -457,6 +457,8 @@ mod tests {
             cost_total: cost_avg * 100.0,
             cost_avg,
             stuck_rate,
+            avg_turns_until_first_write: 0.0,
+            write_by_turn_2_rate: 0.0,
         }
     }
 

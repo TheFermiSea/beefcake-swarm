@@ -2903,6 +2903,8 @@ mod tests {
             cost_total: 0.0,
             cost_avg: 0.0,
             stuck_rate: 0.0,
+            avg_turns_until_first_write: 1.0,
+            write_by_turn_2_rate: 1.0,
         };
 
         let report = slo::evaluate_slos(&metrics);
@@ -2928,6 +2930,8 @@ mod tests {
             cost_total: 0.0,
             cost_avg: 0.0,
             stuck_rate: 1.0,
+            avg_turns_until_first_write: 0.0,
+            write_by_turn_2_rate: 0.0,
         };
 
         let failed_report = slo::evaluate_slos(&failed_metrics);

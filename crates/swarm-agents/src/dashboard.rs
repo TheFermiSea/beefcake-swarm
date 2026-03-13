@@ -425,6 +425,12 @@ mod tests {
             local_validations: vec![],
             iterations: iter_metrics,
             timestamp: timestamp.to_string(),
+            stack_profile: "hybrid_balanced_v1".to_string(),
+            repo_id: None,
+            adapter_id: None,
+            turns_until_first_write: None,
+            write_by_turn_2: false,
+            role_map_version: "v1".to_string(),
         }
     }
 

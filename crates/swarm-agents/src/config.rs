@@ -7,10 +7,11 @@ use std::str::FromStr;
 use std::time::Duration;
 
 /// Named stack-profile system for the swarm.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SwarmStackProfile {
     /// Qwen3.5-27B-Distilled on vasp-03, Qwen3.5-122B-A10B on vasp-01/02
+    #[default]
     #[serde(rename = "hybrid_balanced_v1")]
     HybridBalancedV1,
     /// Test if 27B should absorb more early planning and tool-use work.
@@ -19,12 +20,6 @@ pub enum SwarmStackProfile {
     /// Test if 397B belongs only in a non-writing strategist arbitration lane.
     #[serde(rename = "strategist_hybrid_v1")]
     StrategistHybridV1,
-}
-
-impl Default for SwarmStackProfile {
-    fn default() -> Self {
-        Self::HybridBalancedV1
-    }
 }
 
 impl FromStr for SwarmStackProfile {

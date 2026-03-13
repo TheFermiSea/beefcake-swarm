@@ -396,7 +396,7 @@ fn percentile_duration(sorted: &[Duration], p: usize) -> Duration {
 mod tests {
     use super::*;
 
-    fn test_record(
+    fn make_record(
         id: &str,
         first_pass: bool,
         itg: Option<u32>,

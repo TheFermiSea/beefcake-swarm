@@ -1532,7 +1532,7 @@ mod tests {
 
     #[test]
     fn test_metrics_collector_basic_flow() {
-        let mut collector = MetricsCollector::new("sess-1", "issue-1", "Fix bug");
+        let mut collector = MetricsCollector::new("sess-1", "issue-1", "Fix bug", "hybrid_balanced_v1", None, None, "v1");
 
         collector.start_iteration(1, "Integrator");
         collector.record_agent_time(Duration::from_secs(30));
@@ -1575,7 +1575,7 @@ mod tests {
 
     #[test]
     fn test_metrics_collector_regression_tracking() {
-        let mut collector = MetricsCollector::new("sess-2", "issue-2", "Fix regression");
+        let mut collector = MetricsCollector::new("sess-2", "issue-2", "Fix regression", "hybrid_balanced_v1", None, None, "v1");
 
         collector.start_iteration(1, "Implementer");
         collector.record_regression(true);
@@ -1592,7 +1592,7 @@ mod tests {
 
     #[test]
     fn test_finalize_flushes_in_progress_iteration() {
-        let mut collector = MetricsCollector::new("sess-3", "issue-3", "Test flush");
+        let mut collector = MetricsCollector::new("sess-3", "issue-3", "Test flush", "hybrid_balanced_v1", None, None, "v1");
 
         collector.start_iteration(1, "Integrator");
         collector.record_agent_time(Duration::from_secs(10));
@@ -1620,6 +1620,12 @@ mod tests {
             local_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T00:00:00Z".into(),
+            stack_profile: "hybrid_balanced_v1".into(),
+            repo_id: None,
+            adapter_id: None,
+            turns_until_first_write: None,
+            write_by_turn_2: false,
+            role_map_version: "v1".into(),
         };
 
         write_session_metrics(&metrics, dir.path());
@@ -1651,6 +1657,12 @@ mod tests {
             local_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T00:00:00Z".into(),
+            stack_profile: "hybrid_balanced_v1".into(),
+            repo_id: None,
+            adapter_id: None,
+            turns_until_first_write: None,
+            write_by_turn_2: false,
+            role_map_version: "v1".into(),
         };
         let metrics2 = SessionMetrics {
             session_id: "sess-2".into(),
@@ -1666,6 +1678,12 @@ mod tests {
             local_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T01:00:00Z".into(),
+            stack_profile: "hybrid_balanced_v1".into(),
+            repo_id: None,
+            adapter_id: None,
+            turns_until_first_write: None,
+            write_by_turn_2: false,
+            role_map_version: "v1".into(),
         };
 
         append_telemetry(&metrics1, dir.path());
@@ -1703,6 +1721,12 @@ mod tests {
             local_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T00:00:00Z".into(),
+            stack_profile: "hybrid_balanced_v1".into(),
+            repo_id: None,
+            adapter_id: None,
+            turns_until_first_write: None,
+            write_by_turn_2: false,
+            role_map_version: "v1".into(),
         };
         metrics1.iterations.push(IterationMetrics {
             iteration: 1,
@@ -1761,6 +1785,12 @@ mod tests {
             local_validations: vec![],
             iterations: vec![],
             timestamp: "2024-01-01T01:00:00Z".into(),
+            stack_profile: "hybrid_balanced_v1".into(),
+            repo_id: None,
+            adapter_id: None,
+            turns_until_first_write: None,
+            write_by_turn_2: false,
+            role_map_version: "v1".into(),
         };
         metrics2.iterations.push(IterationMetrics {
             iteration: 1,
@@ -1881,7 +1911,7 @@ mod tests {
 
     #[test]
     fn test_record_artifact_stored_in_iteration() {
-        let mut collector = MetricsCollector::new("sess-art", "issue-art", "Artifact test");
+        let mut collector = MetricsCollector::new("sess-art", "issue-art", "Artifact test", "hybrid_balanced_v1", None, None, "v1");
 
         collector.start_iteration(1, "Worker");
         collector.record_artifact(ArtifactRecord {
@@ -1929,6 +1959,12 @@ mod tests {
             local_validations: vec![],
             iterations: vec![],
             timestamp: "2026-01-01T00:00:00Z".into(),
+            stack_profile: "hybrid_balanced_v1".into(),
+            repo_id: None,
+            adapter_id: None,
+            turns_until_first_write: None,
+            write_by_turn_2: false,
+            role_map_version: "v1".into(),
         }
     }
 
@@ -2146,7 +2182,7 @@ mod tests {
 
     #[test]
     fn test_collector_records_execution_artifacts() {
-        let mut collector = MetricsCollector::new("sess-ea", "issue-ea", "Artifact test");
+        let mut collector = MetricsCollector::new("sess-ea", "issue-ea", "Artifact test", "hybrid_balanced_v1", None, None, "v1");
 
         collector.start_iteration(1, "Integrator");
         collector.record_route_decision(RouteDecision {
@@ -2186,7 +2222,7 @@ mod tests {
 
     #[test]
     fn test_collector_omits_empty_artifact() {
-        let mut collector = MetricsCollector::new("sess-empty", "issue-empty", "Empty artifact");
+        let mut collector = MetricsCollector::new("sess-empty", "issue-empty", "Empty artifact", "hybrid_balanced_v1", None, None, "v1");
         collector.start_iteration(1, "Worker");
         // Don't record any artifact components
         collector.finish_iteration();
@@ -2311,6 +2347,12 @@ mod tests {
                 },
             ],
             timestamp: "2026-01-01T00:00:00Z".into(),
+            stack_profile: "hybrid_balanced_v1".into(),
+            repo_id: None,
+            adapter_id: None,
+            turns_until_first_write: None,
+            write_by_turn_2: false,
+            role_map_version: "v1".into(),
         };
 
         write_execution_artifacts(&metrics, dir.path(), None);
