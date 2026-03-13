@@ -11,6 +11,8 @@ use std::collections::HashMap;
 pub enum SwarmTier {
     /// HydraCoder — local worker for code generation and fixes
     Worker,
+    /// Qwen3.5-397B-A17B advisor tier
+    Strategist,
     /// Manager Council (Opus 4.5, Gemini 3 Pro, Qwen 3.5) — escalated coordination
     Council,
     /// Human intervention — blocking beads issue
@@ -22,6 +24,7 @@ impl SwarmTier {
     pub fn model_id(&self) -> &'static str {
         match self {
             Self::Worker => "HydraCoder-Q6_K",
+            Self::Strategist => "Qwen3.5-397B-A17B",
             Self::Council => "manager-council",
             Self::Human => "human",
         }
@@ -32,6 +35,10 @@ impl SwarmTier {
         match self {
             Self::Worker => TierBudget {
                 max_iterations: 4,
+                max_consultations: 4,
+            },
+            Self::Strategist => TierBudget {
+                max_iterations: 2,
                 max_consultations: 4,
             },
             Self::Council => TierBudget {
@@ -50,6 +57,7 @@ impl std::fmt::Display for SwarmTier {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Worker => write!(f, "worker"),
+            Self::Strategist => write!(f, "strategist"),
             Self::Council => write!(f, "council"),
             Self::Human => write!(f, "human"),
         }
@@ -92,6 +100,10 @@ impl TurnPolicy {
             SwarmTier::Worker => Self {
                 max_turns: 15,
                 timeout_secs: 10 * 60,
+            },
+            SwarmTier::Strategist => Self {
+                max_turns: 10,
+                timeout_secs: 15 * 60,
             },
             SwarmTier::Council => Self {
                 max_turns: 20,

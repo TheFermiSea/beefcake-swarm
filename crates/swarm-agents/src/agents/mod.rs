@@ -22,9 +22,10 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
+use rig::providers::openai;
 use tracing::info;
 
-use crate::config::{ClientSet, SwarmConfig};
+use crate::config::{ClientSet, SwarmConfig, SwarmRole};
 use crate::endpoint_pool::EndpointPool;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::tools::plan_parallel_tool::PlanSlot;
@@ -147,14 +148,61 @@ impl AgentFactory {
         self
     }
 
+    /// Resolve the appropriate client and model for a given swarm role.
+    ///
+    /// Respects the active [`SwarmStackProfile`] and utilizes the [`EndpointPool`]
+    /// for roles that should be distributed across the cluster (GeneralWorker, etc.).
+    pub fn resolve_role_endpoint(&self, role: SwarmRole) -> (openai::CompletionsClient, String) {
+        use crate::config::SwarmStackProfile;
+
+        // Determine if this role should use the round-robin worker pool.
+        let use_pool = match self.config.stack_profile {
+            SwarmStackProfile::HybridBalancedV1 => matches!(
+                role,
+                SwarmRole::GeneralWorker
+                    | SwarmRole::Planner
+                    | SwarmRole::ReasoningWorker
+                    | SwarmRole::LocalManagerFallback
+            ),
+            SwarmStackProfile::SmallSpecialistV1 => matches!(
+                role,
+                SwarmRole::GeneralWorker
+                    | SwarmRole::ReasoningWorker
+                    | SwarmRole::LocalManagerFallback
+            ),
+            SwarmStackProfile::StrategistHybridV1 => matches!(
+                role,
+                SwarmRole::GeneralWorker
+                    | SwarmRole::Planner
+                    | SwarmRole::ReasoningWorker
+                    | SwarmRole::LocalManagerFallback
+            ),
+        };
+
+        if use_pool {
+            let (client, model) = self.endpoint_pool.next();
+            (client.clone(), model.to_string())
+        } else {
+            // resolve_role_client/model are guaranteed to return valid results
+            // if the config was validated at startup.
+            let client = self
+                .config
+                .resolve_role_client(role, &self.clients)
+                .expect("Failed to resolve client for role");
+            let model = self.config.resolve_role_model(role).to_string();
+            (client, model)
+        }
+    }
+
     /// Build the Rust specialist coder (Qwen3.5-27B-Distilled on vasp-03, Rust system prompt).
     ///
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
     pub fn build_rust_coder(&self, wt_path: &Path) -> OaiAgent {
+        let (client, model) = self.resolve_role_endpoint(SwarmRole::RustWorker);
         coder::build_rust_coder_named(
-            &self.clients.local,
-            &self.config.fast_endpoint.model,
+            &client,
+            &model,
             wt_path,
             "rust_coder",
             self.config.cloud_only,
@@ -166,9 +214,10 @@ impl AgentFactory {
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
     pub fn build_general_coder(&self, wt_path: &Path) -> OaiAgent {
+        let (client, model) = self.resolve_role_endpoint(SwarmRole::GeneralWorker);
         coder::build_general_coder_named(
-            &self.clients.coder,
-            &self.config.coder_endpoint.model,
+            &client,
+            &model,
             wt_path,
             "general_coder",
             self.config.cloud_only,
@@ -180,22 +229,9 @@ impl AgentFactory {
     /// The Rust specialist stays pinned to the fast 27B scout tier for focused
     /// Rust repairs, while the general coder uses the worker endpoint pool so
     /// concurrent issues still spread across the integrator tier.
-    ///
-    /// Call once per issue before the iteration loop. All parallel
-    /// `AgentFactory` clones share the same `Arc<AtomicUsize>` counter, so
-    /// concurrent issues still land on different integrator nodes automatically.
     pub fn build_worker_pair(&self, wt_path: &Path) -> (OaiAgent, OaiAgent) {
-        let proxy = self.config.cloud_only;
-        let (client, model) = self.endpoint_pool.next();
-        let rust_coder = coder::build_rust_coder_named(
-            &self.clients.local,
-            &self.config.fast_endpoint.model,
-            wt_path,
-            "rust_coder",
-            proxy,
-        );
-        let general_coder =
-            coder::build_general_coder_named(client, model, wt_path, "general_coder", proxy);
+        let rust_coder = self.build_rust_coder(wt_path);
+        let general_coder = self.build_general_coder(wt_path);
         (rust_coder, general_coder)
     }
 
@@ -205,9 +241,10 @@ impl AgentFactory {
     /// Used as a worker tool by the cloud manager.
     /// In `cloud_only` mode, registers proxy-prefixed tools.
     pub fn build_reasoning_worker(&self, wt_path: &Path) -> OaiAgent {
+        let (client, model) = self.resolve_role_endpoint(SwarmRole::ReasoningWorker);
         coder::build_reasoning_worker_named(
-            &self.clients.reasoning,
-            &self.config.reasoning_endpoint.model,
+            &client,
+            &model,
             wt_path,
             "reasoning_worker",
             self.config.cloud_only,
@@ -216,33 +253,36 @@ impl AgentFactory {
 
     /// Build the blind reviewer (Qwen3.5-27B-Distilled on vasp-03).
     pub fn build_reviewer(&self) -> OaiAgent {
-        reviewer::build_reviewer(&self.clients.local, &self.config.fast_endpoint.model)
+        let (client, model) = self.resolve_role_endpoint(SwarmRole::Reviewer);
+        reviewer::build_reviewer(&client, &model)
+    }
+
+    /// Build the strategist advisor (Qwen3.5-397B-A17B).
+    pub fn build_strategist(&self, wt_path: &Path) -> OaiAgent {
+        let (client, model) = self.resolve_role_endpoint(SwarmRole::Strategist);
+        coder::build_strategist_named(
+            &client,
+            &model,
+            wt_path,
+            "strategist",
+            self.config.cloud_only,
+        )
     }
 
     /// Build the planner specialist.
     ///
     /// Read-only tools for analysis. Produces structured JSON repair plans.
     pub fn build_planner(&self, wt_path: &Path) -> OaiAgent {
-        specialists::build_planner_named(
-            &self.clients.reasoning,
-            &self.config.reasoning_endpoint.model,
-            wt_path,
-            "planner",
-            self.config.cloud_only,
-        )
+        let (client, model) = self.resolve_role_endpoint(SwarmRole::Planner);
+        specialists::build_planner_named(&client, &model, wt_path, "planner", self.config.cloud_only)
     }
 
     /// Build the fixer specialist.
     ///
     /// Full editing tools. Takes a plan and implements it step by step.
     pub fn build_fixer(&self, wt_path: &Path) -> OaiAgent {
-        specialists::build_fixer_named(
-            &self.clients.local,
-            &self.config.fast_endpoint.model,
-            wt_path,
-            "fixer",
-            self.config.cloud_only,
-        )
+        let (client, model) = self.resolve_role_endpoint(SwarmRole::Fixer);
+        specialists::build_fixer_named(&client, &model, wt_path, "fixer", self.config.cloud_only)
     }
 
     /// Build the adversarial breaker agent.
@@ -250,13 +290,8 @@ impl AgentFactory {
     /// Red-teams the implementation after verifier passes.
     /// Writes adversarial test files and runs them to find correctness bugs.
     pub fn build_breaker(&self, wt_path: &Path) -> OaiAgent {
-        adversary::build_breaker_named(
-            &self.clients.local,
-            &self.config.fast_endpoint.model,
-            wt_path,
-            "breaker",
-            self.config.cloud_only,
-        )
+        let (client, model) = self.resolve_role_endpoint(SwarmRole::Reviewer);
+        adversary::build_breaker_named(&client, &model, wt_path, "breaker", self.config.cloud_only)
     }
 
     /// Build the Manager agent.

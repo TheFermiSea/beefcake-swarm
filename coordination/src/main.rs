@@ -84,6 +84,7 @@ struct LlmConfig {
     architect_model: String,
     coder_model: String,
     hydra_model: String,
+    stack_profile: String,
 }
 
 impl Default for LlmConfig {
@@ -97,6 +98,8 @@ impl Default for LlmConfig {
                 .unwrap_or_else(|_| "Strand-Rust-Coder-14B-v1-Q8_0".to_string()),
             hydra_model: std::env::var("HYDRA_MODEL")
                 .unwrap_or_else(|_| "HydraCoder.Q6_K".to_string()),
+            stack_profile: std::env::var("SWARM_STACK_PROFILE")
+                .unwrap_or_else(|_| "hybrid_balanced_v1".to_string()),
         }
     }
 }

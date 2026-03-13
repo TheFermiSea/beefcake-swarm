@@ -222,6 +222,18 @@ pub struct SessionMetrics {
     pub local_validations: Vec<ValidationMetric>,
     pub iterations: Vec<IterationMetrics>,
     pub timestamp: String,
+    /// Active stack profile.
+    pub stack_profile: String,
+    /// Repository identifier.
+    pub repo_id: Option<String>,
+    /// Adapter identifier.
+    pub adapter_id: Option<String>,
+    /// Number of iterations until first file write.
+    pub turns_until_first_write: Option<u32>,
+    /// Whether a file write occurred by iteration 2.
+    pub write_by_turn_2: bool,
+    /// Version of the role model map.
+    pub role_map_version: String,
 }
 
 /// Result of a single cloud validation call.
@@ -244,6 +256,10 @@ pub struct MetricsCollector {
     iterations: Vec<IterationMetrics>,
     cloud_validations: Vec<ValidationMetric>,
     local_validations: Vec<ValidationMetric>,
+    stack_profile: String,
+    repo_id: Option<String>,
+    adapter_id: Option<String>,
+    role_map_version: String,
 }
 
 /// In-flight state for the current iteration.
@@ -270,7 +286,15 @@ struct IterationBuilder {
 }
 
 impl MetricsCollector {
-    pub fn new(session_id: &str, issue_id: &str, issue_title: &str) -> Self {
+    pub fn new(
+        session_id: &str,
+        issue_id: &str,
+        issue_title: &str,
+        stack_profile: &str,
+        repo_id: Option<String>,
+        adapter_id: Option<String>,
+        role_map_version: &str,
+    ) -> Self {
         Self {
             session_id: session_id.to_string(),
             issue_id: issue_id.to_string(),
@@ -280,6 +304,10 @@ impl MetricsCollector {
             iterations: Vec::new(),
             cloud_validations: Vec::new(),
             local_validations: Vec::new(),
+            stack_profile: stack_profile.to_string(),
+            repo_id,
+            adapter_id,
+            role_map_version: role_map_version.to_string(),
         }
     }
 
@@ -511,6 +539,26 @@ impl MetricsCollector {
             0.0
         };
 
+        let turns_until_first_write = self
+            .iterations
+            .iter()
+            .find(|i| {
+                i.artifacts.iter().any(|a| {
+                    a.action == ArtifactAction::Modified || a.action == ArtifactAction::Created
+                })
+            })
+            .map(|i| i.iteration);
+
+        let write_by_turn_2 = self
+            .iterations
+            .iter()
+            .take(2)
+            .any(|i| {
+                i.artifacts.iter().any(|a| {
+                    a.action == ArtifactAction::Modified || a.action == ArtifactAction::Created
+                })
+            });
+
         SessionMetrics {
             session_id: self.session_id,
             issue_id: self.issue_id,
@@ -525,6 +573,12 @@ impl MetricsCollector {
             local_validations: self.local_validations,
             iterations: self.iterations,
             timestamp: chrono::Utc::now().to_rfc3339(),
+            stack_profile: self.stack_profile,
+            repo_id: self.repo_id,
+            adapter_id: self.adapter_id,
+            turns_until_first_write,
+            write_by_turn_2,
+            role_map_version: self.role_map_version,
         }
     }
 }

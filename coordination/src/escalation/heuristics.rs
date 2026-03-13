@@ -147,6 +147,7 @@ impl TelemetryHeuristics {
             no_change_threshold: self.no_change_threshold,
             multi_file_threshold: self.multi_file_threshold,
             require_adversary_review: self.require_adversary_review,
+            stack_profile: "hybrid_balanced_v1".to_string(), // Default if computing from heuristics
         }
     }
 }
@@ -242,6 +243,7 @@ mod tests {
         assert_eq!(cfg.no_change_threshold, h.no_change_threshold);
         assert_eq!(cfg.multi_file_threshold, h.multi_file_threshold);
         assert_eq!(cfg.require_adversary_review, h.require_adversary_review);
+        assert_eq!(cfg.stack_profile, "hybrid_balanced_v1");
         assert!(cfg.require_adversary_review);
     }
 

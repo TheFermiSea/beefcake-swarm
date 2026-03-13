@@ -194,6 +194,33 @@ pub fn build_reasoning_worker_named(
         .build()
 }
 
+/// Build the strategist advisor agent (Qwen3.5-397B-A17B).
+///
+/// Read-only/non-writing advisor role for architectural review and strategic planning.
+pub fn build_strategist_named(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+    name: &str,
+    proxy_tools: bool,
+) -> OaiAgent {
+    client
+        .agent(model)
+        .name(name)
+        .description("Architectural strategist and advisor for high-level decision making")
+        .preamble(prompts::REASONING_WORKER_PREAMBLE) // Reusing reasoning preamble for now
+        .temperature(worker_temperature())
+        .tool_choice(worker_tool_choice())
+        .additional_params(worker_sampling_params())
+        .tools(bundles::worker_tools(
+            wt_path,
+            WorkerRole::Strategist,
+            proxy_tools,
+        ))
+        .default_max_turns(reasoning_max_turns())
+        .build()
+}
+
 /// Build the general-purpose coder (Qwen3.5-Implementer).
 ///
 /// Tools: read_file, write_file, edit_file, list_files, run_command.

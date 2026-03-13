@@ -16,7 +16,7 @@ use crate::agents::coder::OaiAgent;
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::cluster_health::ClusterHealth;
-use crate::config::SwarmConfig;
+use crate::config::{SwarmConfig, SwarmRole};
 use crate::file_targeting::detect_changed_packages;
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
@@ -232,7 +232,18 @@ impl<'a> OrchestratorContext<'a> {
         );
 
         // Telemetry
-        let metrics = MetricsCollector::new(session.session_id(), &issue.id, &issue.title);
+        let stack_profile_str = serde_json::to_string(&config.stack_profile)
+            .unwrap_or_else(|_| "unknown".to_string())
+            .replace('"', "");
+        let metrics = MetricsCollector::new(
+            session.session_id(),
+            &issue.id,
+            &issue.title,
+            &stack_profile_str,
+            config.repo_id.clone(),
+            config.adapter_id.clone(),
+            "v1",
+        );
 
         // Verifier config
         let initial_packages = if config.verifier_packages.is_empty() {
@@ -703,9 +714,48 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                 }
             }
         }
+        SwarmTier::Strategist => {
+            info!(iteration, "Routing to strategist advisor");
+            let model = ctx.config.resolve_role_model(SwarmRole::Strategist);
+            ctx.metrics
+                .record_agent_metrics(&format!("strategist ({model})"), 0, 0);
+
+            let strategist = ctx.factory.build_strategist(&ctx.wt_path);
+            let adapter = RuntimeAdapter::new(AdapterConfig {
+                agent_name: "strategist".into(),
+                deadline: Some(Instant::now() + ctx.worker_timeout),
+                max_reads_without_action: Some(8),
+                ..Default::default()
+            });
+
+            let result = match tokio::time::timeout(
+                ctx.worker_timeout,
+                crate::orchestrator::prompt_with_hook_and_retry(
+                    &strategist,
+                    &task_prompt,
+                    2,
+                    adapter.clone(),
+                ),
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(_) => {
+                    warn!(iteration, "strategist timed out");
+                    Ok("strategist timed out. No guidance produced.".into())
+                }
+            };
+            (result, adapter)
+        }
         SwarmTier::Council | SwarmTier::Human => {
-            info!(iteration, "Routing to manager (state driver)");
-            ctx.metrics.record_agent_metrics("manager", 0, 0);
+            info!(iteration, "Routing to manager");
+            let role = if ctx.config.cloud_endpoint.is_some() {
+                SwarmRole::Council
+            } else {
+                SwarmRole::LocalManagerFallback
+            };
+            let model = ctx.config.resolve_role_model(role);
+            ctx.metrics.record_agent_metrics(&format!("manager ({model})"), 0, 0);
             let adapter = RuntimeAdapter::new(AdapterConfig {
                 agent_name: "manager".into(),
                 deadline: Some(Instant::now() + ctx.manager_timeout),
@@ -1655,6 +1705,8 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
         cost_total: 0.0,
         cost_avg: 0.0,
         stuck_rate: if !ctx.success { 1.0 } else { 0.0 },
+        avg_turns_until_first_write: session_metrics.turns_until_first_write.unwrap_or(0) as f64,
+        write_by_turn_2_rate: if session_metrics.write_by_turn_2 { 1.0 } else { 0.0 },
     };
     let slo_report = slo::evaluate_slos(&orch_metrics);
     match slo_report.overall_severity {

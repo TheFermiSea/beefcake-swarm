@@ -163,10 +163,14 @@ pub use verifier::{
     VerifierReport,
 };
 
-// Re-export escalation types
+// Re-export key escalation types
 pub use escalation::{
     EscalationDecision, EscalationEngine, EscalationState, SwarmTier, TierBudget, TurnPolicy,
 };
+
+// Re-export benchmark types
+pub use benchmark::{load_beefcake_lx2o_manifest, BenchmarkManifest};
+
 
 // Re-export telemetry heuristic types
 pub use escalation::{compute_heuristics, SessionSample, TelemetryHeuristics};

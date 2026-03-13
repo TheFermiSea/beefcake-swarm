@@ -25,6 +25,8 @@ pub struct ProblemMetrics {
     pub total_time_ms: u64,
     /// Final model tier used
     pub final_model_tier: Option<String>,
+    /// Active stack profile
+    pub stack_profile: Option<String>,
 }
 
 impl ProblemMetrics {
@@ -142,6 +144,8 @@ pub struct BenchmarkMetrics {
     pub average_iterations: f32,
     /// Model usage breakdown
     pub model_usage: HashMap<String, u32>,
+    /// Active stack profile
+    pub stack_profile: String,
 }
 
 impl BenchmarkMetrics {
@@ -263,14 +267,17 @@ pub struct MetricsTracker {
     problems: Vec<ProblemMetrics>,
     /// Session ID
     session_id: String,
+    /// Active stack profile
+    stack_profile: String,
 }
 
 impl MetricsTracker {
     /// Create a new tracker
-    pub fn new(session_id: impl Into<String>) -> Self {
+    pub fn new(session_id: impl Into<String>, stack_profile: impl Into<String>) -> Self {
         Self {
             problems: Vec::new(),
             session_id: session_id.into(),
+            stack_profile: stack_profile.into(),
         }
     }
 
@@ -378,6 +385,7 @@ impl MetricsTracker {
             total_time_ms,
             average_iterations: avg_iterations,
             model_usage,
+            stack_profile: self.stack_profile.clone(),
         }
     }
 }
@@ -418,6 +426,7 @@ mod tests {
             total_tokens: 100,
             total_time_ms: 500,
             final_model_tier: Some("fast".to_string()),
+            stack_profile: Some("hybrid_balanced_v1".to_string()),
         };
 
         assert!(metrics.succeeded());
@@ -426,7 +435,7 @@ mod tests {
 
     #[test]
     fn test_metrics_tracker() {
-        let mut tracker = MetricsTracker::new("test-session");
+        let mut tracker = MetricsTracker::new("test-session", "hybrid_balanced_v1");
 
         tracker.add_problem(ProblemMetrics {
             problem_id: "p1".to_string(),
@@ -437,6 +446,7 @@ mod tests {
             total_tokens: 100,
             total_time_ms: 500,
             final_model_tier: Some("fast".to_string()),
+            stack_profile: Some("hybrid_balanced_v1".to_string()),
         });
 
         tracker.add_problem(ProblemMetrics {
@@ -448,6 +458,7 @@ mod tests {
             total_tokens: 400,
             total_time_ms: 2000,
             final_model_tier: Some("specialized".to_string()),
+            stack_profile: Some("hybrid_balanced_v1".to_string()),
         });
 
         let metrics = tracker.build();
@@ -455,6 +466,7 @@ mod tests {
         assert_eq!(metrics.passed_first_attempt, 1);
         assert_eq!(metrics.passed_with_correction, 1);
         assert_eq!(metrics.overall_success_rate, 100.0);
+        assert_eq!(metrics.stack_profile, "hybrid_balanced_v1");
     }
 
     #[test]
@@ -474,6 +486,7 @@ mod tests {
             total_time_ms: 30000,
             average_iterations: 1.5,
             model_usage: HashMap::new(),
+            stack_profile: "hybrid_balanced_v1".to_string(),
         };
 
         let report = metrics.format_report();

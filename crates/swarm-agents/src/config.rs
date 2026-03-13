@@ -1,9 +1,60 @@
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 use rig::providers::openai;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::str::FromStr;
 use std::time::Duration;
+
+/// Named stack-profile system for the swarm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwarmStackProfile {
+    /// Qwen3.5-27B-Distilled on vasp-03, Qwen3.5-122B-A10B on vasp-01/02
+    #[serde(rename = "hybrid_balanced_v1")]
+    HybridBalancedV1,
+    /// Test if 27B should absorb more early planning and tool-use work.
+    #[serde(rename = "small_specialist_v1")]
+    SmallSpecialistV1,
+    /// Test if 397B belongs only in a non-writing strategist arbitration lane.
+    #[serde(rename = "strategist_hybrid_v1")]
+    StrategistHybridV1,
+}
+
+impl Default for SwarmStackProfile {
+    fn default() -> Self {
+        Self::HybridBalancedV1
+    }
+}
+
+impl FromStr for SwarmStackProfile {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "hybrid_balanced_v1" | "balanced" => Ok(Self::HybridBalancedV1),
+            "small_specialist_v1" | "specialist" => Ok(Self::SmallSpecialistV1),
+            "strategist_hybrid_v1" | "strategist" => Ok(Self::StrategistHybridV1),
+            _ => anyhow::bail!("Unknown stack profile: {}", s),
+        }
+    }
+}
+
+/// Swarm agent roles used for model routing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SwarmRole {
+    Scout,
+    Reviewer,
+    RustWorker,
+    GeneralWorker,
+    Planner,
+    Fixer,
+    ReasoningWorker,
+    Strategist,
+    LocalManagerFallback,
+    Council,
+}
 
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
@@ -16,6 +67,8 @@ pub enum Tier {
     Reasoning,
     /// Cloud models via CLIAPIProxy
     Cloud,
+    /// Qwen3.5-397B-A17B (advisor/strategist tier)
+    Strategist,
 }
 
 /// Cluster inference endpoint configuration.
@@ -269,6 +322,18 @@ pub struct SwarmConfig {
     /// Single-subtask plans fall through to the sequential loop.
     /// Populated from `SWARM_CONCURRENT_SUBTASKS` env var (default: true).
     pub concurrent_subtasks: bool,
+    /// Named stack profile for model routing.
+    /// Selected by `SWARM_STACK_PROFILE` env var.
+    pub stack_profile: SwarmStackProfile,
+    /// Qwen3.5-397B-A17B (strategist/advisor, optional).
+    /// Populated from `SWARM_STRATEGIST_URL` and `SWARM_STRATEGIST_MODEL`.
+    pub strategist_endpoint: Option<Endpoint>,
+    /// Repository identifier (e.g., "rust-daq", "CF-LIBS") for adapter selection.
+    /// Populated from `SWARM_REPO_ID`.
+    pub repo_id: Option<String>,
+    /// QLoRA/LoRA adapter identifier for the coder model.
+    /// Populated from `SWARM_ADAPTER_ID`.
+    pub adapter_id: Option<String>,
 }
 
 impl Default for SwarmConfig {
@@ -347,11 +412,157 @@ impl Default for SwarmConfig {
             concurrent_subtasks: std::env::var("SWARM_CONCURRENT_SUBTASKS")
                 .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
                 .unwrap_or(true),
+            stack_profile: std::env::var("SWARM_STACK_PROFILE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_default(),
+            strategist_endpoint: Self::strategist_from_env(),
+            repo_id: std::env::var("SWARM_REPO_ID").ok(),
+            adapter_id: std::env::var("SWARM_ADAPTER_ID").ok(),
         }
     }
 }
 
 impl SwarmConfig {
+    /// Resolve the appropriate rig client for a given swarm role based on the active stack profile.
+    pub fn resolve_role_client(
+        &self,
+        role: SwarmRole,
+        clients: &ClientSet,
+    ) -> Result<openai::CompletionsClient> {
+        match self.stack_profile {
+            SwarmStackProfile::HybridBalancedV1 => match role {
+                SwarmRole::Scout | SwarmRole::Reviewer | SwarmRole::RustWorker | SwarmRole::Fixer => {
+                    Ok(clients.local.clone())
+                }
+                SwarmRole::GeneralWorker
+                | SwarmRole::Planner
+                | SwarmRole::ReasoningWorker
+                | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()), // Use coder/reasoning pool via factory
+                SwarmRole::Council => clients
+                    .cloud
+                    .clone()
+                    .context("Council role requested but no cloud endpoint configured"),
+                SwarmRole::Strategist => clients
+                    .strategist
+                    .clone()
+                    .or_else(|| clients.cloud.clone())
+                    .context("Strategist role requested but no strategist or cloud endpoint configured"),
+            },
+            SwarmStackProfile::SmallSpecialistV1 => match role {
+                SwarmRole::Scout
+                | SwarmRole::Reviewer
+                | SwarmRole::RustWorker
+                | SwarmRole::Fixer
+                | SwarmRole::Planner => Ok(clients.local.clone()),
+                SwarmRole::GeneralWorker
+                | SwarmRole::ReasoningWorker
+                | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()),
+                SwarmRole::Council => clients
+                    .cloud
+                    .clone()
+                    .context("Council role requested but no cloud endpoint configured"),
+                SwarmRole::Strategist => clients
+                    .strategist
+                    .clone()
+                    .or_else(|| clients.cloud.clone())
+                    .context("Strategist role requested but no strategist or cloud endpoint configured"),
+            },
+            SwarmStackProfile::StrategistHybridV1 => match role {
+                SwarmRole::Scout | SwarmRole::Reviewer | SwarmRole::RustWorker | SwarmRole::Fixer => {
+                    Ok(clients.local.clone())
+                }
+                SwarmRole::GeneralWorker
+                | SwarmRole::Planner
+                | SwarmRole::ReasoningWorker
+                | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()),
+                SwarmRole::Strategist => clients.strategist.clone().context(
+                    "Strategist role requested for StrategistHybridV1 but SWARM_STRATEGIST_URL is not set",
+                ),
+                SwarmRole::Council => clients
+                    .cloud
+                    .clone()
+                    .context("Council role requested but no cloud endpoint configured"),
+            },
+        }
+    }
+
+    /// Resolve the appropriate model name for a given swarm role based on the active stack profile.
+    /// Includes the LoRA/QLoRA adapter suffix if configured for worker roles.
+    pub fn resolve_role_model(&self, role: SwarmRole) -> String {
+        let base_model = match self.stack_profile {
+            SwarmStackProfile::HybridBalancedV1 => match role {
+                SwarmRole::Scout | SwarmRole::Reviewer | SwarmRole::RustWorker | SwarmRole::Fixer => {
+                    &self.fast_endpoint.model
+                }
+                SwarmRole::GeneralWorker
+                | SwarmRole::Planner
+                | SwarmRole::ReasoningWorker
+                | SwarmRole::LocalManagerFallback => &self.coder_endpoint.model,
+                SwarmRole::Council => self
+                    .cloud_endpoint
+                    .as_ref()
+                    .map(|e| e.model.as_str())
+                    .unwrap_or("unknown-cloud-model"),
+                SwarmRole::Strategist => self
+                    .strategist_endpoint
+                    .as_ref()
+                    .map(|e| e.model.as_str())
+                    .or_else(|| self.cloud_endpoint.as_ref().map(|e| e.model.as_str()))
+                    .unwrap_or("unknown-strategist-model"),
+            },
+            SwarmStackProfile::SmallSpecialistV1 => match role {
+                SwarmRole::Scout
+                | SwarmRole::Reviewer
+                | SwarmRole::RustWorker
+                | SwarmRole::Fixer
+                | SwarmRole::Planner => &self.fast_endpoint.model,
+                SwarmRole::GeneralWorker
+                | SwarmRole::ReasoningWorker
+                | SwarmRole::LocalManagerFallback => &self.coder_endpoint.model,
+                SwarmRole::Council => self
+                    .cloud_endpoint
+                    .as_ref()
+                    .map(|e| e.model.as_str())
+                    .unwrap_or("unknown-cloud-model"),
+                SwarmRole::Strategist => self
+                    .strategist_endpoint
+                    .as_ref()
+                    .map(|e| e.model.as_str())
+                    .or_else(|| self.cloud_endpoint.as_ref().map(|e| e.model.as_str()))
+                    .unwrap_or("unknown-strategist-model"),
+            },
+            SwarmStackProfile::StrategistHybridV1 => match role {
+                SwarmRole::Scout | SwarmRole::Reviewer | SwarmRole::RustWorker | SwarmRole::Fixer => {
+                    &self.fast_endpoint.model
+                }
+                SwarmRole::GeneralWorker
+                | SwarmRole::Planner
+                | SwarmRole::ReasoningWorker
+                | SwarmRole::LocalManagerFallback => &self.coder_endpoint.model,
+                SwarmRole::Strategist => self
+                    .strategist_endpoint
+                    .as_ref()
+                    .map(|e| e.model.as_str())
+                    .unwrap_or("Qwen3.5-397B-A17B"),
+                SwarmRole::Council => self
+                    .cloud_endpoint
+                    .as_ref()
+                    .map(|e| e.model.as_str())
+                    .unwrap_or("unknown-cloud-model"),
+            },
+        };
+
+        // Apply adapter if configured for worker/fixer roles
+        if let Some(ref adapter) = self.adapter_id {
+            if matches!(role, SwarmRole::RustWorker | SwarmRole::Fixer) {
+                return format!("{base_model}:{adapter}");
+            }
+        }
+
+        base_model.to_string()
+    }
+
     fn cloud_from_env() -> Option<CloudEndpoint> {
         let url = std::env::var("SWARM_CLOUD_URL").ok()?;
         let api_key = std::env::var("SWARM_CLOUD_API_KEY").ok()?;
@@ -360,6 +571,19 @@ impl SwarmConfig {
             url,
             api_key,
             model,
+        })
+    }
+
+    fn strategist_from_env() -> Option<Endpoint> {
+        let url = std::env::var("SWARM_STRATEGIST_URL").ok()?;
+        let model =
+            std::env::var("SWARM_STRATEGIST_MODEL").unwrap_or_else(|_| "Qwen3.5-397B-A17B".into());
+        Some(Endpoint {
+            url,
+            model,
+            tier: Tier::Strategist,
+            api_key: std::env::var("SWARM_STRATEGIST_API_KEY")
+                .unwrap_or_else(|_| "not-needed".into()),
         })
     }
 
@@ -390,9 +614,15 @@ impl SwarmConfig {
                 api_key: proxy_key.clone(),
             },
             cloud_endpoint: Some(CloudEndpoint {
-                url: proxy_url,
-                api_key: proxy_key,
+                url: proxy_url.clone(),
+                api_key: proxy_key.clone(),
                 model: "claude-opus-4-6".into(),
+            }),
+            strategist_endpoint: Some(Endpoint {
+                url: proxy_url,
+                model: "gemini-3-pro-preview".into(),
+                tier: Tier::Strategist,
+                api_key: proxy_key,
             }),
             max_retries: 3,
             worktree_base: None,
@@ -407,6 +637,9 @@ impl SwarmConfig {
             prune_after_iteration: 3,
             parallel_issues: 1,
             concurrent_subtasks: true,
+            stack_profile: SwarmStackProfile::HybridBalancedV1,
+            repo_id: None,
+            adapter_id: None,
         }
     }
 }
@@ -425,8 +658,9 @@ pub struct ClientSet {
     pub coder: openai::CompletionsClient,
     /// Client for vasp-02:8081 (Qwen3.5-122B-A10B -- reasoning/integrator tier: deep analysis)
     pub reasoning: openai::CompletionsClient,
+    /// Client for Qwen3.5-397B-A17B (strategist/advisor tier)
+    pub strategist: Option<openai::CompletionsClient>,
     /// Client for CLIAPIProxy (cloud models: Opus 4.6, G3-Pro, etc.)
-    /// Used as the Manager tier when available.
     pub cloud: Option<openai::CompletionsClient>,
 }
 
@@ -466,6 +700,7 @@ impl ClientSet {
                 local: cloud.clone(),
                 coder: cloud.clone(),
                 reasoning: cloud.clone(),
+                strategist: Some(cloud.clone()),
                 cloud: Some(cloud),
             });
         }
@@ -489,10 +724,19 @@ impl ClientSet {
         let reasoning = build_oai_client(
             &config.reasoning_endpoint.api_key,
             &config.reasoning_endpoint.url,
-            local_http,
+            local_http.clone(),
             None,
         )
         .context("Failed to build reasoning client (vasp-02)")?;
+
+        let strategist = config
+            .strategist_endpoint
+            .as_ref()
+            .map(|ep| {
+                build_oai_client(&ep.api_key, &ep.url, local_http.clone(), None)
+                    .context("Failed to build strategist client")
+            })
+            .transpose()?;
 
         let cloud = config
             .cloud_endpoint
@@ -512,6 +756,7 @@ impl ClientSet {
             local,
             coder,
             reasoning,
+            strategist,
             cloud,
         })
     }

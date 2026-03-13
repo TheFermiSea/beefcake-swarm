@@ -36,6 +36,18 @@ pub struct SessionRecord {
     pub estimated_cost: f64,
     /// Final outcome.
     pub outcome: SessionOutcome,
+    /// Active stack profile.
+    pub stack_profile: String,
+    /// Repository identifier.
+    pub repo_id: Option<String>,
+    /// Adapter identifier.
+    pub adapter_id: Option<String>,
+    /// Number of iterations until first file write.
+    pub turns_until_first_write: Option<u32>,
+    /// Whether a file write occurred by iteration 2.
+    pub write_by_turn_2: bool,
+    /// Version of the role model map.
+    pub role_map_version: String,
 }
 
 /// Final outcome of a session.
@@ -82,6 +94,10 @@ pub struct OrchestrationMetrics {
     pub cost_avg: f64,
     /// Stuck rate (sessions requiring human intervention).
     pub stuck_rate: f64,
+    /// Average turns until first file write.
+    pub avg_turns_until_first_write: f64,
+    /// Fraction of sessions that wrote files by turn 2.
+    pub write_by_turn_2_rate: f64,
 }
 
 /// Comparison between baseline and post-change metrics.
@@ -107,6 +123,10 @@ pub struct MetricsDelta {
     pub cost_delta: f64,
     /// Stuck rate delta (negative = improvement).
     pub stuck_rate_delta: f64,
+    /// Average turns until write delta (negative = improvement).
+    pub avg_turns_until_write_delta: f64,
+    /// Write-by-turn-2 rate delta (positive = improvement).
+    pub write_by_turn_2_delta: f64,
 }
 
 /// Computes aggregated orchestration metrics from session records.
@@ -129,6 +149,8 @@ pub fn compute_metrics(records: &[SessionRecord]) -> OrchestrationMetrics {
             cost_total: 0.0,
             cost_avg: 0.0,
             stuck_rate: 0.0,
+            avg_turns_until_first_write: 0.0,
+            write_by_turn_2_rate: 0.0,
         };
     }
 
@@ -189,6 +211,19 @@ pub fn compute_metrics(records: &[SessionRecord]) -> OrchestrationMetrics {
         .count();
     let stuck_rate = stuck as f64 / n as f64;
 
+    // Tool-use reliability.
+    let turns_until_write: Vec<u32> = records
+        .iter()
+        .filter_map(|r| r.turns_until_first_write)
+        .collect();
+    let avg_turns_until_write = if turns_until_write.is_empty() {
+        0.0
+    } else {
+        turns_until_write.iter().sum::<u32>() as f64 / turns_until_write.len() as f64
+    };
+    let write_by_turn_2_count = records.iter().filter(|r| r.write_by_turn_2).count();
+    let write_by_turn_2_rate = write_by_turn_2_count as f64 / n as f64;
+
     OrchestrationMetrics {
         session_count: n,
         first_pass_rate,
@@ -206,6 +241,8 @@ pub fn compute_metrics(records: &[SessionRecord]) -> OrchestrationMetrics {
         cost_total,
         cost_avg,
         stuck_rate,
+        avg_turns_until_first_write: avg_turns_until_write,
+        write_by_turn_2_rate,
     }
 }
 
@@ -225,6 +262,8 @@ pub fn compare_metrics(baseline: &[SessionRecord], post_change: &[SessionRecord]
         tokens_p50_delta: p.tokens_p50 as i64 - b.tokens_p50 as i64,
         cost_delta: p.cost_total - b.cost_total,
         stuck_rate_delta: p.stuck_rate - b.stuck_rate,
+        avg_turns_until_write_delta: p.avg_turns_until_first_write - b.avg_turns_until_first_write,
+        write_by_turn_2_delta: p.write_by_turn_2_rate - b.write_by_turn_2_rate,
         baseline: b,
         post_change: p,
     }
@@ -264,10 +303,26 @@ pub fn format_comparison(delta: &MetricsDelta) -> String {
         delta.escalation_rate_delta * 100.0,
     ));
     report.push_str(&format!(
-        "| Stuck rate | {:.1}% | {:.1}% | {:+.1}% |\n\n",
+        "| Stuck rate | {:.1}% | {:.1}% | {:+.1}% |\n",
         delta.baseline.stuck_rate * 100.0,
         delta.post_change.stuck_rate * 100.0,
         delta.stuck_rate_delta * 100.0,
+    ));
+
+    report.push_str("## Tool-Use Reliability\n\n");
+    report.push_str("| Metric | Baseline | Post-Change | Delta |\n");
+    report.push_str("|--------|----------|-------------|-------|\n");
+    report.push_str(&format!(
+        "| Avg turns until write | {:.2} | {:.2} | {:+.2} |\n",
+        delta.baseline.avg_turns_until_first_write,
+        delta.post_change.avg_turns_until_first_write,
+        delta.avg_turns_until_write_delta,
+    ));
+    report.push_str(&format!(
+        "| Write-by-turn-2 rate | {:.1}% | {:.1}% | {:+.1}% |\n\n",
+        delta.baseline.write_by_turn_2_rate * 100.0,
+        delta.post_change.write_by_turn_2_rate * 100.0,
+        delta.write_by_turn_2_delta * 100.0,
     ));
 
     report.push_str("## Latency\n\n");
@@ -341,7 +396,7 @@ fn percentile_duration(sorted: &[Duration], p: usize) -> Duration {
 mod tests {
     use super::*;
 
-    fn make_record(
+    fn test_record(
         id: &str,
         first_pass: bool,
         itg: Option<u32>,
@@ -364,6 +419,12 @@ mod tests {
             tokens_used: tokens,
             estimated_cost: cost,
             outcome,
+            stack_profile: "hybrid_balanced_v1".into(),
+            repo_id: None,
+            adapter_id: None,
+            turns_until_first_write: None,
+            write_by_turn_2: false,
+            role_map_version: "v1".into(),
         }
     }
 
@@ -473,6 +534,8 @@ mod tests {
         assert_eq!(metrics.escalation_rate, 0.5); // 2/4
         assert_eq!(metrics.stuck_rate, 0.25); // 1/4
         assert_eq!(metrics.tokens_total, 10500);
+        assert_eq!(metrics.avg_turns_until_first_write, 0.0);
+        assert_eq!(metrics.write_by_turn_2_rate, 0.0);
     }
 
     #[test]

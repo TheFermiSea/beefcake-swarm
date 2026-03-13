@@ -159,6 +159,14 @@ impl BenchmarkProblem {
         self.correction_result = Some(result);
     }
 
+    /// Get final model tier used
+    pub fn final_model_tier(&self) -> Option<String> {
+        self.correction_result
+            .as_ref()
+            .map(|c| c.final_model_tier.clone())
+            .or_else(|| self.first_attempt.as_ref().map(|a| a.model_tier.clone()))
+    }
+
     /// Calculate and store metrics
     pub fn calculate_metrics(&mut self) {
         let mut total_tokens = 0u64;
@@ -174,6 +182,8 @@ impl BenchmarkProblem {
             total_time_ms += correction.duration_ms;
         }
 
+        let final_tier = self.final_model_tier();
+
         self.metrics = Some(ProblemMetrics {
             problem_id: self.id.clone(),
             difficulty: self.difficulty,
@@ -186,11 +196,8 @@ impl BenchmarkProblem {
             total_iterations: self.total_iterations(),
             total_tokens,
             total_time_ms,
-            final_model_tier: self
-                .correction_result
-                .as_ref()
-                .map(|c| c.final_model_tier.clone())
-                .or_else(|| self.first_attempt.as_ref().map(|a| a.model_tier.clone())),
+            final_model_tier: final_tier,
+            stack_profile: std::env::var("SWARM_STACK_PROFILE").ok(),
         });
     }
 }
@@ -631,6 +638,8 @@ impl BenchmarkSession {
             total_time_ms,
             average_iterations: avg_iterations,
             model_usage: self.calculate_model_usage(),
+            stack_profile: std::env::var("SWARM_STACK_PROFILE")
+                .unwrap_or_else(|_| "hybrid_balanced_v1".to_string()),
         });
     }
 
@@ -769,5 +778,6 @@ mod tests {
         assert_eq!(metrics.passed_first_attempt, 1);
         assert_eq!(metrics.passed_with_correction, 1);
         assert_eq!(metrics.overall_success_rate, 100.0);
+        assert_eq!(metrics.stack_profile, "hybrid_balanced_v1");
     }
 }

@@ -59,7 +59,7 @@ pub(crate) use crate::auto_fix::{should_reject_auto_fix, try_auto_fix};
 use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
-use crate::config::SwarmConfig;
+use crate::config::{SwarmConfig, SwarmRole};
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
@@ -121,7 +121,7 @@ pub async fn process_issue(
         // Move metrics out before handle_outcome (finalize consumes self)
         let metrics = std::mem::replace(
             &mut ctx.metrics,
-            crate::telemetry::MetricsCollector::new("", "", ""),
+            crate::telemetry::MetricsCollector::new("", "", "", "unknown", None, None, "v1"),
         );
         crate::driver::handle_outcome(&mut ctx, metrics).await;
         return result;
@@ -264,7 +264,18 @@ async fn process_issue_core(
     );
 
     // --- Telemetry ---
-    let mut metrics = MetricsCollector::new(session.session_id(), &issue.id, &issue.title);
+    let stack_profile_str = serde_json::to_string(&config.stack_profile)
+        .unwrap_or_else(|_| "unknown".to_string())
+        .replace('"', "");
+    let mut metrics = MetricsCollector::new(
+        session.session_id(),
+        &issue.id,
+        &issue.title,
+        &stack_profile_str,
+        config.repo_id.clone(),
+        config.adapter_id.clone(),
+        "v1",
+    );
 
     // --- Acceptance policy ---
     let acceptance_policy = AcceptancePolicy::default();
@@ -1098,6 +1109,33 @@ async fn process_issue_core(
                         (result, adapter)
                     }
                 }
+            }
+            SwarmTier::Strategist => {
+                info!(iteration, "Routing to strategist advisor");
+                let model = config.resolve_role_model(SwarmRole::Strategist);
+                metrics.record_agent_metrics(&format!("strategist ({model})"), 0, 0);
+
+                let strategist = factory.build_strategist(&wt_path);
+                let adapter = RuntimeAdapter::new(AdapterConfig {
+                    agent_name: "strategist".into(),
+                    deadline: Some(Instant::now() + worker_timeout),
+                    max_reads_without_action: Some(8),
+                    ..Default::default()
+                });
+
+                let result = match tokio::time::timeout(
+                    worker_timeout,
+                    prompt_with_hook_and_retry(&strategist, &task_prompt, 2, adapter.clone()),
+                )
+                .await
+                {
+                    Ok(result) => result,
+                    Err(_) => {
+                        warn!(iteration, "strategist timed out");
+                        Ok("strategist timed out. No guidance produced.".to_string())
+                    }
+                };
+                (result, adapter)
             }
             SwarmTier::Council | SwarmTier::Human => {
                 info!(
@@ -2273,6 +2311,8 @@ async fn process_issue_core(
         cost_total: 0.0,
         cost_avg: 0.0,
         stuck_rate: if !success { 1.0 } else { 0.0 },
+        avg_turns_until_first_write: session_metrics.turns_until_first_write.unwrap_or(0) as f64,
+        write_by_turn_2_rate: if session_metrics.write_by_turn_2 { 1.0 } else { 0.0 },
     };
     let slo_report = slo::evaluate_slos(&orch_metrics);
     match slo_report.overall_severity {

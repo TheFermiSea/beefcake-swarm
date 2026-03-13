@@ -30,9 +30,12 @@
 //! 3. Generate summary report
 
 pub mod harness;
+pub mod manifest;
 pub mod metrics;
 pub mod problem;
 pub mod slo;
+
+pub use manifest::{load_beefcake_lx2o_manifest, BenchmarkManifest};
 
 pub use harness::{
     compare_metrics, compute_metrics, format_comparison, MetricsDelta, OrchestrationMetrics,

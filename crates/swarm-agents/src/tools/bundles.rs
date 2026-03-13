@@ -40,6 +40,8 @@ pub enum WorkerRole {
     General,
     /// Planner: read-only tools for analysis (read_file, list_files, run_command).
     Planner,
+    /// Strategist: advisor tier (read-only tools for analysis).
+    Strategist,
 }
 
 /// Build the tool bundle for a worker agent.
@@ -54,8 +56,8 @@ pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dy
 
     // Workers get chat_send when bdh coordination is active.
     // This lets workers signal the manager when stuck or need clarification.
-    // (Planners are read-only — no chat needed.)
-    if role != WorkerRole::Planner {
+    // (Planners and Strategists are read-only — no chat needed.)
+    if role != WorkerRole::Planner && role != WorkerRole::Strategist {
         tools.extend(worker_chat_tools(wt_path));
     }
 
@@ -211,7 +213,7 @@ pub fn process_tactical_tools(
     proxy: bool,
 ) -> Vec<Box<dyn ToolDyn>> {
     match role {
-        WorkerRole::Planner => {
+        WorkerRole::Planner | WorkerRole::Strategist => {
             // Read-only tools for analysis: read_file, list_files, run_command.
             if proxy {
                 vec![

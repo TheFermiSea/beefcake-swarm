@@ -57,6 +57,13 @@ pub struct EscalationConfig {
     pub require_adversary_review: bool,
     /// Consecutive no-change iterations before marking stuck
     pub no_change_threshold: u32,
+    /// Active stack profile name (to enable profile-specific routing rules).
+    #[serde(default = "default_stack_profile")]
+    pub stack_profile: String,
+}
+
+fn default_stack_profile() -> String {
+    "hybrid_balanced_v1".to_string()
 }
 
 impl Default for EscalationConfig {
@@ -67,6 +74,7 @@ impl Default for EscalationConfig {
             multi_file_threshold: 8,
             require_adversary_review: true,
             no_change_threshold: 3,
+            stack_profile: default_stack_profile(),
         }
     }
 }
@@ -116,6 +124,11 @@ impl EscalationEngine {
         // Check: Are we at the Worker tier?
         if state.current_tier == SwarmTier::Worker {
             return self.decide_at_worker(state, report);
+        }
+
+        // Check: Are we at the Strategist tier?
+        if state.current_tier == SwarmTier::Strategist {
+            return self.decide_at_strategist(state, report);
         }
 
         // Check: Are we at the Council tier?
@@ -170,6 +183,8 @@ impl EscalationEngine {
         state: &mut EscalationState,
         report: &VerifierReport,
     ) -> EscalationDecision {
+        let is_strategist_profile = self.config.stack_profile == "strategist_hybrid_v1";
+
         // Trigger T0: Consecutive no-change iterations
         if state.consecutive_no_change >= self.config.no_change_threshold {
             state.stuck = true;
@@ -187,6 +202,24 @@ impl EscalationEngine {
                 action: SuggestedAction::FlagForHuman {
                     reason: format!("Issue {} stuck: {}", state.bead_id, reason),
                 },
+            };
+        }
+
+        // strategist_hybrid_v1: consult strategist after 2 failed worker iterations
+        if is_strategist_profile && state.total_failures() >= 2 && state.current_tier == SwarmTier::Worker {
+            let reason = EscalationReason::TotalFailuresExceeded {
+                count: state.total_failures(),
+                threshold: 2,
+            };
+            state.record_escalation(SwarmTier::Strategist, reason.clone());
+            return EscalationDecision {
+                target_tier: SwarmTier::Strategist,
+                escalated: true,
+                reason: format!("Consulting Strategist (profile rule): {}", reason),
+                resolved: false,
+                stuck: false,
+                needs_review: false,
+                action: SuggestedAction::ArchitecturalGuidance,
             };
         }
 
@@ -234,15 +267,24 @@ impl EscalationEngine {
         if let Some((category, count)) = state.most_repeated_category() {
             if count >= self.config.repeat_threshold {
                 let reason = EscalationReason::RepeatedErrorCategory { category, count };
-                state.record_escalation(SwarmTier::Council, reason.clone());
+                let target = if is_strategist_profile {
+                    SwarmTier::Strategist
+                } else {
+                    SwarmTier::Council
+                };
+                state.record_escalation(target, reason.clone());
                 return EscalationDecision {
-                    target_tier: SwarmTier::Council,
+                    target_tier: target,
                     escalated: true,
                     reason: format!("Escalating: {}", reason),
                     resolved: false,
                     stuck: false,
                     needs_review: false,
-                    action: SuggestedAction::RepairPlan,
+                    action: if target == SwarmTier::Strategist {
+                        SuggestedAction::ArchitecturalGuidance
+                    } else {
+                        SuggestedAction::RepairPlan
+                    },
                 };
             }
         }
@@ -253,15 +295,24 @@ impl EscalationEngine {
                 count: state.total_failures(),
                 threshold: self.config.failure_threshold,
             };
-            state.record_escalation(SwarmTier::Council, reason.clone());
+            let target = if is_strategist_profile {
+                SwarmTier::Strategist
+            } else {
+                SwarmTier::Council
+            };
+            state.record_escalation(target, reason.clone());
             return EscalationDecision {
-                target_tier: SwarmTier::Council,
+                target_tier: target,
                 escalated: true,
                 reason: format!("Escalating: {}", reason),
                 resolved: false,
                 stuck: false,
                 needs_review: false,
-                action: SuggestedAction::RepairPlan,
+                action: if target == SwarmTier::Strategist {
+                    SuggestedAction::ArchitecturalGuidance
+                } else {
+                    SuggestedAction::RepairPlan
+                },
             };
         }
 
@@ -277,9 +328,14 @@ impl EscalationEngine {
             let reason = EscalationReason::MultiFileComplexity {
                 file_count: files_touched,
             };
-            state.record_escalation(SwarmTier::Council, reason.clone());
+            let target = if is_strategist_profile {
+                SwarmTier::Strategist
+            } else {
+                SwarmTier::Council
+            };
+            state.record_escalation(target, reason.clone());
             return EscalationDecision {
-                target_tier: SwarmTier::Council,
+                target_tier: target,
                 escalated: true,
                 reason: format!("Escalating: {}", reason),
                 resolved: false,
@@ -314,6 +370,42 @@ impl EscalationEngine {
                 "Continuing at Worker ({} iterations remaining)",
                 state.remaining_budget(SwarmTier::Worker)
             ),
+            resolved: false,
+            stuck: false,
+            needs_review: false,
+            action: SuggestedAction::Continue,
+        }
+    }
+
+    /// Decision-making at the Strategist tier
+    fn decide_at_strategist(
+        &self,
+        state: &mut EscalationState,
+        _report: &VerifierReport,
+    ) -> EscalationDecision {
+        // Strategist usually gives guidance then falls back to Worker
+        // or escalates to Council if exhausted.
+        if state.remaining_budget(SwarmTier::Strategist) == 0 {
+            let reason = EscalationReason::BudgetExhausted {
+                tier: SwarmTier::Strategist,
+            };
+            state.record_escalation(SwarmTier::Council, reason.clone());
+            return EscalationDecision {
+                target_tier: SwarmTier::Council,
+                escalated: true,
+                reason: format!("Strategist budget exhausted: {}", reason),
+                resolved: false,
+                stuck: false,
+                needs_review: false,
+                action: SuggestedAction::RepairPlan,
+            };
+        }
+
+        // After strategist guidance, try Worker again
+        EscalationDecision {
+            target_tier: SwarmTier::Worker,
+            escalated: true,
+            reason: "Strategist guidance provided — retrying with Worker".to_string(),
             resolved: false,
             stuck: false,
             needs_review: false,

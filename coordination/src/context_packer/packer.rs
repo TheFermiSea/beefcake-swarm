@@ -59,6 +59,7 @@ fn max_context_tokens(tier: SwarmTier) -> usize {
 
     match tier {
         SwarmTier::Worker => from_env("SWARM_CONTEXT_TOKENS_WORKER", 8_000),
+        SwarmTier::Strategist => from_env("SWARM_CONTEXT_TOKENS_STRATEGIST", 32_000),
         SwarmTier::Council => from_env("SWARM_CONTEXT_TOKENS_COUNCIL", 32_000),
         SwarmTier::Human => from_env("SWARM_CONTEXT_TOKENS_HUMAN", 32_000),
     }
