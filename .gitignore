@@ -71,6 +71,7 @@ GEMINI_SUGGESTIONS/
 .roo/
 .windsurf/
 .mcp.json
+/crates/swarm-agents/.stringer/
 
 # Dolt database files (added by bd init)
 .dolt/
