@@ -1,17 +1,64 @@
-Phase 2: Deep-Dive Implementation of Skill-Based SpecializationTarget Files:crates/swarm-agents/src/agents/coder.rscrates/swarm-agents/src/agents/reviewer.rscrates/swarm-agents/src/tools/To enforce the "VoltAgent" pattern, we must rigorously separate tools. The Coder gets Write access, the Reviewer gets Read/Verify access.1. The Coder (Feature Engineer)We must modify crates/swarm-agents/src/agents/coder.rs. We remove verifier_tool and exec_tool. It only gets patch_tool and read access.```rustuse rig::agent::{Agent, AgentBuilder};use rig::providers::anthropic::{Client, CompletionModel};use crate::tools::patch_tool::PatchTool;use crate::tools::fs_tools::FileReaderTool;pub fn build_coder_agent(client: &Client) -> Agent<CompletionModel> {let builder = client.agent("claude-3-5-sonnet-20241022").preamble("You are a specialized Feature Engineer in a SOTA agentic swarm.Your ONLY job is to write high-performance, async-safe Rust code.CONSTRAINTS:\n1. You DO NOT test code. You DO NOT review code.\n2. You must use the patch_tool to apply your changes to the filesystem.\n3. Obey strict rules: No .unwrap() in production, use tracing instead of println!.\n4. If a Reviewer rejects your code, analyze their feedback and issue a new patch.")// Strictly inject only mutation and reading tools.tool(PatchTool::new()).tool(FileReaderTool::new());// rules/no-unwrap-in-prod.yml enforcement during builder instantiation
-match builder.build() {
-    Ok(agent) => agent,
-    Err(e) => {
-        tracing::error!("FATAL: Failed to build coder agent: {}", e);
-        std::process::exit(1);
-    }
+Phase 2: Thread Weaving (Massive Parallelism)
+
+Logical Justification (Slate)
+
+Rigid ReAct loops process one node in a task graph at a time. "Thread weaving" means the Orchestrator dispatches multiple threads concurrently. Because of our gastown worktree isolation, we can safely run multiple workers on different files at the exact same time.
+
+Agent Instructions
+
+Step 1: Async Orchestrator Dispatch
+
+Open crates/swarm-agents/src/orchestrator.rs. Locate the main loop that dispatches work to local agents. We need to replace procedural, awaiting loops with tokio::task::spawn and an MPSC channel for collecting EpisodeSummary returns.
+
+// Target: crates/swarm-agents/src/orchestrator.rs
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
+use futures::future::join_all;
+
+pub struct ThreadWeaver {
+episode_tx: mpsc::Sender<EpisodeSummary>,
+episode_rx: mpsc::Receiver<EpisodeSummary>,
+active_threads: Vec<JoinHandle<()>>,
 }
-}```2. The Reviewer (Security & Policy Auditor)We modify crates/swarm-agents/src/agents/reviewer.rs. It absolutely cannot have the PatchTool. It utilizes the VerifierTool (which wraps cargo check, clippy, and ast-grep).```rustuse rig::agent::{Agent, AgentBuilder};use rig::providers::anthropic::{Client, CompletionModel};use crate::tools::verifier_tool::VerifierTool;use crate::tools::fs_tools::FileReaderTool;pub fn build_reviewer_agent(client: &Client) -> Agent<CompletionModel> {let builder = client.agent("claude-3-5-sonnet-20241022") // Or upgrade to reasoning model if available in API.preamble("You are a ruthless, adversarial Security and Code Auditor.You review code proposed by the Coder for OWASP vulnerabilities and Rust anti-patterns.CONSTRAINTS:\n1. You CANNOT write code. Do not attempt to output code blocks for the user to copy.\n2. Use the verifier_tool to run cargo check and cargo clippy on the workspace.\n3. You must verify compliance with rules/no-unwrap-in-prod.yml and rules/use-tracing-not-print.yml.\nOUTPUT FORMAT:\nIf the code is flawless and passes the verifier tool, your final message MUST end with exactly: 'CONSENSUS_REACHED'.\nIf there are flaws, output a detailed critique explaining exactly what the Coder needs to fix.").tool(VerifierTool::new()).tool(FileReaderTool::new());match builder.build() {
-    Ok(agent) => agent,
-    Err(e) => {
-        tracing::error!("FATAL: Failed to build reviewer agent: {}", e);
-        std::process::exit(1);
-    }
+
+impl ThreadWeaver {
+pub fn new() -> Self {
+let (tx, rx) = mpsc::channel(32);
+Self {
+episode_tx: tx,
+episode_rx: rx,
+active_threads: vec![],
 }
-}```3. Tool Boundary Enforcement (crates/swarm-agents/src/tools/mod.rs)Ensure that the macros/traits defining your tools do not accidentally leak permissions.For instance, your VerifierTool should execute isolated commands:```rust// Inside verifier_tool.rs implementation of rig::tool::Toolasync fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {// Ensure this runs purely in read-only/analysis modelet output = tokio::process::Command::new("cargo").args(["clippy", "--message-format=json"]).output().await.map_err(|e| e.to_string())?;Ok(String::from_utf8_lossy(&output.stdout).into_owned())
-}```
+}
+
+    pub async fn dispatch_thread(&mut self, workspace_id: String, task: String) {
+        let tx = self.episode_tx.clone();
+
+        let handle = tokio::spawn(async move {
+            // 1. Setup Gastown worktree
+            // 2. Spawn local worker (Scout/Integrator) via RPC
+            // 3. Execute agentic loop
+            // 4. finalize_episode() -> EpisodeSummary
+            // 5. tx.send(episode_summary).await
+        });
+
+        self.active_threads.push(handle);
+    }
+
+    pub async fn weave_episodes(&mut self) -> Vec<EpisodeSummary> {
+        let mut summaries = vec![];
+        // Wait for all threads to yield their episodes
+        while let Some(summary) = self.episode_rx.recv().await {
+            summaries.push(summary);
+            // In a real OS, the kernel might react immediately to a Blocked outcome here
+        }
+        summaries
+    }
+
+}
+
+Task for Coder:
+
+Refactor the Orchestrator struct in crates/swarm-agents/src/orchestrator.rs to implement the ThreadWeaver pattern.
+
+Ensure the Cloud Manager (Opus) is exposed to a dispatch_thread tool that accepts a list of parallel tasks, rather than a single delegate_task tool.

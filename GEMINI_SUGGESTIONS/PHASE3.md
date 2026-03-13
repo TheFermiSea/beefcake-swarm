@@ -1,101 +1,45 @@
-Phase 3: Deep-Dive Implementation of Arbitration LoopTarget File: * coordination/src/ensemble/arbitration.rsThis file implements the "Puzld.ai" pattern, orchestrating the Coder and Reviewer over the shared SwarmMemory until consensus is reached.The State Machine Implementation```rustuse rig::agent::Agent;use rig::providers::anthropic::CompletionModel;use tracing::{error, info, instrument, warn};use crate::state::compaction::SwarmMemory;#[derive(Debug)]pub enum ArbitrationResult {Success,Deadlock(String),SystemError(String),}pub struct DebateOrchestrator {coder: Agent<CompletionModel>,reviewer: Agent<CompletionModel>,max_iterations: usize,}impl DebateOrchestrator {pub fn new(coder: Agent<CompletionModel>, reviewer: Agent<CompletionModel>, max_iterations: usize) -> Self {Self { coder, reviewer, max_iterations }}/// The core loop: Coder -> Reviewer -> Consensus Check
-#[instrument(skip(self, memory))]
-pub async fn run_debate(&self, initial_task: &str, memory: &mut SwarmMemory) -> ArbitrationResult {
-    let mut iteration = 1;
-    let mut coder_prompt = format!("TASK: {}\nImplement this using your tools.", initial_task);
+Phase 3: Strategy/Tactics Segregation
 
-    while iteration <= self.max_iterations {
-        info!(iteration, "Starting debate cycle.");
+Logical Justification (Slate)
 
-        // -----------------------------------------
-        // 1. CODER PHASE
-        // -----------------------------------------
-        info!("Coder is actively working...");
-        
-        // Rig handles tool calling internally during `.prompt()`
-        let coder_response = match self.coder.prompt(&coder_prompt).await {
-            Ok(resp) => resp,
-            Err(e) => {
-                error!("Coder LLM/Tool execution failed: {}", e);
-                return ArbitrationResult::SystemError(e.to_string());
-            }
-        };
+AlphaZero split the value network (Strategy) from the policy network (Tactics). The Cloud Manager should act as the Value Network: judging the state of the codebase and routing threads. It should never execute a tactical command like sed or cargo build. The Local Workers act as the Policy Network: executing tactical moves to reach a local goal.
 
-        // Push to shared memory
-        if let Err(e) = memory.push_and_compact(rig::message::Message::User { 
-            content: vec![rig::message::MessageContent::Text(coder_prompt.clone())] 
-        }).await {
-            return ArbitrationResult::SystemError(e.to_string());
-        }
-        if let Err(e) = memory.push_and_compact(rig::message::Message::Assistant { 
-            content: vec![rig::message::MessageContent::Text(coder_response.clone())] 
-        }).await {
-            return ArbitrationResult::SystemError(e.to_string());
-        }
+Agent Instructions
 
-        // -----------------------------------------
-        // 2. REVIEWER PHASE
-        // -----------------------------------------
-        info!("Reviewer is auditing the workspace...");
-        let reviewer_task = format!(
-            "The Coder has completed the implementation. Review the workspace using your verifier_tool. \n\nCoder's comments:\n{}", 
-            coder_response
-        );
+Step 1: Segregate Tool Bundles
 
-        let reviewer_response = match self.reviewer.prompt(&reviewer_task).await {
-            Ok(resp) => resp,
-            Err(e) => {
-                error!("Reviewer LLM/Tool execution failed: {}", e);
-                return ArbitrationResult::SystemError(e.to_string());
-            }
-        };
+Open coordination/src/tool_bundle.rs or crates/swarm-agents/src/tools/bundles.rs.
+You must explicitly separate the tools injected into the Rig agent builder based on the agent's role.
 
-        // Push to shared memory
-        if let Err(e) = memory.push_and_compact(rig::message::Message::User { 
-            content: vec![rig::message::MessageContent::Text(reviewer_task)] 
-        }).await {
-            return ArbitrationResult::SystemError(e.to_string());
-        }
-        if let Err(e) = memory.push_and_compact(rig::message::Message::Assistant { 
-            content: vec![rig::message::MessageContent::Text(reviewer_response.clone())] 
-        }).await {
-            return ArbitrationResult::SystemError(e.to_string());
-        }
+// Target: crates/swarm-agents/src/tools/bundles.rs
 
-        // -----------------------------------------
-        // 3. CONSENSUS EVALUATION
-        // -----------------------------------------
-        if reviewer_response.contains("CONSENSUS_REACHED") {
-            info!("Consensus reached on iteration {}. Task complete.", iteration);
-            return ArbitrationResult::Success;
-        } else {
-            warn!("Reviewer rejected the implementation. Formatting feedback for next iteration.");
-            
-            // Construct feedback loop for the coder
-            coder_prompt = format!(
-                "The Reviewer rejected your code and provided the following feedback:\n\n{}\n\nAddress these issues and apply a new patch.",
-                reviewer_response
-            );
-        }
-
-        iteration += 1;
-    }
-
-    let deadlock_msg = format!("Debate deadlock after {} iterations. Human intervention required.", self.max_iterations);
-    error!("{}", deadlock_msg);
-    ArbitrationResult::Deadlock(deadlock_msg)
+/// Tools EXCLUSIVELY for the Cloud Manager (Kernel / Strategy)
+pub fn kernel_strategy_tools() -> Vec<Box<dyn rig::tool::Tool>> {
+vec![
+        Box::new(DispatchThreadTool::new()), // Spawns a new Gastown worktree + Worker
+        Box::new(ReviewEpisodesTool::new()), // Reads completed thread summaries
+        Box::new(BdhStatusTool::new()),      // Check team status
+    ]
 }
-}```Integration into crates/swarm-agents/src/orchestrator.rsTo launch the swarm:```rust// Inside orchestrator.rsuse crate::agents::{coder::build_coder_agent, reviewer::build_reviewer_agent};use coordination::ensemble::arbitration::{DebateOrchestrator, ArbitrationResult};use coordination::state::compaction::SwarmMemory;pub async fn run_task(task: &str) {let client = rig::providers::anthropic::Client::from_env();let coder = build_coder_agent(&client);
-let reviewer = build_reviewer_agent(&client);
 
-let summarizer = client.agent("claude-3-haiku-20240307").build().unwrap();
-let mut memory = SwarmMemory::new(summarizer, 16_000); // 16k token limit
-
-let orchestrator = DebateOrchestrator::new(coder, reviewer, 5); // Max 5 iterations
-
-match orchestrator.run_debate(task, &mut memory).await {
-    ArbitrationResult::Success => tracing::info!("Swarm successfully completed the task!"),
-    ArbitrationResult::Deadlock(e) => tracing::error!("Swarm deadlocked: {}", e),
-    ArbitrationResult::SystemError(e) => tracing::error!("System failure: {}", e),
+/// Tools EXCLUSIVELY for Local Workers (Processes / Tactics)
+pub fn process_tactical_tools() -> Vec<Box<dyn rig::tool::Tool>> {
+vec![
+        Box::new(AstGrepTool::new()),
+        Box::new(CargoCheckTool::new()),
+        Box::new(GitOpsTool::new()),
+        Box::new(PatchTool::new()),
+    ]
 }
-}```
+
+Step 2: Update Agent Builders
+
+Open crates/swarm-agents/src/agents/cloud.rs. Ensure kernel_strategy_tools are the only tools attached to the Opus agent.
+
+Open crates/swarm-agents/src/agents/coder.rs and integrator.rs. Ensure process_tactical_tools are the only tools attached here. Remove any high-level planning prompts from their system prompts; they should only focus on "Solve this specific subtask and report the Episode."
+
+Task for Coder:
+
+Audit crates/swarm-agents/src/tools/ and strictly categorize them.
+
+Update the AgentBuilder initializations in cloud.rs, coder.rs, and manager.rs to enforce this strict separation of concerns.
