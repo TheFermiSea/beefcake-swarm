@@ -1,0 +1,477 @@
+//! Environment parsing utilities, directive management, scaffolding fallback,
+//! knowledge base helpers, and bdh coordination glue.
+
+use std::path::Path;
+use std::time::Duration;
+
+use tracing::{debug, info, warn};
+
+use crate::notebook_bridge::KnowledgeBase;
+use coordination::{
+    InterventionType, PendingIntervention, ProgressTracker, SessionManager, SwarmTier,
+};
+
+// ── Environment parsing ─────────────────────────────────────────────
+
+pub(crate) fn timeout_from_env(var: &str, default_secs: u64) -> Duration {
+    let secs = std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default_secs);
+    Duration::from_secs(secs)
+}
+
+pub(crate) fn u32_from_env(var: &str, default: u32) -> u32 {
+    std::env::var(var)
+        .ok()
+        .and_then(|v| v.parse::<u32>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(default)
+}
+
+pub(crate) fn bool_from_env(var: &str, default: bool) -> bool {
+    std::env::var(var)
+        .ok()
+        .map(|v| {
+            matches!(
+                v.trim().to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(default)
+}
+
+pub(crate) fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
+    match std::env::var(var)
+        .ok()
+        .map(|v| v.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("worker") => SwarmTier::Worker,
+        Some("human") => SwarmTier::Human,
+        Some("council") => SwarmTier::Council,
+        _ => default,
+    }
+}
+
+// ── Knowledge base ──────────────────────────────────────────────────
+
+/// Query the knowledge base with graceful degradation on failure.
+///
+/// Wraps `KnowledgeBase::query` with error handling so that any KB failure
+/// (connection error, auth failure, or a hanging `nlm` CLI subprocess) returns
+/// an empty string instead of propagating an error. This ensures KB
+/// unavailability never blocks the orchestration loop.
+pub(crate) fn query_kb_with_failsafe(
+    kb: &dyn KnowledgeBase,
+    role: &str,
+    question: &str,
+) -> String {
+    match kb.query(role, question) {
+        Ok(response) => response,
+        Err(e) => {
+            warn!(role, error = %e, "KB query failed — proceeding without context");
+            String::new()
+        }
+    }
+}
+
+// ── Doc task scaffolding ────────────────────────────────────────────
+
+/// Detect whether an issue is doc-oriented based on title/description keywords.
+fn is_doc_task(title: &str, description: &str) -> bool {
+    let combined = format!("{} {}", title, description).to_ascii_lowercase();
+    let doc_keywords = [
+        ".md",
+        "rfc",
+        "doc",
+        "architecture",
+        "planning",
+        "readme",
+        "design doc",
+    ];
+    doc_keywords.iter().any(|kw| combined.contains(kw))
+}
+
+/// Generate a minimal markdown scaffold for a doc-oriented task.
+///
+/// When doc tasks hit the no-change circuit breaker, this creates a template
+/// file so at least a skeleton exists for human completion. Returns `true`
+/// if a scaffold was committed.
+pub fn try_scaffold_fallback(
+    wt_path: &Path,
+    issue_id: &str,
+    issue_title: &str,
+    issue_description: &str,
+    iteration: u32,
+) -> bool {
+    if !is_doc_task(issue_title, issue_description) {
+        return false;
+    }
+
+    // Generate a safe filename from the issue title
+    let safe_name: String = issue_title
+        .chars()
+        .map(|c| {
+            if c.is_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let filename = format!("docs/{}.md", safe_name.trim_matches('-'));
+
+    let scaffold = format!(
+        "# {title}\n\n\
+         > Auto-generated scaffold by swarm orchestrator.\n\
+         > Issue: `{id}` | Generated at iteration {iter}\n\n\
+         ## Overview\n\n\
+         <!-- TODO: Describe the purpose and scope -->\n\n\
+         ## Details\n\n\
+         <!-- TODO: Fill in the content -->\n\n\
+         ## Open Questions\n\n\
+         <!-- TODO: List any unresolved questions -->\n",
+        title = issue_title,
+        id = issue_id,
+        iter = iteration,
+    );
+
+    // Ensure docs/ directory exists
+    let docs_dir = wt_path.join("docs");
+    if let Err(e) = std::fs::create_dir_all(&docs_dir) {
+        warn!("Failed to create docs dir for scaffold: {e}");
+        return false;
+    }
+
+    let file_path = wt_path.join(&filename);
+    if let Err(e) = std::fs::write(&file_path, &scaffold) {
+        warn!("Failed to write scaffold file: {e}");
+        return false;
+    }
+
+    // Stage and commit the scaffold
+    let add = std::process::Command::new("git")
+        .args(["add", &filename])
+        .current_dir(wt_path)
+        .output();
+    if !matches!(add, Ok(ref out) if out.status.success()) {
+        warn!("Failed to git add scaffold");
+        return false;
+    }
+
+    let msg = format!("swarm: scaffold fallback for {issue_id} (iteration {iteration})");
+    let commit = std::process::Command::new("git")
+        .args(["commit", "-m", &msg])
+        .current_dir(wt_path)
+        .output();
+    if !matches!(commit, Ok(ref out) if out.status.success()) {
+        warn!("Failed to commit scaffold");
+        return false;
+    }
+
+    info!(
+        issue_id,
+        filename, "Scaffold fallback committed for doc task"
+    );
+    true
+}
+
+// ── BDH coordination helpers ────────────────────────────────────────
+
+/// Poll for pending worker chat messages via bdh.
+///
+/// Returns `Some(messages)` if there are pending messages, `None` otherwise.
+/// Fails silently if bdh is not available or SWARM_USE_BDH is not set.
+pub(crate) fn poll_worker_chat(wt_path: &Path) -> Option<String> {
+    let use_bdh = std::env::var("SWARM_USE_BDH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !use_bdh {
+        return None;
+    }
+
+    let bridge = crate::bdh_bridge::BdhBridge::with_worktree(wt_path);
+    match bridge.check_chat_pending() {
+        Ok(pending) if !pending.trim().is_empty() && !pending.contains("no pending") => {
+            info!(
+                pending_len = pending.len(),
+                "Worker chat messages detected between iterations"
+            );
+            Some(pending)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            debug!(error = %e, "Chat polling failed (non-fatal)");
+            None
+        }
+    }
+}
+
+/// Escalate to human via bdh (async, non-blocking) when available.
+///
+/// Falls back to the traditional `create_stuck_intervention` mechanism
+/// when bdh is not configured.
+pub(crate) fn escalate_via_bdh(wt_path: &Path, issue_id: &str, reason: &str) {
+    let use_bdh = std::env::var("SWARM_USE_BDH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !use_bdh {
+        return;
+    }
+
+    let bridge = crate::bdh_bridge::BdhBridge::with_worktree(wt_path);
+    let subject = format!("Issue {issue_id} stuck");
+    match bridge.escalate(&subject, reason) {
+        Ok(()) => info!(issue_id, "Async escalation sent via bdh :escalate"),
+        Err(e) => warn!(
+            issue_id,
+            error = %e,
+            "bdh :escalate failed (falling back to intervention file)"
+        ),
+    }
+}
+
+/// Create a human intervention request when the escalation engine reports stuck.
+///
+/// Surfaces the intervention through 4 mechanisms:
+/// 1. Records in session state (in-memory)
+/// 2. Writes `.swarm-interventions.json` in the worktree root
+/// 3. POSTs to `SWARM_WEBHOOK_URL` if configured
+/// 4. Sends async `bdh :escalate` notification (when `SWARM_USE_BDH=1`)
+pub(crate) fn create_stuck_intervention(
+    session: &mut SessionManager,
+    progress: &ProgressTracker,
+    wt_path: &Path,
+    iteration: u32,
+    reason: &str,
+) {
+    let feature_id = session.current_feature().unwrap_or("unknown").to_string();
+
+    let intervention = PendingIntervention::new(
+        InterventionType::ReviewRequired,
+        format!("Stuck after iteration {iteration}: {reason}. Manual review needed."),
+    )
+    .with_feature(&feature_id);
+
+    session.state_mut().add_intervention(intervention);
+
+    let _ = progress.log_error(
+        session.session_id(),
+        iteration,
+        format!("Stuck — human intervention requested: {reason}"),
+    );
+
+    // --- Mechanism 2: Write intervention JSON to worktree ---
+    let intervention_data = serde_json::json!({
+        "session_id": session.session_id(),
+        "feature_id": feature_id,
+        "iteration": iteration,
+        "reason": reason,
+        "type": "review_required",
+        "timestamp": chrono::Utc::now().to_rfc3339(),
+    });
+    let intervention_path = wt_path.join(".swarm-interventions.json");
+    match std::fs::write(
+        &intervention_path,
+        serde_json::to_string_pretty(&intervention_data).unwrap_or_default(),
+    ) {
+        Ok(()) => info!(path = %intervention_path.display(), "Wrote intervention file"),
+        Err(e) => warn!("Failed to write intervention file: {e}"),
+    }
+
+    // --- Mechanism 3: Webhook notification ---
+    if let Ok(webhook_url) = std::env::var("SWARM_WEBHOOK_URL") {
+        // Fire-and-forget — don't block the orchestrator on webhook delivery
+        let payload = intervention_data.clone();
+        tokio::spawn(async move {
+            let client = reqwest::Client::new();
+            match client
+                .post(&webhook_url)
+                .json(&payload)
+                .timeout(Duration::from_secs(10))
+                .send()
+                .await
+            {
+                Ok(resp) => info!(status = %resp.status(), "Webhook notification sent"),
+                Err(e) => warn!("Webhook notification failed: {e}"),
+            }
+        });
+    }
+
+    // --- Mechanism 4: Async bdh escalation ---
+    escalate_via_bdh(wt_path, &feature_id, reason);
+}
+
+// ── Pattern detection + directive injection ─────────────────────────
+
+/// Detect repeated failure patterns from the failure ledger.
+///
+/// Groups entries by `(tool, error_class)` and generates directives for
+/// patterns that occurred 3+ times. Returns at most 5 directives.
+pub(crate) fn detect_failure_patterns(worktree_path: &Path) -> Vec<String> {
+    let path = worktree_path.join(".swarm-failure-ledger.jsonl");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut counts: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
+    for line in content.lines() {
+        if let Ok(entry) = serde_json::from_str::<crate::telemetry::FailureLedgerEntry>(line) {
+            if !entry.success {
+                *counts
+                    .entry((entry.tool.clone(), entry.error_class.clone()))
+                    .or_insert(0) += 1;
+            }
+        }
+    }
+
+    let mut directives: Vec<String> = counts
+        .into_iter()
+        .filter(|(_, count)| *count >= 3)
+        .map(|((tool, class), count)| {
+            format!("Avoid: {tool} failures due to '{class}' (seen {count}x). Use anchor-based editing or re-read files before editing.")
+        })
+        .collect();
+
+    directives.sort();
+    directives.truncate(5);
+    directives
+}
+
+/// Save generated directives to `.swarm-directives.jsonl` in the repo root.
+pub(crate) fn save_directives(repo_root: &Path, directives: &[String]) {
+    use std::io::Write;
+    let path = repo_root.join(".swarm-directives.jsonl");
+    match std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&path)
+    {
+        Ok(mut file) => {
+            let ts = chrono::Utc::now().to_rfc3339();
+            for d in directives {
+                let entry = serde_json::json!({"timestamp": ts, "directive": d});
+                let _ = writeln!(file, "{}", entry);
+            }
+        }
+        Err(e) => warn!("Failed to write directives: {e}"),
+    }
+}
+
+/// Load recent directives from `.swarm-directives.jsonl`.
+///
+/// Returns at most 5 recent directives (deduped).
+pub(crate) fn load_directives(repo_root: &Path) -> Vec<String> {
+    let path = repo_root.join(".swarm-directives.jsonl");
+    let content = match std::fs::read_to_string(&path) {
+        Ok(c) => c,
+        Err(_) => return Vec::new(),
+    };
+
+    let mut directives: Vec<String> = content
+        .lines()
+        .rev() // most recent first
+        .filter_map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            v.get("directive")?.as_str().map(|s| s.to_string())
+        })
+        .collect();
+
+    // Deduplicate while preserving order
+    let mut seen = std::collections::HashSet::new();
+    directives.retain(|d| seen.insert(d.clone()));
+    directives.truncate(5);
+    directives
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_query_kb_with_failsafe_on_failure() {
+        use crate::notebook_bridge::KnowledgeBase;
+        use anyhow::Result;
+
+        struct FailingKb;
+        impl KnowledgeBase for FailingKb {
+            fn query(&self, _role: &str, _question: &str) -> Result<String> {
+                anyhow::bail!("simulated nlm connection failure")
+            }
+            fn add_source_text(&self, _role: &str, _title: &str, _content: &str) -> Result<()> {
+                Ok(())
+            }
+            fn add_source_file(&self, _role: &str, _file_path: &str) -> Result<()> {
+                Ok(())
+            }
+            fn is_available(&self) -> bool {
+                false
+            }
+        }
+
+        let kb = FailingKb;
+        // Must not panic or propagate error — returns empty string
+        let result = query_kb_with_failsafe(&kb, "project_brain", "What is the architecture?");
+        assert_eq!(result, "", "failsafe must return empty string on KB error");
+    }
+
+    #[test]
+    fn test_query_kb_with_failsafe_on_success() {
+        use crate::notebook_bridge::KnowledgeBase;
+        use anyhow::Result;
+
+        struct SucceedingKb;
+        impl KnowledgeBase for SucceedingKb {
+            fn query(&self, _role: &str, _question: &str) -> Result<String> {
+                Ok("The architecture uses a 4-tier escalation ladder.".to_string())
+            }
+            fn add_source_text(&self, _role: &str, _title: &str, _content: &str) -> Result<()> {
+                Ok(())
+            }
+            fn add_source_file(&self, _role: &str, _file_path: &str) -> Result<()> {
+                Ok(())
+            }
+            fn is_available(&self) -> bool {
+                true
+            }
+        }
+
+        let kb = SucceedingKb;
+        let result = query_kb_with_failsafe(&kb, "project_brain", "What is the architecture?");
+        assert_eq!(result, "The architecture uses a 4-tier escalation ladder.");
+    }
+
+    #[test]
+    fn test_create_stuck_intervention_adds_to_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut session = SessionManager::new(dir.path().to_path_buf(), 10);
+        session.start().unwrap();
+        session.set_current_feature("test-issue-001");
+
+        let progress = ProgressTracker::new(dir.path().join("progress.txt"));
+
+        create_stuck_intervention(&mut session, &progress, dir.path(), 3, "repeated errors");
+
+        // Intervention should be recorded in session state
+        let interventions = session.state().unresolved_interventions();
+        assert_eq!(interventions.len(), 1);
+        assert!(interventions[0].question.contains("iteration 3"));
+        assert!(interventions[0].question.contains("repeated errors"));
+        assert_eq!(
+            interventions[0].feature_id.as_deref(),
+            Some("test-issue-001")
+        );
+
+        // Progress file should have the error logged
+        let entries = progress.read_all().unwrap();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].summary.contains("human intervention"));
+    }
+}
