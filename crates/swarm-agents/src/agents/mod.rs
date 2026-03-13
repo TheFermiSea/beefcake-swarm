@@ -48,7 +48,7 @@ pub struct AgentFactory {
     /// Centralized tool construction factory, scoped to a worktree.
     ///
     /// When set, agent builders can use this instead of calling
-    /// `bundles::worker_tools()` / `bundles::manager_tools()` directly.
+    /// `bundles::worker_tools()` / `bundles::kernel_strategy_tools()` directly.
     /// Initialize via [`AgentFactory::with_worktree`].
     pub tool_factory: Option<ToolFactory>,
     /// Round-robin pool for selecting the next worker node.
@@ -125,7 +125,7 @@ impl AgentFactory {
     ///
     /// Once set, the `tool_factory` field is available for callers that want
     /// centralized, Clone-able tool construction instead of calling
-    /// `bundles::worker_tools()` / `bundles::manager_tools()` directly.
+    /// `bundles::worker_tools()` / `bundles::kernel_strategy_tools()` directly.
     ///
     /// Existing agent builder methods (e.g., `build_rust_coder`) continue to
     /// work unchanged via `bundles` -- this is an additive capability.
@@ -147,7 +147,7 @@ impl AgentFactory {
         self
     }
 
-    /// Build the Rust specialist coder (Qwen3.5-122B-A10B on vasp-01, Rust system prompt).
+    /// Build the Rust specialist coder (Qwen3.5-27B-Distilled on vasp-03, Rust system prompt).
     ///
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
@@ -161,7 +161,7 @@ impl AgentFactory {
         )
     }
 
-    /// Build the general coder (Qwen3.5-122B-A10B on vasp-01, general coding system prompt).
+    /// Build the general coder (Qwen3.5-122B-A10B on the integrator tier, general coding system prompt).
     ///
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
@@ -175,16 +175,25 @@ impl AgentFactory {
         )
     }
 
-    /// Select the next node in round-robin order and build the rust + general
-    /// coders both pointing to that same node.
+    /// Build the specialized worker pair for a single issue.
     ///
-    /// Call once per issue before the iteration loop. All parallel `AgentFactory`
-    /// clones share the same `Arc<AtomicUsize>` counter, so concurrent issues
-    /// land on different nodes automatically.
+    /// The Rust specialist stays pinned to the fast 27B scout tier for focused
+    /// Rust repairs, while the general coder uses the worker endpoint pool so
+    /// concurrent issues still spread across the integrator tier.
+    ///
+    /// Call once per issue before the iteration loop. All parallel
+    /// `AgentFactory` clones share the same `Arc<AtomicUsize>` counter, so
+    /// concurrent issues still land on different integrator nodes automatically.
     pub fn build_worker_pair(&self, wt_path: &Path) -> (OaiAgent, OaiAgent) {
-        let (client, model) = self.endpoint_pool.next();
         let proxy = self.config.cloud_only;
-        let rust_coder = coder::build_rust_coder_named(client, model, wt_path, "rust_coder", proxy);
+        let (client, model) = self.endpoint_pool.next();
+        let rust_coder = coder::build_rust_coder_named(
+            &self.clients.local,
+            &self.config.fast_endpoint.model,
+            wt_path,
+            "rust_coder",
+            proxy,
+        );
         let general_coder =
             coder::build_general_coder_named(client, model, wt_path, "general_coder", proxy);
         (rust_coder, general_coder)

@@ -6,8 +6,8 @@
 //! following the same pattern as [`BeadsBridge`](crate::beads_bridge::BeadsBridge).
 
 use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::Path;
 use std::process::Command;

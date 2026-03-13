@@ -44,9 +44,172 @@ pub enum WorkerRole {
 
 /// Build the tool bundle for a worker agent.
 ///
+/// Delegates to [`process_tactical_tools`] for the core tactical tools,
+/// then appends worker chat tools for bdh coordination.
+///
 /// When `proxy` is true, tools are wrapped with `proxy_` prefixed names
 /// for CLIAPIProxy compatibility.
 pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dyn ToolDyn>> {
+    let mut tools = process_tactical_tools(wt_path, role, proxy);
+
+    // Workers get chat_send when bdh coordination is active.
+    // This lets workers signal the manager when stuck or need clarification.
+    // (Planners are read-only — no chat needed.)
+    if role != WorkerRole::Planner {
+        tools.extend(worker_chat_tools(wt_path));
+    }
+
+    tools
+}
+
+/// Build a worker tool bundle with a file allowlist for subtask dispatch.
+///
+/// Like `worker_tools`, but `edit_file` and `write_file` will reject writes
+/// to paths outside `target_files`, enforcing the non-overlap constraint at
+/// the tool layer (not just the prompt).
+///
+/// Includes workpad tools (`announce` + `check_announcements`) for inter-worker
+/// communication during concurrent execution. Workers announce interface changes
+/// so other workers can adapt before their final edits.
+pub fn subtask_worker_tools(
+    wt_path: &Path,
+    role: WorkerRole,
+    target_files: &[String],
+    worker_id: &str,
+) -> Vec<Box<dyn ToolDyn>> {
+    let allowlist: std::collections::HashSet<String> = target_files.iter().cloned().collect();
+
+    let mut tools: Vec<Box<dyn ToolDyn>> = vec![
+        Box::new(ReadFileTool::new(wt_path)),
+        Box::new(WriteFileTool::new_with_allowlist(
+            wt_path,
+            allowlist.clone(),
+        )),
+        Box::new(EditFileTool::new_with_allowlist(wt_path, allowlist)),
+        Box::new(RunCommandTool::new(wt_path)),
+    ];
+
+    if role == WorkerRole::General {
+        tools.push(Box::new(ListFilesTool::new(wt_path)));
+    }
+
+    // Workpad tools for inter-worker communication during concurrent dispatch.
+    tools.push(Box::new(AnnounceTool::new(wt_path, worker_id)));
+    tools.push(Box::new(CheckAnnouncementsTool::new(wt_path, worker_id)));
+
+    tools
+}
+
+/// Build the deterministic tool bundle for a manager agent.
+///
+/// Both cloud and local managers get strategy-only tools via
+/// [`kernel_strategy_tools`]: verifier, diff, changed_files.
+/// NO read_file, write_file, or list_files — forces the manager to
+/// delegate exploration and code changes to workers.
+///
+/// Local managers previously retained read/list, but the Slate
+/// architecture enforces strict segregation: managers orchestrate,
+/// workers execute. Local managers have workers as agent-tools and
+/// should delegate through them.
+///
+/// When `proxy` is true, tools are wrapped with `proxy_` prefix.
+pub fn manager_tools(
+    wt_path: &Path,
+    verifier_packages: &[String],
+    proxy: bool,
+) -> Vec<Box<dyn ToolDyn>> {
+    kernel_strategy_tools(wt_path, verifier_packages, proxy)
+}
+
+/// Build bdh coordination tools for the manager agent.
+///
+/// Returns coordination tools when `SWARM_USE_BDH=1`, empty vec otherwise.
+/// These give the manager team awareness: who's working on what, file locks,
+/// and inter-agent messaging (including chat).
+pub fn coordination_tools(wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
+    let use_bdh = std::env::var("SWARM_USE_BDH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !use_bdh {
+        return vec![];
+    }
+
+    vec![
+        Box::new(TeamStatusTool::new(wt_path)),
+        Box::new(CheckMailTool::new(wt_path)),
+        Box::new(SendMailTool::new(wt_path)),
+        Box::new(CheckLocksTool::new(wt_path)),
+        Box::new(ChatSendTool::new(wt_path)),
+        Box::new(ChatCheckTool::new(wt_path)),
+    ]
+}
+
+/// Build bdh chat tools for worker agents.
+///
+/// Returns chat_send when `SWARM_USE_BDH=1`, empty vec otherwise.
+/// Workers can signal the manager when stuck or when they need clarification.
+pub fn worker_chat_tools(wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
+    let use_bdh = std::env::var("SWARM_USE_BDH")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !use_bdh {
+        return vec![];
+    }
+
+    vec![Box::new(ChatSendTool::new(wt_path))]
+}
+
+/// Build the **strategy-only** tool bundle for the kernel (cloud manager).
+///
+/// Strategy tools let the kernel observe and orchestrate without touching code:
+/// - `run_verifier`: validate worker output (cargo fmt, clippy, check, test)
+/// - `get_diff` / `list_changed_files`: inspect what workers changed
+///
+/// The kernel delegates all code-level work to worker processes. This enforces
+/// the LLM-as-OS-Kernel pattern: the kernel sees the world through summaries
+/// and diffs, never through raw file reads or writes.
+///
+/// When `proxy` is true, tools get `proxy_` prefix for CLIAPIProxy compatibility.
+pub fn kernel_strategy_tools(
+    wt_path: &Path,
+    verifier_packages: &[String],
+    proxy: bool,
+) -> Vec<Box<dyn ToolDyn>> {
+    if proxy {
+        vec![
+            Box::new(ProxyRunVerifier(
+                RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()),
+            )),
+            Box::new(ProxyGetDiff(GetDiffTool::new(wt_path))),
+            Box::new(ProxyListChangedFiles(ListChangedFilesTool::new(wt_path))),
+        ]
+    } else {
+        vec![
+            Box::new(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec())),
+            Box::new(GetDiffTool::new(wt_path)),
+            Box::new(ListChangedFilesTool::new(wt_path)),
+        ]
+    }
+}
+
+/// Build the **tactics-only** tool bundle for worker processes.
+///
+/// Tactical tools let workers interact with code and the filesystem:
+/// - `read_file`, `write_file`, `edit_file`: code manipulation
+/// - `run_command`: execute cargo, grep, etc.
+/// - `list_files`: directory exploration (General/Reasoning roles only)
+///
+/// Workers never get dispatch, verifier, or coordination tools — they execute
+/// subtasks assigned by the kernel and report results back.
+///
+/// When `proxy` is true, tools get `proxy_` prefix for CLIAPIProxy compatibility.
+pub fn process_tactical_tools(
+    wt_path: &Path,
+    role: WorkerRole,
+    proxy: bool,
+) -> Vec<Box<dyn ToolDyn>> {
     match role {
         WorkerRole::Planner => {
             // Read-only tools for analysis: read_file, list_files, run_command.
@@ -90,128 +253,9 @@ pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dy
                 }
             }
 
-            // Workers get chat_send when bdh coordination is active.
-            // This lets workers signal the manager when stuck or need clarification.
-            tools.extend(worker_chat_tools(wt_path));
-
             tools
         }
     }
-}
-
-/// Build a worker tool bundle with a file allowlist for subtask dispatch.
-///
-/// Like `worker_tools`, but `edit_file` and `write_file` will reject writes
-/// to paths outside `target_files`, enforcing the non-overlap constraint at
-/// the tool layer (not just the prompt).
-///
-/// Includes workpad tools (`announce` + `check_announcements`) for inter-worker
-/// communication during concurrent execution. Workers announce interface changes
-/// so other workers can adapt before their final edits.
-pub fn subtask_worker_tools(
-    wt_path: &Path,
-    role: WorkerRole,
-    target_files: &[String],
-    worker_id: &str,
-) -> Vec<Box<dyn ToolDyn>> {
-    let allowlist: std::collections::HashSet<String> = target_files.iter().cloned().collect();
-
-    let mut tools: Vec<Box<dyn ToolDyn>> = vec![
-        Box::new(ReadFileTool::new(wt_path)),
-        Box::new(WriteFileTool::new_with_allowlist(
-            wt_path,
-            allowlist.clone(),
-        )),
-        Box::new(EditFileTool::new_with_allowlist(wt_path, allowlist)),
-        Box::new(RunCommandTool::new(wt_path)),
-    ];
-
-    if role == WorkerRole::General {
-        tools.push(Box::new(ListFilesTool::new(wt_path)));
-    }
-
-    // Workpad tools for inter-worker communication during concurrent dispatch.
-    tools.push(Box::new(AnnounceTool::new(wt_path, worker_id)));
-    tools.push(Box::new(CheckAnnouncementsTool::new(wt_path, worker_id)));
-
-    tools
-}
-
-/// Build the deterministic tool bundle for a manager agent.
-///
-/// Cloud managers get delegate-only tools: verifier, diff, changed_files.
-/// NO read_file or list_files — forces the manager to delegate exploration
-/// to workers instead of absorbing read-work itself.
-///
-/// Local managers retain read/list since they may need to explore without
-/// cloud-quality planning ability.
-///
-/// When `proxy` is true, tools are wrapped with `proxy_` prefix.
-pub fn manager_tools(
-    wt_path: &Path,
-    verifier_packages: &[String],
-    proxy: bool,
-) -> Vec<Box<dyn ToolDyn>> {
-    if proxy {
-        // Cloud manager: delegate-only (no read_file, no list_files).
-        // Workers have these tools — the manager must delegate to them.
-        vec![
-            Box::new(ProxyRunVerifier(
-                RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()),
-            )),
-            Box::new(ProxyGetDiff(GetDiffTool::new(wt_path))),
-            Box::new(ProxyListChangedFiles(ListChangedFilesTool::new(wt_path))),
-        ]
-    } else {
-        // Local manager: retains read/list for direct exploration.
-        vec![
-            Box::new(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec())),
-            Box::new(ReadFileTool::new(wt_path)),
-            Box::new(ListFilesTool::new(wt_path)),
-            Box::new(GetDiffTool::new(wt_path)),
-            Box::new(ListChangedFilesTool::new(wt_path)),
-        ]
-    }
-}
-
-/// Build bdh coordination tools for the manager agent.
-///
-/// Returns coordination tools when `SWARM_USE_BDH=1`, empty vec otherwise.
-/// These give the manager team awareness: who's working on what, file locks,
-/// and inter-agent messaging (including chat).
-pub fn coordination_tools(wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
-    let use_bdh = std::env::var("SWARM_USE_BDH")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    if !use_bdh {
-        return vec![];
-    }
-
-    vec![
-        Box::new(TeamStatusTool::new(wt_path)),
-        Box::new(CheckMailTool::new(wt_path)),
-        Box::new(SendMailTool::new(wt_path)),
-        Box::new(CheckLocksTool::new(wt_path)),
-        Box::new(ChatSendTool::new(wt_path)),
-        Box::new(ChatCheckTool::new(wt_path)),
-    ]
-}
-
-/// Build bdh chat tools for worker agents.
-///
-/// Returns chat_send when `SWARM_USE_BDH=1`, empty vec otherwise.
-/// Workers can signal the manager when stuck or when they need clarification.
-pub fn worker_chat_tools(wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
-    let use_bdh = std::env::var("SWARM_USE_BDH")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    if !use_bdh {
-        return vec![];
-    }
-
-    vec![Box::new(ChatSendTool::new(wt_path))]
 }
 
 /// Build the optional knowledge base tool for a manager agent.
@@ -283,13 +327,13 @@ mod tests {
     }
 
     #[test]
-    fn test_manager_local_has_5_tools() {
+    fn test_manager_local_has_3_strategy_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], false);
         assert_eq!(
             tools.len(),
-            5,
-            "Local manager should have 5 tools (verifier, read, list, get_diff, list_changed_files)"
+            3,
+            "Local manager should have 3 strategy-only tools (verifier, get_diff, list_changed_files)"
         );
     }
 
@@ -300,21 +344,24 @@ mod tests {
         assert_eq!(
             tools.len(),
             3,
-            "Cloud manager should have 3 delegate-only tools (verifier, get_diff, list_changed_files)"
+            "Cloud manager should have 3 strategy-only tools (verifier, get_diff, list_changed_files)"
         );
     }
 
     #[test]
-    fn test_manager_cloud_no_read_list_tools() {
+    fn test_manager_no_read_list_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = manager_tools(dir.path(), &[], true);
-        let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
-        assert!(
-            !names
-                .iter()
-                .any(|n| n.contains("read_file") || n.contains("list_files")),
-            "Cloud manager should not have read_file/list_files, got: {names:?}"
-        );
+        // Both cloud and local managers should lack read_file/list_files.
+        for proxy in [false, true] {
+            let tools = manager_tools(dir.path(), &[], proxy);
+            let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
+            assert!(
+                !names
+                    .iter()
+                    .any(|n| n.contains("read_file") || n.contains("list_files")),
+                "Manager (proxy={proxy}) should not have read_file/list_files, got: {names:?}"
+            );
+        }
     }
 
     #[test]
@@ -405,5 +452,127 @@ mod tests {
         let tools = notebook_tool(Some(kb), true);
         assert_eq!(tools.len(), 1);
         assert!(tools[0].name().starts_with("proxy_"));
+    }
+
+    // ── Strategy/Tactics segregation tests ──────────────────────────
+
+    #[test]
+    fn test_kernel_strategy_tools_local() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = kernel_strategy_tools(dir.path(), &[], false);
+        assert_eq!(
+            tools.len(),
+            3,
+            "Strategy bundle: verifier, get_diff, list_changed_files"
+        );
+        let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.iter().any(|n| n.contains("verifier")));
+        assert!(names.iter().any(|n| n.contains("get_diff")));
+        assert!(names.iter().any(|n| n.contains("list_changed_files")));
+    }
+
+    #[test]
+    fn test_kernel_strategy_tools_proxy() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = kernel_strategy_tools(dir.path(), &["pkg".to_string()], true);
+        assert_eq!(tools.len(), 3);
+        for tool in &tools {
+            assert!(
+                tool.name().starts_with("proxy_"),
+                "Strategy tool should have proxy_ prefix: {}",
+                tool.name()
+            );
+        }
+    }
+
+    #[test]
+    fn test_kernel_strategy_has_no_tactical_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        for proxy in [false, true] {
+            let tools = kernel_strategy_tools(dir.path(), &[], proxy);
+            let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
+            let tactical_names = [
+                "read_file",
+                "write_file",
+                "edit_file",
+                "run_command",
+                "list_files",
+            ];
+            for bad in &tactical_names {
+                assert!(
+                    !names.iter().any(|n| n.contains(bad)),
+                    "Strategy bundle (proxy={proxy}) should not contain tactical tool '{bad}', got: {names:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_process_tactical_tools_general() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = process_tactical_tools(dir.path(), WorkerRole::General, false);
+        assert_eq!(
+            tools.len(),
+            5,
+            "General tactical: read, write, edit, run, list"
+        );
+        let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
+        assert!(names.iter().any(|n| n.contains("read_file")));
+        assert!(names.iter().any(|n| n.contains("write_file")));
+        assert!(names.iter().any(|n| n.contains("edit_file")));
+        assert!(names.iter().any(|n| n.contains("run_command")));
+        assert!(names.iter().any(|n| n.contains("list_files")));
+    }
+
+    #[test]
+    fn test_process_tactical_tools_rust_specialist() {
+        let dir = tempfile::tempdir().unwrap();
+        let tools = process_tactical_tools(dir.path(), WorkerRole::RustSpecialist, false);
+        assert_eq!(
+            tools.len(),
+            4,
+            "Rust specialist tactical: read, write, edit, run (no list)"
+        );
+    }
+
+    #[test]
+    fn test_process_tactical_has_no_strategy_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        for role in [
+            WorkerRole::RustSpecialist,
+            WorkerRole::General,
+            WorkerRole::Planner,
+        ] {
+            for proxy in [false, true] {
+                let tools = process_tactical_tools(dir.path(), role, proxy);
+                let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
+                let strategy_names = ["verifier", "get_diff", "list_changed_files"];
+                for bad in &strategy_names {
+                    assert!(
+                        !names.iter().any(|n| n.contains(bad)),
+                        "Tactical bundle ({role:?}, proxy={proxy}) should not contain strategy tool '{bad}', got: {names:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_strategy_and_tactical_are_disjoint() {
+        let dir = tempfile::tempdir().unwrap();
+        let strategy: Vec<String> = kernel_strategy_tools(dir.path(), &[], false)
+            .iter()
+            .map(|t| t.name())
+            .collect();
+        let tactical: Vec<String> = process_tactical_tools(dir.path(), WorkerRole::General, false)
+            .iter()
+            .map(|t| t.name())
+            .collect();
+        for s in &strategy {
+            assert!(
+                !tactical.contains(s),
+                "Tool '{s}' appears in both strategy and tactical bundles — must be disjoint"
+            );
+        }
     }
 }

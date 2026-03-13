@@ -1,10 +1,11 @@
-//! Manager/orchestrator agent.
+//! Manager/orchestrator agent (Kernel in the Slate LLM-as-OS pattern).
 //!
 //! When cloud is available: backed by Opus 4.6 / G3-Pro with local workers as tools.
 //! Fallback: backed by Qwen3.5-Architect (local reasoning) with coders as tools.
 //!
 //! The Manager gets worker agents as tools (agent-as-tool pattern) plus
-//! deterministic tools (verifier, read_file, list_files, query_notebook).
+//! **strategy-only** deterministic tools (verifier, get_diff, list_changed_files).
+//! No read/write/edit/list — the kernel orchestrates, workers execute.
 
 use std::path::Path;
 use std::sync::Arc;
@@ -83,8 +84,13 @@ pub fn build_cloud_manager(
         builder = builder.tool(rw);
     }
 
-    // Deterministic tools — proxy-prefixed for CLIAPIProxy compatibility.
-    builder = builder.tools(bundles::manager_tools(wt_path, verifier_packages, true));
+    // Strategy tools — proxy-prefixed for CLIAPIProxy compatibility.
+    // Kernel sees verifier, diff, changed_files only. No read/write/edit.
+    builder = builder.tools(bundles::kernel_strategy_tools(
+        wt_path,
+        verifier_packages,
+        true,
+    ));
 
     // Parallel work planning tool (optional — enables manager-guided decomposition).
     if let Some(plan_slot) = workers.plan_slot {
@@ -129,8 +135,13 @@ pub fn build_local_manager(
         .tool(workers.rust_coder)
         .tool(workers.general_coder)
         .tool(workers.reviewer)
-        // Deterministic tools — no proxy prefix for local models
-        .tools(bundles::manager_tools(wt_path, verifier_packages, false));
+        // Strategy tools — no proxy prefix for local models.
+        // Same segregation as cloud: verifier, diff, changed_files only.
+        .tools(bundles::kernel_strategy_tools(
+            wt_path,
+            verifier_packages,
+            false,
+        ));
 
     // Parallel work planning tool (optional).
     if let Some(plan_slot) = workers.plan_slot {

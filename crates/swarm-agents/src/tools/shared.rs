@@ -86,9 +86,9 @@ impl ToolFactory {
         bundles::worker_tools(&self.wt_path, role, self.proxy)
     }
 
-    /// Build the deterministic tool bundle for a manager agent.
+    /// Build the strategy-only tool bundle for a manager agent.
     ///
-    /// Includes verifier, read_file, list_files.
+    /// Includes verifier, get_diff, list_changed_files (no read/write/list).
     /// Delegates to [`bundles::manager_tools`] with the factory's stored parameters.
     pub fn manager_tools(&self) -> Vec<Box<dyn ToolDyn>> {
         bundles::manager_tools(&self.wt_path, &self.verifier_packages, self.proxy)
@@ -157,11 +157,11 @@ mod tests {
 
     #[test]
     fn test_factory_manager_tools() -> TestResult {
-        // Manager (deterministic): run_verifier, read_file, list_files, get_diff, list_changed_files.
+        // Manager (strategy-only): run_verifier, get_diff, list_changed_files.
         let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec!["test-pkg".to_string()], None);
         let tools = factory.manager_tools();
-        assert_eq!(tools.len(), 5, "Manager should have 5 tools");
+        assert_eq!(tools.len(), 3, "Manager should have 3 strategy-only tools");
         Ok(())
     }
 
