@@ -313,6 +313,19 @@ impl Verifier {
     ) -> Result<std::process::Output, String> {
         cmd.current_dir(&self.working_dir).kill_on_drop(true);
 
+        // Use sccache for compilation caching if available. This dramatically
+        // speeds up repeated verifier runs across worktrees (90s → ~10s for
+        // incremental builds). Set RUSTC_WRAPPER only if sccache is on PATH.
+        if std::process::Command::new("sccache")
+            .arg("--version")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .is_ok()
+        {
+            cmd.env("RUSTC_WRAPPER", "sccache");
+        }
+
         // Create a new process group so we can kill the entire tree on timeout.
         // process_group(0) calls setpgid(0, 0) which puts the child in its own
         // group. When kill_on_drop fires, tokio kills the child; the group
