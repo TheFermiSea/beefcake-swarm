@@ -16,6 +16,8 @@ pub mod patch_tool;
 pub mod plan_parallel_tool;
 pub mod proxy_wrappers;
 pub mod search_code_tool;
+pub mod colgrep_tool;
+pub mod astgrep_tool;
 pub mod shared;
 pub mod verifier_tool;
 pub mod workpad_tool;

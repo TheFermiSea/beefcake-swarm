@@ -58,7 +58,7 @@ pub enum Tier {
     Fast,
     /// Qwen3.5-122B-A10B on vasp-01 — Coder/integrator tier (65K context, expert-offload)
     Coder,
-    /// Qwen3.5-122B-A10B on vasp-02 — Reasoning/integrator tier (65K context, expert-offload)
+    /// Qwen3.5-122B-A10B on vasp-01+02 RPC — Reasoning/integrator tier (65K context, expert-offload)
     Reasoning,
     /// Cloud models via CLIAPIProxy
     Cloud,
@@ -262,7 +262,7 @@ pub struct SwarmConfig {
     pub fast_endpoint: Endpoint,
     /// Qwen3.5-122B-A10B on vasp-01:8081 (Coder/integrator, 65K context, expert-offload)
     pub coder_endpoint: Endpoint,
-    /// Qwen3.5-122B-A10B on vasp-02:8081 (Reasoning/integrator, 65K context, expert-offload)
+    /// Qwen3.5-122B-A10B on vasp-01+02 RPC:8081 (Reasoning/integrator, 65K context, expert-offload)
     pub reasoning_endpoint: Endpoint,
     /// CLIAPIProxy cloud escalation (optional)
     pub cloud_endpoint: Option<CloudEndpoint>,
@@ -354,7 +354,7 @@ impl Default for SwarmConfig {
             },
             reasoning_endpoint: Endpoint {
                 url: std::env::var("SWARM_REASONING_URL")
-                    .unwrap_or_else(|_| "http://vasp-02:8081/v1".into()),
+                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
                 model: std::env::var("SWARM_REASONING_MODEL")
                     .unwrap_or_else(|_| "Qwen3.5-122B-A10B".into()),
                 tier: Tier::Reasoning,
@@ -485,6 +485,12 @@ impl SwarmConfig {
     /// Resolve the appropriate model name for a given swarm role based on the active stack profile.
     /// Includes the LoRA/QLoRA adapter suffix if configured for worker roles.
     pub fn resolve_role_model(&self, role: SwarmRole) -> String {
+        if self.cloud_only {
+            if let Some(ref cloud_ep) = self.cloud_endpoint {
+                return cloud_ep.model.clone();
+            }
+        }
+
         let base_model = match self.stack_profile {
             SwarmStackProfile::HybridBalancedV1 => match role {
                 SwarmRole::Scout | SwarmRole::Reviewer | SwarmRole::RustWorker | SwarmRole::Fixer => {
@@ -644,14 +650,14 @@ impl SwarmConfig {
 /// Each tier maps to a different node/model:
 /// - `local`     -> vasp-03:8081 (Qwen3.5-27B-Distilled, Scout/fast tier, 192K context)
 /// - `coder`     -> vasp-01:8081 (Qwen3.5-122B-A10B, Integrator/coder tier, 65K context)
-/// - `reasoning` -> vasp-02:8081 (Qwen3.5-122B-A10B, Integrator/reasoning tier, 65K context)
+/// - `reasoning` -> vasp-01+02 RPC:8081 (Qwen3.5-122B-A10B, Integrator/reasoning tier, 65K context)
 #[derive(Clone)]
 pub struct ClientSet {
     /// Client for vasp-03:8081 (Qwen3.5-27B-Distilled -- scout/fast tier: analysis, routing, review)
     pub local: openai::CompletionsClient,
     /// Client for vasp-01:8081 (Qwen3.5-122B-A10B -- coder/integrator tier: code generation)
     pub coder: openai::CompletionsClient,
-    /// Client for vasp-02:8081 (Qwen3.5-122B-A10B -- reasoning/integrator tier: deep analysis)
+    /// Client for vasp-01+02 RPC:8081 (Qwen3.5-122B-A10B -- reasoning/integrator tier: deep analysis)
     pub reasoning: openai::CompletionsClient,
     /// Client for Qwen3.5-397B-A17B (strategist/advisor tier)
     pub strategist: Option<openai::CompletionsClient>,
@@ -722,7 +728,7 @@ impl ClientSet {
             local_http.clone(),
             None,
         )
-        .context("Failed to build reasoning client (vasp-02)")?;
+        .context("Failed to build reasoning client (vasp-01+02 RPC)")?;
 
         let strategist = config
             .strategist_endpoint
@@ -861,7 +867,7 @@ mod tests {
         assert_eq!(config.max_retries, 10);
         assert!(config.fast_endpoint.url.contains("vasp-03"));
         assert!(config.coder_endpoint.url.contains("vasp-01"));
-        assert!(config.reasoning_endpoint.url.contains("vasp-02"));
+        assert!(config.reasoning_endpoint.url.contains("vasp-01"));
         assert_eq!(config.fast_endpoint.model, "Qwen3.5-27B-Distilled");
         assert_eq!(config.coder_endpoint.model, "Qwen3.5-122B-A10B");
         assert_eq!(config.reasoning_endpoint.model, "Qwen3.5-122B-A10B");

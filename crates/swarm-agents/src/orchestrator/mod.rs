@@ -292,27 +292,32 @@ async fn process_issue_core(
         .cluster_health()
         .cloned()
         .unwrap_or_else(|| ClusterHealth::from_config(config));
-    let healthy_count = cluster_health.check_all_now().await;
-    // Evaluate async summary before the info! macro to avoid holding a
-    // temporary `&dyn tracing::Value` across the .await (which is !Send).
-    let health_summary = cluster_health.summary().await;
-    info!(
-        healthy = healthy_count,
-        total = 3,
-        summary = %health_summary,
-        "Preflight endpoint health check"
-    );
-    if healthy_count == 0 {
-        warn!(
-            id = %issue.id,
-            "All inference endpoints are DOWN — cannot proceed"
+    
+    if !config.cloud_only {
+        let healthy_count = cluster_health.check_all_now().await;
+        // Evaluate async summary before the info! macro to avoid holding a
+        // temporary `&dyn tracing::Value` across the .await (which is !Send).
+        let health_summary = cluster_health.summary().await;
+        info!(
+            healthy = healthy_count,
+            total = 3,
+            summary = %health_summary,
+            "Preflight endpoint health check"
         );
-        // Reset issue status so it can be picked up later
-        let _ = beads.update_status(&issue.id, "open");
-        anyhow::bail!(
-            "Preflight failed: all 3 inference endpoints are down ({})",
-            cluster_health.summary().await
-        );
+        if healthy_count == 0 {
+            warn!(
+                id = %issue.id,
+                "All inference endpoints are DOWN — cannot proceed"
+            );
+            // Reset issue status so it can be picked up later
+            let _ = beads.update_status(&issue.id, "open");
+            anyhow::bail!(
+                "Preflight failed: all 3 inference endpoints are down ({})",
+                cluster_health.summary().await
+            );
+        }
+    } else {
+        info!("Cloud-only mode: bypassing local endpoint preflight checks");
     }
 
     // Spawn background health monitor for ongoing checks during the session.

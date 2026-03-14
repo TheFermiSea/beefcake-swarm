@@ -15,18 +15,22 @@ use std::sync::Arc;
 
 use rig::tool::ToolDyn;
 
+use super::astgrep_tool::AstGrepTool;
 use super::bdh_tools::{
     ChatCheckTool, ChatSendTool, CheckLocksTool, CheckMailTool, SendMailTool, TeamStatusTool,
 };
+use super::colgrep_tool::ColGrepTool;
 use super::exec_tool::RunCommandTool;
 use super::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
 use super::git_tools::{GetDiffTool, ListChangedFilesTool};
 use super::notebook_tool::QueryNotebookTool;
 use super::patch_tool::EditFileTool;
 use super::proxy_wrappers::{
-    ProxyEditFile, ProxyGetDiff, ProxyListChangedFiles, ProxyListFiles, ProxyQueryNotebook,
-    ProxyReadFile, ProxyRunCommand, ProxyRunVerifier, ProxyWriteFile,
+    ProxyAstGrep, ProxyColGrep, ProxyEditFile, ProxyGetDiff, ProxyListChangedFiles, ProxyListFiles,
+    ProxyQueryNotebook, ProxyReadFile, ProxyRunCommand, ProxyRunVerifier, ProxySearchCode,
+    ProxyWriteFile,
 };
+use super::search_code_tool::SearchCodeTool;
 use super::verifier_tool::RunVerifierTool;
 use super::workpad_tool::{AnnounceTool, CheckAnnouncementsTool};
 use crate::notebook_bridge::KnowledgeBase;
@@ -89,6 +93,9 @@ pub fn subtask_worker_tools(
         )),
         Box::new(EditFileTool::new_with_allowlist(wt_path, allowlist)),
         Box::new(RunCommandTool::new(wt_path)),
+        Box::new(SearchCodeTool::new(wt_path)),
+        Box::new(ColGrepTool::new(wt_path)),
+        Box::new(AstGrepTool::new(wt_path)),
     ];
 
     if role == WorkerRole::General {
@@ -186,12 +193,18 @@ pub fn kernel_strategy_tools(
             )),
             Box::new(ProxyGetDiff(GetDiffTool::new(wt_path))),
             Box::new(ProxyListChangedFiles(ListChangedFilesTool::new(wt_path))),
+            Box::new(ProxySearchCode(SearchCodeTool::new(wt_path))),
+            Box::new(ProxyColGrep(ColGrepTool::new(wt_path))),
+            Box::new(ProxyAstGrep(AstGrepTool::new(wt_path))),
         ]
     } else {
         vec![
             Box::new(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec())),
             Box::new(GetDiffTool::new(wt_path)),
             Box::new(ListChangedFilesTool::new(wt_path)),
+            Box::new(SearchCodeTool::new(wt_path)),
+            Box::new(ColGrepTool::new(wt_path)),
+            Box::new(AstGrepTool::new(wt_path)),
         ]
     }
 }
@@ -214,18 +227,24 @@ pub fn process_tactical_tools(
 ) -> Vec<Box<dyn ToolDyn>> {
     match role {
         WorkerRole::Planner | WorkerRole::Strategist => {
-            // Read-only tools for analysis: read_file, list_files, run_command.
+            // Read-only tools for analysis: read_file, list_files, run_command, plus search tools.
             if proxy {
                 vec![
                     Box::new(ProxyReadFile(ReadFileTool::new(wt_path))),
                     Box::new(ProxyListFiles(ListFilesTool::new(wt_path))),
                     Box::new(ProxyRunCommand(RunCommandTool::new(wt_path))),
+                    Box::new(ProxySearchCode(SearchCodeTool::new(wt_path))),
+                    Box::new(ProxyColGrep(ColGrepTool::new(wt_path))),
+                    Box::new(ProxyAstGrep(AstGrepTool::new(wt_path))),
                 ]
             } else {
                 vec![
                     Box::new(ReadFileTool::new(wt_path)),
                     Box::new(ListFilesTool::new(wt_path)),
                     Box::new(RunCommandTool::new(wt_path)),
+                    Box::new(SearchCodeTool::new(wt_path)),
+                    Box::new(ColGrepTool::new(wt_path)),
+                    Box::new(AstGrepTool::new(wt_path)),
                 ]
             }
         }
@@ -236,6 +255,9 @@ pub fn process_tactical_tools(
                     Box::new(ProxyWriteFile(WriteFileTool::new(wt_path))),
                     Box::new(ProxyEditFile(EditFileTool::new(wt_path))),
                     Box::new(ProxyRunCommand(RunCommandTool::new(wt_path))),
+                    Box::new(ProxySearchCode(SearchCodeTool::new(wt_path))),
+                    Box::new(ProxyColGrep(ColGrepTool::new(wt_path))),
+                    Box::new(ProxyAstGrep(AstGrepTool::new(wt_path))),
                 ]
             } else {
                 vec![
@@ -243,6 +265,9 @@ pub fn process_tactical_tools(
                     Box::new(WriteFileTool::new(wt_path)),
                     Box::new(EditFileTool::new(wt_path)),
                     Box::new(RunCommandTool::new(wt_path)),
+                    Box::new(SearchCodeTool::new(wt_path)),
+                    Box::new(ColGrepTool::new(wt_path)),
+                    Box::new(AstGrepTool::new(wt_path)),
                 ]
             };
 
@@ -281,17 +306,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_worker_rust_specialist_has_4_tools() {
+    fn test_worker_rust_specialist_has_expected_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = worker_tools(dir.path(), WorkerRole::RustSpecialist, false);
-        assert_eq!(tools.len(), 4, "Rust specialist should have 4 tools");
+        // read, write, edit, run + search_code, colgrep, astgrep = 7
+        assert_eq!(tools.len(), 7, "Rust specialist should have 7 tools");
     }
 
     #[test]
-    fn test_worker_general_has_5_tools() {
+    fn test_worker_general_has_expected_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = worker_tools(dir.path(), WorkerRole::General, false);
-        assert_eq!(tools.len(), 5, "General worker should have 5 tools");
+        // read, write, edit, run, list + search_code, colgrep, astgrep = 8
+        assert_eq!(tools.len(), 8, "General worker should have 8 tools");
     }
 
     #[test]
@@ -329,24 +356,25 @@ mod tests {
     }
 
     #[test]
-    fn test_manager_local_has_3_strategy_tools() {
+    fn test_manager_local_has_strategy_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], false);
+        // verifier, get_diff, list_changed_files + search_code, colgrep, astgrep = 6
         assert_eq!(
             tools.len(),
-            3,
-            "Local manager should have 3 strategy-only tools (verifier, get_diff, list_changed_files)"
+            6,
+            "Local manager should have 6 strategy tools (verifier, get_diff, list_changed_files, search_code, colgrep, astgrep)"
         );
     }
 
     #[test]
-    fn test_manager_cloud_has_3_tools() {
+    fn test_manager_cloud_has_strategy_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], true);
         assert_eq!(
             tools.len(),
-            3,
-            "Cloud manager should have 3 strategy-only tools (verifier, get_diff, list_changed_files)"
+            6,
+            "Cloud manager should have 6 strategy tools"
         );
     }
 
@@ -395,13 +423,14 @@ mod tests {
     }
 
     #[test]
-    fn test_worker_planner_has_3_tools() {
+    fn test_worker_planner_has_expected_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = worker_tools(dir.path(), WorkerRole::Planner, false);
+        // read, list, run + search_code, colgrep, astgrep = 6
         assert_eq!(
             tools.len(),
-            3,
-            "Planner should have 3 read-only tools (read, list, run)"
+            6,
+            "Planner should have 6 read-only tools (read, list, run, search_code, colgrep, astgrep)"
         );
     }
 
@@ -422,7 +451,7 @@ mod tests {
     fn test_worker_planner_proxy() {
         let dir = tempfile::tempdir().unwrap();
         let tools = worker_tools(dir.path(), WorkerRole::Planner, true);
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 6);
         for tool in &tools {
             assert!(
                 tool.name().starts_with("proxy_"),
@@ -462,22 +491,26 @@ mod tests {
     fn test_kernel_strategy_tools_local() {
         let dir = tempfile::tempdir().unwrap();
         let tools = kernel_strategy_tools(dir.path(), &[], false);
+        // verifier, get_diff, list_changed_files + search_code, colgrep, astgrep = 6
         assert_eq!(
             tools.len(),
-            3,
-            "Strategy bundle: verifier, get_diff, list_changed_files"
+            6,
+            "Strategy bundle: verifier, get_diff, list_changed_files, search_code, colgrep, astgrep"
         );
         let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
         assert!(names.iter().any(|n| n.contains("verifier")));
         assert!(names.iter().any(|n| n.contains("get_diff")));
         assert!(names.iter().any(|n| n.contains("list_changed_files")));
+        assert!(names.iter().any(|n| n.contains("search_code")));
+        assert!(names.iter().any(|n| n.contains("colgrep")));
+        assert!(names.iter().any(|n| n.contains("ast_grep")));
     }
 
     #[test]
     fn test_kernel_strategy_tools_proxy() {
         let dir = tempfile::tempdir().unwrap();
         let tools = kernel_strategy_tools(dir.path(), &["pkg".to_string()], true);
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 6);
         for tool in &tools {
             assert!(
                 tool.name().starts_with("proxy_"),
@@ -513,10 +546,11 @@ mod tests {
     fn test_process_tactical_tools_general() {
         let dir = tempfile::tempdir().unwrap();
         let tools = process_tactical_tools(dir.path(), WorkerRole::General, false);
+        // read, write, edit, run, list + search_code, colgrep, astgrep = 8
         assert_eq!(
             tools.len(),
-            5,
-            "General tactical: read, write, edit, run, list"
+            8,
+            "General tactical: read, write, edit, run, list, search_code, colgrep, astgrep"
         );
         let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
         assert!(names.iter().any(|n| n.contains("read_file")));
@@ -530,10 +564,11 @@ mod tests {
     fn test_process_tactical_tools_rust_specialist() {
         let dir = tempfile::tempdir().unwrap();
         let tools = process_tactical_tools(dir.path(), WorkerRole::RustSpecialist, false);
+        // read, write, edit, run + search_code, colgrep, astgrep = 7
         assert_eq!(
             tools.len(),
-            4,
-            "Rust specialist tactical: read, write, edit, run (no list)"
+            7,
+            "Rust specialist tactical: read, write, edit, run, search_code, colgrep, astgrep (no list)"
         );
     }
 
@@ -560,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn test_strategy_and_tactical_are_disjoint() {
+    fn test_strategy_and_tactical_are_disjoint_except_search() {
         let dir = tempfile::tempdir().unwrap();
         let strategy: Vec<String> = kernel_strategy_tools(dir.path(), &[], false)
             .iter()
@@ -570,10 +605,17 @@ mod tests {
             .iter()
             .map(|t| t.name())
             .collect();
+        // Search tools (search_code, colgrep, ast_grep) are intentionally shared
+        // between strategy and tactical bundles — both managers and workers need
+        // code search. Only the core strategy tools must be exclusive.
+        let shared_ok = ["search_code", "colgrep", "ast_grep"];
         for s in &strategy {
+            if shared_ok.iter().any(|ok| s.contains(ok)) {
+                continue;
+            }
             assert!(
                 !tactical.contains(s),
-                "Tool '{s}' appears in both strategy and tactical bundles — must be disjoint"
+                "Tool '{s}' appears in both strategy and tactical bundles — must be disjoint (except search tools)"
             );
         }
     }

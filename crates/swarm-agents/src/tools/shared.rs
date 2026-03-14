@@ -111,31 +111,31 @@ mod tests {
 
     #[test]
     fn test_factory_worker_rust_specialist() -> TestResult {
-        // Rust specialist: read_file, write_file, edit_file, run_command (no list_files).
+        // Rust specialist: read, write, edit, run + search_code, colgrep, astgrep = 7
         let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let tools = factory.worker_tools(WorkerRole::RustSpecialist);
-        assert_eq!(tools.len(), 4, "Rust specialist should have 4 tools");
+        assert_eq!(tools.len(), 7, "Rust specialist should have 7 tools");
         Ok(())
     }
 
     #[test]
     fn test_factory_worker_general() -> TestResult {
-        // General: read_file, write_file, edit_file, run_command, list_files.
+        // General: read, write, edit, run, list + search_code, colgrep, astgrep = 8
         let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let tools = factory.worker_tools(WorkerRole::General);
-        assert_eq!(tools.len(), 5, "General worker should have 5 tools");
+        assert_eq!(tools.len(), 8, "General worker should have 8 tools");
         Ok(())
     }
 
     #[test]
     fn test_factory_worker_planner() -> TestResult {
-        // Planner (read-only): read_file, list_files, run_command.
+        // Planner (read-only): read, list, run + search_code, colgrep, astgrep = 6
         let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec![], None);
         let tools = factory.worker_tools(WorkerRole::Planner);
-        assert_eq!(tools.len(), 3, "Planner should have 3 tools");
+        assert_eq!(tools.len(), 6, "Planner should have 6 tools");
         Ok(())
     }
 
@@ -157,11 +157,11 @@ mod tests {
 
     #[test]
     fn test_factory_manager_tools() -> TestResult {
-        // Manager (strategy-only): run_verifier, get_diff, list_changed_files.
+        // Manager (strategy): verifier, get_diff, list_changed, search_code, colgrep, astgrep = 6
         let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec!["test-pkg".to_string()], None);
         let tools = factory.manager_tools();
-        assert_eq!(tools.len(), 3, "Manager should have 3 strategy-only tools");
+        assert_eq!(tools.len(), 6, "Manager should have 6 strategy tools");
         Ok(())
     }
 

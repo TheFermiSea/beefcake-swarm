@@ -71,7 +71,7 @@ PY
 else
   echo "Worker-first mode: SWARM_CLOUD_URL not set, using local models only"
 fi
-export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
+export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bdh}"
 
 # ── sccache: shared C/C++ compilation cache ──
 # Eliminates redundant proc-macro and native dep builds across worktrees.

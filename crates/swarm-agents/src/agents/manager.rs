@@ -43,6 +43,8 @@ pub struct ManagerWorkers {
     pub fixer: OaiAgent,
     /// Qwen3.5-Architect reasoning worker (cloud manager only).
     pub reasoning_worker: Option<OaiAgent>,
+    /// Qwen3.5-397B-A17B strategist advisor (strategist profile only).
+    pub strategist: Option<OaiAgent>,
     /// Optional knowledge base for the query_notebook tool.
     pub notebook_bridge: Option<Arc<dyn KnowledgeBase>>,
     /// Shared slot where the manager deposits a parallel work plan.
@@ -55,6 +57,7 @@ pub struct ManagerWorkers {
 ///
 /// Cloud model (Opus 4.6 / G3-Pro) manages local workers:
 /// - reasoning_worker (Qwen3.5-Architect): deep analysis, repair plans
+/// - strategist (Qwen3.5-397B-A17B): advisor for architectural review
 /// - rust_coder (Qwen3.5-Implementer): fast Rust fixes
 /// - general_coder (Qwen3.5-Implementer): multi-file scaffolding
 /// - reviewer: blind code review
@@ -82,6 +85,11 @@ pub fn build_cloud_manager(
     // Reasoning worker only present in cloud manager
     if let Some(rw) = workers.reasoning_worker {
         builder = builder.tool(rw);
+    }
+
+    // Strategist advisor (read-only)
+    if let Some(st) = workers.strategist {
+        builder = builder.tool(st);
     }
 
     // Strategy tools — proxy-prefixed for CLIAPIProxy compatibility.
@@ -134,14 +142,20 @@ pub fn build_local_manager(
         // Agent-as-Tool: workers
         .tool(workers.rust_coder)
         .tool(workers.general_coder)
-        .tool(workers.reviewer)
-        // Strategy tools — no proxy prefix for local models.
-        // Same segregation as cloud: verifier, diff, changed_files only.
-        .tools(bundles::kernel_strategy_tools(
-            wt_path,
-            verifier_packages,
-            false,
-        ));
+        .tool(workers.reviewer);
+
+    // Strategist advisor (read-only)
+    if let Some(st) = workers.strategist {
+        builder = builder.tool(st);
+    }
+
+    // Strategy tools — no proxy prefix for local models.
+    // Same segregation as cloud: verifier, diff, changed_files only.
+    builder = builder.tools(bundles::kernel_strategy_tools(
+        wt_path,
+        verifier_packages,
+        false,
+    ));
 
     // Parallel work planning tool (optional).
     if let Some(plan_slot) = workers.plan_slot {

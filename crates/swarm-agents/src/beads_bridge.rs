@@ -83,7 +83,7 @@ impl IssueTracker for NoOpTracker {
 /// Bridge to the beads CLI binary (`bd`).
 ///
 /// beads is a Go binary — we shell out to it.
-/// The binary name is read from the `SWARM_BEADS_BIN` env var, defaulting to `"bd"`.
+/// The binary name is read from the `SWARM_BEADS_BIN` env var, defaulting to `"bdh"`.
 pub struct BeadsBridge {
     bin: String,
 }
@@ -97,7 +97,7 @@ impl Default for BeadsBridge {
 impl BeadsBridge {
     pub fn new() -> Self {
         Self {
-            bin: std::env::var("SWARM_BEADS_BIN").unwrap_or_else(|_| "bd".into()),
+            bin: std::env::var("SWARM_BEADS_BIN").unwrap_or_else(|_| "bdh".into()),
         }
     }
 
