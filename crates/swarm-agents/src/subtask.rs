@@ -567,9 +567,7 @@ async fn run_subtask_worker(
                     (n + 1, e)
                 }
             });
-    let dynamic_turns = ((existing_count + new_count) * 15 + new_count * 10)
-        .max(30)
-        .min(150);
+    let dynamic_turns = ((existing_count + new_count) * 15 + new_count * 10).clamp(30, 150);
 
     // Build the agent with a subtask-specific system prompt.
     let system_prompt = build_subtask_system_prompt(subtask, wt_path);
