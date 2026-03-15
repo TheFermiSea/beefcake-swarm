@@ -1,0 +1,35 @@
+# Find direct std::fs operations that bypass sandbox_check().
+#
+# Swarm use: security audit. All file I/O in tool handlers MUST route through
+# sandbox_check() to prevent path traversal outside the worktree. This rule
+# finds raw fs calls that might skip the sandbox.
+#
+# The correct pattern is:
+#   let full_path = sandbox_check(&self.working_dir, &args.path)?;
+#   std::fs::read_to_string(&full_path)?;
+#
+# Run: sg scan --rule rules/ast-grep/rules/missing-sandbox-check.yml crates/
+
+id: missing-sandbox-check
+language: rust
+message: "Direct `std::fs::$OP` call — verify this is preceded by `sandbox_check()` in the same scope"
+severity: warning
+rule:
+  any:
+    - pattern: std::fs::read_to_string($PATH)
+    - pattern: std::fs::write($PATH, $$$)
+    - pattern: std::fs::remove_file($PATH)
+    - pattern: std::fs::rename($SRC, $DST)
+    - pattern: std::fs::create_dir_all($PATH)
+    - pattern: std::fs::remove_dir_all($PATH)
+    - pattern: fs::read_to_string($PATH)
+    - pattern: fs::write($PATH, $$$)
+    - pattern: fs::remove_file($PATH)
+note: |
+  Tool handlers must call `sandbox_check(&self.working_dir, path)?` before any
+  filesystem operation that accepts user-supplied paths. The full_path returned
+  by sandbox_check() is canonicalized and verified to be within the worktree root.
+
+  False positives: internal paths (config loading, state persistence) that don't
+  come from user/LLM input are acceptable — add a `// sandbox: internal` comment
+  to document the intent.

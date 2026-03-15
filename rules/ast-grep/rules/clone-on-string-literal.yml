@@ -1,0 +1,28 @@
+# Find .to_string() or .to_owned() called on string literals.
+#
+# Swarm use: performance micro-audit. Calling `.to_string()` on a `&str` literal
+# allocates a new String. This is fine most of the time, but inside hot paths
+# (e.g. tool call handlers called per-LLM-turn) it adds unnecessary allocations.
+#
+# Run: sg scan --rule rules/ast-grep/rules/clone-on-string-literal.yml crates/
+
+id: clone-on-string-literal
+language: rust
+message: "`.to_string()` on a string literal — consider `String::from(...)` or `.to_owned()` (functionally identical, but more idiomatic)"
+severity: hint
+rule:
+  any:
+    - pattern: "$STR.to_string()"
+    - pattern: "$STR.to_owned()"
+note: |
+  All three forms are equivalent in Rust:
+    - `"literal".to_string()`      — calls fmt::Display, slightly less direct
+    - `"literal".to_owned()`       — idiomatic for &str → String
+    - `String::from("literal")`    — explicit, preferred in many style guides
+
+  In const/static contexts, consider `Cow<'static, str>` or `&'static str`
+  to avoid the allocation entirely when the string doesn't need to be mutable.
+
+  False positives: `.to_string()` on non-literal expressions (variables, fields)
+  is the correct and idiomatic way to convert Display types to String — those
+  are fine and intentional.

@@ -1,0 +1,21 @@
+# Find .ok() that silently discards Result errors.
+#
+# Swarm use: audit error handling coverage. `.ok()` converts Result<T,E> to
+# Option<T>, dropping the error entirely. Legitimate uses exist (e.g. when
+# you genuinely don't care), but in an agent system most errors should be
+# logged or propagated.
+#
+# Run: sg scan --rule rules/ast-grep/rules/silent-error-discard.yml crates/
+
+id: silent-error-discard
+language: rust
+message: "`.ok()` silently discards the error — consider logging or propagating with `?`"
+severity: hint
+rule:
+  pattern: $EXPR.ok()
+note: |
+  Alternatives:
+    - `$EXPR?`                     — propagate to caller
+    - `$EXPR.ok().or_log()`        — log and continue (if a log-or helper exists)
+    - `if let Err(e) = $EXPR { warn!(...) }` — explicit discard with visibility
+    - Keep `.ok()` only when None is a valid, expected outcome documented in context

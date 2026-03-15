@@ -1,0 +1,31 @@
+# Find TODO, FIXME, HACK, and XXX comments.
+#
+# Swarm use: tech debt inventory. These markers indicate known issues that
+# haven't been tracked in the beads issue tracker. Workers should convert
+# actionable TODOs into beads issues and remove the comment.
+#
+# Uses regex on line_comment nodes for precise text matching (not structural
+# pattern which would false-positive on all comments).
+#
+# Run: sg scan --rule rules/ast-grep/rules/todo-fixme-comments.yml crates/
+
+id: todo-fixme-comments
+language: rust
+message: "Untracked tech debt marker — create a beads issue and replace with `// beads: <issue-id>`"
+severity: hint
+rule:
+  kind: line_comment
+  regex: "(TODO|FIXME|HACK|XXX)"
+note: |
+  The preferred pattern for tracked tech debt:
+    // beads: beefcake-XXXX — <brief description of what needs fixing>
+
+  Steps to convert:
+    1. `bdh create --title="<what the TODO describes>" --type=task --priority=3`
+    2. Replace the comment with `// beads: <new-id>`
+    3. Commit both changes together
+
+  Context-dependent severity:
+    - `// TODO(name):` in a PR under active development — acceptable temporarily
+    - `// FIXME:` in production tool handlers — should be a P1 beads issue
+    - `// HACK:` anywhere — document why the hack exists; often a P2 issue

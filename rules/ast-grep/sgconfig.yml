@@ -1,0 +1,9 @@
+# ast-grep project config for beefcake-swarm
+# Run: sg scan --config rules/ast-grep/sgconfig.yml
+# Or:  sg scan --rule rules/ast-grep/rules/<rule>.yml .
+
+ruleDirs:
+  - rules
+
+testConfigs:
+  - testDir: tests

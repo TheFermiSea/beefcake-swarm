@@ -1,0 +1,35 @@
+# Find .expect("") calls with empty or uninformative messages.
+#
+# Swarm use: debuggability audit. `.expect()` is the correct replacement for
+# `.unwrap()`, but only if the message is meaningful. An empty or single-word
+# message ("error", "failed") provides no debugging context when the panic fires.
+#
+# Good: `.expect("Failed to parse config: SWARM_CLOUD_URL must be a valid URL")`
+# Bad:  `.expect("")` or `.expect("error")` or `.expect("failed")`
+#
+# Run: sg scan --rule rules/ast-grep/rules/expect-missing-context.yml crates/
+
+id: expect-missing-context
+language: rust
+message: "`.expect()` has an empty or uninformative message — add context describing what failed and why"
+severity: hint
+rule:
+  any:
+    - pattern: $EXPR.expect("")
+    - pattern: $EXPR.expect("error")
+    - pattern: $EXPR.expect("failed")
+    - pattern: $EXPR.expect("ok")
+    - pattern: $EXPR.expect("none")
+    - pattern: $EXPR.expect("unwrap")
+note: |
+  A good `.expect()` message answers: "What was the program trying to do
+  when this failed?" and "What constraint was violated?"
+
+  Examples:
+    - Bad:  `.expect("error")`
+    - Good: `.expect("SWARM_CLOUD_URL must be set — see CLAUDE.md env var section")`
+    - Good: `.expect("regex is a compile-time constant and should always compile")`
+    - Good: `.expect("config file was validated at startup, this path must exist")`
+
+  In tests: use `.expect("test setup: ...")` pattern so failures report
+  the test context clearly.

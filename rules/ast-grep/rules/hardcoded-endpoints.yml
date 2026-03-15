@@ -1,0 +1,40 @@
+# Find hardcoded HTTP/HTTPS URLs in non-test source code.
+#
+# Swarm use: configuration audit. Hardcoded URLs prevent environment-specific
+# deployment (dev/staging/prod) and break when services move. URLs should come
+# from environment variables, config files, or constants defined once.
+#
+# The correct pattern is:
+#   let url = std::env::var("SWARM_CLOUD_URL").unwrap_or_default();
+#   // or loaded from SwarmConfig which reads env vars
+#
+# Run: sg scan --rule rules/ast-grep/rules/hardcoded-endpoints.yml crates/
+#
+# NOTE: Matches string literals containing "http://" or "https://". This is a
+# text-level match since AST patterns don't look inside string content. Check
+# output carefully — localhost:PORT defaults in config.rs are expected and
+# documented (see SWARM_* env var overrides in CLAUDE.md).
+
+id: hardcoded-endpoints
+language: rust
+message: "Hardcoded URL literal — consider using an env var or config constant"
+severity: hint
+rule:
+  any:
+    - pattern: "\"http://$$$\""
+    - pattern: "\"https://$$$\""
+note: |
+  Preferred patterns for endpoint configuration:
+    - `std::env::var("SWARM_CLOUD_URL")`        — read from env at startup
+    - `SwarmConfig` struct fields with env overrides (see config.rs)
+    - Named constants in a `urls` module with env-override logic
+
+  Expected false positives (don't change these):
+    - Default values in `config.rs` (e.g. `http://localhost:8317/v1`) — these are
+      the CONFIG DEFAULTS that get overridden by env vars; the pattern is correct
+    - Test URLs in `#[cfg(test)]` blocks
+    - Documentation strings and comments (those won't match AST patterns anyway)
+
+  True positives to fix:
+    - Direct usage in agent builders or HTTP client setup without env var override
+    - URLs inside match arms or if-else branches that bypass config loading

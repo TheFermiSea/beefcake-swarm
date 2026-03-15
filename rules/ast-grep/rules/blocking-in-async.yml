@@ -1,0 +1,37 @@
+# Find blocking operations inside async contexts.
+#
+# Swarm use: performance audit. Calling synchronous blocking functions directly
+# inside async tasks will stall the Tokio runtime thread, reducing throughput
+# and potentially causing deadlocks under load.
+#
+# The correct pattern is to wrap CPU-bound or blocking I/O work in:
+#   tokio::task::spawn_blocking(|| { ... }).await?
+#   tokio::task::block_in_place(|| { ... })
+#
+# Run: sg scan --rule rules/ast-grep/rules/blocking-in-async.yml crates/
+
+id: blocking-in-async
+language: rust
+message: "Blocking call `$EXPR` inside async context — consider `spawn_blocking` or `block_in_place`"
+severity: warning
+rule:
+  any:
+    # std::thread::sleep is a hard block — use tokio::time::sleep instead
+    - pattern: std::thread::sleep($DUR)
+    # Mutex::lock() blocks the thread — use tokio::sync::Mutex for async contexts
+    - pattern: $MUTEX.lock().unwrap()
+    # Direct std::process::Command without spawn_blocking
+    - pattern: std::process::Command::new($CMD).output()
+    - pattern: std::process::Command::new($CMD).status()
+    - pattern: std::process::Command::new($CMD).spawn()
+note: |
+  In async Rust (Tokio), blocking the thread prevents other tasks from running
+  on that thread. Preferred alternatives:
+
+    - `tokio::time::sleep(dur).await`      — async sleep
+    - `tokio::sync::Mutex`                 — async-aware mutex
+    - `tokio::task::spawn_blocking(|| ...)` — offload to blocking thread pool
+    - `tokio::process::Command`            — async process spawning
+
+  False positives: `Mutex::lock()` in non-async code is fine. Use path exclusions
+  or add `// blocking: intentional` comment to suppress.

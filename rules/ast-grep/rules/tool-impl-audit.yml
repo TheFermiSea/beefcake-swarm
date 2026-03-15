@@ -1,0 +1,24 @@
+# Find all `impl Tool for <Type>` blocks.
+#
+# Swarm use: tool surface area inventory. Workers adding new tools or
+# modifying existing ones can use this to:
+#   1. Discover every registered tool in the codebase
+#   2. Check if a tool with similar semantics already exists before creating one
+#   3. Verify tool naming conventions (snake_case, action-noun pattern)
+#
+# Run: sg scan --rule rules/ast-grep/rules/tool-impl-audit.yml crates/
+# to get every tool implementation with file + line.
+
+id: tool-impl-audit
+language: rust
+message: "Tool implementation: $TYPE"
+severity: info
+rule:
+  pattern: impl Tool for $TYPE { $$$BODY }
+note: |
+  Each Tool impl must define:
+    - `const NAME: &'static str`       — the JSON tool name sent to the LLM
+    - `async fn definition()`          — returns ToolDefinition with description + schema
+    - `async fn call(args)`            — the actual handler
+
+  Naming convention: snake_case verb-noun (e.g. "read_file", "run_command", "ast_grep")

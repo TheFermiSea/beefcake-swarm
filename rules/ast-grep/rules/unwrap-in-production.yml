@@ -1,0 +1,23 @@
+# Find .unwrap() calls outside of #[cfg(test)] / mod tests blocks.
+#
+# Swarm use: beefcake-2i7z — "Eradicate .unwrap() in Production Code"
+# Workers targeting a file can run:
+#   sg scan --rule rules/ast-grep/rules/unwrap-in-production.yml <file>
+# to get a precise list of callsites to replace with proper error handling.
+#
+# NOTE: ast-grep doesn't traverse cfg(test) gates at the attribute level,
+# so this rule catches all .unwrap() — filter out test files manually or
+# combine with path exclusions: sg scan --rule ... src/ (exclude tests/).
+
+id: unwrap-in-production
+language: rust
+message: "`.unwrap()` panics on None/Err — replace with `?`, `.expect(\"reason\")`, or proper error handling"
+severity: warning
+rule:
+  pattern: $EXPR.unwrap()
+note: |
+  Prefer:
+    - `?`          — propagate the error to the caller
+    - `.expect("descriptive message")` — panic with context (acceptable in tests/init)
+    - `if let Some(x) = ...` / `match` — handle the None/Err case explicitly
+    - `.unwrap_or_default()` / `.unwrap_or_else(|_| ...)` — provide a fallback
