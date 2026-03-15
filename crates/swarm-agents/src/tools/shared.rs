@@ -157,11 +157,11 @@ mod tests {
 
     #[test]
     fn test_factory_manager_tools() -> TestResult {
-        // Manager (strategy): verifier, get_diff, list_changed, search_code, colgrep, astgrep = 6
+        // Manager (strategy): verifier, get_diff, list_changed = 3 (no search tools — must delegate)
         let dir = tempfile::tempdir()?;
         let factory = ToolFactory::new(dir.path(), false, vec!["test-pkg".to_string()], None);
         let tools = factory.manager_tools();
-        assert_eq!(tools.len(), 6, "Manager should have 6 strategy tools");
+        assert_eq!(tools.len(), 3, "Manager should have 3 strategy tools");
         Ok(())
     }
 
