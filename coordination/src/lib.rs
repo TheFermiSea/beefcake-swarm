@@ -171,7 +171,6 @@ pub use escalation::{
 // Re-export benchmark types
 pub use benchmark::{load_beefcake_lx2o_manifest, BenchmarkManifest};
 
-
 // Re-export telemetry heuristic types
 pub use escalation::{compute_heuristics, SessionSample, TelemetryHeuristics};
 

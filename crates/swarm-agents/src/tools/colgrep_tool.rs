@@ -75,7 +75,7 @@ impl Tool for ColGrepTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let max = args.max_results.unwrap_or(DEFAULT_MAX_RESULTS);
-        
+
         let max_str = max.to_string();
         let mut cmd_args = vec!["--json", "-k", &max_str];
 
@@ -92,9 +92,13 @@ impl Tool for ColGrepTool {
         cmd_args.push(&args.query);
 
         // Run colgrep. Output is JSON array of matches or error text
-        let output =
-            run_command_with_timeout("colgrep", &cmd_args, &self.working_dir, DEFAULT_TIMEOUT_SECS)
-                .await?;
+        let output = run_command_with_timeout(
+            "colgrep",
+            &cmd_args,
+            &self.working_dir,
+            DEFAULT_TIMEOUT_SECS,
+        )
+        .await?;
 
         // Basic validation that output is valid JSON (if not, it might be an error message we should return)
         if !output.trim().starts_with('[') {
@@ -111,8 +115,14 @@ impl Tool for ColGrepTool {
 
         let mut formatted = Vec::new();
         for res in results {
-            let file_path = res.pointer("/unit/file").and_then(|v| v.as_str()).unwrap_or("");
-            let content = res.pointer("/unit/content").and_then(|v| v.as_str()).unwrap_or("");
+            let file_path = res
+                .pointer("/unit/file")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let content = res
+                .pointer("/unit/content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             let score = res.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
 
             if !file_path.is_empty() {
@@ -122,7 +132,9 @@ impl Tool for ColGrepTool {
                 }
             }
 
-            formatted.push(format!("--- MATCH (score: {score:.3}) ---\nFile: {file_path}\n{content}\n"));
+            formatted.push(format!(
+                "--- MATCH (score: {score:.3}) ---\nFile: {file_path}\n{content}\n"
+            ));
         }
 
         Ok(formatted.join("\n"))

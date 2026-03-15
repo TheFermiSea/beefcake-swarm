@@ -284,7 +284,9 @@ fn scaffold_fallback_creates_doc_for_doc_task() {
     assert!(created, "doc task should produce a scaffold");
 
     // Verify the file was created
-    let expected_path = dir.path().join("docs/architecture-rfc-for-swarm-redesign.md");
+    let expected_path = dir
+        .path()
+        .join("docs/architecture-rfc-for-swarm-redesign.md");
     assert!(
         expected_path.exists(),
         "scaffold file should exist at {expected_path:?}"
@@ -309,10 +311,7 @@ fn scaffold_fallback_skips_non_doc_task() {
         2,
     );
 
-    assert!(
-        !created,
-        "non-doc task should not produce a scaffold"
-    );
+    assert!(!created, "non-doc task should not produce a scaffold");
 }
 
 // ── 6. Send-safety (compile-time) ────────────────────────────────────
@@ -326,5 +325,8 @@ fn send_safety_assertion_compiles() {
     // This test is a documentation marker. The actual Send assertion lives
     // in orchestrator/mod.rs and is checked at compile time. If you can run
     // this test, process_issue_core is Send.
-    assert!(true, "If this test runs, the compile-time Send assertion passed");
+    assert!(
+        true,
+        "If this test runs, the compile-time Send assertion passed"
+    );
 }

@@ -206,7 +206,10 @@ impl EscalationEngine {
         }
 
         // strategist_hybrid_v1: consult strategist after 2 failed worker iterations
-        if is_strategist_profile && state.total_failures() >= 2 && state.current_tier == SwarmTier::Worker {
+        if is_strategist_profile
+            && state.total_failures() >= 2
+            && state.current_tier == SwarmTier::Worker
+        {
             let reason = EscalationReason::TotalFailuresExceeded {
                 count: state.total_failures(),
                 threshold: 2,

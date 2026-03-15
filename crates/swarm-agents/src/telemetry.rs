@@ -549,15 +549,11 @@ impl MetricsCollector {
             })
             .map(|i| i.iteration);
 
-        let write_by_turn_2 = self
-            .iterations
-            .iter()
-            .take(2)
-            .any(|i| {
-                i.artifacts.iter().any(|a| {
-                    a.action == ArtifactAction::Modified || a.action == ArtifactAction::Created
-                })
-            });
+        let write_by_turn_2 = self.iterations.iter().take(2).any(|i| {
+            i.artifacts.iter().any(|a| {
+                a.action == ArtifactAction::Modified || a.action == ArtifactAction::Created
+            })
+        });
 
         SessionMetrics {
             session_id: self.session_id,
@@ -1532,7 +1528,15 @@ mod tests {
 
     #[test]
     fn test_metrics_collector_basic_flow() {
-        let mut collector = MetricsCollector::new("sess-1", "issue-1", "Fix bug", "hybrid_balanced_v1", None, None, "v1");
+        let mut collector = MetricsCollector::new(
+            "sess-1",
+            "issue-1",
+            "Fix bug",
+            "hybrid_balanced_v1",
+            None,
+            None,
+            "v1",
+        );
 
         collector.start_iteration(1, "Integrator");
         collector.record_agent_time(Duration::from_secs(30));
@@ -1575,7 +1579,15 @@ mod tests {
 
     #[test]
     fn test_metrics_collector_regression_tracking() {
-        let mut collector = MetricsCollector::new("sess-2", "issue-2", "Fix regression", "hybrid_balanced_v1", None, None, "v1");
+        let mut collector = MetricsCollector::new(
+            "sess-2",
+            "issue-2",
+            "Fix regression",
+            "hybrid_balanced_v1",
+            None,
+            None,
+            "v1",
+        );
 
         collector.start_iteration(1, "Implementer");
         collector.record_regression(true);
@@ -1592,7 +1604,15 @@ mod tests {
 
     #[test]
     fn test_finalize_flushes_in_progress_iteration() {
-        let mut collector = MetricsCollector::new("sess-3", "issue-3", "Test flush", "hybrid_balanced_v1", None, None, "v1");
+        let mut collector = MetricsCollector::new(
+            "sess-3",
+            "issue-3",
+            "Test flush",
+            "hybrid_balanced_v1",
+            None,
+            None,
+            "v1",
+        );
 
         collector.start_iteration(1, "Integrator");
         collector.record_agent_time(Duration::from_secs(10));
@@ -1911,7 +1931,15 @@ mod tests {
 
     #[test]
     fn test_record_artifact_stored_in_iteration() {
-        let mut collector = MetricsCollector::new("sess-art", "issue-art", "Artifact test", "hybrid_balanced_v1", None, None, "v1");
+        let mut collector = MetricsCollector::new(
+            "sess-art",
+            "issue-art",
+            "Artifact test",
+            "hybrid_balanced_v1",
+            None,
+            None,
+            "v1",
+        );
 
         collector.start_iteration(1, "Worker");
         collector.record_artifact(ArtifactRecord {
@@ -2182,7 +2210,15 @@ mod tests {
 
     #[test]
     fn test_collector_records_execution_artifacts() {
-        let mut collector = MetricsCollector::new("sess-ea", "issue-ea", "Artifact test", "hybrid_balanced_v1", None, None, "v1");
+        let mut collector = MetricsCollector::new(
+            "sess-ea",
+            "issue-ea",
+            "Artifact test",
+            "hybrid_balanced_v1",
+            None,
+            None,
+            "v1",
+        );
 
         collector.start_iteration(1, "Integrator");
         collector.record_route_decision(RouteDecision {
@@ -2222,7 +2258,15 @@ mod tests {
 
     #[test]
     fn test_collector_omits_empty_artifact() {
-        let mut collector = MetricsCollector::new("sess-empty", "issue-empty", "Empty artifact", "hybrid_balanced_v1", None, None, "v1");
+        let mut collector = MetricsCollector::new(
+            "sess-empty",
+            "issue-empty",
+            "Empty artifact",
+            "hybrid_balanced_v1",
+            None,
+            None,
+            "v1",
+        );
         collector.start_iteration(1, "Worker");
         // Don't record any artifact components
         collector.finish_iteration();

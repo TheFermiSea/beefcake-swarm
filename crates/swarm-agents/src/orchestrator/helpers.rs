@@ -63,11 +63,7 @@ pub(crate) fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
 /// (connection error, auth failure, or a hanging `nlm` CLI subprocess) returns
 /// an empty string instead of propagating an error. This ensures KB
 /// unavailability never blocks the orchestration loop.
-pub(crate) fn query_kb_with_failsafe(
-    kb: &dyn KnowledgeBase,
-    role: &str,
-    question: &str,
-) -> String {
+pub(crate) fn query_kb_with_failsafe(kb: &dyn KnowledgeBase, role: &str, question: &str) -> String {
     match kb.query(role, question) {
         Ok(response) => response,
         Err(e) => {

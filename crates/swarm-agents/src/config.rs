@@ -493,9 +493,10 @@ impl SwarmConfig {
 
         let base_model = match self.stack_profile {
             SwarmStackProfile::HybridBalancedV1 => match role {
-                SwarmRole::Scout | SwarmRole::Reviewer | SwarmRole::RustWorker | SwarmRole::Fixer => {
-                    &self.fast_endpoint.model
-                }
+                SwarmRole::Scout
+                | SwarmRole::Reviewer
+                | SwarmRole::RustWorker
+                | SwarmRole::Fixer => &self.fast_endpoint.model,
                 SwarmRole::GeneralWorker
                 | SwarmRole::Planner
                 | SwarmRole::ReasoningWorker
@@ -534,9 +535,10 @@ impl SwarmConfig {
                     .unwrap_or("unknown-strategist-model"),
             },
             SwarmStackProfile::StrategistHybridV1 => match role {
-                SwarmRole::Scout | SwarmRole::Reviewer | SwarmRole::RustWorker | SwarmRole::Fixer => {
-                    &self.fast_endpoint.model
-                }
+                SwarmRole::Scout
+                | SwarmRole::Reviewer
+                | SwarmRole::RustWorker
+                | SwarmRole::Fixer => &self.fast_endpoint.model,
                 SwarmRole::GeneralWorker
                 | SwarmRole::Planner
                 | SwarmRole::ReasoningWorker

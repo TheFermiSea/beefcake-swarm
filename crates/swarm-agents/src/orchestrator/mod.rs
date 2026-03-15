@@ -18,12 +18,12 @@ pub mod validation;
 // continues to compile without changes.
 
 pub use dispatch::{format_compact_task_prompt, format_task_prompt, route_to_coder, CoderRoute};
+pub use helpers::try_scaffold_fallback;
 pub(crate) use helpers::{
     bool_from_env, create_stuck_intervention, detect_failure_patterns, load_directives,
     poll_worker_chat, query_kb_with_failsafe, save_directives, tier_from_env, timeout_from_env,
     u32_from_env,
 };
-pub use helpers::try_scaffold_fallback;
 pub(crate) use validation::{
     cloud_validate, extract_local_validator_feedback, extract_validator_feedback, local_validate,
 };
@@ -68,10 +68,10 @@ use coordination::benchmark::slo::{self, AlertSeverity};
 use coordination::benchmark::OrchestrationMetrics;
 use coordination::escalation::state::EscalationReason;
 use coordination::escalation::worker_first::classify_initial_tier;
+use coordination::feedback::ErrorCategory;
 use coordination::otel::{self, SpanSummary};
 use coordination::rollout::FeatureFlags;
 use coordination::save_session_state;
-use coordination::feedback::ErrorCategory;
 use coordination::{
     ContextPacker, EscalationEngine, EscalationState, GitManager, ProgressTracker, SessionManager,
     SwarmTier, TierBudget, TurnPolicy, ValidatorFeedback, Verifier, VerifierConfig, VerifierReport,
@@ -168,9 +168,17 @@ pub async fn process_issue(
     // than `Span::enter()` keeps the future `Send`, enabling `tokio::spawn`
     // for parallel thread dispatch (Slate Phase 2).
     let process_span = otel::process_issue_span(&issue.id);
-    process_issue_core(config, factory, worktree_bridge, issue, beads, knowledge_base, cancel)
-        .instrument(process_span)
-        .await
+    process_issue_core(
+        config,
+        factory,
+        worktree_bridge,
+        issue,
+        beads,
+        knowledge_base,
+        cancel,
+    )
+    .instrument(process_span)
+    .await
 }
 
 /// Core orchestration loop — implement → verify → review → escalate.
@@ -292,7 +300,7 @@ async fn process_issue_core(
         .cluster_health()
         .cloned()
         .unwrap_or_else(|| ClusterHealth::from_config(config));
-    
+
     if !config.cloud_only {
         let healthy_count = cluster_health.check_all_now().await;
         // Evaluate async summary before the info! macro to avoid holding a
@@ -2317,7 +2325,11 @@ async fn process_issue_core(
         cost_avg: 0.0,
         stuck_rate: if !success { 1.0 } else { 0.0 },
         avg_turns_until_first_write: session_metrics.turns_until_first_write.unwrap_or(0) as f64,
-        write_by_turn_2_rate: if session_metrics.write_by_turn_2 { 1.0 } else { 0.0 },
+        write_by_turn_2_rate: if session_metrics.write_by_turn_2 {
+            1.0
+        } else {
+            0.0
+        },
     };
     let slo_report = slo::evaluate_slos(&orch_metrics);
     match slo_report.overall_severity {

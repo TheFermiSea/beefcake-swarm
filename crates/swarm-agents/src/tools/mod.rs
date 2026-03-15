@@ -3,9 +3,11 @@
 //! Each tool implements `rig::tool::Tool` and can be attached to agents
 //! via `AgentBuilder::tool()`. Tools are sandboxed to a worktree root.
 
+pub mod astgrep_tool;
 pub mod bdh_tools;
 pub mod bundles;
 pub mod cargo_metadata_tool;
+pub mod colgrep_tool;
 pub mod exec_tool;
 pub mod file_exists_tool;
 pub mod fs_tools;
@@ -16,8 +18,6 @@ pub mod patch_tool;
 pub mod plan_parallel_tool;
 pub mod proxy_wrappers;
 pub mod search_code_tool;
-pub mod colgrep_tool;
-pub mod astgrep_tool;
 pub mod shared;
 pub mod verifier_tool;
 pub mod workpad_tool;

@@ -755,7 +755,8 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                 SwarmRole::LocalManagerFallback
             };
             let model = ctx.config.resolve_role_model(role);
-            ctx.metrics.record_agent_metrics(&format!("manager ({model})"), 0, 0);
+            ctx.metrics
+                .record_agent_metrics(&format!("manager ({model})"), 0, 0);
             let adapter = RuntimeAdapter::new(AdapterConfig {
                 agent_name: "manager".into(),
                 deadline: Some(Instant::now() + ctx.manager_timeout),
@@ -1706,7 +1707,11 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
         cost_avg: 0.0,
         stuck_rate: if !ctx.success { 1.0 } else { 0.0 },
         avg_turns_until_first_write: session_metrics.turns_until_first_write.unwrap_or(0) as f64,
-        write_by_turn_2_rate: if session_metrics.write_by_turn_2 { 1.0 } else { 0.0 },
+        write_by_turn_2_rate: if session_metrics.write_by_turn_2 {
+            1.0
+        } else {
+            0.0
+        },
     };
     let slo_report = slo::evaluate_slos(&orch_metrics);
     match slo_report.overall_severity {

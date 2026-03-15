@@ -371,11 +371,7 @@ mod tests {
     fn test_manager_cloud_has_strategy_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], true);
-        assert_eq!(
-            tools.len(),
-            6,
-            "Cloud manager should have 6 strategy tools"
-        );
+        assert_eq!(tools.len(), 6, "Cloud manager should have 6 strategy tools");
     }
 
     #[test]

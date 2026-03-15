@@ -284,7 +284,13 @@ impl AgentFactory {
     /// Read-only tools for analysis. Produces structured JSON repair plans.
     pub fn build_planner(&self, wt_path: &Path) -> OaiAgent {
         let (client, model) = self.resolve_role_endpoint(SwarmRole::Planner);
-        specialists::build_planner_named(&client, &model, wt_path, "planner", self.config.cloud_only)
+        specialists::build_planner_named(
+            &client,
+            &model,
+            wt_path,
+            "planner",
+            self.config.cloud_only,
+        )
     }
 
     /// Build the fixer specialist.
@@ -315,24 +321,20 @@ impl AgentFactory {
     /// No proxy prefix needed — local models don't mangle tool names.
     pub fn build_manager(&self, wt_path: &Path) -> OaiAgent {
         // Resolve strategist if available for this profile
-        let strategist = self
-            .clients
-            .strategist
-            .as_ref()
-            .map(|client| {
-                let model = self.config.resolve_role_model(SwarmRole::Strategist);
-                coder::build_strategist_named(
-                    client,
-                    &model,
-                    wt_path,
-                    if self.clients.cloud.is_some() {
-                        "proxy_strategist"
-                    } else {
-                        "strategist"
-                    },
-                    self.clients.cloud.is_some(),
-                )
-            });
+        let strategist = self.clients.strategist.as_ref().map(|client| {
+            let model = self.config.resolve_role_model(SwarmRole::Strategist);
+            coder::build_strategist_named(
+                client,
+                &model,
+                wt_path,
+                if self.clients.cloud.is_some() {
+                    "proxy_strategist"
+                } else {
+                    "strategist"
+                },
+                self.clients.cloud.is_some(),
+            )
+        });
 
         if let Some(ref cloud_client) = self.clients.cloud {
             let cloud_ep = self.config.cloud_endpoint.as_ref().unwrap();
@@ -343,22 +345,39 @@ impl AgentFactory {
             // Workers get proxy_ prefix for CLIAPIProxy compatibility.
             // proxy_tools=true so tool names match after CLIAPIProxy prefixing.
             let (p_client, p_model) = self.resolve_role_endpoint(SwarmRole::Planner);
-            let planner =
-                specialists::build_planner_named(&p_client, &p_model, wt_path, "proxy_planner", true);
+            let planner = specialists::build_planner_named(
+                &p_client,
+                &p_model,
+                wt_path,
+                "proxy_planner",
+                true,
+            );
 
             let (f_client, f_model) = self.resolve_role_endpoint(SwarmRole::Fixer);
-            let fixer = specialists::build_fixer_named(&f_client, &f_model, wt_path, "proxy_fixer", true);
+            let fixer =
+                specialists::build_fixer_named(&f_client, &f_model, wt_path, "proxy_fixer", true);
 
             let (r_client, r_model) = self.resolve_role_endpoint(SwarmRole::RustWorker);
-            let rust_coder =
-                coder::build_rust_coder_named(&r_client, &r_model, wt_path, "proxy_rust_coder", true);
+            let rust_coder = coder::build_rust_coder_named(
+                &r_client,
+                &r_model,
+                wt_path,
+                "proxy_rust_coder",
+                true,
+            );
 
             let (g_client, g_model) = self.resolve_role_endpoint(SwarmRole::GeneralWorker);
-            let general_coder =
-                coder::build_general_coder_named(&g_client, &g_model, wt_path, "proxy_general_coder", true);
+            let general_coder = coder::build_general_coder_named(
+                &g_client,
+                &g_model,
+                wt_path,
+                "proxy_general_coder",
+                true,
+            );
 
             let (rev_client, rev_model) = self.resolve_role_endpoint(SwarmRole::Reviewer);
-            let reviewer = reviewer::build_reviewer_named(&rev_client, &rev_model, "proxy_reviewer");
+            let reviewer =
+                reviewer::build_reviewer_named(&rev_client, &rev_model, "proxy_reviewer");
 
             let (reas_client, reas_model) = self.resolve_role_endpoint(SwarmRole::ReasoningWorker);
             let reasoning_worker = coder::build_reasoning_worker_named(
@@ -431,28 +450,31 @@ impl AgentFactory {
             "Building cloud manager with fallback model"
         );
 
-        let strategist = self
-            .clients
-            .strategist
-            .as_ref()
-            .map(|client| {
-                let model = self.config.resolve_role_model(SwarmRole::Strategist);
-                coder::build_strategist_named(client, &model, wt_path, "proxy_strategist", true)
-            });
+        let strategist = self.clients.strategist.as_ref().map(|client| {
+            let model = self.config.resolve_role_model(SwarmRole::Strategist);
+            coder::build_strategist_named(client, &model, wt_path, "proxy_strategist", true)
+        });
 
         let (p_client, p_model) = self.resolve_role_endpoint(SwarmRole::Planner);
-        let planner = specialists::build_planner_named(&p_client, &p_model, wt_path, "proxy_planner", true);
+        let planner =
+            specialists::build_planner_named(&p_client, &p_model, wt_path, "proxy_planner", true);
 
         let (f_client, f_model) = self.resolve_role_endpoint(SwarmRole::Fixer);
-        let fixer = specialists::build_fixer_named(&f_client, &f_model, wt_path, "proxy_fixer", true);
+        let fixer =
+            specialists::build_fixer_named(&f_client, &f_model, wt_path, "proxy_fixer", true);
 
         let (r_client, r_model) = self.resolve_role_endpoint(SwarmRole::RustWorker);
         let rust_coder =
             coder::build_rust_coder_named(&r_client, &r_model, wt_path, "proxy_rust_coder", true);
 
         let (g_client, g_model) = self.resolve_role_endpoint(SwarmRole::GeneralWorker);
-        let general_coder =
-            coder::build_general_coder_named(&g_client, &g_model, wt_path, "proxy_general_coder", true);
+        let general_coder = coder::build_general_coder_named(
+            &g_client,
+            &g_model,
+            wt_path,
+            "proxy_general_coder",
+            true,
+        );
 
         let (rev_client, rev_model) = self.resolve_role_endpoint(SwarmRole::Reviewer);
         let reviewer = reviewer::build_reviewer_named(&rev_client, &rev_model, "proxy_reviewer");
