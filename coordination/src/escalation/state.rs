@@ -98,8 +98,8 @@ impl TurnPolicy {
     pub fn for_tier(tier: SwarmTier) -> Self {
         match tier {
             SwarmTier::Worker => Self {
-                max_turns: 15,
-                timeout_secs: 10 * 60,
+                max_turns: 30,
+                timeout_secs: 45 * 60,
             },
             SwarmTier::Strategist => Self {
                 max_turns: 10,
@@ -521,8 +521,8 @@ mod tests {
     #[test]
     fn test_turn_policy_defaults() {
         let worker = TurnPolicy::for_tier(SwarmTier::Worker);
-        assert_eq!(worker.max_turns, 15);
-        assert_eq!(worker.timeout_secs, 10 * 60);
+        assert_eq!(worker.max_turns, 30);
+        assert_eq!(worker.timeout_secs, 45 * 60);
 
         let council = TurnPolicy::for_tier(SwarmTier::Council);
         assert_eq!(council.max_turns, 20);

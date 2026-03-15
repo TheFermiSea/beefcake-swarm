@@ -129,8 +129,9 @@ const DEFAULT_CLOUD_HTTP_TIMEOUT_SECS: u64 = 300;
 /// Default per-request HTTP timeout for local LLM calls (Qwen3.5 on vasp nodes).
 ///
 /// Local models at ~6 tok/s with max_tokens=4096 need ~11 minutes worst case.
-/// 15 minutes provides headroom for slow prompts and context processing.
-const DEFAULT_LOCAL_HTTP_TIMEOUT_SECS: u64 = 900;
+/// With 20-turn write deadline and 2 min/turn on 122B expert-offload,
+/// workers need up to 40 minutes. 45 minutes provides headroom.
+const DEFAULT_LOCAL_HTTP_TIMEOUT_SECS: u64 = 2700;
 
 /// Default TCP connect timeout for all endpoints.
 const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 15;
