@@ -4,9 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Model Selection & Routing
 
-- **Local RPC Distributed Ensemble (March 2026):**
+- **Local Independent Instances (March 2026):**
   - **Scout/Reviewer:** Qwen3.5-27B-Distilled (vasp-03:8081) — 100% VRAM-resident, 192K context, blazing fast.
-  - **Integrator:** Qwen3.5-122B-A10B MoE (vasp-01:8081 RPC head + vasp-02 RPC worker) — 128K context, distributed VRAM.
+  - **Coder:** Qwen3.5-122B-A10B MoE (vasp-01:8081) — independent instance, expert-offload, 65K context.
+  - **Reasoning:** Qwen3.5-122B-A10B MoE (vasp-02:8081) — independent instance, expert-offload, 65K context.
 - **General/Complex:** Claude Opus 4.6 / Sonnet 4.6 (default).
 - **Research:** Always check **NotebookLM** first using `/ask-notebook` or `notebook_query`.
 
@@ -52,7 +53,7 @@ Key modules:
 1. Pick highest-priority beads issue (or CLI `--issue`)
 2. Create Gastown worktree in `/tmp/beefcake-wt/<issue-id>`
 3. Cloud manager (Claude Opus 4.6 via CLIAPIProxy) plans and delegates
-4. Local workers (Qwen3.5-27B on vasp-03, Qwen3.5-122B on vasp-01+02 RPC) execute code changes
+4. Local workers (Qwen3.5-27B on vasp-03, Qwen3.5-122B on vasp-01 + vasp-02) execute code changes
 5. Verifier (deterministic quality gates) after each iteration
 6. Pass → merge + close issue; Fail → retry up to `SWARM_MAX_RETRIES`
 
@@ -60,9 +61,10 @@ Key modules:
 
 ```text
 Cloud Manager (Claude Opus 4.6 thinking via CLIAPIProxy, max 10 iterations)
-    → delegates to local workers (2026 VRAM-Resident RPC):
+    → delegates to local workers (2026 Independent Instances):
         vasp-03:8081 — Scout/Reviewer tier (Qwen3.5-27B-Distilled, 192K context, VRAM-resident)
-        vasp-01:8081 — Integrator tier (Qwen3.5-122B-A10B MoE, 128K context, vasp-02 as RPC worker)
+        vasp-01:8081 — Coder tier (Qwen3.5-122B-A10B MoE, 65K context, expert-offload)
+        vasp-02:8081 — Reasoning tier (Qwen3.5-122B-A10B MoE, 65K context, expert-offload)
     → runs verifier after each worker completes
     ↓ all budgets exhausted
 Human Intervention (blocking beads issue)
@@ -81,19 +83,21 @@ When cloud is unavailable, falls back to worker-first mode (local models only).
 
 ## Inference Endpoints
 
-The swarm uses a **VRAM-Resident Distributed** architecture (Transitioning March 2026).
+The swarm uses **independent single-node instances** with expert-offload (March 2026).
 
 | Tier | Model | Node | Context | Hardware Strategy |
 |------|-------|------|---------|-------------------|
 | Scout/Reviewer | Qwen3.5-27B-Distilled | vasp-03 | 192K | 100% VRAM-resident (32GB) |
-| Integrator | Qwen3.5-122B-A10B MoE | vasp-01 (head) + vasp-02 (RPC worker) | 128K | Dual-node RPC (64GB VRAM) |
+| Coder | Qwen3.5-122B-A10B MoE | vasp-01 | 65K | Expert-offload, single-node (32GB VRAM) |
+| Reasoning | Qwen3.5-122B-A10B MoE | vasp-02 | 65K | Expert-offload, single-node (32GB VRAM) |
 | Cloud | Claude Opus 4.6 | ai-proxy | 200K | CLIAPIProxy Relay |
 
 **Health Checks:**
 
 ```bash
 curl -s http://vasp-03:8081/health  # Scout
-curl -s http://vasp-01:8081/health  # Integrator (Head)
+curl -s http://vasp-01:8081/health  # Coder
+curl -s http://vasp-02:8081/health  # Reasoning
 ```
 
 **Start inference (New RPC Ensemble):**
@@ -119,9 +123,9 @@ Tiers use task-specialized models (March 2026 upgrade).
 |----------|---------|-------|
 | `SWARM_FAST_URL` / `SWARM_FAST_MODEL` | `http://vasp-03:8081/v1` | `Qwen3.5-27B-Distilled` |
 | `SWARM_CODER_URL` / `SWARM_CODER_MODEL` | `http://vasp-01:8081/v1` | `Qwen3.5-122B-A10B` |
-| `SWARM_REASONING_URL` / `SWARM_REASONING_MODEL` | `http://vasp-01:8081/v1` | `Qwen3.5-122B-A10B` |
+| `SWARM_REASONING_URL` / `SWARM_REASONING_MODEL` | `http://vasp-02:8081/v1` | `Qwen3.5-122B-A10B` |
 
-Note: vasp-02 serves as an RPC worker shard for vasp-01 and has no independent endpoint. Both `SWARM_CODER_URL` and `SWARM_REASONING_URL` point to vasp-01.
+Coder and Reasoning run on separate nodes (vasp-01 and vasp-02 respectively), providing 4 total concurrent 122B slots.
 
 ### Cloud Endpoint
 
@@ -214,8 +218,8 @@ grep -o 'gen_ai.tool.name[^"]*"[^"]*"' logs/dogfood/run-*.log | sort | uniq -c |
 
 # Check endpoint health
 curl -s http://vasp-03:8081/health  # Scout (Qwen3.5-27B-Distilled)
-curl -s http://vasp-01:8081/health  # Integrator head (Qwen3.5-122B-A10B MoE)
-# vasp-02 is an RPC worker shard for vasp-01 — no independent endpoint
+curl -s http://vasp-01:8081/health  # Coder (Qwen3.5-122B-A10B MoE)
+curl -s http://vasp-02:8081/health  # Reasoning (Qwen3.5-122B-A10B MoE)
 ```
 
 ### Healthy Startup Log
@@ -290,8 +294,8 @@ nlm source add "<ID>" --file "doc.md"
 ## Cluster Access
 
 - slurm-ctl: `ssh root@10.0.0.5` (controller, NFS server — VM 500 on pve1)
-- vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, Qwen3.5-122B-A10B MoE RPC head — VM 600 on pve1)
-- vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, Qwen3.5-122B-A10B MoE RPC worker — VM 601 on pve2)
+- vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, Qwen3.5-122B-A10B MoE Coder — VM 600 on pve1)
+- vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, Qwen3.5-122B-A10B MoE Reasoning — VM 601 on pve2)
 - vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM, Qwen3.5-27B-Distilled running — VM 602 on pve3)
 - pve1: `ssh root@10.0.0.1` (Proxmox host, cluster gateway — DO NOT reboot)
 - pve2: `ssh root@10.0.0.2` (Proxmox host)
