@@ -556,16 +556,17 @@ async fn run_subtask_worker(
     //   2 existing files → 45 turns
     //   1 new file       → 40 turns
     //   3 files (1 new)  → 65 turns
-    let (new_count, existing_count) = subtask
-        .target_files
-        .iter()
-        .fold((0usize, 0usize), |(n, e), f| {
-            if wt_path.join(f).exists() {
-                (n, e + 1)
-            } else {
-                (n + 1, e)
-            }
-        });
+    let (new_count, existing_count) =
+        subtask
+            .target_files
+            .iter()
+            .fold((0usize, 0usize), |(n, e), f| {
+                if wt_path.join(f).exists() {
+                    (n, e + 1)
+                } else {
+                    (n + 1, e)
+                }
+            });
     let dynamic_turns = ((existing_count + new_count) * 15 + new_count * 10)
         .max(30)
         .min(150);
