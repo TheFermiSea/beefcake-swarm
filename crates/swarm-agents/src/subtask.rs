@@ -417,11 +417,32 @@ pub async fn dispatch_subtasks(
 // ── Worker ────────────────────────────────────────────────────────────────────
 
 /// Build a file-constrained system prompt for a subtask worker.
-fn build_subtask_system_prompt(subtask: &Subtask) -> String {
+///
+/// Classifies each target file as "existing" or "new" based on whether it
+/// exists in the worktree. This prevents workers from wasting their entire
+/// budget trying to read files that need to be created from scratch.
+fn build_subtask_system_prompt(subtask: &Subtask, wt_path: &Path) -> String {
+    // Classify target files as existing or new.
+    let mut existing_targets = Vec::new();
+    let mut new_targets = Vec::new();
+    for f in &subtask.target_files {
+        if wt_path.join(f).exists() {
+            existing_targets.push(f.as_str());
+        } else {
+            new_targets.push(f.as_str());
+        }
+    }
+
     let target_list = subtask
         .target_files
         .iter()
-        .map(|f| format!("  - {f}"))
+        .map(|f| {
+            if wt_path.join(f).exists() {
+                format!("  - {f}  ← EXISTS (read then edit)")
+            } else {
+                format!("  - {f}  ← NEW (create with write_file)")
+            }
+        })
         .collect::<Vec<_>>()
         .join("\n");
 
@@ -436,6 +457,29 @@ fn build_subtask_system_prompt(subtask: &Subtask) -> String {
             .join("\n")
     };
 
+    // Build the starting instruction based on file existence.
+    let start_instruction = if existing_targets.is_empty() && !new_targets.is_empty() {
+        // All files are new — skip read and go straight to write.
+        "6. All your target files are NEW and need to be CREATED. Your first tool call MUST be \
+           write_file to create the first new file. Do NOT call read_file on new files — they \
+           don't exist yet. write_file will create parent directories automatically."
+            .to_string()
+    } else if !existing_targets.is_empty() && !new_targets.is_empty() {
+        // Mix of existing and new files.
+        let existing = existing_targets.join(", ");
+        let new = new_targets.join(", ");
+        format!(
+            "6. Some files exist ({existing}), some are NEW ({new}). \
+             Start with read_file on the EXISTING files. \
+             Use write_file to CREATE the new files — do NOT call read_file on new files."
+        )
+    } else {
+        // All files exist — original behavior.
+        "6. Your first tool call MUST be read_file on one of your target files. \
+           Then edit_file/write_file to implement changes."
+            .to_string()
+    };
+
     format!(
         r#"You are a Rust engineer executing ONE subtask of a larger parallel plan.
 
@@ -447,11 +491,12 @@ fn build_subtask_system_prompt(subtask: &Subtask) -> String {
 
 ## RULES
 1. ONLY modify files in YOUR ASSIGNED FILES list above. Do NOT touch any other files.
-2. Start by reading your target files to understand the current code.
+2. For EXISTING target files: read them first to understand the current code.
+   For NEW target files: create them with write_file (parent dirs are created automatically).
 3. Make focused, minimal changes that accomplish your subtask objective.
 4. Other workers are editing OTHER files concurrently — do not interfere.
 5. If you need to understand code in other files, use read_file on context_files.
-6. Your first tool call MUST be read_file. Then edit_file/write_file to implement.
+{start_instruction}
 7. Do NOT run cargo check/test — the orchestrator runs the verifier after all workers finish.
 
 ## INTER-WORKER COMMUNICATION
@@ -502,7 +547,7 @@ async fn run_subtask_worker(
     let tools = bundles::subtask_worker_tools(wt_path, role, &subtask.target_files, &subtask.id);
 
     // Build the agent with a subtask-specific system prompt.
-    let system_prompt = build_subtask_system_prompt(subtask);
+    let system_prompt = build_subtask_system_prompt(subtask, wt_path);
     let agent = client
         .agent(model)
         .preamble(&system_prompt)
@@ -733,7 +778,7 @@ mod tests {
             context_files: vec!["src/types.rs".into()],
             worker_type: "rust_coder".into(),
         };
-        let prompt = build_subtask_system_prompt(&subtask);
+        let prompt = build_subtask_system_prompt(&subtask, Path::new("/tmp"));
         assert!(prompt.contains("src/lib.rs"));
         assert!(prompt.contains("src/main.rs"));
         assert!(prompt.contains("src/types.rs"));
@@ -859,7 +904,7 @@ mod tests {
             context_files: vec![],
             worker_type: "general_coder".into(),
         };
-        let prompt = build_subtask_system_prompt(&subtask);
+        let prompt = build_subtask_system_prompt(&subtask, Path::new("/tmp"));
         assert!(prompt.contains("announce"), "Should mention announce tool");
         assert!(
             prompt.contains("check_announcements"),
