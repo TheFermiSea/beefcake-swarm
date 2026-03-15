@@ -555,7 +555,7 @@ async fn run_subtask_worker(
         .tool_choice(rig::completion::message::ToolChoice::Required)
         .additional_params(coder::worker_sampling_params())
         .tools(tools)
-        .default_max_turns(15) // Subtask workers need room to explore scoped context
+        .default_max_turns(20) // Subtask workers need room to explore + implement + fix
         .build();
 
     // Build task prompt.
@@ -565,14 +565,16 @@ async fn run_subtask_worker(
     );
 
     // Runtime adapter for budget tracking.
-    // Write deadline of 8 gives workers enough turns to read context files
-    // (target_files + context_files) before writing. At 5, workers consistently
-    // exhaust the budget on read-heavy tasks without ever writing.
+    // Write deadline: workers must make a file edit within this many turns.
+    // Raised to 12 (from 8) — complex issues like multi-file feature additions
+    // legitimately need 10+ turns of research before the first edit. At 8, workers
+    // would exhaust the budget without writing on any non-trivial task.
+    // Total turn limit is 15, so the remaining 3 turns are for the actual edit + verify.
     let adapter = RuntimeAdapter::new(AdapterConfig {
         agent_name: format!("{}-{}", subtask.worker_type, subtask.id),
-        max_tool_calls: Some(30),
+        max_tool_calls: Some(40),
         deadline: Some(Instant::now() + Duration::from_secs(timeout_secs)),
-        max_turns_without_write: Some(8),
+        max_turns_without_write: Some(12),
         ..Default::default()
     });
 
