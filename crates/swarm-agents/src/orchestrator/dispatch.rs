@@ -121,6 +121,17 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
             .push_str("_Use the `read_file` tool to read these files before making changes._\n\n");
     }
 
+    // Repository Map — whole-codebase structure showing public symbols by file.
+    // Gives the agent a complete mental model without reading files one by one.
+    if let Some(ref repo_map) = packet.repo_map {
+        prompt.push_str("## Repository Map\n");
+        prompt.push_str(
+            "_Codebase structure ranked by relevance. Use this to locate code without reading files blindly._\n",
+        );
+        prompt.push_str(repo_map);
+        prompt.push('\n');
+    }
+
     if !packet.key_symbols.is_empty() {
         prompt.push_str("## Key Symbols\n");
         for sym in &packet.key_symbols {
@@ -427,6 +438,7 @@ mod tests {
             replay_hints: vec![],
             validator_feedback: vec![],
             change_contract: None,
+            repo_map: None,
         }
     }
 

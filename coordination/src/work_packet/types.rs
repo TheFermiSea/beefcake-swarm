@@ -73,6 +73,12 @@ pub struct WorkPacket {
     /// Structured change contract from the planner agent
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub change_contract: Option<ChangeContract>,
+    /// Pre-computed repository map showing codebase structure (public symbols
+    /// organized by file, ranked by import frequency and keyword relevance).
+    /// Injected into the task prompt so the agent knows WHERE things are
+    /// without reading files one by one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repo_map: Option<String>,
 }
 
 impl WorkPacket {
@@ -372,6 +378,7 @@ mod tests {
             replay_hints: vec![],
             validator_feedback: vec![],
             change_contract: None,
+            repo_map: None,
         };
 
         let summary = packet.summary();
@@ -417,6 +424,7 @@ mod tests {
             replay_hints: vec![],
             validator_feedback: vec![],
             change_contract: None,
+            repo_map: None,
         };
 
         let json = serde_json::to_string_pretty(&packet).unwrap();
@@ -457,6 +465,7 @@ mod tests {
             replay_hints: vec![],
             validator_feedback: vec![],
             change_contract: None,
+            repo_map: None,
         };
 
         // Should be a reasonable estimate
@@ -542,6 +551,7 @@ mod tests {
             replay_hints: vec![],
             validator_feedback: vec![],
             change_contract: Some(contract),
+            repo_map: None,
         };
 
         // Round-trip with contract
@@ -558,6 +568,7 @@ mod tests {
         // None case — should not appear in JSON (skip_serializing_if)
         let no_contract_packet = WorkPacket {
             change_contract: None,
+            repo_map: None,
             ..packet.clone()
         };
         let json2 = serde_json::to_string(&no_contract_packet).unwrap();

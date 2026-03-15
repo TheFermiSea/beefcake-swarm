@@ -175,6 +175,7 @@ impl WorkPacketGenerator {
             replay_hints: vec![],       // Populated by orchestrator from trace index
             validator_feedback: vec![], // Populated by orchestrator from reviewer feedback
             change_contract: None,      // Populated by planner agent
+            repo_map: None,             // Populated by ContextPacker
         }
     }
 

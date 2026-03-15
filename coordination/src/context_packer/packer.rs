@@ -111,6 +111,17 @@ impl ContextPacker {
         packet.objective = objective.to_string();
         packet.generated_at = Utc::now();
 
+        // Generate repo map — whole-codebase structural overview for the agent.
+        // Uses ~2000 tokens but eliminates 50+ blind file reads.
+        let repo_map = super::repo_map::generate_repo_map(
+            &self.working_dir,
+            objective,
+            0, // default budget
+        );
+        if !repo_map.is_empty() {
+            packet.repo_map = Some(repo_map);
+        }
+
         // Trim to fit token budget
         self.trim_to_budget(&mut packet);
         packet

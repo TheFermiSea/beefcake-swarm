@@ -777,6 +777,7 @@ mod tests {
             replay_hints: vec![],
             validator_feedback: vec![],
             change_contract: None,
+            repo_map: None,
         };
 
         let prompt = crate::orchestrator::format_task_prompt(&packet);
