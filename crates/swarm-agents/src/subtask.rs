@@ -546,6 +546,30 @@ async fn run_subtask_worker(
     // Build tools scoped to the worktree with file allowlist enforcement.
     let tools = bundles::subtask_worker_tools(wt_path, role, &subtask.target_files, &subtask.id);
 
+    // Scale turn budget dynamically based on task complexity:
+    //   - Each target file adds 15 turns (need to read + understand + edit)
+    //   - NEW files (don't exist yet) add 10 extra each (more design work)
+    //   - Minimum of 30 turns, maximum of 150
+    //
+    // Examples:
+    //   1 existing file  → 30 turns
+    //   2 existing files → 45 turns
+    //   1 new file       → 40 turns
+    //   3 files (1 new)  → 65 turns
+    let (new_count, existing_count) = subtask
+        .target_files
+        .iter()
+        .fold((0usize, 0usize), |(n, e), f| {
+            if wt_path.join(f).exists() {
+                (n, e + 1)
+            } else {
+                (n + 1, e)
+            }
+        });
+    let dynamic_turns = ((existing_count + new_count) * 15 + new_count * 10)
+        .max(30)
+        .min(150);
+
     // Build the agent with a subtask-specific system prompt.
     let system_prompt = build_subtask_system_prompt(subtask, wt_path);
     let agent = client
@@ -555,8 +579,16 @@ async fn run_subtask_worker(
         .tool_choice(rig::completion::message::ToolChoice::Required)
         .additional_params(coder::worker_sampling_params())
         .tools(tools)
-        .default_max_turns(100) // Let the deadline timeout govern — not turn count
+        .default_max_turns(dynamic_turns)
         .build();
+
+    tracing::debug!(
+        subtask_id = %subtask.id,
+        dynamic_turns,
+        new_files = new_count,
+        existing_files = existing_count,
+        "Subtask turn budget calculated"
+    );
 
     // Build task prompt.
     let task_prompt = format!(
@@ -566,13 +598,12 @@ async fn run_subtask_worker(
 
     // Runtime adapter for budget tracking.
     // The deadline (wall-clock timeout) is the primary constraint — not turn counts.
-    // max_turns_without_write is set high so workers aren't prematurely killed mid-research.
-    // max_tool_calls is generous; local models are fast enough that 200 calls in 45 min is fine.
+    // max_turns_without_write scales proportionally; max_tool_calls is generous.
     let adapter = RuntimeAdapter::new(AdapterConfig {
         agent_name: format!("{}-{}", subtask.worker_type, subtask.id),
-        max_tool_calls: Some(200),
+        max_tool_calls: Some(dynamic_turns * 3),
         deadline: Some(Instant::now() + Duration::from_secs(timeout_secs)),
-        max_turns_without_write: Some(80),
+        max_turns_without_write: Some((dynamic_turns * 3) / 4), // 75% of budget without a write
         ..Default::default()
     });
 
