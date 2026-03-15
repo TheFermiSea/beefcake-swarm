@@ -754,6 +754,52 @@ async fn process_issue_core(
         }
     }
 
+    // --- Baseline verification (autoresearch pattern) ---
+    //
+    // Run the verifier on the clean worktree before the agent touches anything.
+    // If the baseline is broken (main doesn't pass), skip this issue — don't
+    // waste iterations trying to fix pre-existing failures.
+    {
+        let baseline_verifier = Verifier::new(&wt_path, verifier_config.clone());
+        let baseline_report = baseline_verifier.run_pipeline().await;
+        let gates_passed = baseline_report
+            .gates
+            .iter()
+            .filter(|g| g.outcome == coordination::verifier::report::GateOutcome::Passed)
+            .count();
+        let gates_total = baseline_report.gates.len();
+
+        if !baseline_report.all_green {
+            let baseline_summary = baseline_report.summary();
+            warn!(
+                id = %issue.id,
+                gates_passed,
+                gates_total,
+                summary = %baseline_summary,
+                "Baseline verification FAILED — worktree does not compile/pass tests before agent modifications. \
+                 Skipping issue to avoid wasting iterations on pre-existing failures."
+            );
+            let _ = beads.update_status(&issue.id, "open");
+            let _ = progress.log_error(
+                session.session_id(),
+                0,
+                format!("Baseline failed: {baseline_summary}"),
+            );
+            // Clean up worktree
+            if let Err(e) = worktree_bridge.cleanup(&issue.id) {
+                warn!(id = %issue.id, error = %e, "Failed to clean up worktree after baseline failure");
+            }
+            return Ok(false);
+        }
+
+        info!(
+            id = %issue.id,
+            gates_passed,
+            gates_total,
+            "Baseline verification PASSED — worktree is clean before agent starts"
+        );
+    }
+
     // --- Main loop: implement → verify → review → escalate ---
     loop {
         let iteration = match session.next_iteration() {

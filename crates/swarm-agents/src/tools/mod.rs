@@ -95,10 +95,33 @@ pub(crate) async fn run_command_with_timeout(
     }
 }
 
-/// Validate that a resolved path stays within the sandbox root.
+/// Directories that agents must never read or modify.
+///
+/// `.beads/` contains the issue tracker database — agents deleting it caused
+/// 100% dogfood failure rate on 2026-03-14. `.git/` is obviously off-limits.
+const FORBIDDEN_PREFIXES: &[&str] = &[".beads", ".git", ".beadhub", ".dolt"];
+
+/// Validate that a resolved path stays within the sandbox root and does not
+/// touch forbidden directories (`.beads/`, `.git/`, etc.).
 ///
 /// Returns the canonicalized path on success.
 pub fn sandbox_check(working_dir: &Path, relative_path: &str) -> Result<PathBuf, ToolError> {
+    // Block access to forbidden directories before any filesystem operations.
+    // Normalize the path to catch tricks like "foo/../.beads/config.yaml".
+    let normalized = Path::new(relative_path);
+    for component in normalized.components() {
+        if let std::path::Component::Normal(seg) = component {
+            let seg_str = seg.to_string_lossy();
+            for prefix in FORBIDDEN_PREFIXES {
+                if seg_str == *prefix || seg_str.starts_with(&format!("{prefix}/")) {
+                    return Err(ToolError::Sandbox(format!(
+                        "path `{relative_path}` touches forbidden directory `{prefix}/`"
+                    )));
+                }
+            }
+        }
+    }
+
     let candidate = working_dir.join(relative_path);
     let resolved = candidate
         .canonicalize()
