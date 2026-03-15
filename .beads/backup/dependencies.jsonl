@@ -36,6 +36,8 @@
 {"created_at":"2026-03-13T16:33:43Z","created_by":"TheFermiSea","depends_on_id":"beefcake-ni1i","issue_id":"beefcake-2i7z","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T16:33:38Z","created_by":"TheFermiSea","depends_on_id":"beefcake-ud3y","issue_id":"beefcake-2i7z","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T16:31:45Z","created_by":"TheFermiSea","depends_on_id":"beefcake-vbjk","issue_id":"beefcake-2i7z","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:34:28Z","created_by":"TheFermiSea","depends_on_id":"beefcake-d9w3","issue_id":"beefcake-2xge","metadata":"{}","type":"parent-child"}
+{"created_at":"2026-03-15T14:32:27Z","created_by":"TheFermiSea","depends_on_id":"beefcake-zdv2","issue_id":"beefcake-2xge","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-09T11:06:33Z","created_by":"TheFermiSea","depends_on_id":"beefcake-7t2q","issue_id":"beefcake-30et","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T09:20:42Z","created_by":"TheFermiSea","depends_on_id":"beefcake-mmn3","issue_id":"beefcake-32xq","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-13T09:20:49Z","created_by":"TheFermiSea","depends_on_id":"beefcake-p9gc","issue_id":"beefcake-32xq","metadata":"{}","type":"blocks"}
@@ -57,6 +59,9 @@
 {"created_at":"2026-03-03T10:34:24Z","created_by":"claude-code","depends_on_id":"beefcake-w45i","issue_id":"beefcake-4omk","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T09:19:55Z","created_by":"TheFermiSea","depends_on_id":"beefcake-g8rh","issue_id":"beefcake-4qzd","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T09:19:55Z","created_by":"TheFermiSea","depends_on_id":"beefcake-mmn3","issue_id":"beefcake-4qzd","metadata":"{}","type":"parent-child"}
+{"created_at":"2026-03-15T14:32:19Z","created_by":"TheFermiSea","depends_on_id":"beefcake-lv41","issue_id":"beefcake-4zf5","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:34:12Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tzye","issue_id":"beefcake-4zf5","metadata":"{}","type":"parent-child"}
+{"created_at":"2026-03-15T14:35:15Z","created_by":"TheFermiSea","depends_on_id":"beefcake-w70b.1","issue_id":"beefcake-4zh2","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-03T10:36:01Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-5iww","metadata":"{}","type":"blocks"}
 {"created_at":"2026-02-18T15:09:15Z","created_by":"claude-code","depends_on_id":"beefcake-1tg","issue_id":"beefcake-5kb","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T09:20:16Z","created_by":"TheFermiSea","depends_on_id":"beefcake-mmn3","issue_id":"beefcake-5ol5","metadata":"{}","type":"relates-to"}
@@ -92,6 +97,7 @@
 {"created_at":"2026-03-09T11:05:09Z","created_by":"TheFermiSea","depends_on_id":"beefcake-hknc","issue_id":"beefcake-7t2q","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-03T10:36:01Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-83el","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-09T11:04:38Z","created_by":"TheFermiSea","depends_on_id":"beefcake-iv5t","issue_id":"beefcake-83z2","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:33:34Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tzye","issue_id":"beefcake-86uj","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-09T11:04:49Z","created_by":"TheFermiSea","depends_on_id":"beefcake-cc66","issue_id":"beefcake-89us","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-06T22:20:52Z","created_by":"TheFermiSea","depends_on_id":"beefcake-q33c","issue_id":"beefcake-8cnh","metadata":"{}","type":"blocks"}
 {"created_at":"2026-02-20T14:18:03Z","created_by":"claude-code","depends_on_id":"beefcake-7kj","issue_id":"beefcake-90u","metadata":"{}","type":"blocks"}
@@ -143,6 +149,7 @@
 {"created_at":"2026-03-08T11:57:56Z","created_by":"TheFermiSea","depends_on_id":"beefcake-1axl","issue_id":"beefcake-bkjs","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-02-17T21:06:12Z","created_by":"claude-code","depends_on_id":"beefcake-42e","issue_id":"beefcake-bt5","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-02T20:40:34Z","created_by":"claude-code","depends_on_id":"beefcake-nhmh","issue_id":"beefcake-bzvh","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:33:41Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tzye","issue_id":"beefcake-c6fd","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-09T11:04:46Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tuuk","issue_id":"beefcake-cc66","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-03T10:34:00Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-cgxo","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-14T16:41:30Z","created_by":"TheFermiSea","depends_on_id":"beefcake-v7sh","issue_id":"beefcake-ckge","metadata":"{}","type":"relates-to"}
@@ -236,6 +243,8 @@
 {"created_at":"2026-03-03T10:36:01Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-d5wt","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T09:20:43Z","created_by":"TheFermiSea","depends_on_id":"beefcake-mmn3","issue_id":"beefcake-d8cy","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-13T09:20:50Z","created_by":"TheFermiSea","depends_on_id":"beefcake-p9gc","issue_id":"beefcake-d8cy","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:35:39Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-d9w3","metadata":"{}","type":"relates-to"}
+{"created_at":"2026-03-15T14:36:34Z","created_by":"TheFermiSea","depends_on_id":"beefcake-v7sh","issue_id":"beefcake-d9w3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-06T22:02:48Z","created_by":"claude-code","depends_on_id":"beefcake-qqra","issue_id":"beefcake-df7i","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-06T22:02:55Z","created_by":"claude-code","depends_on_id":"beefcake-v78z","issue_id":"beefcake-df7i","metadata":"{}","type":"blocks"}
 {"created_at":"2026-02-18T10:43:13Z","created_by":"claude-code","depends_on_id":"beefcake-6ws","issue_id":"beefcake-dhm","metadata":"{}","type":"blocks"}
@@ -247,6 +256,7 @@
 {"created_at":"2026-02-20T14:17:56Z","created_by":"claude-code","depends_on_id":"beefcake-50d","issue_id":"beefcake-e5b","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-06T22:02:55Z","created_by":"claude-code","depends_on_id":"beefcake-28f1","issue_id":"beefcake-e773","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-06T22:02:48Z","created_by":"claude-code","depends_on_id":"beefcake-qqra","issue_id":"beefcake-e773","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:35:01Z","created_by":"TheFermiSea","depends_on_id":"beefcake-d9w3","issue_id":"beefcake-e8wk","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-14T16:41:45Z","created_by":"TheFermiSea","depends_on_id":"beefcake-v7sh","issue_id":"beefcake-e8wk","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:46:15Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-e9da","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-08T11:57:56Z","created_by":"TheFermiSea","depends_on_id":"beefcake-1axl","issue_id":"beefcake-ed41","metadata":"{}","type":"parent-child"}
@@ -298,9 +308,12 @@
 {"created_at":"2026-03-08T11:57:54Z","created_by":"TheFermiSea","depends_on_id":"beefcake-pl2l","issue_id":"beefcake-hcnr","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-08T11:57:54Z","created_by":"TheFermiSea","depends_on_id":"beefcake-pt6h","issue_id":"beefcake-hcnr","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-08T11:57:54Z","created_by":"TheFermiSea","depends_on_id":"beefcake-z7vk","issue_id":"beefcake-hcnr","metadata":"{}","type":"relates-to"}
+{"created_at":"2026-03-15T14:32:02Z","created_by":"TheFermiSea","depends_on_id":"beefcake-lv41","issue_id":"beefcake-hdvd","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:33:55Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tzye","issue_id":"beefcake-hdvd","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-15T10:50:02Z","created_by":"TheFermiSea","depends_on_id":"beefcake-1cpr","issue_id":"beefcake-hesd","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-15T10:46:23Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-hesd","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-09T11:05:21Z","created_by":"TheFermiSea","depends_on_id":"beefcake-u5dl","issue_id":"beefcake-hfwq","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:35:08Z","created_by":"TheFermiSea","depends_on_id":"beefcake-w70b.1","issue_id":"beefcake-hiiu","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-09T11:04:53Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tuuk","issue_id":"beefcake-hknc","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-09T11:04:42Z","created_by":"TheFermiSea","depends_on_id":"beefcake-iv5t","issue_id":"beefcake-hrxr","metadata":"{}","type":"blocks"}
 {"created_at":"2026-02-19T20:36:09Z","created_by":"claude-code","depends_on_id":"beefcake-d5u","issue_id":"beefcake-hx0","metadata":"{}","type":"relates-to"}
@@ -404,6 +417,7 @@
 {"created_at":"2026-03-03T10:34:20Z","created_by":"claude-code","depends_on_id":"beefcake-ujvt","issue_id":"beefcake-ljk9","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-02T20:40:31Z","created_by":"claude-code","depends_on_id":"beefcake-nhmh","issue_id":"beefcake-lpi4","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-14T16:41:18Z","created_by":"TheFermiSea","depends_on_id":"beefcake-v7sh","issue_id":"beefcake-lu8b","metadata":"{}","type":"relates-to"}
+{"created_at":"2026-03-15T14:34:03Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tzye","issue_id":"beefcake-lv41","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-15T10:49:10Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-m1jf","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-13T09:21:03Z","created_by":"TheFermiSea","depends_on_id":"beefcake-1vll","issue_id":"beefcake-m3cz","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T09:20:56Z","created_by":"TheFermiSea","depends_on_id":"beefcake-mmn3","issue_id":"beefcake-m3cz","metadata":"{}","type":"parent-child"}
@@ -412,6 +426,7 @@
 {"created_at":"2026-03-13T09:21:05Z","created_by":"TheFermiSea","depends_on_id":"beefcake-vd8c","issue_id":"beefcake-m3cz","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T16:33:32Z","created_by":"TheFermiSea","depends_on_id":"beefcake-28f1","issue_id":"beefcake-m609","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T16:31:40Z","created_by":"TheFermiSea","depends_on_id":"beefcake-w70b.3","issue_id":"beefcake-m609","metadata":"{}","type":"related"}
+{"created_at":"2026-03-15T14:35:21Z","created_by":"TheFermiSea","depends_on_id":"beefcake-w70b.1","issue_id":"beefcake-m6qi","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-15T11:50:13Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-m7c8","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-13T09:20:16Z","created_by":"TheFermiSea","depends_on_id":"beefcake-5ol5","issue_id":"beefcake-mmn3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-13T09:20:17Z","created_by":"TheFermiSea","depends_on_id":"beefcake-aruf","issue_id":"beefcake-mmn3","metadata":"{}","type":"relates-to"}
@@ -419,6 +434,8 @@
 {"created_at":"2026-03-13T09:20:09Z","created_by":"TheFermiSea","depends_on_id":"beefcake-frxr","issue_id":"beefcake-mmn3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-13T09:20:08Z","created_by":"TheFermiSea","depends_on_id":"beefcake-fzr5","issue_id":"beefcake-mmn3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-13T09:20:16Z","created_by":"TheFermiSea","depends_on_id":"beefcake-mtku","issue_id":"beefcake-mmn3","metadata":"{}","type":"relates-to"}
+{"created_at":"2026-03-15T14:32:34Z","created_by":"TheFermiSea","depends_on_id":"beefcake-2xge","issue_id":"beefcake-mtbn","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:34:34Z","created_by":"TheFermiSea","depends_on_id":"beefcake-d9w3","issue_id":"beefcake-mtbn","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-13T09:20:23Z","created_by":"TheFermiSea","depends_on_id":"beefcake-5ol5","issue_id":"beefcake-mtku","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T09:20:16Z","created_by":"TheFermiSea","depends_on_id":"beefcake-mmn3","issue_id":"beefcake-mtku","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-06T22:20:44Z","created_by":"TheFermiSea","depends_on_id":"beefcake-hovk","issue_id":"beefcake-mzfp","metadata":"{}","type":"blocks"}
@@ -426,6 +443,7 @@
 {"created_at":"2026-03-15T10:48:56Z","created_by":"TheFermiSea","depends_on_id":"beefcake-1cpr","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T11:50:20Z","created_by":"TheFermiSea","depends_on_id":"beefcake-9f04","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:49:04Z","created_by":"TheFermiSea","depends_on_id":"beefcake-b6ol","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
+{"created_at":"2026-03-15T14:35:39Z","created_by":"TheFermiSea","depends_on_id":"beefcake-d9w3","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:49:25Z","created_by":"TheFermiSea","depends_on_id":"beefcake-e0jh","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:46:15Z","created_by":"TheFermiSea","depends_on_id":"beefcake-e9da","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:49:19Z","created_by":"TheFermiSea","depends_on_id":"beefcake-g78x","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
@@ -501,6 +519,7 @@
 {"created_at":"2026-03-03T10:34:00Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-qmrg","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-03T10:34:16Z","created_by":"claude-code","depends_on_id":"beefcake-ujvt","issue_id":"beefcake-qmrg","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-03T10:33:59Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-qwaq","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:35:31Z","created_by":"TheFermiSea","depends_on_id":"beefcake-v7sh","issue_id":"beefcake-qyos","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-03T10:36:01Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-qze7","metadata":"{}","type":"blocks"}
 {"created_at":"2026-02-20T13:41:06Z","created_by":"claude-code","depends_on_id":"beefcake-5od","issue_id":"beefcake-rl0","metadata":"{}","type":"blocks"}
 {"created_at":"2026-02-20T13:41:06Z","created_by":"claude-code","depends_on_id":"beefcake-coz","issue_id":"beefcake-rl0","metadata":"{}","type":"blocks"}
@@ -629,10 +648,12 @@
 {"created_at":"2026-03-14T16:43:33Z","created_by":"TheFermiSea","depends_on_id":"beefcake-1hmj","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-14T16:41:11Z","created_by":"TheFermiSea","depends_on_id":"beefcake-600a","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-14T16:41:31Z","created_by":"TheFermiSea","depends_on_id":"beefcake-ckge","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
+{"created_at":"2026-03-15T14:36:34Z","created_by":"TheFermiSea","depends_on_id":"beefcake-d9w3","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-14T16:41:45Z","created_by":"TheFermiSea","depends_on_id":"beefcake-e8wk","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-14T16:41:23Z","created_by":"TheFermiSea","depends_on_id":"beefcake-f83h","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-14T16:43:03Z","created_by":"TheFermiSea","depends_on_id":"beefcake-lheg","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-14T16:41:18Z","created_by":"TheFermiSea","depends_on_id":"beefcake-lu8b","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
+{"created_at":"2026-03-15T14:35:31Z","created_by":"TheFermiSea","depends_on_id":"beefcake-qyos","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-14T16:41:38Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tkq6","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-14T16:43:09Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tr9b","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-14T16:43:25Z","created_by":"TheFermiSea","depends_on_id":"beefcake-va1d","issue_id":"beefcake-v7sh","metadata":"{}","type":"relates-to"}
@@ -726,12 +747,19 @@
 {"created_at":"2026-03-07T12:45:41Z","created_by":"TheFermiSea","depends_on_id":"beefcake-t0zx","issue_id":"beefcake-xxzv","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-07T12:45:41Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tuck","issue_id":"beefcake-xxzv","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-07T12:45:42Z","created_by":"TheFermiSea","depends_on_id":"beefcake-voyy","issue_id":"beefcake-xxzv","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:32:51Z","created_by":"TheFermiSea","depends_on_id":"beefcake-2xge","issue_id":"beefcake-ydpa","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:34:52Z","created_by":"TheFermiSea","depends_on_id":"beefcake-d9w3","issue_id":"beefcake-ydpa","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-09T11:06:22Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tuuk","issue_id":"beefcake-yj2v","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-06T22:20:52Z","created_by":"TheFermiSea","depends_on_id":"beefcake-flbd","issue_id":"beefcake-yu1k","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:32:10Z","created_by":"TheFermiSea","depends_on_id":"beefcake-lv41","issue_id":"beefcake-yu7x","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:33:48Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tzye","issue_id":"beefcake-yu7x","metadata":"{}","type":"parent-child"}
+{"created_at":"2026-03-15T14:34:43Z","created_by":"TheFermiSea","depends_on_id":"beefcake-d9w3","issue_id":"beefcake-z37f","metadata":"{}","type":"parent-child"}
+{"created_at":"2026-03-15T14:32:43Z","created_by":"TheFermiSea","depends_on_id":"beefcake-zdv2","issue_id":"beefcake-z37f","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-08T11:57:54Z","created_by":"TheFermiSea","depends_on_id":"beefcake-hcnr","issue_id":"beefcake-z7vk","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-03T08:19:23Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-z9jj","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-03T10:36:01Z","created_by":"claude-code","depends_on_id":"beefcake-i4y2","issue_id":"beefcake-z9jj","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-03T10:36:01Z","created_by":"claude-code","depends_on_id":"beefcake-qze7","issue_id":"beefcake-z9jj","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T14:34:20Z","created_by":"TheFermiSea","depends_on_id":"beefcake-d9w3","issue_id":"beefcake-zdv2","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-08T11:57:37Z","created_by":"TheFermiSea","depends_on_id":"beefcake-a6ho","issue_id":"beefcake-zm3h","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-08T09:31:38Z","created_by":"TheFermiSea","depends_on_id":"beefcake-28f1","issue_id":"beefcake-zse3","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-08T09:30:51Z","created_by":"TheFermiSea","depends_on_id":"beefcake-4omk","issue_id":"beefcake-zse3","metadata":"{}","type":"parent-child"}
