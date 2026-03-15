@@ -14,8 +14,8 @@ use crate::tools::bundles::{self, WorkerRole};
 /// Type alias for agents built from OpenAI-compatible endpoints.
 pub type OaiAgent = Agent<openai::completion::CompletionModel>;
 
-const DEFAULT_WORKER_MAX_TURNS: usize = 15;
-const DEFAULT_REASONING_MAX_TURNS: usize = 15;
+const DEFAULT_WORKER_MAX_TURNS: usize = 50;
+const DEFAULT_REASONING_MAX_TURNS: usize = 50;
 
 /// Default temperature for worker agents.
 ///

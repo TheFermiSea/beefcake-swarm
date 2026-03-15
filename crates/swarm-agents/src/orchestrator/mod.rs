@@ -50,7 +50,7 @@ use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 /// Set high enough for slow local models (2 min/turn on 122B expert-offload).
 /// With the RepoMap in the prompt, workers should need fewer exploration turns,
 /// but we give generous budget to avoid premature timeout.
-const WORKER_MAX_TURNS_WITHOUT_WRITE: usize = 20;
+const WORKER_MAX_TURNS_WITHOUT_WRITE: usize = 40;
 
 /// Error message produced when cooperative cancellation fires inside the main loop.
 ///
