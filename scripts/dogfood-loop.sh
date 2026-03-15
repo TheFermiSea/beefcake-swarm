@@ -138,11 +138,44 @@ run_issue() {
   local issue_title issue_args=()
   local run_start run_end elapsed exit_code
 
-  # Fetch title + description from beads for the objective
+  # Fetch title + description from beads for the objective.
   # Including the description gives find_target_files_by_grep more identifiers
   # to search for (e.g., "edit_file", "verifier") beyond just the title.
-  issue_title=$("$ISSUE_QUERY_BIN" show "$issue_id" --json 2>/dev/null | parse_bdh_json field title 1000 2>/dev/null || echo "Issue $issue_id")
-  issue_desc=$("$ISSUE_QUERY_BIN" show "$issue_id" --json 2>/dev/null | parse_bdh_json field description 300 2>/dev/null || echo "")
+  # Try bdh first, fall back to JSONL backup if bdh/bd fails (Dolt server issues).
+  issue_title=$("$ISSUE_QUERY_BIN" show "$issue_id" --json 2>/dev/null | parse_bdh_json field title 1000 2>/dev/null)
+  if [[ -z "$issue_title" || "$issue_title" == "Issue $issue_id" ]]; then
+    # Fall back to JSONL backup (always available, no Dolt needed)
+    local jsonl_path="${REPO_ROOT}/.beads/backup/issues.jsonl"
+    if [[ -f "$jsonl_path" ]]; then
+      issue_title=$(python3 -c "
+import json, sys
+with open('$jsonl_path') as f:
+    for line in f:
+        issue = json.loads(line)
+        if issue.get('id') == '$issue_id':
+            print(issue.get('title', ''))
+            break
+" 2>/dev/null)
+    fi
+  fi
+  issue_title="${issue_title:-Issue $issue_id}"
+
+  issue_desc=$("$ISSUE_QUERY_BIN" show "$issue_id" --json 2>/dev/null | parse_bdh_json field description 300 2>/dev/null)
+  if [[ -z "$issue_desc" ]]; then
+    local jsonl_path="${REPO_ROOT}/.beads/backup/issues.jsonl"
+    if [[ -f "$jsonl_path" ]]; then
+      issue_desc=$(python3 -c "
+import json, sys
+with open('$jsonl_path') as f:
+    for line in f:
+        issue = json.loads(line)
+        if issue.get('id') == '$issue_id':
+            desc = issue.get('description', '')
+            print(desc[:300] if desc else '')
+            break
+" 2>/dev/null)
+    fi
+  fi
   if [[ -n "$issue_desc" ]]; then
     issue_objective="${issue_title}. ${issue_desc}"
   else
