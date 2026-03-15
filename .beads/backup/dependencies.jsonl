@@ -98,6 +98,7 @@
 {"created_at":"2026-02-20T14:18:03Z","created_by":"claude-code","depends_on_id":"beefcake-tk3","issue_id":"beefcake-90u","metadata":"{}","type":"blocks"}
 {"created_at":"2026-02-17T21:07:19Z","created_by":"claude-code","depends_on_id":"beefcake-swarm-393","issue_id":"beefcake-91g","metadata":"{}","type":"blocks"}
 {"created_at":"2026-02-17T21:06:45Z","created_by":"claude-code","depends_on_id":"beefcake-swarm-hf5","issue_id":"beefcake-91g","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T11:50:20Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-9f04","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-08T09:29:19Z","created_by":"TheFermiSea","depends_on_id":"beefcake-23y1","issue_id":"beefcake-9o82","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-08T09:29:29Z","created_by":"TheFermiSea","depends_on_id":"beefcake-3qbp","issue_id":"beefcake-9o82","metadata":"{}","type":"parent-child"}
 {"created_at":"2026-03-08T09:29:39Z","created_by":"TheFermiSea","depends_on_id":"beefcake-44if","issue_id":"beefcake-9o82","metadata":"{}","type":"parent-child"}
@@ -411,6 +412,7 @@
 {"created_at":"2026-03-13T09:21:05Z","created_by":"TheFermiSea","depends_on_id":"beefcake-vd8c","issue_id":"beefcake-m3cz","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T16:33:32Z","created_by":"TheFermiSea","depends_on_id":"beefcake-28f1","issue_id":"beefcake-m609","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-13T16:31:40Z","created_by":"TheFermiSea","depends_on_id":"beefcake-w70b.3","issue_id":"beefcake-m609","metadata":"{}","type":"related"}
+{"created_at":"2026-03-15T11:50:13Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-m7c8","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-13T09:20:16Z","created_by":"TheFermiSea","depends_on_id":"beefcake-5ol5","issue_id":"beefcake-mmn3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-13T09:20:17Z","created_by":"TheFermiSea","depends_on_id":"beefcake-aruf","issue_id":"beefcake-mmn3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-13T09:20:09Z","created_by":"TheFermiSea","depends_on_id":"beefcake-dj8a","issue_id":"beefcake-mmn3","metadata":"{}","type":"relates-to"}
@@ -422,6 +424,7 @@
 {"created_at":"2026-03-06T22:20:44Z","created_by":"TheFermiSea","depends_on_id":"beefcake-hovk","issue_id":"beefcake-mzfp","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-15T10:48:48Z","created_by":"TheFermiSea","depends_on_id":"beefcake-0exa","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:48:56Z","created_by":"TheFermiSea","depends_on_id":"beefcake-1cpr","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
+{"created_at":"2026-03-15T11:50:20Z","created_by":"TheFermiSea","depends_on_id":"beefcake-9f04","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:49:04Z","created_by":"TheFermiSea","depends_on_id":"beefcake-b6ol","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:49:25Z","created_by":"TheFermiSea","depends_on_id":"beefcake-e0jh","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:46:15Z","created_by":"TheFermiSea","depends_on_id":"beefcake-e9da","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
@@ -431,9 +434,11 @@
 {"created_at":"2026-03-15T10:46:46Z","created_by":"TheFermiSea","depends_on_id":"beefcake-jx0l","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:46:56Z","created_by":"TheFermiSea","depends_on_id":"beefcake-jy8t","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:49:10Z","created_by":"TheFermiSea","depends_on_id":"beefcake-m1jf","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
+{"created_at":"2026-03-15T11:50:13Z","created_by":"TheFermiSea","depends_on_id":"beefcake-m7c8","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:59:29Z","created_by":"TheFermiSea","depends_on_id":"beefcake-pd6u","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:49:32Z","created_by":"TheFermiSea","depends_on_id":"beefcake-pvne","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:46:32Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tkq6","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
+{"created_at":"2026-03-15T11:50:04Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tzye","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-15T10:46:09Z","created_by":"TheFermiSea","depends_on_id":"beefcake-uj1g","issue_id":"beefcake-n3m3","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-06T22:02:55Z","created_by":"claude-code","depends_on_id":"beefcake-ni1i","issue_id":"beefcake-n98h","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-06T22:02:48Z","created_by":"claude-code","depends_on_id":"beefcake-qqra","issue_id":"beefcake-n98h","metadata":"{}","type":"blocks"}
@@ -602,6 +607,7 @@
 {"created_at":"2026-03-03T10:36:00Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-tplh","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-14T16:43:09Z","created_by":"TheFermiSea","depends_on_id":"beefcake-v7sh","issue_id":"beefcake-tr9b","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-03-03T10:36:00Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-tu3q","metadata":"{}","type":"blocks"}
+{"created_at":"2026-03-15T11:50:04Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-tzye","metadata":"{}","type":"relates-to"}
 {"created_at":"2026-02-20T13:41:05Z","created_by":"claude-code","depends_on_id":"beefcake-5od","issue_id":"beefcake-u1u","metadata":"{}","type":"blocks"}
 {"created_at":"2026-02-20T13:41:06Z","created_by":"claude-code","depends_on_id":"beefcake-ixv","issue_id":"beefcake-u1u","metadata":"{}","type":"blocks"}
 {"created_at":"2026-03-08T11:57:56Z","created_by":"TheFermiSea","depends_on_id":"beefcake-1axl","issue_id":"beefcake-u3qm","metadata":"{}","type":"parent-child"}
