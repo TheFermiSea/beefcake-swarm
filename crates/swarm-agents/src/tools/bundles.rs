@@ -186,6 +186,10 @@ pub fn kernel_strategy_tools(
     verifier_packages: &[String],
     proxy: bool,
 ) -> Vec<Box<dyn ToolDyn>> {
+    // Manager gets ONLY coordination/observation tools — NO search tools.
+    // Search tools (search_code, colgrep, ast_grep) belong exclusively in
+    // process_tactical_tools() for workers. The manager MUST delegate all
+    // code exploration to workers via proxy_rust_coder/proxy_general_coder.
     if proxy {
         vec![
             Box::new(ProxyRunVerifier(
@@ -193,18 +197,12 @@ pub fn kernel_strategy_tools(
             )),
             Box::new(ProxyGetDiff(GetDiffTool::new(wt_path))),
             Box::new(ProxyListChangedFiles(ListChangedFilesTool::new(wt_path))),
-            Box::new(ProxySearchCode(SearchCodeTool::new(wt_path))),
-            Box::new(ProxyColGrep(ColGrepTool::new(wt_path))),
-            Box::new(ProxyAstGrep(AstGrepTool::new(wt_path))),
         ]
     } else {
         vec![
             Box::new(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec())),
             Box::new(GetDiffTool::new(wt_path)),
             Box::new(ListChangedFilesTool::new(wt_path)),
-            Box::new(SearchCodeTool::new(wt_path)),
-            Box::new(ColGrepTool::new(wt_path)),
-            Box::new(AstGrepTool::new(wt_path)),
         ]
     }
 }
@@ -359,11 +357,11 @@ mod tests {
     fn test_manager_local_has_strategy_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], false);
-        // verifier, get_diff, list_changed_files + search_code, colgrep, astgrep = 6
+        // verifier, get_diff, list_changed_files = 3 (no search tools — manager must delegate)
         assert_eq!(
             tools.len(),
-            6,
-            "Local manager should have 6 strategy tools (verifier, get_diff, list_changed_files, search_code, colgrep, astgrep)"
+            3,
+            "Local manager should have 3 strategy tools (verifier, get_diff, list_changed_files)"
         );
     }
 
@@ -371,7 +369,7 @@ mod tests {
     fn test_manager_cloud_has_strategy_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], true);
-        assert_eq!(tools.len(), 6, "Cloud manager should have 6 strategy tools");
+        assert_eq!(tools.len(), 3, "Cloud manager should have 3 strategy tools (verifier, diff, changed_files)");
     }
 
     #[test]
@@ -401,6 +399,22 @@ mod tests {
                     .iter()
                     .any(|n| n.contains("write") || n.contains("edit")),
                 "Manager (proxy={proxy}) should not have write/edit tools, got: {names:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_manager_no_search_tools() {
+        let dir = tempfile::tempdir().unwrap();
+        // Manager must delegate ALL code exploration to workers.
+        for proxy in [false, true] {
+            let tools = manager_tools(dir.path(), &[], proxy);
+            let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
+            assert!(
+                !names
+                    .iter()
+                    .any(|n| n.contains("search_code") || n.contains("colgrep") || n.contains("ast_grep")),
+                "Manager (proxy={proxy}) must not have search tools — delegate to workers, got: {names:?}"
             );
         }
     }
@@ -487,26 +501,23 @@ mod tests {
     fn test_kernel_strategy_tools_local() {
         let dir = tempfile::tempdir().unwrap();
         let tools = kernel_strategy_tools(dir.path(), &[], false);
-        // verifier, get_diff, list_changed_files + search_code, colgrep, astgrep = 6
+        // verifier, get_diff, list_changed_files = 3 (no search tools — manager must delegate)
         assert_eq!(
             tools.len(),
-            6,
-            "Strategy bundle: verifier, get_diff, list_changed_files, search_code, colgrep, astgrep"
+            3,
+            "Strategy bundle: verifier, get_diff, list_changed_files (no search tools)"
         );
         let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
         assert!(names.iter().any(|n| n.contains("verifier")));
         assert!(names.iter().any(|n| n.contains("get_diff")));
         assert!(names.iter().any(|n| n.contains("list_changed_files")));
-        assert!(names.iter().any(|n| n.contains("search_code")));
-        assert!(names.iter().any(|n| n.contains("colgrep")));
-        assert!(names.iter().any(|n| n.contains("ast_grep")));
     }
 
     #[test]
     fn test_kernel_strategy_tools_proxy() {
         let dir = tempfile::tempdir().unwrap();
         let tools = kernel_strategy_tools(dir.path(), &["pkg".to_string()], true);
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 3);
         for tool in &tools {
             assert!(
                 tool.name().starts_with("proxy_"),
