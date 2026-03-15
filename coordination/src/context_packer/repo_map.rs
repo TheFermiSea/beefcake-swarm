@@ -48,11 +48,7 @@ struct ScoredFile {
 /// * `worktree_root` — Path to the worktree to map
 /// * `objective` — Issue objective text (used for keyword relevance scoring)
 /// * `char_budget` — Maximum characters for the map (0 = default 8000)
-pub fn generate_repo_map(
-    worktree_root: &Path,
-    objective: &str,
-    char_budget: usize,
-) -> String {
+pub fn generate_repo_map(worktree_root: &Path, objective: &str, char_budget: usize) -> String {
     let budget = if char_budget == 0 {
         DEFAULT_CHAR_BUDGET
     } else {
@@ -113,10 +109,7 @@ pub fn generate_repo_map(
                 };
 
                 // Get the module name (first segment before :: or {)
-                let module = after
-                    .split([':', '{', ';', ' '])
-                    .next()
-                    .unwrap_or("");
+                let module = after.split([':', '{', ';', ' ']).next().unwrap_or("");
 
                 if !module.is_empty() {
                     *import_counts.entry(module.to_string()).or_insert(0) += 1;
@@ -139,11 +132,7 @@ pub fn generate_repo_map(
         let import_score = *import_counts.get(&module_stem).unwrap_or(&0) as f64;
 
         // Public symbol count score
-        let pub_count = index
-            .symbols
-            .iter()
-            .filter(|s| s.is_public)
-            .count() as f64;
+        let pub_count = index.symbols.iter().filter(|s| s.is_public).count() as f64;
 
         // Keyword relevance score — does the file path or any symbol name
         // match words from the issue objective?
@@ -172,7 +161,11 @@ pub fn generate_repo_map(
     }
 
     // Sort by score descending
-    scored_files.sort_by(|a, b| b.score.partial_cmp(&a.score).unwrap_or(std::cmp::Ordering::Equal));
+    scored_files.sort_by(|a, b| {
+        b.score
+            .partial_cmp(&a.score)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
 
     // Build the map within budget
     format_repo_map(&scored_files, budget)
@@ -188,11 +181,7 @@ fn format_repo_map(scored_files: &[ScoredFile], char_budget: usize) -> String {
     let mut dir_map: HashMap<&str, usize> = HashMap::new();
 
     for sf in scored_files {
-        let dir = sf
-            .path
-            .find('/')
-            .map(|i| &sf.path[..i])
-            .unwrap_or(".");
+        let dir = sf.path.find('/').map(|i| &sf.path[..i]).unwrap_or(".");
 
         if let Some(&idx) = dir_map.get(dir) {
             by_dir[idx].1.push(sf);
