@@ -435,7 +435,12 @@ impl Tool for EditFileTool {
             None => {
                 return Err(ToolError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
-                    "edit_file: either old_content or both anchor_start and anchor_end required.",
+                    "edit_file: old_content is required. To INSERT new lines, include surrounding \
+                     context lines in BOTH old_content and new_content. Example — to add Ok(()) \
+                     before a closing brace:\n\
+                     old_content: \"    assert_eq!(x, 1);\\n    }\\n}\"\n\
+                     new_content: \"    assert_eq!(x, 1);\\n\\n        Ok(())\\n    }\\n}\"\n\
+                     Alternatively, use anchor_start and anchor_end (hashline anchors from read_file).",
                 )));
             }
         };
