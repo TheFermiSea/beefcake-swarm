@@ -756,11 +756,19 @@ async fn process_issue_core(
 
     // --- Baseline verification (autoresearch pattern) ---
     //
-    // Run the verifier on the clean worktree before the agent touches anything.
-    // If the baseline is broken (main doesn't pass), skip this issue — don't
-    // waste iterations trying to fix pre-existing failures.
+    // Run a lightweight check on the clean worktree before the agent touches anything.
+    // Only checks compilation (fmt + clippy + check) — NOT tests, since worktree
+    // environment differences (symlinked .beads/, bdh init) can cause test flakes
+    // that don't reflect actual code problems.
     {
-        let baseline_verifier = Verifier::new(&wt_path, verifier_config.clone());
+        let baseline_config = VerifierConfig {
+            check_fmt: true,
+            check_clippy: true,
+            check_compile: true,
+            check_test: false, // Skip tests — worktree env can cause false failures
+            ..verifier_config.clone()
+        };
+        let baseline_verifier = Verifier::new(&wt_path, baseline_config);
         let baseline_report = baseline_verifier.run_pipeline().await;
         let gates_passed = baseline_report
             .gates
