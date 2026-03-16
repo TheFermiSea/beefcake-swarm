@@ -42,10 +42,19 @@ log() { echo "[deploy] $*"; }
 # ── Step 1: Stop existing processes ──
 log "Stopping existing dogfood processes on ai-proxy..."
 ssh "$PROXY_HOST" "
+  # Kill dogfood loop shells
   pkill -9 -f dogfood-loop 2>/dev/null || true
-  sleep 1
-  # Also kill any orphaned swarm-agents binaries
+  # Kill swarm-agents binaries (multiple patterns for reliability)
+  pkill -9 -f 'swarm-agents.*--issue' 2>/dev/null || true
   pkill -9 -f 'target.*swarm-agents' 2>/dev/null || true
+  pkill -9 -f 'beefcake-shared-target.*swarm' 2>/dev/null || true
+  sleep 2
+  # Verify nothing survived
+  REMAINING=\$(pgrep -f 'swarm-agents' 2>/dev/null | wc -l)
+  if [ \"\$REMAINING\" -gt 0 ]; then
+    echo \"WARNING: \$REMAINING swarm processes still alive after pkill\"
+    pgrep -af 'swarm-agents' 2>/dev/null || true
+  fi
   rm -f /tmp/dogfood-loop.lock
   # Clean stale worktrees
   rm -rf /tmp/beefcake-wt/beefcake-* 2>/dev/null || true

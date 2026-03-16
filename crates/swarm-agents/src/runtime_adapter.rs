@@ -1245,15 +1245,25 @@ mod tests {
         );
         assert_eq!(RuntimeAdapter::classify_tool("planner"), ToolClass::Action);
 
-        // Neutral tools
+        // Read-like tools (search, exploration, commands)
         assert_eq!(
             RuntimeAdapter::classify_tool("run_command"),
-            ToolClass::Neutral
+            ToolClass::ReadOnly
         );
         assert_eq!(
             RuntimeAdapter::classify_tool("proxy_run_command"),
-            ToolClass::Neutral
+            ToolClass::ReadOnly
         );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("search_code"),
+            ToolClass::ReadOnly
+        );
+        assert_eq!(
+            RuntimeAdapter::classify_tool("ast_grep"),
+            ToolClass::ReadOnly
+        );
+
+        // Neutral tools (truly unknown)
         assert_eq!(
             RuntimeAdapter::classify_tool("unknown_tool"),
             ToolClass::Neutral

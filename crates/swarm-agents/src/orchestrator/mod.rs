@@ -47,10 +47,11 @@ use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 /// Worker write deadline budget. Allows enough read turns to gather context
 /// before forcing an edit_file/write_file action.
 ///
-/// Set high enough for slow local models (2 min/turn on 122B expert-offload).
-/// With the RepoMap in the prompt, workers should need fewer exploration turns,
-/// but we give generous budget to avoid premature timeout.
-const WORKER_MAX_TURNS_WITHOUT_WRITE: usize = 40;
+/// The compact prompt inlines the target file content, so the worker should
+/// need at most 2-3 reads before editing. 8 turns gives headroom for complex
+/// tasks that need to read multiple files. On the 122B model (~2 min/turn),
+/// this is a ~16 min budget before the write-deadline terminates the agent.
+const WORKER_MAX_TURNS_WITHOUT_WRITE: usize = 8;
 
 /// Error message produced when cooperative cancellation fires inside the main loop.
 ///
@@ -1113,7 +1114,7 @@ async fn process_issue_core(
                         let adapter = RuntimeAdapter::new(AdapterConfig {
                             agent_name: "Qwen3.5-RustCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
-                            max_tool_calls: Some(30),
+                            max_tool_calls: Some(15),
                             max_turns_without_write: Some(WORKER_MAX_TURNS_WITHOUT_WRITE),
                             ..Default::default()
                         });
@@ -1148,7 +1149,7 @@ async fn process_issue_core(
                         let adapter = RuntimeAdapter::new(AdapterConfig {
                             agent_name: "Qwen3.5-GeneralCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
-                            max_tool_calls: Some(30),
+                            max_tool_calls: Some(15),
                             max_turns_without_write: Some(WORKER_MAX_TURNS_WITHOUT_WRITE),
                             ..Default::default()
                         });

@@ -387,7 +387,13 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
         let target_path = wt_root.join(&target_files[0]);
         if let Ok(content) = std::fs::read_to_string(&target_path) {
             let truncated = if content.len() > 4000 {
-                format!("{}...\n[truncated at 4000 chars]", &content[..4000])
+                // Find the nearest char boundary at or before 4000 to avoid
+                // panicking on multi-byte UTF-8 (e.g. em dash '─' is 3 bytes).
+                let mut end = 4000;
+                while end > 0 && !content.is_char_boundary(end) {
+                    end -= 1;
+                }
+                format!("{}...\n[truncated at {end} chars]", &content[..end])
             } else {
                 content
             };
