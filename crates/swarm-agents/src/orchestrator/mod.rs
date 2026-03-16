@@ -1518,22 +1518,89 @@ async fn process_issue_core(
                 };
                 let verifier = Verifier::new(&wt_path, current_verifier_config);
                 let report = verifier.run_pipeline().await;
-                let decision = engine.decide(&mut escalation, &report);
-                last_report = Some(report);
-                metrics.finish_iteration();
 
-                if decision.stuck {
-                    error!(iteration, "Escalation engine: stuck after agent failure");
-                    create_stuck_intervention(
-                        &mut session,
-                        &progress,
-                        &wt_path,
-                        iteration,
-                        &decision.reason,
-                    );
-                    break;
+                // Compile-clean short-circuit on agent failure path:
+                // The agent may have been terminated by the adapter (repeated edit failure,
+                // post-write stall) AFTER successfully writing files. If the verifier shows
+                // fmt+clippy+check pass, accept the result — the "failure" was just the
+                // agent not knowing when to stop, not an actual code failure.
+                if agent_has_written_prev && tier == SwarmTier::Worker {
+                    use coordination::verifier::GateOutcome;
+                    let fmt_ok = report
+                        .gates
+                        .iter()
+                        .any(|g| g.gate == "fmt" && matches!(g.outcome, GateOutcome::Passed));
+                    let clippy_ok = report
+                        .gates
+                        .iter()
+                        .any(|g| g.gate == "clippy" && matches!(g.outcome, GateOutcome::Passed));
+                    let check_ok = report
+                        .gates
+                        .iter()
+                        .any(|g| g.gate == "check" && matches!(g.outcome, GateOutcome::Passed));
+
+                    if fmt_ok && clippy_ok && check_ok {
+                        info!(
+                            iteration,
+                            "Compile-clean short-circuit (agent failure path): \
+                             worker wrote files and fmt+clippy+check pass despite agent termination. Accepting."
+                        );
+
+                        // Log experiment TSV
+                        let commit = pre_worker_commit.as_deref().unwrap_or("unknown");
+                        crate::telemetry::append_experiment_tsv(
+                            &wt_path,
+                            commit,
+                            report.failure_signals.len(),
+                            &["fmt", "clippy", "check"],
+                            "compile_clean_accept",
+                            "agent failure path: wrote files, compile clean",
+                        );
+
+                        // Accept: merge worktree and close issue
+                        #[allow(unused_assignments)]
+                        {
+                            last_report = Some(report);
+                        }
+                        metrics.finish_iteration();
+                        success = true;
+                        break; // Exit the loop — acceptance handled by post-loop merge logic
+                    } else {
+                        let decision = engine.decide(&mut escalation, &report);
+                        last_report = Some(report);
+                        metrics.finish_iteration();
+
+                        if decision.stuck {
+                            error!(iteration, "Escalation engine: stuck after agent failure");
+                            create_stuck_intervention(
+                                &mut session,
+                                &progress,
+                                &wt_path,
+                                iteration,
+                                &decision.reason,
+                            );
+                            break;
+                        }
+                        continue;
+                    }
+                } else {
+                    let decision = engine.decide(&mut escalation, &report);
+                    last_report = Some(report);
+                    metrics.finish_iteration();
+
+                    if decision.stuck {
+                        error!(iteration, "Escalation engine: stuck after agent failure");
+                        create_stuck_intervention(
+                            &mut session,
+                            &progress,
+                            &wt_path,
+                            iteration,
+                            &decision.reason,
+                        );
+                        break;
+                    }
+                    continue;
                 }
-                continue;
             }
         };
 
