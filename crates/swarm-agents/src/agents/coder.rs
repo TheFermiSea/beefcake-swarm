@@ -14,8 +14,10 @@ use crate::tools::bundles::{self, WorkerRole};
 /// Type alias for agents built from OpenAI-compatible endpoints.
 pub type OaiAgent = Agent<openai::completion::CompletionModel>;
 
-const DEFAULT_WORKER_MAX_TURNS: usize = 50;
-const DEFAULT_REASONING_MAX_TURNS: usize = 50;
+/// Worker sub-agents (agent-as-tool) don't have RuntimeAdapter hooks,
+/// so max_turns is their only loop guard. Keep it tight.
+const DEFAULT_WORKER_MAX_TURNS: usize = 15;
+const DEFAULT_REASONING_MAX_TURNS: usize = 20;
 
 /// Default temperature for worker agents.
 ///
