@@ -232,11 +232,11 @@ impl CloudFallbackMatrix {
         }
     }
 
-    /// Default matrix: Opus 4.6 thinking → Opus 4.6 → Gemini 3.1 Pro → Sonnet 4.6 → Flash.
+    /// Default matrix: Opus 4.6 → Gemini 3.1 Pro High → Sonnet 4.6 → Gemini 3.1 Flash Lite.
     ///
-    /// The thinking variant gives better planning for complex tasks. Gemini 3.1 Pro
-    /// has 2M context for whole-codebase understanding. Sonnet 4.6 is faster than
-    /// Opus for simpler delegation. Flash is the cheapest last resort.
+    /// Gemini 3.1 Pro has 2M context for whole-codebase understanding. Sonnet 4.6
+    /// is faster than Opus for simpler delegation. Gemini 3.1 Flash Lite is the
+    /// latest fast/cheap model for last-resort fallback.
     pub fn default_matrix() -> Self {
         Self {
             entries: vec![
@@ -256,7 +256,7 @@ impl CloudFallbackMatrix {
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "gemini-2.5-flash".to_string(),
+                    model: "gemini-3.1-flash-lite-preview".to_string(),
                     tier_label: "fallback-3".to_string(),
                     max_tokens: 4096,
                 },
@@ -610,7 +610,7 @@ impl SwarmConfig {
         Self {
             fast_endpoint: Endpoint {
                 url: proxy_url.clone(),
-                model: "gemini-2.5-flash".into(),
+                model: "gemini-3.1-flash-lite-preview".into(),
                 tier: Tier::Fast,
                 api_key: proxy_key.clone(),
             },
@@ -916,7 +916,7 @@ mod tests {
         assert_eq!(fallbacks.len(), 3);
         assert_eq!(fallbacks[0].model, "gemini-3.1-pro-high");
         assert_eq!(fallbacks[1].model, "claude-sonnet-4-6");
-        assert_eq!(fallbacks[2].model, "gemini-2.5-flash");
+        assert_eq!(fallbacks[2].model, "gemini-3.1-flash-lite-preview");
     }
 
     #[test]
