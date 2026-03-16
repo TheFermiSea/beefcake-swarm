@@ -240,11 +240,20 @@ pub(crate) async fn cloud_validate(
         diff
     };
 
-    let models = [
+    // Run 2-3 cloud models concurrently for diverse code review perspectives.
+    // Each model catches different bug classes. All run in parallel via tokio.
+    let mut models = vec![
         std::env::var("SWARM_VALIDATOR_MODEL_1")
             .unwrap_or_else(|_| "gemini-3.1-pro-preview".into()),
         std::env::var("SWARM_VALIDATOR_MODEL_2").unwrap_or_else(|_| "claude-sonnet-4-6".into()),
     ];
+    // Optional third validator — default to OpenAI's code-specialized model.
+    // Disable with SWARM_VALIDATOR_MODEL_3="" (empty string).
+    match std::env::var("SWARM_VALIDATOR_MODEL_3") {
+        Ok(m) if m.trim().is_empty() => {} // explicitly disabled
+        Ok(m) => models.push(m),
+        Err(_) => models.push("gpt-5.2-codex".into()),
+    }
 
     let review_prompt = build_reviewer_prompt(&diff_for_review);
     let validation_timeout = timeout_from_env(

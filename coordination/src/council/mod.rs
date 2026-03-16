@@ -45,20 +45,20 @@ pub enum CouncilError {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CouncilRole {
-    /// Librarian: Repository context and code understanding (Gemini 3 Pro)
+    /// Librarian: Repository context and code understanding (Gemini 3.1 Pro, 2M context)
     Librarian,
-    /// Architect: Design decisions and safety contracts (Claude Opus 4.5)
+    /// Architect: Design decisions and safety contracts (Claude Opus 4.6)
     Architect,
-    /// Strategist: Reasoning, planning, task decomposition (Qwen3.5)
+    /// Strategist: Reasoning, planning, task decomposition (GPT-5.2 Codex)
     Strategist,
 }
 
 impl CouncilRole {
     pub fn model_name(&self) -> &'static str {
         match self {
-            Self::Librarian => "gemini-3-pro",
-            Self::Architect => "claude-opus-4-5",
-            Self::Strategist => "qwen3.5-397b",
+            Self::Librarian => "gemini-3.1-pro-preview",
+            Self::Architect => "claude-opus-4-6",
+            Self::Strategist => "gpt-5.2-codex",
         }
     }
 
