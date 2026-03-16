@@ -4,10 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Model Selection & Routing
 
-- **Local Independent Instances (March 2026):**
-  - **Scout/Fast:** Qwen3.5-27B-Opus-Distilled Q4_K_M (vasp-03:8081) — distilled from Claude 4.6 Opus reasoning, VRAM-resident, 65K context, ~34 tok/s.
-  - **Coder:** Qwen3.5-122B-A10B MoE (vasp-01:8081) — independent instance, expert-offload, 65K context, ~5-8 tok/s.
-  - **Reasoning:** Qwen3.5-122B-A10B MoE (vasp-02:8081) — independent instance, expert-offload, 65K context, ~5-8 tok/s.
+- **Rust/Code Tasks:** All three compute nodes run **Qwen3.5-397B-A17B** (Q4_K_M, --parallel 2 each, 6 total slots):
+  - Fast/Scout: vasp-03:8081 (`/ask-local "Qwen3.5-397B-A17B" "..."`)
+  - Coder: vasp-01:8081
+  - Reasoning/Planning: vasp-02:8081
 - **General/Complex:** Claude Opus 4.6 / Sonnet 4.6 (default).
 - **Research:** Always check **NotebookLM** first using `/ask-notebook` or `notebook_query`.
 
@@ -41,7 +41,7 @@ Key modules:
 - `escalation/` — Tier routing state machine. Triggers: error repeat 2x → escalate, >3 compile failures → escalate, >8 files changed → Cloud.
 - `feedback/` — Compilation error correction loop with tiered escalation. Runs compiler, parses errors, routes to appropriate model tier.
 - `ensemble/` — Multi-model coordination: submit task → execute all models sequentially (load/run/store/unload) → voting (majority/weighted/unanimous) → arbitration if tie. Uses RocksDB for state persistence.
-- `council/` — Cloud AI escalation adapter. Three members: Librarian (gemini-3.1-pro-preview), Architect (claude-opus-4-6), Strategist (gpt-5.2-codex). Queries concurrently, synthesizes weighted decision.
+- `council/` — Cloud AI escalation adapter. Three members: Librarian (Gemini 3 Pro), Architect (Claude Sonnet 4), Manager (GPT-4o). Queries concurrently, synthesizes weighted decision.
 - `harness/` — Agent session management (Anthropic patterns): session state persistence, git checkpoints/rollback, feature registry, sub-session delegation, human intervention requests.
 - `slurm/` — SLURM inference lifecycle (1.3k LOC): job submission, health checks (TCP+HTTP), endpoint discovery via NFS JSON, recovery state machine, preemption handling.
 - `router/` — Task classification: type mismatch/imports → Strand (fast), borrow/lifetimes/traits → Hydra → OR1, complex/multi-file → OR1 (reasoning).
@@ -53,23 +53,19 @@ Key modules:
 1. Pick highest-priority beads issue (or CLI `--issue`)
 2. Create Gastown worktree in `/tmp/beefcake-wt/<issue-id>`
 3. Cloud manager (Claude Opus 4.6 via CLIAPIProxy) plans and delegates
-4. Local workers (Qwen3.5-27B-Opus-Distilled on vasp-03, Qwen3.5-122B on vasp-01 + vasp-02) execute code changes
-5. Verifier (deterministic quality gates, cargo fmt runs before verifier in agent failure path) after each iteration
+4. Local workers (Qwen3.5-397B on all 3 nodes) execute code changes
+5. Verifier (deterministic quality gates) after each iteration
 6. Pass → merge + close issue; Fail → retry up to `SWARM_MAX_RETRIES`
 
 ### Escalation Ladder
 
 ```text
-Cloud Manager (claude-opus-4-6 thinking via CLIAPIProxy, max 10 iterations)
-    → fallback chain: opus-4-6 → gemini-3.1-pro-high → claude-sonnet-4-6 → gemini-3.1-flash-lite-preview
-    → delegates to local workers (2026 Independent Instances):
-        vasp-03:8081 — Scout/Fast tier (Qwen3.5-27B-Opus-Distilled Q4_K_M, 65K context, ~34 tok/s, VRAM-resident)
-        vasp-01:8081 — Coder tier (Qwen3.5-122B-A10B MoE, 65K context, ~5-8 tok/s, expert-offload)
-        vasp-02:8081 — Reasoning tier (Qwen3.5-122B-A10B MoE, 65K context, ~5-8 tok/s, expert-offload)
-    → runs verifier after each worker completes (cargo fmt before verifier in failure path)
-    → 3-model concurrent cloud validation: gemini-3.1-pro-preview + claude-sonnet-4-6 + gpt-5.2-codex
-    → worker budgets: max_turns_without_write=8, max_tool_calls=15
-    → post-write stall detection: read stall detector, compile-clean short-circuit
+Cloud Manager (Claude Opus 4.6 thinking via CLIAPIProxy, max 10 iterations)
+    → delegates to local workers (all Qwen3.5-397B-A17B Q4_K_M):
+        vasp-03:8081 — fast/scout tier (read, review, breaker)
+        vasp-01:8081 — coder tier (general_coder, rust_coder)
+        vasp-02:8081 — reasoning tier (planner, reasoning_worker)
+    → runs verifier after each worker completes
     ↓ all budgets exhausted
 Human Intervention (blocking beads issue)
 ```
@@ -87,29 +83,24 @@ When cloud is unavailable, falls back to worker-first mode (local models only).
 
 ## Inference Endpoints
 
-The swarm uses **independent single-node instances** with expert-offload (March 2026).
+All three compute nodes run the same model — **Qwen3.5-397B-A17B Q4_K_M** (233GB, 7 GGUF shards).
 
-| Tier | Model | Node | Context | Throughput | Hardware Strategy |
-|------|-------|------|---------|------------|-------------------|
-| Scout/Fast | Qwen3.5-27B-Opus-Distilled Q4_K_M | vasp-03 | 65K | ~34 tok/s | VRAM-resident (32GB) |
-| Coder | Qwen3.5-122B-A10B MoE | vasp-01 | 65K | ~5-8 tok/s | Expert-offload, single-node (32GB VRAM) |
-| Reasoning | Qwen3.5-122B-A10B MoE | vasp-02 | 65K | ~5-8 tok/s | Expert-offload, single-node (32GB VRAM) |
-| Cloud Manager | claude-opus-4-6 | ai-proxy | 200K | API | CLIAPIProxy Relay |
-| Cloud Validators | gemini-3.1-pro-preview + claude-sonnet-4-6 + gpt-5.2-codex | ai-proxy | varies | API | 3 concurrent |
+| Tier | Endpoint | Node | Concurrency |
+|------|----------|------|-------------|
+| Fast/Scout | http://vasp-03:8081/v1 | vasp-03 | 2 parallel @ 64K |
+| Coder | http://vasp-01:8081/v1 | vasp-01 | 2 parallel @ 64K |
+| Reasoning | http://vasp-02:8081/v1 | vasp-02 | 2 parallel @ 64K |
+| Cloud | http://localhost:8317/v1 | ai-proxy (CLIAPIProxy) | 1 |
 
-**Health Checks:**
+MoE architecture: expert FFN layers on CPU RAM (~225GB), attention on GPU (V100S 32GB).
+Cloud model: `claude-opus-4-6` (fallback: `claude-sonnet-4-5-20250929`).
 
-```bash
-curl -s http://vasp-03:8081/health  # Scout/Fast (Qwen3.5-27B-Opus-Distilled)
-curl -s http://vasp-01:8081/health  # Coder (Qwen3.5-122B-A10B)
-curl -s http://vasp-02:8081/health  # Reasoning (Qwen3.5-122B-A10B)
-```
-
-**Start inference (New RPC Ensemble):**
+**Start inference:**
 
 ```bash
-ssh root@10.0.0.22 "sbatch /cluster/shared/scripts/run-27b-256k.slurm"
-ssh root@10.0.0.20 "sbatch /cluster/shared/scripts/run-122b-rpc.slurm"
+ssh root@10.0.0.22 "bash /tmp/start-qwen35-mmq.sh"   # vasp-03 (fast tier)
+ssh root@10.0.0.20 "bash /tmp/start-qwen35-mmq.sh"   # vasp-01 (coder tier)
+ssh root@10.0.0.21 "bash /tmp/start-qwen35-mmq.sh"   # vasp-02 (reasoning tier)
 ```
 
 **Cloud proxy:** CLIAPIProxy runs on ai-proxy (localhost:8317). Uses `x-api-key` header (not Bearer). API key set via `SWARM_CLOUD_API_KEY` env var.
@@ -122,15 +113,16 @@ Set by `scripts/run-swarm.sh` (overrides config.rs defaults). See `crates/swarm-
 
 ### Tier Endpoints
 
-Tiers use task-specialized models (March 2026 upgrade).
+All tiers default to Qwen3.5-397B-A17B. run-swarm.sh and config.rs are now aligned.
 
-| Variable | Default | Model |
-|----------|---------|-------|
-| `SWARM_FAST_URL` / `SWARM_FAST_MODEL` | `http://vasp-03:8081/v1` | `Qwen3.5-27B-Opus-Distilled` |
-| `SWARM_CODER_URL` / `SWARM_CODER_MODEL` | `http://vasp-01:8081/v1` | `Qwen3.5-122B-A10B` |
-| `SWARM_REASONING_URL` / `SWARM_REASONING_MODEL` | `http://vasp-02:8081/v1` | `Qwen3.5-122B-A10B` |
-
-Coder and Reasoning run on separate nodes (vasp-01 and vasp-02 respectively).
+| Variable | Default |
+|----------|---------|
+| `SWARM_FAST_URL` | `http://vasp-03:8081/v1` |
+| `SWARM_FAST_MODEL` | `Qwen3.5-397B-A17B` |
+| `SWARM_CODER_URL` | `http://vasp-01:8081/v1` |
+| `SWARM_CODER_MODEL` | `Qwen3.5-397B-A17B` |
+| `SWARM_REASONING_URL` | `http://vasp-02:8081/v1` |
+| `SWARM_REASONING_MODEL` | `Qwen3.5-397B-A17B` |
 
 ### Cloud Endpoint
 
@@ -139,7 +131,7 @@ Coder and Reasoning run on separate nodes (vasp-01 and vasp-02 respectively).
 | `SWARM_CLOUD_URL` | `http://localhost:8317/v1` (script) / *(none)* (config.rs) | Required for cloud manager mode |
 | `SWARM_CLOUD_API_KEY` | *(none)* | Required if cloud URL set |
 | `SWARM_CLOUD_MODEL` | `claude-opus-4-6` | Primary cloud model |
-| `SWARM_CLOUD_FALLBACK_MODEL` (script) / `SWARM_CLOUD_FALLBACK_MODELS` (config.rs) | `gemini-3.1-pro-high, claude-sonnet-4-6, gemini-3.1-flash-lite-preview` | Fallback chain after opus-4-6. Note singular vs plural env var name |
+| `SWARM_CLOUD_FALLBACK_MODEL` (script) / `SWARM_CLOUD_FALLBACK_MODELS` (config.rs) | `claude-sonnet-4-5-20250929` (script) / `claude-sonnet-4-5-20250929, gemini-2.5-flash` (config.rs) | Note singular vs plural env var name |
 | `SWARM_REQUIRE_ANTHROPIC_OWNERSHIP` | `1` | run-swarm.sh accepts both "anthropic" and "antigravity" |
 | `SWARM_CLOUD_PREFLIGHT` | `1` | Probe cloud endpoint before starting |
 
@@ -149,13 +141,13 @@ Coder and Reasoning run on separate nodes (vasp-01 and vasp-02 respectively).
 |----------|---------|-------|
 | `SWARM_MAX_RETRIES` | `10` | Max iterations per issue |
 | `SWARM_CLOUD_MAX_RETRIES` | `3` | Cloud-specific retry limit |
-| `SWARM_MAX_NO_CHANGE` | `2` | Circuit breaker for stuck iterations |
+| `SWARM_MAX_NO_CHANGE` | `3` | Circuit breaker for stuck iterations |
 | `SWARM_CLOUD_ONLY` | `false` | Route all work through cloud (skip local) |
 | `SWARM_VERIFIER_PACKAGES` | *(empty)* | Comma-separated; empty = entire workspace |
 | `SWARM_MIN_OBJECTIVE_LEN` | `10` | Minimum issue title length |
 | `SWARM_CLOUD_HTTP_TIMEOUT_SECS` | `300` | Per-request HTTP timeout for cloud API calls (5 min) |
 | `SWARM_LOCAL_HTTP_TIMEOUT_SECS` | `900` | Per-request HTTP timeout for local LLM calls (15 min) |
-| `SWARM_BEADS_BIN` | `bdh` | Beads CLI binary name (must be `bdh`, not `bdh` — BeadsBridge parses `bdh show --json` format) |
+| `SWARM_BEADS_BIN` | `bdh` | Beads CLI binary name |
 | `RUST_LOG` | `info` | Log level (see Debug & Monitoring) |
 
 ## Dogfood Operations
@@ -221,10 +213,10 @@ tail -f ~/code/beefcake-swarm/logs/dogfood/run-N-<issue>-*.log
 # Tool call distribution (requires RUST_LOG=debug)
 grep -o 'gen_ai.tool.name[^"]*"[^"]*"' logs/dogfood/run-*.log | sort | uniq -c | sort -rn
 
-# Check endpoint health
-curl -s http://vasp-03:8081/health  # Scout/Fast (Qwen3.5-27B-Opus-Distilled)
-curl -s http://vasp-01:8081/health  # Coder (Qwen3.5-122B-A10B MoE)
-curl -s http://vasp-02:8081/health  # Reasoning (Qwen3.5-122B-A10B MoE)
+# Check endpoint health (all Qwen3.5-397B)
+curl -s http://vasp-03:8081/health  # fast
+curl -s http://vasp-01:8081/health  # coder
+curl -s http://vasp-02:8081/health  # reasoning
 ```
 
 ### Healthy Startup Log
@@ -299,9 +291,9 @@ nlm source add "<ID>" --file "doc.md"
 ## Cluster Access
 
 - slurm-ctl: `ssh root@10.0.0.5` (controller, NFS server — VM 500 on pve1)
-- vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, Qwen3.5-122B-A10B MoE Coder — VM 600 on pve1)
-- vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, Qwen3.5-122B-A10B MoE Reasoning — VM 601 on pve2)
-- vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM, Qwen3.5-27B-Opus-Distilled running — VM 602 on pve3)
+- vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, Qwen3.5-397B running — VM 600 on pve1)
+- vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, Qwen3.5-397B running — VM 601 on pve2)
+- vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM, Qwen3.5-397B running — VM 602 on pve3)
 - pve1: `ssh root@10.0.0.1` (Proxmox host, cluster gateway — DO NOT reboot)
 - pve2: `ssh root@10.0.0.2` (Proxmox host)
 - pve3: `ssh root@10.0.0.3` (Proxmox host)
