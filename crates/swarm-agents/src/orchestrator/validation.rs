@@ -241,9 +241,9 @@ pub(crate) async fn cloud_validate(
     };
 
     let models = [
-        std::env::var("SWARM_VALIDATOR_MODEL_1").unwrap_or_else(|_| "gemini-3-pro-preview".into()),
-        std::env::var("SWARM_VALIDATOR_MODEL_2")
-            .unwrap_or_else(|_| "claude-sonnet-4-5-20250929".into()),
+        std::env::var("SWARM_VALIDATOR_MODEL_1")
+            .unwrap_or_else(|_| "gemini-3.1-pro-preview".into()),
+        std::env::var("SWARM_VALIDATOR_MODEL_2").unwrap_or_else(|_| "claude-sonnet-4-6".into()),
     ];
 
     let review_prompt = build_reviewer_prompt(&diff_for_review);

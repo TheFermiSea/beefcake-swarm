@@ -232,7 +232,11 @@ impl CloudFallbackMatrix {
         }
     }
 
-    /// Default matrix: Opus 4.6 → Sonnet 4.5 → Gemini 2.5 Flash.
+    /// Default matrix: Opus 4.6 thinking → Opus 4.6 → Gemini 3.1 Pro → Sonnet 4.6 → Flash.
+    ///
+    /// The thinking variant gives better planning for complex tasks. Gemini 3.1 Pro
+    /// has 2M context for whole-codebase understanding. Sonnet 4.6 is faster than
+    /// Opus for simpler delegation. Flash is the cheapest last resort.
     pub fn default_matrix() -> Self {
         Self {
             entries: vec![
@@ -242,13 +246,18 @@ impl CloudFallbackMatrix {
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "claude-sonnet-4-5-20250929".to_string(),
+                    model: "gemini-3.1-pro-high".to_string(),
                     tier_label: "fallback-1".to_string(),
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "gemini-2.5-flash".to_string(),
+                    model: "claude-sonnet-4-6".to_string(),
                     tier_label: "fallback-2".to_string(),
+                    max_tokens: 4096,
+                },
+                CloudFallbackEntry {
+                    model: "gemini-2.5-flash".to_string(),
+                    tier_label: "fallback-3".to_string(),
                     max_tokens: 4096,
                 },
             ],
@@ -898,15 +907,16 @@ mod tests {
     #[test]
     fn test_cloud_fallback_matrix_default() {
         let matrix = CloudFallbackMatrix::default_matrix();
-        assert_eq!(matrix.len(), 3);
+        assert_eq!(matrix.len(), 4);
         assert!(!matrix.is_empty());
         let primary = matrix.primary().unwrap();
         assert_eq!(primary.model, "claude-opus-4-6");
         assert_eq!(primary.tier_label, "primary");
         let fallbacks = matrix.fallbacks();
-        assert_eq!(fallbacks.len(), 2);
-        assert_eq!(fallbacks[0].model, "claude-sonnet-4-5-20250929");
-        assert_eq!(fallbacks[1].model, "gemini-2.5-flash");
+        assert_eq!(fallbacks.len(), 3);
+        assert_eq!(fallbacks[0].model, "gemini-3.1-pro-high");
+        assert_eq!(fallbacks[1].model, "claude-sonnet-4-6");
+        assert_eq!(fallbacks[2].model, "gemini-2.5-flash");
     }
 
     #[test]
@@ -921,7 +931,7 @@ mod tests {
     #[test]
     fn test_cloud_fallback_matrix_in_config() {
         let config = SwarmConfig::proxy_config();
-        assert_eq!(config.cloud_fallback_matrix.len(), 3);
+        assert_eq!(config.cloud_fallback_matrix.len(), 4);
         assert_eq!(
             config.cloud_fallback_matrix.primary().unwrap().model,
             "claude-opus-4-6"
