@@ -65,9 +65,13 @@ pub(crate) async fn run_command_with_timeout(
     let wd = working_dir.to_path_buf();
 
     let result = tokio::task::spawn_blocking(move || {
+        use std::os::unix::process::CommandExt;
         std::process::Command::new(&program)
             .args(&args)
             .current_dir(&wd)
+            // Isolate in its own process group so we can kill the entire tree
+            // on timeout — prevents zombie accumulation from nested cargo/rustc.
+            .process_group(0)
             .output()
             .map_err(ToolError::Io)
     });

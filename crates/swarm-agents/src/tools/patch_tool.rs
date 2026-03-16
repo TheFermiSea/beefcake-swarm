@@ -374,7 +374,7 @@ impl Tool for EditFileTool {
                     },
                     "old_content": {
                         "type": "string",
-                        "description": "The exact text block to find and replace. Must be unique in the file. Include enough context lines to be unambiguous."
+                        "description": "REQUIRED. The exact text block to find and replace. Must be unique in the file. Include enough surrounding context (3-5 lines) to be unambiguous. Pass empty string only when using anchor_start/anchor_end."
                     },
                     "new_content": {
                         "type": "string",
@@ -389,7 +389,8 @@ impl Tool for EditFileTool {
                         "description": "End anchor from read_file hashline output (e.g. '44:0e'). Used with anchor_start."
                     }
                 },
-                "required": ["path", "new_content"]
+                "required": ["path", "old_content", "new_content"],
+                "additionalProperties": false
             }),
         }
     }
@@ -431,8 +432,8 @@ impl Tool for EditFileTool {
 
         // old_content is required for non-anchor str_replace path
         let old_content_raw = match args.old_content {
-            Some(ref oc) => oc.clone(),
-            None => {
+            Some(ref oc) if !oc.is_empty() => oc.clone(),
+            Some(_) | None => {
                 return Err(ToolError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidInput,
                     "edit_file: old_content is required. To INSERT new lines, include surrounding \
