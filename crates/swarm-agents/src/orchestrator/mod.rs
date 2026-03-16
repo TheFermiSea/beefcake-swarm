@@ -732,16 +732,13 @@ async fn process_issue_core(
             Ok(plan) => {
                 info!(
                     id = %issue.id,
-                    "Planner returned single subtask — routing to manager"
+                    "Planner returned single subtask — staying at Worker tier"
                 );
                 debug!(summary = %plan.summary, "Single-subtask plan");
-                // Single-task issues don't benefit from parallel dispatch.
-                // Skip Worker tier and go straight to Council (cloud manager)
-                // which can delegate to the right specialist directly.
-                if factory.clients.cloud.is_some() {
-                    info!(id = %issue.id, "Cloud available — escalating to Council for single-task issue");
-                    escalation.current_tier = SwarmTier::Council;
-                }
+                // Single-task issues are simple enough for a local worker.
+                // Stay at Worker tier — the local 122B handles reads, edits,
+                // and searches directly. Cloud manager is only needed for
+                // multi-file coordination or after worker failures.
             }
             Err(e) => {
                 warn!(
