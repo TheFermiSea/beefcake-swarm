@@ -498,6 +498,8 @@ fn build_subtask_system_prompt(subtask: &Subtask, wt_path: &Path) -> String {
 5. If you need to understand code in other files, use read_file on context_files.
 {start_instruction}
 7. Do NOT run cargo check/test — the orchestrator runs the verifier after all workers finish.
+8. **STOP RULE**: Once your edit_file or write_file calls succeed, YOU ARE DONE. \
+   Do NOT call any more tools. Immediately return a summary of what you changed.
 
 ## INTER-WORKER COMMUNICATION
 8. After changing any PUBLIC interface (struct fields, function signatures, trait methods, \

@@ -1504,6 +1504,44 @@ async fn process_issue_core(
                     format!("Agent failed: {e}"),
                 );
                 // engine.decide() records the iteration internally — don't double-count
+                //
+                // Auto-format BEFORE verification: the agent may have written
+                // syntactically correct but unformatted code. Without this,
+                // the verifier's fail-fast pipeline sees fmt failure and skips
+                // all remaining gates (clippy, check, test), causing the
+                // compile-clean short-circuit to see all-false gates.
+                // See: beefcake-dj1o
+                if agent_has_written_prev {
+                    let mut fmt_args = vec!["fmt".to_string()];
+                    if verifier_config.packages.is_empty() {
+                        fmt_args.push("--all".to_string());
+                    } else {
+                        for pkg in &verifier_config.packages {
+                            fmt_args.extend(["--package".to_string(), pkg.clone()]);
+                        }
+                    }
+                    let fmt_result = tokio::process::Command::new("cargo")
+                        .args(&fmt_args)
+                        .current_dir(&wt_path)
+                        .output()
+                        .await;
+                    match fmt_result {
+                        Ok(ref out) if out.status.success() => {
+                            debug!(iteration, "Agent failure path: cargo fmt succeeded");
+                        }
+                        Ok(ref out) => {
+                            warn!(
+                                iteration,
+                                "Agent failure path: cargo fmt failed (non-fatal): {}",
+                                String::from_utf8_lossy(&out.stderr)
+                            );
+                        }
+                        Err(e) => {
+                            warn!(iteration, "Agent failure path: cargo fmt error: {e}");
+                        }
+                    }
+                }
+
                 info!(
                     iteration,
                     "Running verifier after agent failure to assess codebase state"
@@ -1526,18 +1564,18 @@ async fn process_issue_core(
                 // agent not knowing when to stop, not an actual code failure.
                 if agent_has_written_prev && tier == SwarmTier::Worker {
                     use coordination::verifier::GateOutcome;
-                    let fmt_ok = report
-                        .gates
-                        .iter()
-                        .any(|g| g.gate == "fmt" && matches!(g.outcome, GateOutcome::Passed));
-                    let clippy_ok = report
-                        .gates
-                        .iter()
-                        .any(|g| g.gate == "clippy" && matches!(g.outcome, GateOutcome::Passed));
-                    let check_ok = report
-                        .gates
-                        .iter()
-                        .any(|g| g.gate == "check" && matches!(g.outcome, GateOutcome::Passed));
+                    // Accept Passed OR Skipped: Skipped means the gate didn't run
+                    // due to fail-fast (an earlier gate failed), NOT that this gate
+                    // itself failed. Only GateOutcome::Failed is a true rejection.
+                    let gate_ok = |name: &str| {
+                        report.gates.iter().any(|g| {
+                            g.gate == name
+                                && matches!(g.outcome, GateOutcome::Passed | GateOutcome::Skipped)
+                        })
+                    };
+                    let fmt_ok = gate_ok("fmt");
+                    let clippy_ok = gate_ok("clippy");
+                    let check_ok = gate_ok("check");
 
                     if fmt_ok && clippy_ok && check_ok {
                         info!(
@@ -1917,18 +1955,16 @@ async fn process_issue_core(
         // changes that iteration N already committed correctly.
         if !report.all_green && agent_has_written_prev && tier == SwarmTier::Worker {
             use coordination::verifier::GateOutcome;
-            let fmt_ok = report
-                .gates
-                .iter()
-                .any(|g| g.gate == "fmt" && matches!(g.outcome, GateOutcome::Passed));
-            let clippy_ok = report
-                .gates
-                .iter()
-                .any(|g| g.gate == "clippy" && matches!(g.outcome, GateOutcome::Passed));
-            let check_ok = report
-                .gates
-                .iter()
-                .any(|g| g.gate == "check" && matches!(g.outcome, GateOutcome::Passed));
+            // Accept Passed OR Skipped (Skipped = didn't run due to fail-fast, not failed)
+            let gate_ok = |name: &str| {
+                report.gates.iter().any(|g| {
+                    g.gate == name
+                        && matches!(g.outcome, GateOutcome::Passed | GateOutcome::Skipped)
+                })
+            };
+            let fmt_ok = gate_ok("fmt");
+            let clippy_ok = gate_ok("clippy");
+            let check_ok = gate_ok("check");
 
             if fmt_ok && clippy_ok && check_ok {
                 info!(

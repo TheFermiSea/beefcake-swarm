@@ -276,7 +276,13 @@ impl RuntimeAdapter {
         let base = tool_name.strip_prefix("proxy_").unwrap_or(tool_name);
         match base {
             "read_file" | "list_files" | "get_diff" | "list_changed_files" | "query_notebook"
-            | "team_status" | "check_mail" | "check_locks" | "chat_check" => ToolClass::ReadOnly,
+            | "team_status" | "check_mail" | "check_locks" | "chat_check"
+            // Search and exploration tools are read-like: they gather info but don't change code.
+            // Post-write, these indicate the worker is exploring instead of stopping.
+            | "search_code" | "colgrep" | "ast_grep" | "file_exists"
+            // run_command is read-like for post-write stall detection: workers calling
+            // cargo check/clippy/test after writing are doing the orchestrator's job.
+            | "run_command" => ToolClass::ReadOnly,
             "edit_file" | "write_file" | "run_verifier" | "rust_coder" | "general_coder"
             | "fixer" | "planner" | "reasoning_worker" | "reviewer" | "send_mail" | "chat_send" => {
                 ToolClass::Action
