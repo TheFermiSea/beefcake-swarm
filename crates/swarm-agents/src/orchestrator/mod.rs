@@ -1542,6 +1542,9 @@ async fn process_issue_core(
                     if fmt_ok && clippy_ok && check_ok {
                         info!(
                             iteration,
+                            fmt_ok,
+                            clippy_ok,
+                            check_ok,
                             "Compile-clean short-circuit (agent failure path): \
                              worker wrote files and fmt+clippy+check pass despite agent termination. Accepting."
                         );
@@ -1566,6 +1569,17 @@ async fn process_issue_core(
                         success = true;
                         break; // Exit the loop — acceptance handled by post-loop merge logic
                     } else {
+                        info!(
+                            iteration,
+                            agent_has_written_prev,
+                            fmt_ok,
+                            clippy_ok,
+                            check_ok,
+                            all_green = report.all_green,
+                            gates_passed = report.gates_passed,
+                            gates_total = report.gates_total,
+                            "Compile-clean short-circuit NOT triggered (agent failure path)"
+                        );
                         let decision = engine.decide(&mut escalation, &report);
                         last_report = Some(report);
                         metrics.finish_iteration();
@@ -1584,6 +1598,12 @@ async fn process_issue_core(
                         continue;
                     }
                 } else {
+                    info!(
+                        iteration,
+                        agent_has_written_prev,
+                        tier = ?tier,
+                        "Compile-clean short-circuit skipped: not Worker tier or no writes"
+                    );
                     let decision = engine.decide(&mut escalation, &report);
                     last_report = Some(report);
                     metrics.finish_iteration();
