@@ -23,6 +23,7 @@
 //! ```
 
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -148,6 +149,12 @@ struct AdapterState {
     successful_writes: u32,
     /// Validator state for pre-tool-call validation.
     validator_state: ValidatorState,
+    /// Consecutive identical tool calls: (tool_name, args_hash) -> count.
+    /// Tracks when an agent calls the same tool with the same arguments repeatedly,
+    /// which indicates a stuck loop (e.g., searching for something that will never change).
+    repeat_call_counts: HashMap<u64, u32>,
+    /// The most recent (tool_name, args_hash) — used to detect consecutive repeats.
+    last_call_key: Option<u64>,
 }
 
 /// Rig [`PromptHook`] implementation for tool-event visibility and budget control.
@@ -180,6 +187,8 @@ impl RuntimeAdapter {
                 files_read_set: std::collections::HashSet::new(),
                 successful_writes: 0,
                 validator_state: ValidatorState::new(),
+                repeat_call_counts: HashMap::new(),
+                last_call_key: None,
             })),
             config: Arc::new(config),
             validators: Arc::new(Vec::new()),
@@ -206,6 +215,8 @@ impl RuntimeAdapter {
                 files_read_set: std::collections::HashSet::new(),
                 successful_writes: 0,
                 validator_state: ValidatorState::new(),
+                repeat_call_counts: HashMap::new(),
+                last_call_key: None,
             })),
             config: Arc::new(config),
             validators: Arc::new(validators),
@@ -398,6 +409,41 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                     return ToolCallHookAction::skip(msg);
                 }
             }
+
+            // Anti-loop: detect consecutive identical tool calls.
+            // Hash (tool_name, args) to detect the same call repeated.
+            const MAX_REPEAT_CALLS: u32 = 3;
+            let call_key = {
+                let mut hasher = std::collections::hash_map::DefaultHasher::new();
+                tool_name.hash(&mut hasher);
+                args_owned.hash(&mut hasher);
+                hasher.finish()
+            };
+
+            if s.last_call_key == Some(call_key) {
+                let count = s.repeat_call_counts.entry(call_key).or_insert(1);
+                *count += 1;
+                if *count > MAX_REPEAT_CALLS {
+                    warn!(
+                        agent = %config.agent_name,
+                        tool = %tool_name,
+                        repeat_count = *count,
+                        "Anti-loop: identical tool call repeated {} times — skipping",
+                        *count
+                    );
+                    return ToolCallHookAction::skip(format!(
+                        "You have called {tool_name} with identical arguments {count} times. \
+                         The results will not change. Stop repeating this call and move on: \
+                         either run the verifier, delegate to a different worker, or report \
+                         completion."
+                    ));
+                }
+            } else {
+                // Different call — reset tracking
+                s.repeat_call_counts.clear();
+                s.repeat_call_counts.insert(call_key, 1);
+            }
+            s.last_call_key = Some(call_key);
 
             // Check deadline
             if let Some(deadline) = config.deadline {
@@ -887,13 +933,15 @@ mod tests {
 
     /// Helper: simulate a tool call + result round-trip.
     async fn simulate_tool_call(adapter: &RuntimeAdapter, tool_name: &str, call_id: &str) {
+        // Use call_id in args so each call hashes uniquely (avoids repeat-call circuit breaker).
+        let args = format!("{{\"id\":\"{call_id}\"}}");
         let _ = <RuntimeAdapter as PromptHook<
             rig::providers::openai::completion::CompletionModel,
-        >>::on_tool_call(adapter, tool_name, None, call_id, "{}")
+        >>::on_tool_call(adapter, tool_name, None, call_id, &args)
         .await;
         let _ = <RuntimeAdapter as PromptHook<
             rig::providers::openai::completion::CompletionModel,
-        >>::on_tool_result(adapter, tool_name, None, call_id, "{}", "ok")
+        >>::on_tool_result(adapter, tool_name, None, call_id, &args, "ok")
         .await;
     }
 
@@ -919,10 +967,12 @@ mod tests {
             simulate_tool_call(&adapter, "proxy_read_file", &format!("r-{i}")).await;
         }
 
-        // 9th read call should be terminated
+        // 9th read call should be terminated (unique args to avoid repeat-call breaker)
         let action = <RuntimeAdapter as PromptHook<
             rig::providers::openai::completion::CompletionModel,
-        >>::on_tool_call(&adapter, "proxy_read_file", None, "r-8", "{}")
+        >>::on_tool_call(
+            &adapter, "proxy_read_file", None, "r-8", "{\"id\":\"r-8\"}"
+        )
         .await;
         assert!(
             matches!(action, ToolCallHookAction::Terminate { .. }),
@@ -936,6 +986,64 @@ mod tests {
             .as_ref()
             .unwrap()
             .contains("read budget"));
+    }
+
+    #[tokio::test]
+    async fn test_repeat_call_circuit_breaker() {
+        let adapter = RuntimeAdapter::new(AdapterConfig {
+            agent_name: "test-agent".into(),
+            ..Default::default()
+        });
+
+        // First 3 identical calls should succeed
+        for i in 0..3 {
+            let action = <RuntimeAdapter as PromptHook<
+                rig::providers::openai::completion::CompletionModel,
+            >>::on_tool_call(
+                &adapter,
+                "proxy_search_code",
+                None,
+                &format!("c-{i}"),
+                "{\"pattern\":\"DEFAULT_TIMEOUT_SECS\"}",
+            )
+            .await;
+            assert!(
+                !matches!(action, ToolCallHookAction::Skip { .. }),
+                "Call {i} should not be skipped"
+            );
+        }
+
+        // 4th identical call should be skipped (circuit breaker fires)
+        let action = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(
+            &adapter,
+            "proxy_search_code",
+            None,
+            "c-3",
+            "{\"pattern\":\"DEFAULT_TIMEOUT_SECS\"}",
+        )
+        .await;
+        assert!(
+            matches!(action, ToolCallHookAction::Skip { .. }),
+            "4th identical call should be skipped by circuit breaker, got {action:?}"
+        );
+
+        // A different call should reset the counter and succeed
+        let action = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(
+            &adapter,
+            "proxy_read_file",
+            None,
+            "c-4",
+            "{\"path\":\"foo.rs\"}",
+        )
+        .await;
+        assert!(
+            !matches!(action, ToolCallHookAction::Skip { .. }),
+            "Different call should succeed after circuit breaker"
+        );
     }
 
     #[tokio::test]
