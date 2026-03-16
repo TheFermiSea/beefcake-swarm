@@ -3,9 +3,10 @@ set -euo pipefail
 export RUST_LOG="${RUST_LOG:-info}"
 export SWARM_USE_BDH="${SWARM_USE_BDH:-1}"
 export SWARM_BDH_BIN="${SWARM_BDH_BIN:-bdh}"
-# Scout/Fast tier: Qwen3.5-27B-Distilled on vasp-03 (VRAM-resident, 192K context)
+# Scout/Fast tier: Qwen3.5-27B-Opus-Distilled on vasp-03 (VRAM-resident, 65K context, ~34 tok/s)
+# Distilled from Claude 4.6 Opus reasoning trajectories. Rollback: see /scratch/ai/rollback-vasp03.txt
 export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-03:8081/v1}"
-export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3.5-27B-Distilled}"
+export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3.5-27B-Opus-Distilled}"
 # Coder/Integrator tier: Qwen3.5-122B-A10B MoE on vasp-01 (expert-offload, 65K context)
 export SWARM_CODER_URL="${SWARM_CODER_URL:-http://vasp-01:8081/v1}"
 export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-122B-A10B}"
