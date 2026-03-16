@@ -25,4 +25,5 @@ pub mod state_machine;
 pub mod subtask;
 pub mod telemetry;
 pub mod tools;
+pub mod work_protocol;
 pub mod worktree_bridge;

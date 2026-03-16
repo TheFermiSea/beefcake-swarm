@@ -48,6 +48,19 @@ done
 
 mkdir -p "$LOG_DIR"
 
+# ── Lockfile: prevent overlapping loop instances ──
+# Uses flock(1) for atomic, race-free locking. The lock is automatically
+# released when the process exits (including crashes/signals).
+LOCKFILE="/tmp/dogfood-loop.lock"
+exec 200>"$LOCKFILE"
+if ! flock -n 200; then
+    EXISTING_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "unknown")
+    echo "ERROR: Another dogfood-loop is already running (pid=$EXISTING_PID)." >&2
+    echo "Kill it first: kill $EXISTING_PID" >&2
+    exit 1
+fi
+echo $$ > "$LOCKFILE"
+
 # ── sccache: shared C/C++ compilation cache ──
 # Eliminates redundant proc-macro and native dep builds across worktrees.
 # Install: cargo install sccache

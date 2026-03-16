@@ -349,6 +349,123 @@ impl std::fmt::Display for ContextUpdater {
     }
 }
 
+// ── SwarmEvent: Worker dispatch protocol ─────────────────────────────────────
+//
+// These events carry structured metadata for the worker dispatch lifecycle.
+// Phase 2 will wire them into the EventBus; for now they are defined as types
+// for the work_protocol module to publish and the orchestrator to consume.
+
+/// Events for the worker dispatch protocol.
+///
+/// Separate from `EnsembleEvent` (which tracks model coordination / voting)
+/// because the worker protocol has a different lifecycle:
+///   WorkOrderCreated → WorkerStarted → WorkerProgress* → WorkerCompleted → VerificationRan
+///
+/// In Phase 2, the EventBus will be made generic or dual-channel to carry both.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SwarmEvent {
+    /// A new work order was created for a worker.
+    WorkOrderCreated {
+        order_id: String,
+        issue_id: String,
+        objective_preview: String,
+        target_files: Vec<String>,
+        worker_tier: Option<String>,
+        iteration: usize,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// A worker started executing a work order.
+    WorkerStarted {
+        order_id: String,
+        worker_name: String,
+        worker_tier: String,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// A worker reports progress mid-execution.
+    WorkerProgress {
+        order_id: String,
+        turns_completed: usize,
+        tool_calls: usize,
+        files_modified: Vec<String>,
+        has_written: bool,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// A worker completed (or failed) a work order.
+    WorkerCompleted {
+        order_id: String,
+        /// Serialized status label: "complete", "partial", "stuck", "out_of_scope", "failed"
+        status: String,
+        files_modified: Vec<String>,
+        tool_calls: usize,
+        turns_used: usize,
+        wall_time_ms: u64,
+        confidence: f32,
+        needs_escalation: bool,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// Verification ran after a worker completed.
+    VerificationRan {
+        order_id: String,
+        all_green: bool,
+        gates_passed: usize,
+        gates_total: usize,
+        error_count: usize,
+        timestamp: DateTime<Utc>,
+    },
+
+    /// A worker requested escalation to the manager.
+    EscalationRequested {
+        order_id: String,
+        reason: String,
+        suggested_action: String,
+        blocking_files: Vec<String>,
+        timestamp: DateTime<Utc>,
+    },
+}
+
+impl SwarmEvent {
+    /// Get the timestamp of this event.
+    pub fn timestamp(&self) -> DateTime<Utc> {
+        match self {
+            SwarmEvent::WorkOrderCreated { timestamp, .. } => *timestamp,
+            SwarmEvent::WorkerStarted { timestamp, .. } => *timestamp,
+            SwarmEvent::WorkerProgress { timestamp, .. } => *timestamp,
+            SwarmEvent::WorkerCompleted { timestamp, .. } => *timestamp,
+            SwarmEvent::VerificationRan { timestamp, .. } => *timestamp,
+            SwarmEvent::EscalationRequested { timestamp, .. } => *timestamp,
+        }
+    }
+
+    /// Get the event type as a string.
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            SwarmEvent::WorkOrderCreated { .. } => "work_order_created",
+            SwarmEvent::WorkerStarted { .. } => "worker_started",
+            SwarmEvent::WorkerProgress { .. } => "worker_progress",
+            SwarmEvent::WorkerCompleted { .. } => "worker_completed",
+            SwarmEvent::VerificationRan { .. } => "verification_ran",
+            SwarmEvent::EscalationRequested { .. } => "escalation_requested",
+        }
+    }
+
+    /// Get the order ID for this event.
+    pub fn order_id(&self) -> &str {
+        match self {
+            SwarmEvent::WorkOrderCreated { order_id, .. } => order_id,
+            SwarmEvent::WorkerStarted { order_id, .. } => order_id,
+            SwarmEvent::WorkerProgress { order_id, .. } => order_id,
+            SwarmEvent::WorkerCompleted { order_id, .. } => order_id,
+            SwarmEvent::VerificationRan { order_id, .. } => order_id,
+            SwarmEvent::EscalationRequested { order_id, .. } => order_id,
+        }
+    }
+}
+
 /// Reason for session ending
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

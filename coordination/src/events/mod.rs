@@ -73,6 +73,6 @@ pub use history::{
     EventHistory, EventStats, HistoryError, HistoryResult, ReplayBuilder, ReplayStats,
 };
 pub use types::{
-    ArbitrationReason, ContextUpdater, EnsembleEvent, EventId, SessionEndReason, UnloadReason,
-    VoteSummary,
+    ArbitrationReason, ContextUpdater, EnsembleEvent, EventId, SessionEndReason, SwarmEvent,
+    UnloadReason, VoteSummary,
 };

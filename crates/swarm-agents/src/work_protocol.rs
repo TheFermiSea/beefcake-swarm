@@ -1,0 +1,1152 @@
+//! Structured inter-agent communication protocol for the swarm.
+//!
+//! Replaces the flat `String` return from Rig's agent-as-tool pattern with
+//! typed contracts that enable:
+//! - **WorkOrder**: what the worker MUST do (behavioral contract)
+//! - **WorkResult**: what the worker DID (structured outcome)
+//! - **WorkStatus**: tristate completion signal (Complete / Partial / Stuck / Failed)
+//!
+//! # Design Basis
+//!
+//! - SEMAP (APSEC 2025): behavioral contracts + structured messaging + lifecycle gates
+//! - Agentic Lybic: FSM-based Controller/Manager/Workers/Evaluator with quality gating
+//! - CodeCRDT: observation-driven coordination via shared state (git worktree = blackboard)
+//! - MAST taxonomy: verification failures are the #1 cause of agent failures
+//!
+//! # Usage
+//!
+//! ```ignore
+//! use swarm_agents::work_protocol::*;
+//!
+//! // Orchestrator creates a work order
+//! let order = WorkOrder::new("order-1", "beads-abc", "Fix borrow checker error in parser.rs")
+//!     .target_files(vec!["src/parser.rs".into()])
+//!     .done_when(DoneCriteria::CompileClean)
+//!     .max_turns(15);
+//!
+//! // After worker completes, build structured result from adapter report
+//! let result = WorkResult::from_adapter_report("order-1", &report, WorkStatus::Complete, "Fixed it");
+//!
+//! // Attach verification
+//! let result = result.with_verification(verification);
+//! ```
+
+use serde::{Deserialize, Serialize};
+
+use crate::runtime_adapter::AdapterReport;
+
+// ── WorkOrder ────────────────────────────────────────────────────────────────
+
+/// Structured task contract sent to a worker.
+///
+/// Defines the behavioral contract: what the worker may do, what it must not
+/// touch, and what "done" looks like. Analogous to `Subtask` but richer.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkOrder {
+    /// Unique identifier for this work order.
+    pub id: String,
+    /// Beads issue ID this work order belongs to.
+    pub issue_id: String,
+    /// Human-readable objective — what the worker should accomplish.
+    pub objective: String,
+    /// Files the worker MAY modify.
+    pub target_files: Vec<String>,
+    /// Files the worker MUST NOT modify (hard constraint).
+    #[serde(default)]
+    pub forbidden_files: Vec<String>,
+    /// What "done" means — the verification contract.
+    pub done_criteria: DoneCriteria,
+    /// Maximum LLM turns before the worker must stop.
+    pub max_turns: usize,
+    /// Wall-clock timeout in seconds.
+    pub timeout_secs: u64,
+    /// Contextual information to help the worker.
+    pub context: WorkContext,
+    /// Which worker tier should execute this order.
+    #[serde(default)]
+    pub worker_tier: Option<WorkerTier>,
+    /// Current iteration number (0-based). Enables retry-aware behavior.
+    #[serde(default)]
+    pub iteration: usize,
+}
+
+impl WorkOrder {
+    /// Create a new work order with minimal required fields.
+    pub fn new(
+        id: impl Into<String>,
+        issue_id: impl Into<String>,
+        objective: impl Into<String>,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            issue_id: issue_id.into(),
+            objective: objective.into(),
+            target_files: Vec::new(),
+            forbidden_files: Vec::new(),
+            done_criteria: DoneCriteria::CompileClean,
+            max_turns: 15,
+            timeout_secs: 900,
+            context: WorkContext::default(),
+            worker_tier: None,
+            iteration: 0,
+        }
+    }
+
+    /// Set target files the worker may modify.
+    pub fn target_files(mut self, files: Vec<String>) -> Self {
+        self.target_files = files;
+        self
+    }
+
+    /// Set forbidden files the worker must not touch.
+    pub fn forbidden_files(mut self, files: Vec<String>) -> Self {
+        self.forbidden_files = files;
+        self
+    }
+
+    /// Set the done criteria (verification contract).
+    pub fn done_when(mut self, criteria: DoneCriteria) -> Self {
+        self.done_criteria = criteria;
+        self
+    }
+
+    /// Set maximum LLM turns.
+    pub fn max_turns(mut self, turns: usize) -> Self {
+        self.max_turns = turns;
+        self
+    }
+
+    /// Set wall-clock timeout.
+    pub fn timeout_secs(mut self, secs: u64) -> Self {
+        self.timeout_secs = secs;
+        self
+    }
+
+    /// Set contextual information.
+    pub fn context(mut self, ctx: WorkContext) -> Self {
+        self.context = ctx;
+        self
+    }
+
+    /// Set the worker tier.
+    pub fn worker_tier(mut self, tier: WorkerTier) -> Self {
+        self.worker_tier = Some(tier);
+        self
+    }
+
+    /// Set the iteration number.
+    pub fn iteration(mut self, iter: usize) -> Self {
+        self.iteration = iter;
+        self
+    }
+}
+
+/// What "done" means — the verification contract.
+///
+/// The orchestrator checks this AFTER the worker completes but BEFORE
+/// accepting the result. This is the behavioral contract from SEMAP.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum DoneCriteria {
+    /// All target_files modified, `cargo check` passes.
+    CompileClean,
+    /// `cargo test` passes for specified packages.
+    TestsPass { packages: Vec<String> },
+    /// Specific pattern no longer appears in target files.
+    PatternRemoved { pattern: String },
+    /// Custom verification command succeeds (exit code 0).
+    Custom { command: String },
+}
+
+/// Contextual information to help the worker understand the task.
+///
+/// Derived from the orchestrator's accumulated state: previous errors,
+/// file contents, constraints from the escalation engine.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkContext {
+    /// Compilation/test error messages from previous iterations.
+    #[serde(default)]
+    pub error_history: Vec<String>,
+    /// Relevant file snippets: (path, content_preview).
+    #[serde(default)]
+    pub file_snippets: Vec<FileSnippet>,
+    /// Constraints from the escalation engine or manager.
+    #[serde(default)]
+    pub constraints: Vec<String>,
+    /// Summary of previous attempts (what was tried and why it failed).
+    #[serde(default)]
+    pub previous_attempts: Vec<String>,
+    /// Reviewer/validator feedback from previous iterations (TextGrad).
+    #[serde(default)]
+    pub reviewer_feedback: Vec<String>,
+}
+
+/// A file snippet with path and content preview for the worker's context.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileSnippet {
+    pub path: String,
+    pub content: String,
+    /// Key symbols (functions, structs, traits) in this file.
+    #[serde(default)]
+    pub key_symbols: Vec<String>,
+}
+
+/// Which worker tier should execute a work order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkerTier {
+    /// Qwen3.5-27B-Distilled — fast, VRAM-resident, 192K context.
+    Fast,
+    /// Qwen3.5-122B-A10B MoE on vasp-01 — code specialist.
+    Coder,
+    /// Qwen3.5-122B-A10B MoE on vasp-02 — deep reasoning.
+    Reasoning,
+}
+
+impl std::fmt::Display for WorkerTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkerTier::Fast => write!(f, "fast"),
+            WorkerTier::Coder => write!(f, "coder"),
+            WorkerTier::Reasoning => write!(f, "reasoning"),
+        }
+    }
+}
+
+// ── WorkResult ───────────────────────────────────────────────────────────────
+
+/// Structured result returned by a worker after completing (or failing) a WorkOrder.
+///
+/// This is the core output type that replaces Rig's flat `String` return.
+/// It provides the manager/orchestrator with structured information about
+/// what happened, enabling programmatic decision-making.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkResult {
+    /// WorkOrder ID this result corresponds to.
+    pub order_id: String,
+    /// Completion status — the tristate signal.
+    pub status: WorkStatus,
+    /// Files the worker modified (from RuntimeAdapter or git diff).
+    pub files_modified: Vec<String>,
+    /// Files the worker read (from RuntimeAdapter).
+    pub files_read: Vec<String>,
+    /// File manifest with blake3 hashes for programmatic verification.
+    #[serde(default)]
+    pub file_manifest: Vec<FileManifestEntry>,
+    /// Total tool calls made by the worker.
+    pub tool_calls: usize,
+    /// LLM turns used.
+    pub turns_used: usize,
+    /// Wall-clock time in milliseconds.
+    pub wall_time_ms: u64,
+    /// Git diff summary (from `git diff --stat`).
+    pub git_diff_summary: String,
+    /// Verification result (if verifier ran after worker completed).
+    pub verification: Option<VerificationResult>,
+    /// Worker's free-text explanation of what it did.
+    pub worker_message: String,
+    /// Worker self-assessment confidence (0.0–1.0).
+    /// Below 0.5 → auto-escalate to manager.
+    /// Below 0.3 → flag for human review.
+    pub confidence: f32,
+    /// Escalation request if the worker needs help.
+    pub escalation: Option<EscalationRequest>,
+}
+
+impl WorkResult {
+    /// Build a WorkResult from a RuntimeAdapter report.
+    ///
+    /// This is the primary constructor — bridges the existing telemetry
+    /// infrastructure (`AdapterReport`) to the new structured protocol.
+    pub fn from_adapter_report(
+        order_id: impl Into<String>,
+        report: &AdapterReport,
+        status: WorkStatus,
+        worker_message: impl Into<String>,
+    ) -> Self {
+        Self {
+            order_id: order_id.into(),
+            status,
+            files_modified: report.files_modified.clone(),
+            files_read: report.files_read.clone(),
+            file_manifest: Vec::new(),
+            tool_calls: report.total_tool_calls,
+            turns_used: report.turn_count,
+            wall_time_ms: report.wall_time_ms,
+            git_diff_summary: String::new(),
+            verification: None,
+            worker_message: worker_message.into(),
+            confidence: 0.5, // default — refined by heuristics or verification
+            escalation: None,
+        }
+    }
+
+    /// Infer WorkStatus from an AdapterReport heuristically.
+    ///
+    /// Uses the adapter's termination signals to determine the most likely
+    /// outcome without relying on the worker's self-report (which may be
+    /// unreliable for local LLMs).
+    pub fn infer_status(report: &AdapterReport) -> WorkStatus {
+        if report.terminated_early {
+            let reason = report
+                .termination_reason
+                .clone()
+                .unwrap_or_else(|| "budget exhausted".into());
+            if report.has_written {
+                WorkStatus::Partial { reason }
+            } else {
+                WorkStatus::Stuck { reason }
+            }
+        } else if report.has_written {
+            WorkStatus::Complete
+        } else {
+            // Agent finished normally but never wrote — likely confused or blocked.
+            WorkStatus::Stuck {
+                reason: "agent completed without writing any files".into(),
+            }
+        }
+    }
+
+    /// Compute a heuristic confidence score from adapter telemetry.
+    ///
+    /// This provides a baseline confidence before verification runs.
+    /// After verification, use `with_verification()` which refines confidence
+    /// based on gate pass rates.
+    pub fn heuristic_confidence(report: &AdapterReport) -> f32 {
+        let mut score: f32 = 0.0;
+
+        // Did it write files? (+0.3)
+        if report.has_written {
+            score += 0.3;
+        }
+
+        // Didn't get terminated early? (+0.2)
+        if !report.terminated_early {
+            score += 0.2;
+        }
+
+        // Tool call efficiency: fewer calls per write = more focused (+0.1–0.2)
+        if report.has_written && report.total_tool_calls > 0 {
+            let writes = report.successful_writes.max(1) as f32;
+            let ratio = writes / report.total_tool_calls as f32;
+            // ratio of 0.1+ is efficient (1 write per 10 calls)
+            score += (ratio * 2.0).min(0.2);
+        }
+
+        // No failed edits? (+0.1)
+        if report.last_failed_edits.is_empty() {
+            score += 0.1;
+        }
+
+        score.clamp(0.0, 1.0)
+    }
+
+    /// Attach verification results and refine confidence.
+    pub fn with_verification(mut self, verification: VerificationResult) -> Self {
+        // Refine confidence based on verification gates.
+        self.confidence = verification.confidence_contribution();
+        self.verification = Some(verification);
+        self
+    }
+
+    /// Attach git diff summary.
+    pub fn with_diff(mut self, diff: String) -> Self {
+        self.git_diff_summary = diff;
+        self
+    }
+
+    /// Attach file manifest with blake3 hashes.
+    pub fn with_manifest(mut self, manifest: Vec<FileManifestEntry>) -> Self {
+        self.file_manifest = manifest;
+        self
+    }
+
+    /// Attach an escalation request.
+    pub fn with_escalation(mut self, escalation: EscalationRequest) -> Self {
+        self.escalation = Some(escalation);
+        self
+    }
+
+    /// Override the confidence score.
+    pub fn with_confidence(mut self, confidence: f32) -> Self {
+        self.confidence = confidence.clamp(0.0, 1.0);
+        self
+    }
+
+    /// Whether this result should trigger auto-escalation to the manager.
+    pub fn needs_escalation(&self) -> bool {
+        self.confidence < 0.5
+            || self.escalation.is_some()
+            || matches!(
+                self.status,
+                WorkStatus::Stuck { .. } | WorkStatus::OutOfScope { .. }
+            )
+    }
+
+    /// Whether this result should be flagged for human review.
+    pub fn needs_human_review(&self) -> bool {
+        self.confidence < 0.3 || matches!(self.status, WorkStatus::Failed { .. })
+    }
+
+    /// Whether the worker made any meaningful progress.
+    pub fn made_progress(&self) -> bool {
+        !self.files_modified.is_empty()
+            && matches!(
+                self.status,
+                WorkStatus::Complete | WorkStatus::Partial { .. }
+            )
+    }
+
+    /// Summary suitable for logging.
+    pub fn summary(&self) -> String {
+        format!(
+            "WorkResult[{}] status={} files_mod={} tools={} turns={} conf={:.2} {}",
+            self.order_id,
+            self.status,
+            self.files_modified.len(),
+            self.tool_calls,
+            self.turns_used,
+            self.confidence,
+            if self.needs_escalation() {
+                "[ESCALATE]"
+            } else {
+                ""
+            },
+        )
+    }
+}
+
+// ── WorkStatus ───────────────────────────────────────────────────────────────
+
+/// Tristate completion signal from a worker.
+///
+/// Research (MAST taxonomy) shows that binary success/fail is insufficient —
+/// workers often make partial progress that should be preserved rather than
+/// rolled back. The tristate enables the orchestrator to make nuanced decisions:
+///
+/// - **Complete**: worker believes task is done → run verification
+/// - **Partial**: worker made progress but couldn't finish → keep changes, retry
+/// - **Stuck**: worker is blocked, needs help → escalate to manager
+/// - **OutOfScope**: task requires changes outside allowed files → reassign
+/// - **Failed**: unrecoverable error → roll back, escalate
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WorkStatus {
+    /// Worker believes the task is done. Run verification to confirm.
+    Complete,
+    /// Worker made progress but couldn't finish. Keep changes.
+    /// Retryable — the reason explains what's left.
+    Partial { reason: String },
+    /// Worker is blocked and needs help. Escalate to manager.
+    Stuck { reason: String },
+    /// Task requires changes outside the worker's allowed files.
+    OutOfScope { reason: String },
+    /// Unrecoverable error. Roll back changes.
+    Failed { error: String },
+}
+
+impl WorkStatus {
+    /// Whether changes from this status should be kept (not rolled back).
+    pub fn keep_changes(&self) -> bool {
+        matches!(self, WorkStatus::Complete | WorkStatus::Partial { .. })
+    }
+
+    /// Whether this status is retryable.
+    pub fn is_retryable(&self) -> bool {
+        matches!(
+            self,
+            WorkStatus::Partial { .. } | WorkStatus::Stuck { .. } | WorkStatus::OutOfScope { .. }
+        )
+    }
+
+    /// Whether this status represents a terminal failure.
+    pub fn is_terminal(&self) -> bool {
+        matches!(self, WorkStatus::Failed { .. })
+    }
+
+    /// Short label for logging and events.
+    pub fn label(&self) -> &'static str {
+        match self {
+            WorkStatus::Complete => "complete",
+            WorkStatus::Partial { .. } => "partial",
+            WorkStatus::Stuck { .. } => "stuck",
+            WorkStatus::OutOfScope { .. } => "out_of_scope",
+            WorkStatus::Failed { .. } => "failed",
+        }
+    }
+}
+
+impl std::fmt::Display for WorkStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            WorkStatus::Complete => write!(f, "complete"),
+            WorkStatus::Partial { reason } => write!(f, "partial: {reason}"),
+            WorkStatus::Stuck { reason } => write!(f, "stuck: {reason}"),
+            WorkStatus::OutOfScope { reason } => write!(f, "out_of_scope: {reason}"),
+            WorkStatus::Failed { error } => write!(f, "failed: {error}"),
+        }
+    }
+}
+
+// ── VerificationResult ───────────────────────────────────────────────────────
+
+/// Simplified verification result for inter-agent communication.
+///
+/// Mirrors the coordination crate's `VerifierReport` but focused on what
+/// the manager/orchestrator needs for decision-making, not the full pipeline
+/// details.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationResult {
+    /// Whether ALL gates passed (clean build).
+    pub all_green: bool,
+    /// cargo fmt passed.
+    pub fmt_pass: bool,
+    /// cargo clippy passed.
+    pub clippy_pass: bool,
+    /// cargo check passed.
+    pub check_pass: bool,
+    /// cargo test passed (None if tests weren't run).
+    pub test_pass: Option<bool>,
+    /// Number of remaining errors.
+    pub error_count: usize,
+    /// Gates passed vs total.
+    pub gates_passed: usize,
+    pub gates_total: usize,
+    /// Human-readable summary.
+    pub summary: String,
+}
+
+impl VerificationResult {
+    /// Compute a confidence contribution from verification gates.
+    ///
+    /// Maps gate pass rates to a 0.0–1.0 confidence score:
+    /// - fmt only: 0.3
+    /// - fmt + clippy: 0.5
+    /// - fmt + clippy + check: 0.75
+    /// - all gates: 1.0
+    pub fn confidence_contribution(&self) -> f32 {
+        let mut score = 0.0f32;
+        if self.fmt_pass {
+            score += 0.2;
+        }
+        if self.clippy_pass {
+            score += 0.2;
+        }
+        if self.check_pass {
+            score += 0.3;
+        }
+        if let Some(true) = self.test_pass {
+            score += 0.3;
+        }
+        score.clamp(0.0, 1.0)
+    }
+}
+
+// ── FileManifestEntry ────────────────────────────────────────────────────────
+
+/// File manifest entry with blake3 hash for programmatic verification.
+///
+/// Enables the manager/orchestrator to verify that the worker's claimed
+/// changes actually happened, without reading file contents.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileManifestEntry {
+    pub path: String,
+    /// blake3 hash of the file content (short form, 2 hex chars).
+    pub hash: String,
+    /// What the worker did to this file.
+    pub action: FileAction,
+}
+
+/// What happened to a file in the worktree.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FileAction {
+    Created,
+    Modified,
+    Deleted,
+}
+
+impl std::fmt::Display for FileAction {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FileAction::Created => write!(f, "created"),
+            FileAction::Modified => write!(f, "modified"),
+            FileAction::Deleted => write!(f, "deleted"),
+        }
+    }
+}
+
+// ── EscalationRequest ────────────────────────────────────────────────────────
+
+/// Worker requesting help from the manager or orchestrator.
+///
+/// Provides structured context about WHY the worker is stuck, enabling
+/// the manager to provide targeted guidance rather than blind re-delegation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EscalationRequest {
+    /// Why the worker is stuck (e.g., "borrow checker error I can't resolve").
+    pub reason: String,
+    /// What the worker suggests the manager do.
+    pub suggested_action: String,
+    /// Files that are blocking progress (may be outside the worker's scope).
+    #[serde(default)]
+    pub blocking_files: Vec<String>,
+}
+
+// ── Build file manifest ──────────────────────────────────────────────────────
+
+/// Build a file manifest from a list of modified file paths in a worktree.
+///
+/// Reads each file and computes a blake3 short hash. Files that don't
+/// exist are assumed deleted. New files are detected by comparing against
+/// a baseline file list.
+pub fn build_file_manifest(
+    worktree_path: &std::path::Path,
+    files_modified: &[String],
+    baseline_files: &[String],
+) -> Vec<FileManifestEntry> {
+    files_modified
+        .iter()
+        .map(|path| {
+            let full_path = worktree_path.join(path);
+            if full_path.exists() {
+                let content = std::fs::read_to_string(&full_path).unwrap_or_default();
+                let hash = blake3::hash(content.as_bytes());
+                let short_hash = format!("{:02x}{:02x}", hash.as_bytes()[0], hash.as_bytes()[1]);
+                let action = if baseline_files.contains(path) {
+                    FileAction::Modified
+                } else {
+                    FileAction::Created
+                };
+                FileManifestEntry {
+                    path: path.clone(),
+                    hash: short_hash,
+                    action,
+                }
+            } else {
+                FileManifestEntry {
+                    path: path.clone(),
+                    hash: String::new(),
+                    action: FileAction::Deleted,
+                }
+            }
+        })
+        .collect()
+}
+
+// ── Conversions ──────────────────────────────────────────────────────────────
+
+/// Convert a `coordination::verifier::VerifierReport` to a `VerificationResult`.
+///
+/// This bridges the coordination crate's detailed report to the simplified
+/// protocol type used for inter-agent communication.
+pub fn verification_from_report(
+    report: &coordination::verifier::VerifierReport,
+) -> VerificationResult {
+    use coordination::verifier::GateOutcome;
+
+    let fmt_pass = report
+        .gates
+        .iter()
+        .any(|g| g.gate == "fmt" && matches!(g.outcome, GateOutcome::Passed));
+    let clippy_pass = report
+        .gates
+        .iter()
+        .any(|g| g.gate == "clippy" && matches!(g.outcome, GateOutcome::Passed));
+    let check_pass = report
+        .gates
+        .iter()
+        .any(|g| g.gate == "check" && matches!(g.outcome, GateOutcome::Passed));
+    let test_pass = report
+        .gates
+        .iter()
+        .find(|g| g.gate == "test")
+        .map(|g| matches!(g.outcome, GateOutcome::Passed));
+
+    VerificationResult {
+        all_green: report.all_green,
+        fmt_pass,
+        clippy_pass,
+        check_pass,
+        test_pass,
+        error_count: report.failure_signals.len(),
+        gates_passed: report.gates_passed,
+        gates_total: report.gates_total,
+        summary: format!(
+            "{}/{} gates passed{}",
+            report.gates_passed,
+            report.gates_total,
+            if report.all_green { " ✓" } else { "" }
+        ),
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn work_order_builder() {
+        let order = WorkOrder::new("order-1", "beads-abc", "Fix parser")
+            .target_files(vec!["src/parser.rs".into()])
+            .forbidden_files(vec!["src/main.rs".into()])
+            .done_when(DoneCriteria::CompileClean)
+            .max_turns(20)
+            .timeout_secs(600)
+            .worker_tier(WorkerTier::Coder)
+            .iteration(2);
+
+        assert_eq!(order.id, "order-1");
+        assert_eq!(order.issue_id, "beads-abc");
+        assert_eq!(order.target_files, vec!["src/parser.rs"]);
+        assert_eq!(order.forbidden_files, vec!["src/main.rs"]);
+        assert_eq!(order.max_turns, 20);
+        assert_eq!(order.timeout_secs, 600);
+        assert_eq!(order.worker_tier, Some(WorkerTier::Coder));
+        assert_eq!(order.iteration, 2);
+    }
+
+    #[test]
+    fn work_order_serialization() {
+        let order =
+            WorkOrder::new("o1", "issue-1", "do stuff").done_when(DoneCriteria::TestsPass {
+                packages: vec!["coordination".into()],
+            });
+
+        let json = serde_json::to_string(&order).unwrap();
+        let parsed: WorkOrder = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.id, "o1");
+        match parsed.done_criteria {
+            DoneCriteria::TestsPass { packages } => {
+                assert_eq!(packages, vec!["coordination"]);
+            }
+            _ => panic!("wrong done_criteria variant"),
+        }
+    }
+
+    #[test]
+    fn work_status_properties() {
+        assert!(WorkStatus::Complete.keep_changes());
+        assert!(WorkStatus::Partial { reason: "x".into() }.keep_changes());
+        assert!(!WorkStatus::Stuck { reason: "x".into() }.keep_changes());
+        assert!(!WorkStatus::Failed { error: "x".into() }.keep_changes());
+
+        assert!(!WorkStatus::Complete.is_retryable());
+        assert!(WorkStatus::Partial { reason: "x".into() }.is_retryable());
+        assert!(WorkStatus::Stuck { reason: "x".into() }.is_retryable());
+        assert!(!WorkStatus::Failed { error: "x".into() }.is_retryable());
+
+        assert!(!WorkStatus::Complete.is_terminal());
+        assert!(WorkStatus::Failed { error: "x".into() }.is_terminal());
+    }
+
+    #[test]
+    fn work_status_labels() {
+        assert_eq!(WorkStatus::Complete.label(), "complete");
+        assert_eq!(
+            WorkStatus::Partial { reason: "x".into() }.label(),
+            "partial"
+        );
+        assert_eq!(
+            WorkStatus::OutOfScope { reason: "x".into() }.label(),
+            "out_of_scope"
+        );
+    }
+
+    #[test]
+    fn work_result_from_adapter_report() {
+        let report = AdapterReport {
+            agent_name: "test-coder".into(),
+            tool_events: vec![],
+            turn_count: 5,
+            total_tool_calls: 12,
+            total_tool_time_ms: 3000,
+            wall_time_ms: 15000,
+            terminated_early: false,
+            termination_reason: None,
+            has_written: true,
+            files_read: vec!["src/lib.rs".into()],
+            files_modified: vec!["src/parser.rs".into()],
+            successful_writes: 3,
+            last_failed_edits: vec![],
+        };
+
+        let result =
+            WorkResult::from_adapter_report("order-1", &report, WorkStatus::Complete, "Fixed it");
+
+        assert_eq!(result.order_id, "order-1");
+        assert!(matches!(result.status, WorkStatus::Complete));
+        assert_eq!(result.files_modified, vec!["src/parser.rs"]);
+        assert_eq!(result.files_read, vec!["src/lib.rs"]);
+        assert_eq!(result.tool_calls, 12);
+        assert_eq!(result.turns_used, 5);
+        assert_eq!(result.wall_time_ms, 15000);
+        assert!(!result.needs_escalation()); // confidence 0.5, complete status
+    }
+
+    #[test]
+    fn infer_status_complete() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 5,
+            total_tool_calls: 10,
+            total_tool_time_ms: 1000,
+            wall_time_ms: 5000,
+            terminated_early: false,
+            termination_reason: None,
+            has_written: true,
+            files_read: vec![],
+            files_modified: vec![],
+            successful_writes: 2,
+            last_failed_edits: vec![],
+        };
+        assert!(matches!(
+            WorkResult::infer_status(&report),
+            WorkStatus::Complete
+        ));
+    }
+
+    #[test]
+    fn infer_status_partial() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 15,
+            total_tool_calls: 30,
+            total_tool_time_ms: 5000,
+            wall_time_ms: 15000,
+            terminated_early: true,
+            termination_reason: Some("deadline exceeded".into()),
+            has_written: true,
+            files_read: vec![],
+            files_modified: vec![],
+            successful_writes: 1,
+            last_failed_edits: vec![],
+        };
+        let status = WorkResult::infer_status(&report);
+        assert!(matches!(status, WorkStatus::Partial { .. }));
+        if let WorkStatus::Partial { reason } = status {
+            assert!(reason.contains("deadline"));
+        }
+    }
+
+    #[test]
+    fn infer_status_stuck() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 40,
+            total_tool_calls: 80,
+            total_tool_time_ms: 10000,
+            wall_time_ms: 30000,
+            terminated_early: true,
+            termination_reason: Some("write deadline".into()),
+            has_written: false,
+            files_read: vec!["src/lib.rs".into()],
+            files_modified: vec![],
+            successful_writes: 0,
+            last_failed_edits: vec![],
+        };
+        let status = WorkResult::infer_status(&report);
+        assert!(matches!(status, WorkStatus::Stuck { .. }));
+    }
+
+    #[test]
+    fn infer_status_stuck_no_write_no_termination() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 3,
+            total_tool_calls: 5,
+            total_tool_time_ms: 500,
+            wall_time_ms: 2000,
+            terminated_early: false,
+            termination_reason: None,
+            has_written: false,
+            files_read: vec![],
+            files_modified: vec![],
+            successful_writes: 0,
+            last_failed_edits: vec![],
+        };
+        let status = WorkResult::infer_status(&report);
+        assert!(matches!(status, WorkStatus::Stuck { .. }));
+    }
+
+    #[test]
+    fn heuristic_confidence_wrote_and_finished() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 5,
+            total_tool_calls: 10,
+            total_tool_time_ms: 1000,
+            wall_time_ms: 5000,
+            terminated_early: false,
+            termination_reason: None,
+            has_written: true,
+            files_read: vec![],
+            files_modified: vec![],
+            successful_writes: 3,
+            last_failed_edits: vec![],
+        };
+        let conf = WorkResult::heuristic_confidence(&report);
+        // 0.3 (wrote) + 0.2 (no early term) + efficiency + 0.1 (no failed edits) ≈ 0.6–0.8
+        assert!(conf >= 0.6, "expected >= 0.6, got {conf}");
+    }
+
+    #[test]
+    fn heuristic_confidence_terminated_no_write() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 40,
+            total_tool_calls: 80,
+            total_tool_time_ms: 10000,
+            wall_time_ms: 30000,
+            terminated_early: true,
+            termination_reason: Some("deadline".into()),
+            has_written: false,
+            files_read: vec![],
+            files_modified: vec![],
+            successful_writes: 0,
+            last_failed_edits: vec![("src/lib.rs".into(), "not found".into())],
+        };
+        let conf = WorkResult::heuristic_confidence(&report);
+        // 0.0 (no write) + 0.0 (terminated) + 0.0 (no writes) + 0.0 (failed edits) = 0.0
+        assert!(conf < 0.1, "expected < 0.1, got {conf}");
+    }
+
+    #[test]
+    fn verification_confidence_mapping() {
+        let v = VerificationResult {
+            all_green: true,
+            fmt_pass: true,
+            clippy_pass: true,
+            check_pass: true,
+            test_pass: Some(true),
+            error_count: 0,
+            gates_passed: 4,
+            gates_total: 4,
+            summary: "4/4 ✓".into(),
+        };
+        let conf = v.confidence_contribution();
+        assert!(
+            (conf - 1.0).abs() < f32::EPSILON,
+            "expected 1.0, got {conf}"
+        );
+
+        let v2 = VerificationResult {
+            all_green: false,
+            fmt_pass: true,
+            clippy_pass: true,
+            check_pass: false,
+            test_pass: None,
+            error_count: 3,
+            gates_passed: 2,
+            gates_total: 3,
+            summary: "2/3".into(),
+        };
+        let conf2 = v2.confidence_contribution();
+        assert!(
+            (conf2 - 0.4).abs() < f32::EPSILON,
+            "expected 0.4, got {conf2}"
+        );
+    }
+
+    #[test]
+    fn work_result_escalation_signals() {
+        let result = WorkResult {
+            order_id: "o1".into(),
+            status: WorkStatus::Stuck {
+                reason: "can't fix".into(),
+            },
+            files_modified: vec![],
+            files_read: vec![],
+            file_manifest: vec![],
+            tool_calls: 0,
+            turns_used: 0,
+            wall_time_ms: 0,
+            git_diff_summary: String::new(),
+            verification: None,
+            worker_message: String::new(),
+            confidence: 0.2,
+            escalation: Some(EscalationRequest {
+                reason: "borrow checker".into(),
+                suggested_action: "restructure lifetimes".into(),
+                blocking_files: vec!["src/main.rs".into()],
+            }),
+        };
+
+        assert!(result.needs_escalation());
+        assert!(result.needs_human_review()); // confidence < 0.3
+        assert!(!result.made_progress());
+    }
+
+    #[test]
+    fn work_result_serialization_roundtrip() {
+        let result = WorkResult {
+            order_id: "o1".into(),
+            status: WorkStatus::Partial {
+                reason: "need more time".into(),
+            },
+            files_modified: vec!["src/a.rs".into()],
+            files_read: vec!["src/b.rs".into()],
+            file_manifest: vec![FileManifestEntry {
+                path: "src/a.rs".into(),
+                hash: "ab".into(),
+                action: FileAction::Modified,
+            }],
+            tool_calls: 5,
+            turns_used: 3,
+            wall_time_ms: 10000,
+            git_diff_summary: " 1 file changed".into(),
+            verification: Some(VerificationResult {
+                all_green: false,
+                fmt_pass: true,
+                clippy_pass: true,
+                check_pass: false,
+                test_pass: None,
+                error_count: 2,
+                gates_passed: 2,
+                gates_total: 3,
+                summary: "2/3".into(),
+            }),
+            worker_message: "partially done".into(),
+            confidence: 0.4,
+            escalation: None,
+        };
+
+        let json = serde_json::to_string_pretty(&result).unwrap();
+        let parsed: WorkResult = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.order_id, "o1");
+        assert!(matches!(parsed.status, WorkStatus::Partial { .. }));
+        assert_eq!(parsed.file_manifest.len(), 1);
+        assert!(parsed.verification.is_some());
+    }
+
+    #[test]
+    fn file_manifest_from_worktree() {
+        let dir = tempfile::tempdir().unwrap();
+        let file_path = dir.path().join("src");
+        std::fs::create_dir_all(&file_path).unwrap();
+        std::fs::write(file_path.join("a.rs"), "fn main() {}").unwrap();
+        std::fs::write(file_path.join("b.rs"), "struct Foo;").unwrap();
+
+        let manifest = build_file_manifest(
+            dir.path(),
+            &[
+                "src/a.rs".into(),
+                "src/b.rs".into(),
+                "src/deleted.rs".into(),
+            ],
+            &["src/a.rs".into()], // a.rs existed before → Modified
+        );
+
+        assert_eq!(manifest.len(), 3);
+        assert_eq!(manifest[0].action, FileAction::Modified); // a.rs
+        assert_eq!(manifest[1].action, FileAction::Created); // b.rs (not in baseline)
+        assert_eq!(manifest[2].action, FileAction::Deleted); // deleted.rs
+        assert!(!manifest[0].hash.is_empty());
+        assert!(manifest[2].hash.is_empty()); // deleted file has no hash
+    }
+
+    #[test]
+    fn done_criteria_serialization() {
+        let cases = vec![
+            DoneCriteria::CompileClean,
+            DoneCriteria::TestsPass {
+                packages: vec!["foo".into(), "bar".into()],
+            },
+            DoneCriteria::PatternRemoved {
+                pattern: "TODO".into(),
+            },
+            DoneCriteria::Custom {
+                command: "cargo test -p foo".into(),
+            },
+        ];
+
+        for criteria in cases {
+            let json = serde_json::to_string(&criteria).unwrap();
+            let parsed: DoneCriteria = serde_json::from_str(&json).unwrap();
+            // Just verify it round-trips without error
+            let json2 = serde_json::to_string(&parsed).unwrap();
+            assert_eq!(json, json2);
+        }
+    }
+
+    #[test]
+    fn work_result_with_verification_refines_confidence() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 5,
+            total_tool_calls: 10,
+            total_tool_time_ms: 1000,
+            wall_time_ms: 5000,
+            terminated_early: false,
+            termination_reason: None,
+            has_written: true,
+            files_read: vec![],
+            files_modified: vec!["src/a.rs".into()],
+            successful_writes: 2,
+            last_failed_edits: vec![],
+        };
+
+        let result = WorkResult::from_adapter_report("o1", &report, WorkStatus::Complete, "done")
+            .with_verification(VerificationResult {
+                all_green: true,
+                fmt_pass: true,
+                clippy_pass: true,
+                check_pass: true,
+                test_pass: Some(true),
+                error_count: 0,
+                gates_passed: 4,
+                gates_total: 4,
+                summary: "4/4 ✓".into(),
+            });
+
+        // Confidence should be 1.0 (all gates passed)
+        assert!(
+            (result.confidence - 1.0).abs() < f32::EPSILON,
+            "expected 1.0, got {}",
+            result.confidence
+        );
+        assert!(!result.needs_escalation());
+    }
+
+    #[test]
+    fn worker_tier_display() {
+        assert_eq!(format!("{}", WorkerTier::Fast), "fast");
+        assert_eq!(format!("{}", WorkerTier::Coder), "coder");
+        assert_eq!(format!("{}", WorkerTier::Reasoning), "reasoning");
+    }
+
+    #[test]
+    fn work_result_summary() {
+        let result = WorkResult {
+            order_id: "o1".into(),
+            status: WorkStatus::Complete,
+            files_modified: vec!["a.rs".into(), "b.rs".into()],
+            files_read: vec![],
+            file_manifest: vec![],
+            tool_calls: 8,
+            turns_used: 4,
+            wall_time_ms: 5000,
+            git_diff_summary: String::new(),
+            verification: None,
+            worker_message: String::new(),
+            confidence: 0.8,
+            escalation: None,
+        };
+
+        let s = result.summary();
+        assert!(s.contains("o1"));
+        assert!(s.contains("complete"));
+        assert!(s.contains("files_mod=2"));
+        assert!(s.contains("tools=8"));
+        assert!(s.contains("conf=0.80"));
+    }
+}
