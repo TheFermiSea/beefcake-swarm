@@ -480,6 +480,27 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
             match tool_class {
                 ToolClass::ReadOnly => {
                     s.consecutive_reads += 1;
+
+                    // Post-write read stall detection: if the agent already wrote files
+                    // and is now just reading, it's likely done but doesn't know it.
+                    // Terminate early to hand control back to the orchestrator's verifier.
+                    if s.has_written && s.consecutive_reads >= 3 {
+                        s.terminated_early = true;
+                        let reason = format!(
+                            "Post-write read stall: {} consecutive read-only calls after \
+                             successful write. Task appears complete — handing off to verifier.",
+                            s.consecutive_reads
+                        );
+                        s.termination_reason = Some(reason.clone());
+                        warn!(
+                            agent = %config.agent_name,
+                            tool = %tool_name,
+                            consecutive_reads = s.consecutive_reads,
+                            "Post-write stall: terminating agent (wrote files, now only reading)"
+                        );
+                        return ToolCallHookAction::terminate(format!("Runtime adapter: {reason}"));
+                    }
+
                     debug!(
                         agent = %config.agent_name,
                         tool = %tool_name,

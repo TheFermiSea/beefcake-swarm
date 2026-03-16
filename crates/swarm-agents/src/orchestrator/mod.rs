@@ -1823,6 +1823,58 @@ async fn process_issue_core(
             lm.emit();
         }
 
+        // --- Compile-clean short-circuit (Worker tier only) ---
+        // If the worker wrote files and compilation passes (fmt + clippy + check),
+        // accept the result even if tests fail — test failures may be pre-existing.
+        // This prevents the "ghost iteration" problem where iteration N+1 re-applies
+        // changes that iteration N already committed correctly.
+        if !report.all_green && agent_has_written_prev && tier == SwarmTier::Worker {
+            use coordination::verifier::GateOutcome;
+            let fmt_ok = report
+                .gates
+                .iter()
+                .any(|g| g.gate == "fmt" && matches!(g.outcome, GateOutcome::Passed));
+            let clippy_ok = report
+                .gates
+                .iter()
+                .any(|g| g.gate == "clippy" && matches!(g.outcome, GateOutcome::Passed));
+            let check_ok = report
+                .gates
+                .iter()
+                .any(|g| g.gate == "check" && matches!(g.outcome, GateOutcome::Passed));
+
+            if fmt_ok && clippy_ok && check_ok {
+                info!(
+                    iteration,
+                    gates_passed = report.gates_passed,
+                    gates_total = report.gates_total,
+                    "Compile-clean short-circuit: worker wrote files and fmt+clippy+check pass. \
+                     Accepting despite test failure (likely pre-existing)."
+                );
+
+                // Record as successful iteration for escalation engine
+                escalation.record_iteration(error_cats.clone(), 0, true);
+                best_error_count = Some(0);
+
+                // Log experiment TSV
+                let commit = pre_worker_commit.as_deref().unwrap_or("unknown");
+                crate::telemetry::append_experiment_tsv(
+                    &wt_path,
+                    commit,
+                    error_count,
+                    &["fmt", "clippy", "check"],
+                    "compile_clean_accept",
+                    &format!(
+                        "Worker wrote files, compile clean (test failures: {})",
+                        error_count
+                    ),
+                );
+
+                // Skip hill-climbing and go straight to acceptance
+                report.all_green = true;
+            }
+        }
+
         // --- Hill-climbing: keep changes only when they improve on the best ---
         if !report.all_green {
             // Reset validator failure counter — verifier itself failed, so

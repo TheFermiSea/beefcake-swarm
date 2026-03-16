@@ -208,9 +208,16 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
     }
 
     prompt.push_str(&format!(
-        "**Max patch size:** {} LOC\n",
+        "**Max patch size:** {} LOC\n\n",
         packet.max_patch_loc
     ));
+
+    prompt.push_str(
+        "**STOP RULE**: Once you have applied your changes with edit_file or write_file, \
+         YOU ARE DONE. Do NOT call any more tools. Do NOT run cargo check, cargo test, \
+         or any verification commands — the orchestrator runs verification automatically. \
+         After your edit succeeds, immediately return a brief summary of what you changed.\n",
+    );
 
     prompt
 }
@@ -340,6 +347,14 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
         }
         prompt.push('\n');
     }
+
+    // Explicit stop instruction — critical for local LLMs that don't self-terminate.
+    prompt.push_str(
+        "**STOP RULE**: Once you have applied your changes with edit_file or write_file, \
+         YOU ARE DONE. Do NOT call any more tools. Do NOT run cargo check, cargo test, \
+         or any verification commands — the orchestrator runs verification automatically. \
+         After your edit succeeds, immediately return a brief summary of what you changed.\n\n",
+    );
 
     // On retries: include error summary (compact — category + message only)
     if !packet.failure_signals.is_empty() {
