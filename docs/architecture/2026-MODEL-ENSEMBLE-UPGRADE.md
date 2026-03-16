@@ -1,7 +1,12 @@
+> **HISTORICAL DOCUMENT** (as of March 16, 2026): This plan has been superseded. The 397B model
+> was replaced by independent 122B-A10B instances on vasp-01 and vasp-02, and the 27B Scout model
+> is now Qwen3.5-27B-Opus-Distilled (distilled from Claude 4.6 Opus reasoning). See `CLAUDE.md`
+> for the current model roster and escalation ladder.
+
 # 2026 Model Ensemble Upgrade - Qwen3.5 Hybrid Strategy
 
 **Date**: March 9, 2026
-**Status**: ACTIVE UPGRADE (In Progress)
+**Status**: HISTORICAL (superseded by independent instance deployment)
 
 ## Overview
 

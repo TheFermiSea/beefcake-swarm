@@ -23,7 +23,7 @@
 
 ## Executive Summary
 
-We surveyed 10+ coding agent harnesses to identify patterns that can improve beefcake-swarm's local-LLM worker reliability (Qwen3.5-397B-A17B on V100S GPUs). Three critical findings:
+We surveyed 10+ coding agent harnesses to identify patterns that can improve beefcake-swarm's local-LLM worker reliability (Qwen3.5-27B-Opus-Distilled + Qwen3.5-122B-A10B MoE on V100S GPUs). Three critical findings:
 
 1. **Aider's repo map** (PageRank + tree-sitter) is the gold standard for context packing. Our alphabetical file walk only reaches `coordination/src/` files, never `crates/swarm-agents/`. Graph-based ranking solves this directly.
 
@@ -218,12 +218,16 @@ const stream = streamText({
 - **Edit format enforcement** acts as implicit steering — unified diffs make the model produce machine-parsable output instead of conversational text
 - **Architect mode**: Two-step (reasoning model proposes, editing model executes) naturally limits each model's scope
 
-### Our System: Write Deadline
+### Our System: Write Deadline + Post-Write Stall Detection
 
-- `max_turns_without_write=5` in RuntimeAdapter terminates agents that don't call edit_file/write_file
-- `SWARM_MAX_NO_CHANGE=3` circuit breaker for stuck iterations
+- `max_turns_without_write=8` terminates agents that don't call edit_file/write_file (tightened from 5)
+- `max_tool_calls=15` hard budget on total tool calls per worker invocation
+- `SWARM_MAX_NO_CHANGE=2` circuit breaker for stuck iterations
 - `SWARM_MAX_RETRIES=10` overall iteration limit
-- **Problem observed**: Qwen3.5 exits the Rig loop by returning text on turn 4 (no tool call), bypassing the write deadline entirely
+- Post-write read stall detector: detects when worker only calls read-only tools (search_code, colgrep, ast_grep, run_command) after writing
+- Compile-clean short-circuit: if verifier passes, stop immediately
+- STOP RULE injected in worker prompts to enforce termination
+- **Problem observed (mitigated)**: Qwen3.5 exits the Rig loop by returning text (no tool call), bypassing the write deadline — now addressed by STOP RULE in prompts
 
 ### Comparison
 
@@ -233,7 +237,7 @@ const stream = streamText({
 | **Gemini CLI** | 15 turns | 5 min | `complete_task` required |
 | **Codex CLI** | None | None | Model self-terminates |
 | **Aider** | None | None | Edit format enforcement |
-| **Our system** | 15 turns + write deadline | 15 min HTTP timeout | `max_turns_without_write=5` |
+| **Our system** | 15 turns + write deadline + max_tool_calls=15 | 15 min HTTP timeout | `max_turns_without_write=8` + post-write stall detector |
 
 ---
 
@@ -249,7 +253,7 @@ From Aider's controlled experiments on GPT-4 Turbo:
 | **Unified Diff** | **61%** | 3x reduction in lazy coding |
 | Whole File | ~61% | Comparable success but much higher cost/latency |
 
-**Key insight**: Unified diffs make models treat output as "textual data for a program" rather than conversational text. This behavioral shift is exactly what we need from Qwen3.5 (which tends to dump 4500+ tokens of analysis text instead of tool calls).
+**Key insight**: Unified diffs make models treat output as "textual data for a program" rather than conversational text. This behavioral shift is what we need from local workers (which can dump 4500+ tokens of analysis text instead of tool calls — mitigated in v7.1.0 via STOP RULE and post-write stall detection).
 
 ### Codex CLI: Patch-Based Edits
 
@@ -431,8 +435,8 @@ Amp's most distinctive feature is its **multi-model architecture**:
 
 ### Our System: Cloud Manager + Local Workers
 
-- Cloud manager (Claude Opus) plans and delegates via WorkPackets
-- Local workers (Qwen3.5 on 3 nodes) execute code changes in git worktrees
+- Cloud manager (claude-opus-4-6) plans and delegates via WorkPackets
+- Local workers (Qwen3.5-27B-Opus-Distilled + Qwen3.5-122B-A10B MoE on 3 nodes) execute code changes in git worktrees
 - State shared via WorkPacket serialization
 - Closest to **Aider's Architect pattern** — reasoning model proposes, editing model executes
 - Key difference: We pass structured WorkPackets; Aider passes natural language proposals
@@ -544,13 +548,18 @@ The most explicit retry loop of any tool surveyed:
 - **Model provider failover**: If primary API fails, falls back to alternate providers
 - **Weakness**: Can freeze during processing with no indication. Manual `s` to stop + `plandex rewind` required
 
-### Our System: Write Deadline + Max No-Change
+### Our System: Write Deadline + Post-Write Stall Detection + Max No-Change
 
-- `max_turns_without_write=5`: Terminates agents that don't write within N turns
-- `SWARM_MAX_NO_CHANGE=3`: Circuit breaker for iterations with no file changes
+- `max_turns_without_write=8`: Terminates agents that don't write within N turns (tightened budget)
+- `max_tool_calls=15`: Hard budget on total tool calls per worker invocation
+- `SWARM_MAX_NO_CHANGE=2`: Circuit breaker for iterations with no file changes
 - `SWARM_MAX_RETRIES=10`: Overall limit
-- **Gap**: No per-edit validation, no LSP feedback, no loop detection events
-- **Note**: Beefcake-swarm's stall detection is already more sophisticated than most surveyed tools
+- Post-write read stall detector: catches workers that only read after writing (search_code, colgrep, ast_grep, run_command classified as ReadOnly)
+- Compile-clean short-circuit: if cargo check passes after write, stop iteration early
+- cargo fmt runs before verifier in agent failure path (prevents false-negative compile errors from formatting)
+- STOP RULE in worker prompts (v7.1.0) with search tool documentation
+- **Gap**: No per-edit validation, no LSP feedback
+- **Note**: Beefcake-swarm's stall detection is now more sophisticated than most surveyed tools
 
 ### Comparison
 
@@ -564,7 +573,7 @@ The most explicit retry loop of any tool surveyed:
 | **Gemini CLI** | Event-based + time limits | None | Turn-level |
 | **Codex CLI** | None (model trusted) | None | N/A |
 | **Ralph** | Circuit breaker (3 loops) | None | 30-min cooldown |
-| **Our system** | Write deadline (5 turns) | Full verifier (post-iteration) | Minutes |
+| **Our system** | Write deadline (8 turns) + post-write stall + STOP RULE | Full verifier (post-iteration) + compile-clean short-circuit | Seconds-Minutes |
 
 ---
 
@@ -674,7 +683,7 @@ Run `cargo check --message-format=json` after every edit and feed diagnostics ba
 Change `edit_file` to accept unified diffs instead of search/replace blocks.
 
 - **Evidence**: 61% vs 20% success rate (GPT-4 Turbo). 3x reduction in lazy coding
-- **Risk**: Requires testing with Qwen3.5 specifically — the benchmark was on GPT-4 Turbo
+- **Risk**: Requires testing with Qwen3.5-27B-Opus-Distilled and Qwen3.5-122B-A10B specifically — the benchmark was on GPT-4 Turbo
 - **Implementation**: New tool `apply_diff` that accepts unified diff format, parses and applies patches
 - **Alternative**: Keep search/replace but add Gemini CLI's fuzzy matching fallback chain
 

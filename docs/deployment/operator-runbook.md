@@ -2,7 +2,7 @@
 
 **Audience:** On-call operators and developers  
 **Scope:** Restart order, endpoint probes, and swarm resume strategy  
-**Last updated:** 2026-02-27
+**Last updated:** 2026-03-16
 
 ---
 
@@ -12,7 +12,7 @@ Bring components up in this order. Each step depends on the previous.
 
 ```
 1. NFS server (slurm-ctl)
-2. Inference endpoints (vasp-02, then vasp-01)
+2. Inference endpoints (vasp-03, vasp-01, vasp-02)
 3. Cloud proxy / ai-proxy
 4. SLURM swarm jobs
 ```
@@ -35,35 +35,47 @@ ssh root@10.0.0.21 "df -h /cluster/shared"
 
 ### 1.2 Inference endpoints
 
-**vasp-02 (HydraCoder 30B — all tiers)**
+**vasp-03 (Scout/Fast — Qwen3.5-27B-Opus-Distilled Q4_K_M)**
 
 ```bash
-ssh root@10.0.0.21
-# Check if already running
+ssh root@10.0.0.22
 pgrep -a llama-server
-# Start HydraCoder (manual, no SLURM while NFS is unavailable)
-nohup /tmp/start-hydracoder.sh > /tmp/hydracoder-server.log 2>&1 &
+# Start via SLURM:
+sbatch /cluster/shared/scripts/run-27b-256k.slurm
 ```
 
 Verify endpoint health:
 
 ```bash
-curl -fsS http://10.0.0.21:8080/health && echo " vasp-02 OK"
+curl -fsS http://10.0.0.22:8081/health && echo " vasp-03 OK"
 ```
 
-**vasp-01 (Qwen3.5-397B — deferred until disk space restored)**
+**vasp-01 (Coder — Qwen3.5-122B-A10B MoE)**
 
 ```bash
 ssh root@10.0.0.20
 pgrep -a llama-server
-# When Qwen3.5 download completes:
-nohup /tmp/start-qwen35.sh > /tmp/qwen35-server.log 2>&1 &
+# Start via SLURM:
+sbatch /cluster/shared/scripts/run-122b-rpc.slurm
 ```
 
 Verify:
 
 ```bash
 curl -fsS http://10.0.0.20:8081/health && echo " vasp-01 OK"
+```
+
+**vasp-02 (Reasoning — Qwen3.5-122B-A10B MoE)**
+
+```bash
+ssh root@10.0.0.21
+pgrep -a llama-server
+```
+
+Verify:
+
+```bash
+curl -fsS http://10.0.0.21:8081/health && echo " vasp-02 OK"
 ```
 
 ### 1.3 Cloud proxy (ai-proxy)
@@ -114,8 +126,9 @@ check() {
     fi
 }
 
-check "vasp-02 HydraCoder"  http://10.0.0.21:8080/health
-check "vasp-01 Qwen3.5"     http://10.0.0.20:8081/health
+check "vasp-03 Scout/Fast"   http://10.0.0.22:8081/health
+check "vasp-01 Coder"       http://10.0.0.20:8081/health
+check "vasp-02 Reasoning"   http://10.0.0.21:8081/health
 check "ai-proxy"            http://10.0.0.5:8317/health
 check "NFS"                 "$(df /cluster/shared 2>&1 | grep -q cluster && echo OK || echo FAIL)"
 ```
@@ -125,9 +138,9 @@ check "NFS"                 "$(df /cluster/shared 2>&1 | grep -q cluster && echo
 Verify a model actually generates tokens (not just health ping):
 
 ```bash
-curl -sS http://10.0.0.21:8080/v1/chat/completions \
+curl -sS http://10.0.0.22:8081/v1/chat/completions \
   -H "Content-Type: application/json" \
-  -d '{"model":"HydraCoder.i1-Q4_K_M","messages":[{"role":"user","content":"Reply with one word: Ready"}],"max_tokens":5}' \
+  -d '{"model":"Qwen3.5-27B-Opus-Distilled","messages":[{"role":"user","content":"Reply with one word: Ready"}],"max_tokens":5}' \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['choices'][0]['message']['content'])"
 ```
 
@@ -247,8 +260,9 @@ bd annotate beefcake-XXXX "Returned to open — swarm exhausted budget. Needs hu
 | Source | Path |
 |--------|------|
 | SLURM swarm job | `/cluster/shared/ai/logs/swarm-orch-<JOBID>.log` |
-| HydraCoder server | `/tmp/hydracoder-server.log` (on vasp-02) |
-| Qwen3.5 server | `/tmp/qwen35-server.log` (on vasp-01) |
+| Scout/Fast server (27B) | SLURM log (on vasp-03) |
+| Coder server (122B) | SLURM log (on vasp-01) |
+| Reasoning server (122B) | SLURM log (on vasp-02) |
 | Cloud proxy | `journalctl --user -u cloud-proxy` (on ai-proxy) |
 | Swarm telemetry | `$REPO/.swarm-telemetry.jsonl` (JSONL, append-only) |
 | Per-issue metrics | `$WORKTREE/.swarm-metrics.json` |

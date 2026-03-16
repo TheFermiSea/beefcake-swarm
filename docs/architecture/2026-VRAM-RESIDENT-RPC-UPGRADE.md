@@ -1,7 +1,12 @@
+> **HISTORICAL DOCUMENT** (as of March 16, 2026): The RPC-distributed 122B topology has been
+> replaced by independent single-node instances (vasp-01 Coder, vasp-02 Reasoning). The 27B
+> Scout model is now Qwen3.5-27B-Opus-Distilled Q4_K_M with 65K context (not 192K). See
+> `CLAUDE.md` for the current model roster and escalation ladder.
+
 # 2026 Model Ensemble Upgrade - VRAM-Resident Distributed Strategy (RPC)
 
 **Date**: March 9, 2026
-**Status**: DEPLOYED / ACTIVE
+**Status**: HISTORICAL (superseded by independent instance deployment)
 **Epic**: `beefcake-wy9r`
 
 ## Overview

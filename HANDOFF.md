@@ -82,8 +82,9 @@ if plan.subtasks.len() == 1 && config.cloud_available() {
 
 ### Infrastructure
 - **Inference Endpoints**: ✅ Online (as of 2026-03-12 ~11:30)
-  - Scout (Qwen3.5-27B-Distilled): vasp-03:8081, SLURM job 1824
-  - Integrator (Qwen3.5-122B-A10B MoE): vasp-01:8081, SLURM job 1825
+  - Scout/Fast (Qwen3.5-27B-Opus-Distilled Q4_K_M): vasp-03:8081
+  - Coder (Qwen3.5-122B-A10B MoE): vasp-01:8081
+  - Reasoning (Qwen3.5-122B-A10B MoE): vasp-02:8081
   - Both responding to health checks: `curl -s http://10.0.0.22:8081/health` → `{"status":"ok"}`
 
 - **Cloud Proxy**: ✅ Running on ai-proxy (localhost:8317), CLIAPIProxy relay active
@@ -192,8 +193,8 @@ cargo clippy --workspace -- -D warnings
 # Expected: No errors
 
 # 4. Endpoints healthy
-curl -s http://10.0.0.22:8081/health  # Scout
-curl -s http://10.0.0.20:8081/health  # Integrator
+curl -s http://10.0.0.22:8081/health  # Scout/Fast
+curl -s http://10.0.0.20:8081/health  # Coder
 # Expected: {"status": "ok"}
 ```
 
@@ -254,8 +255,8 @@ WARN subtask: Worker budget exhausted: turns_without_write=8, max=8
 **Fix**: Restart SLURM jobs:
 ```bash
 ssh root@10.0.0.5
-sbatch /cluster/shared/scripts/llama-cpp/run-27b-256k.slurm   # Scout
-sbatch /cluster/shared/scripts/llama-cpp/run-122b-rpc.slurm    # Integrator
+sbatch /cluster/shared/scripts/llama-cpp/run-27b-256k.slurm   # Scout/Fast
+sbatch /cluster/shared/scripts/llama-cpp/run-122b-rpc.slurm    # Coder
 # Wait 30-60 sec for endpoints to load models and become ready
 ```
 
@@ -326,8 +327,8 @@ sbatch /cluster/shared/scripts/llama-cpp/run-122b-rpc.slurm    # Integrator
 
 ```bash
 # Health checks
-curl -s http://10.0.0.22:8081/health  # Scout
-curl -s http://10.0.0.20:8081/health  # Integrator
+curl -s http://10.0.0.22:8081/health  # Scout/Fast
+curl -s http://10.0.0.20:8081/health  # Coder
 
 # Build & test
 cargo build -p swarm-agents && cargo test -p swarm-agents && cargo clippy --workspace -- -D warnings

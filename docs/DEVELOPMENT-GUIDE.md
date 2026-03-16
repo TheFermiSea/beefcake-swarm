@@ -4,7 +4,7 @@
 
 The beefcake-swarm runs on a 3-node HPC cluster with NVIDIA V100S GPUs:
 
-- **2+1 Topology**: vasp-02 (fast 14B), vasp-01+vasp-03 (reasoning 72B via RPC)
+- **3-Node Independent Instances**: vasp-03 (Scout/Fast 27B-Opus-Distilled), vasp-01 (Coder 122B MoE), vasp-02 (Reasoning 122B MoE)
 - **Scheduler**: SLURM for all compute (inference jobs, future agent jobs)
 - **Storage**: NFS shared from slurm-ctl (10.0.0.5)
 - **Gateway**: ai-proxy LXC for external access
@@ -23,12 +23,12 @@ use rig::providers::openai;
 // Create a client pointing at local llama-server
 let client = openai::CompletionsClient::builder()
     .api_key("not-needed")
-    .base_url("http://vasp-02:8080/v1")
+    .base_url("http://vasp-03:8081/v1")
     .build()?;
 
 // Build an agent with a system prompt
 let agent = client
-    .agent("strand-rust-coder-14b-q8_0")
+    .agent("Qwen3.5-27B-Opus-Distilled")
     .preamble("You are an expert Rust developer.")
     .build();
 
@@ -83,29 +83,30 @@ Forked from `Dicklesworthstone/agentic_coding_flywheel_setup`. Adapting for SLUR
 
 ```
                 ┌──────────────────────────────────┐
-                │   Orchestrator (swarm-agents)     │
-                │   Queries beads for next TODO     │
+                │   Cloud Manager (claude-opus-4-6) │
+                │   Plans and delegates via proxy   │
                 └──────┬──────────────┬────────────┘
                        │              │
                 ┌──────▼──────┐ ┌─────▼──────────┐
-                │ Implementer │ │   Validator     │
-                │ (72B tier)  │ │   (14B tier)    │
-                │ vasp-01:8081│ │   vasp-02:8080  │
+                │   Workers   │ │   Verifier      │
+                │ vasp-03:8081│ │ (deterministic)  │
+                │ vasp-01:8081│ │ fmt→clippy→test  │
+                │ vasp-02:8081│ │                  │
                 └──────┬──────┘ └─────┬──────────┘
                        │              │
                 ┌──────▼──────────────▼────────────┐
                 │        Gastown Worktree           │
-                │  /cluster/shared/wt/<issue_id>    │
+                │  /tmp/beefcake-wt/<issue_id>      │
                 └──────────────────────────────────┘
 ```
 
-1. **Orchestrator**: `br list --status=open --json` → pick highest-priority TODO
-2. **Environment**: `gastown create <issue_id>` → isolated worktree
-3. **Implementer**: Rig agent calls 72B, reads files, writes code
-4. **Verifier**: `cargo fmt && cargo clippy && cargo test` (deterministic)
-5. **Validator**: Rig agent calls 14B, reviews diff *without seeing implementer context* (blind)
-6. **If pass**: `gastown merge` → `br close <id>`
-7. **If fail**: `br update <id> --notes "validator feedback"` → loop back to step 3
+1. **Orchestrator**: Pick highest-priority beads issue (or CLI `--issue`)
+2. **Environment**: Create Gastown worktree in `/tmp/beefcake-wt/<issue-id>`
+3. **Cloud Manager**: claude-opus-4-6 plans and delegates via CLIAPIProxy
+4. **Workers**: Local LLMs (27B-Opus-Distilled on vasp-03, 122B on vasp-01 + vasp-02) execute code changes
+5. **Verifier**: `cargo fmt && cargo clippy && cargo check && cargo test` (deterministic)
+6. **If pass**: merge + close issue
+7. **If fail**: retry up to `SWARM_MAX_RETRIES`
 
 ## 4. Context Building (Critical Gap)
 
@@ -118,9 +119,9 @@ Agents need a "repo packer" to build context windows:
 ## 5. SLURM Integration
 
 ```bash
-# Start inference
-sbatch inference/slurm/run-14b.slurm
-sbatch inference/slurm/run-72b-distributed.slurm
+# Start inference (independent instances)
+ssh root@10.0.0.22 "sbatch /cluster/shared/scripts/run-27b-256k.slurm"
+ssh root@10.0.0.20 "sbatch /cluster/shared/scripts/run-122b-rpc.slurm"
 
 # Future: agent batch jobs
 sbatch --dependency=afterok:$JOB_ID agent-task.slurm
