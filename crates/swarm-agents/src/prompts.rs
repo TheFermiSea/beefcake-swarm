@@ -5,7 +5,7 @@
 //! useful for debugging regressions in agent behavior.
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "7.0.0";
+pub const PROMPT_VERSION: &str = "7.1.0";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -247,6 +247,20 @@ Do NOT run cargo check/test yourself. Do NOT commit.
 - **write_file**: Use ONLY for creating new files. Never use write_file on existing files \
   unless the entire file must be replaced (rare).
 
+## Search Tools
+When you need to find code patterns, callers, or implementations:
+- **colgrep**: Semantic code search. Best for finding related code by meaning: \
+  `colgrep \"error handling\" ./src`. Also supports regex: `colgrep -e \"fn.*auth\" \"authentication\"`.
+- **search_code**: Ripgrep wrapper. Fast exact pattern matching: `search_code pattern=\"impl Tool\" glob=\"*.rs\"`.
+- **ast_grep**: Structural AST search. Matches code structure, not text: \
+  `ast_grep pattern=\"$EXPR.unwrap()\"` finds all unwrap calls. \
+  Rules available: unwrap-in-production, blocking-in-async, hardcoded-endpoints.
+- **query_notebook**: Query the project knowledge base for architecture decisions, \
+  debugging playbooks, or known fix patterns. Roles: project_brain, debugging_kb.
+
+Prefer **colgrep** for finding relevant code when you don't know the exact pattern. \
+Prefer **ast_grep** for structural patterns like \"all functions returning Result\".
+
 ## Rust Expertise (Reasoning-Enhanced)
 - Borrow checker: use your reasoning to identify the *minimal* scope change needed.
 - Trait bounds: analyze the error chain to see where the bound originates.
@@ -319,6 +333,19 @@ Do NOT run cargo check/test yourself. Do NOT commit.
   to find (old_content) and its replacement (new_content). Include 3-5 lines of surrounding \
   context to ensure uniqueness. This is faster and safer than rewriting the whole file.
 - **write_file**: Use ONLY for creating new files or replacing entire file contents (rare).
+
+## Search Tools
+When you need to find code patterns, callers, or implementations:
+- **colgrep**: Semantic code search. Best for finding related code by meaning: \
+  `colgrep \"error handling\" ./src`. Also supports regex: `colgrep -e \"fn.*auth\" \"authentication\"`.
+- **search_code**: Ripgrep wrapper. Fast exact pattern matching: `search_code pattern=\"impl Tool\" glob=\"*.rs\"`.
+- **ast_grep**: Structural AST search. Matches code structure, not text: \
+  `ast_grep pattern=\"$EXPR.unwrap()\"` finds all unwrap calls.
+- **query_notebook**: Query the project knowledge base for architecture decisions, \
+  debugging playbooks, or known fix patterns. Roles: project_brain, debugging_kb.
+
+Prefer **colgrep** for broad exploration (\"where is authentication handled?\"). \
+Prefer **search_code** for exact patterns. Prefer **ast_grep** for structural patterns.
 
 ## Capabilities
 - Multi-file changes: coordinate across modules, update imports, fix cascading errors.

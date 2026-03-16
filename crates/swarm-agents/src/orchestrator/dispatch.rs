@@ -348,6 +348,12 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
         prompt.push('\n');
     }
 
+    // Search tool hints — workers have these but won't use them without prompting.
+    prompt.push_str(
+        "**Search tools**: Use `colgrep` for semantic search, `search_code` for exact patterns, \
+         `ast_grep` for structural code patterns (e.g. `$EXPR.unwrap()`).\n\n",
+    );
+
     // Explicit stop instruction — critical for local LLMs that don't self-terminate.
     prompt.push_str(
         "**STOP RULE**: Once you have applied your changes with edit_file or write_file, \
