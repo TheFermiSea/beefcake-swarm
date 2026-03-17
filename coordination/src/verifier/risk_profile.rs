@@ -105,6 +105,143 @@ impl DiffRiskProfile {
     pub fn should_prefer_nextest(&self) -> bool {
         self.files_changed >= 3 || self.lines_added >= 100
     }
+
+    /// Net line delta (positive = growth, negative = shrinkage).
+    pub fn net_delta(&self) -> i64 {
+        self.lines_added as i64 - self.lines_removed as i64
+    }
+
+    /// Evaluate change complexity against thresholds.
+    ///
+    /// Implements the autoresearch principle: "if improvement is tiny but adds
+    /// disproportionate complexity, flag it; if the same improvement removes
+    /// code, it's a simplification win."
+    ///
+    /// Returns `None` if within thresholds, or `Some(ComplexityWarning)` if exceeded.
+    pub fn check_complexity(&self, thresholds: &ComplexityThresholds) -> Option<ComplexityWarning> {
+        let mut reasons = Vec::new();
+
+        // Check absolute line growth
+        if self.net_delta() > thresholds.max_net_lines_added as i64 {
+            reasons.push(format!(
+                "net +{} lines (threshold: {})",
+                self.net_delta(),
+                thresholds.max_net_lines_added
+            ));
+        }
+
+        // Check file count
+        if self.files_changed > thresholds.max_files_changed {
+            reasons.push(format!(
+                "{} files changed (threshold: {})",
+                self.files_changed, thresholds.max_files_changed
+            ));
+        }
+
+        // Check bloat ratio: lines_added / max(lines_removed, 1)
+        // High ratio means lots of new code relative to what was replaced
+        if self.lines_removed > 0 {
+            let ratio = self.lines_added as f64 / self.lines_removed as f64;
+            if ratio > thresholds.max_bloat_ratio {
+                reasons.push(format!(
+                    "bloat ratio {ratio:.1}x (added {}/removed {}, threshold: {:.1}x)",
+                    self.lines_added, self.lines_removed, thresholds.max_bloat_ratio
+                ));
+            }
+        } else if self.lines_added > thresholds.max_net_lines_added {
+            // All additions, no removals — pure growth
+            reasons.push(format!(
+                "pure addition of {} lines with no removals",
+                self.lines_added
+            ));
+        }
+
+        if reasons.is_empty() {
+            None
+        } else {
+            Some(ComplexityWarning {
+                net_delta: self.net_delta(),
+                files_changed: self.files_changed,
+                lines_added: self.lines_added,
+                lines_removed: self.lines_removed,
+                bloat_ratio: if self.lines_removed > 0 {
+                    self.lines_added as f64 / self.lines_removed as f64
+                } else {
+                    f64::INFINITY
+                },
+                is_simplification: self.net_delta() < 0,
+                reasons,
+            })
+        }
+    }
+}
+
+/// Thresholds for the complexity guard.
+///
+/// Configurable via environment variables:
+/// - `SWARM_COMPLEXITY_MAX_LINES` (default: 300)
+/// - `SWARM_COMPLEXITY_MAX_FILES` (default: 15)
+/// - `SWARM_COMPLEXITY_MAX_BLOAT_RATIO` (default: 5.0)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComplexityThresholds {
+    /// Maximum net lines added (additions - removals)
+    pub max_net_lines_added: usize,
+    /// Maximum number of files changed
+    pub max_files_changed: usize,
+    /// Maximum ratio of lines added to lines removed (bloat detector)
+    pub max_bloat_ratio: f64,
+}
+
+impl Default for ComplexityThresholds {
+    fn default() -> Self {
+        Self {
+            max_net_lines_added: 300,
+            max_files_changed: 15,
+            max_bloat_ratio: 5.0,
+        }
+    }
+}
+
+impl ComplexityThresholds {
+    /// Load thresholds from environment variables, falling back to defaults.
+    pub fn from_env() -> Self {
+        let mut t = Self::default();
+        if let Ok(v) = std::env::var("SWARM_COMPLEXITY_MAX_LINES") {
+            if let Ok(n) = v.parse() {
+                t.max_net_lines_added = n;
+            }
+        }
+        if let Ok(v) = std::env::var("SWARM_COMPLEXITY_MAX_FILES") {
+            if let Ok(n) = v.parse() {
+                t.max_files_changed = n;
+            }
+        }
+        if let Ok(v) = std::env::var("SWARM_COMPLEXITY_MAX_BLOAT_RATIO") {
+            if let Ok(n) = v.parse() {
+                t.max_bloat_ratio = n;
+            }
+        }
+        t
+    }
+}
+
+/// Warning produced when a change exceeds complexity thresholds.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ComplexityWarning {
+    /// Net line delta (positive = growth)
+    pub net_delta: i64,
+    /// Number of files changed
+    pub files_changed: usize,
+    /// Lines added
+    pub lines_added: usize,
+    /// Lines removed
+    pub lines_removed: usize,
+    /// Ratio of additions to removals
+    pub bloat_ratio: f64,
+    /// Whether this is a simplification (net negative delta)
+    pub is_simplification: bool,
+    /// Human-readable reasons for the warning
+    pub reasons: Vec<String>,
 }
 
 /// Get the git diff text from a working directory.
@@ -289,6 +426,99 @@ diff --git a/src/c.rs b/src/c.rs
         assert!(!profile.should_run_deny());
         assert!(!profile.should_run_doc());
         assert!(!profile.should_prefer_nextest());
+    }
+
+    #[test]
+    fn test_complexity_within_thresholds() {
+        let profile = DiffRiskProfile {
+            lines_added: 20,
+            lines_removed: 10,
+            files_changed: 3,
+            ..Default::default()
+        };
+        let thresholds = ComplexityThresholds::default();
+        assert!(profile.check_complexity(&thresholds).is_none());
+    }
+
+    #[test]
+    fn test_complexity_net_lines_exceeded() {
+        let profile = DiffRiskProfile {
+            lines_added: 400,
+            lines_removed: 50,
+            files_changed: 5,
+            ..Default::default()
+        };
+        let thresholds = ComplexityThresholds::default(); // max_net_lines_added = 300
+        let warning = profile.check_complexity(&thresholds);
+        assert!(warning.is_some());
+        let w = warning.unwrap();
+        assert!(w.reasons.iter().any(|r| r.contains("net +")));
+    }
+
+    #[test]
+    fn test_complexity_bloat_ratio_exceeded() {
+        let profile = DiffRiskProfile {
+            lines_added: 60,
+            lines_removed: 10,
+            files_changed: 2,
+            ..Default::default()
+        };
+        let thresholds = ComplexityThresholds::default(); // max_bloat_ratio = 5.0
+        let warning = profile.check_complexity(&thresholds);
+        assert!(warning.is_some());
+        let w = warning.unwrap();
+        assert!(w.reasons.iter().any(|r| r.contains("bloat ratio")));
+        assert!((w.bloat_ratio - 6.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_complexity_simplification_passes() {
+        let profile = DiffRiskProfile {
+            lines_added: 5,
+            lines_removed: 50,
+            files_changed: 3,
+            ..Default::default()
+        };
+        let thresholds = ComplexityThresholds::default();
+        // Net delta is negative (simplification) — should pass
+        assert!(profile.check_complexity(&thresholds).is_none());
+        assert!(profile.net_delta() < 0);
+    }
+
+    #[test]
+    fn test_complexity_max_files_exceeded() {
+        let profile = DiffRiskProfile {
+            lines_added: 50,
+            lines_removed: 30,
+            files_changed: 20,
+            ..Default::default()
+        };
+        let thresholds = ComplexityThresholds::default(); // max_files_changed = 15
+        let warning = profile.check_complexity(&thresholds);
+        assert!(warning.is_some());
+        let w = warning.unwrap();
+        assert!(w.reasons.iter().any(|r| r.contains("files changed")));
+    }
+
+    #[test]
+    fn test_complexity_custom_thresholds() {
+        let profile = DiffRiskProfile {
+            lines_added: 50,
+            lines_removed: 10,
+            files_changed: 3,
+            ..Default::default()
+        };
+        // Strict thresholds
+        let strict = ComplexityThresholds {
+            max_net_lines_added: 20,
+            max_files_changed: 2,
+            max_bloat_ratio: 3.0,
+        };
+        let warning = profile.check_complexity(&strict);
+        assert!(warning.is_some());
+        // Should trigger all three
+        let w = warning.unwrap();
+        assert!(w.reasons.len() >= 2); // net lines + bloat ratio at minimum
     }
 
     #[test]

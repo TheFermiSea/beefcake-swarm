@@ -49,6 +49,14 @@ pub struct VerifierConfig {
     /// Enable adaptive gate selection based on diff risk profile.
     /// When true, deny/doc/nextest are auto-enabled based on what changed.
     pub adaptive: bool,
+    /// Enable complexity guard (advisory gate).
+    /// Flags changes that add disproportionate complexity.
+    /// Inspired by autoresearch: "simpler is better."
+    pub check_complexity: bool,
+    /// Complexity thresholds (max lines, max files, max bloat ratio).
+    /// Loaded from env vars when using `ComplexityThresholds::from_env()`.
+    #[serde(default)]
+    pub complexity_thresholds: super::risk_profile::ComplexityThresholds,
 }
 
 impl Default for VerifierConfig {
@@ -68,6 +76,8 @@ impl Default for VerifierConfig {
             check_doc: false,
             use_nextest: false,
             adaptive: false,
+            check_complexity: false,
+            complexity_thresholds: super::risk_profile::ComplexityThresholds::default(),
         }
     }
 }
@@ -152,6 +162,10 @@ impl VerifierConfig {
         if profile.should_prefer_nextest() {
             self.use_nextest = true;
         }
+
+        // Always run complexity guard in adaptive mode
+        self.check_complexity = true;
+        self.complexity_thresholds = super::risk_profile::ComplexityThresholds::from_env();
     }
 }
 
@@ -296,6 +310,12 @@ impl Verifier {
             let result = self.run_doc_gate().await;
             report.add_gate(result);
             // doc gate is warning-only for now
+        }
+
+        // Gate 7: Complexity guard (advisory — autoresearch principle: "simpler is better")
+        if config.check_complexity {
+            let result = self.run_complexity_gate(&config, &report);
+            report.add_gate(result);
         }
 
         report.finalize(start.elapsed());
@@ -789,6 +809,83 @@ impl Verifier {
                 errors: vec![],
                 stderr_excerpt: Some(format!("cargo doc failed: {e}")),
             },
+        }
+    }
+
+    /// Run complexity guard — advisory gate that flags disproportionate changes.
+    ///
+    /// Uses the diff risk profile (from adaptive mode or computed fresh) to check
+    /// whether the change exceeds complexity thresholds. Warning-only: never blocks
+    /// the pipeline, but the warning is visible in the report for the manager agent
+    /// and the acceptance policy.
+    ///
+    /// Inspired by autoresearch: "All else being equal, simpler is better."
+    fn run_complexity_gate(&self, config: &VerifierConfig, report: &VerifierReport) -> GateResult {
+        let start = Instant::now();
+
+        // Use existing risk profile if available, otherwise compute fresh
+        let profile = report.risk_profile.clone().unwrap_or_else(|| {
+            super::risk_profile::DiffRiskProfile::from_working_dir(&self.working_dir)
+        });
+
+        let warning = profile.check_complexity(&config.complexity_thresholds);
+
+        match warning {
+            None => {
+                let is_simplification = profile.net_delta() < 0;
+                let note = if is_simplification {
+                    format!(
+                        "Simplification: net {} lines (added {}, removed {})",
+                        profile.net_delta(),
+                        profile.lines_added,
+                        profile.lines_removed
+                    )
+                } else {
+                    format!(
+                        "Within thresholds: net +{} lines, {} files",
+                        profile.net_delta(),
+                        profile.files_changed
+                    )
+                };
+                tracing::info!(
+                    net_delta = profile.net_delta(),
+                    files = profile.files_changed,
+                    "Complexity guard: {note}"
+                );
+                GateResult {
+                    gate: "complexity".to_string(),
+                    outcome: GateOutcome::Passed,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code: Some(0),
+                    error_count: 0,
+                    warning_count: 0,
+                    errors: vec![],
+                    stderr_excerpt: Some(note),
+                }
+            }
+            Some(cw) => {
+                let detail = cw.reasons.join("; ");
+                tracing::warn!(
+                    net_delta = cw.net_delta,
+                    files = cw.files_changed,
+                    bloat_ratio = %format!("{:.1}", cw.bloat_ratio),
+                    "Complexity guard warning: {detail}"
+                );
+                GateResult {
+                    gate: "complexity".to_string(),
+                    outcome: GateOutcome::Warning,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code: Some(1),
+                    error_count: 0,
+                    warning_count: cw.reasons.len(),
+                    errors: vec![],
+                    stderr_excerpt: Some(format!(
+                        "Complexity warning: {detail}. Net delta: {} lines, {} files changed. \
+                         Consider whether this change is proportionate to the improvement.",
+                        cw.net_delta, cw.files_changed
+                    )),
+                }
+            }
         }
     }
 
