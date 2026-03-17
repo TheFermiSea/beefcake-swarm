@@ -127,7 +127,13 @@ doc = json.load(sys.stdin)
 payload = doc.get("bd_stdout", doc) if isinstance(doc, dict) else doc
 
 if sys.argv[1] == "field":
-    item = payload[0] if isinstance(payload, list) and payload else {}
+    # bdh show --json returns a dict; bdh list/ready --json returns a list
+    if isinstance(payload, dict):
+        item = payload
+    elif isinstance(payload, list) and payload:
+        item = payload[0]
+    else:
+        item = {}
     value = item.get(sys.argv[2], "") if isinstance(item, dict) else ""
     limit = int(sys.argv[3])
     if isinstance(value, str):
