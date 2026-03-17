@@ -453,8 +453,9 @@ impl SwarmConfig {
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()), // Use coder/reasoning pool via factory
                 SwarmRole::Council => clients
-                    .cloud
+                    .cloud_tz
                     .clone()
+                    .or_else(|| clients.cloud.clone())
                     .context("Council role requested but no cloud endpoint configured"),
                 SwarmRole::Strategist => clients
                     .strategist
@@ -472,8 +473,9 @@ impl SwarmConfig {
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()),
                 SwarmRole::Council => clients
-                    .cloud
+                    .cloud_tz
                     .clone()
+                    .or_else(|| clients.cloud.clone())
                     .context("Council role requested but no cloud endpoint configured"),
                 SwarmRole::Strategist => clients
                     .strategist
@@ -493,8 +495,9 @@ impl SwarmConfig {
                     "Strategist role requested for StrategistHybridV1 but SWARM_STRATEGIST_URL is not set",
                 ),
                 SwarmRole::Council => clients
-                    .cloud
+                    .cloud_tz
                     .clone()
+                    .or_else(|| clients.cloud.clone())
                     .context("Council role requested but no cloud endpoint configured"),
             },
         }
@@ -507,6 +510,12 @@ impl SwarmConfig {
             if let Some(ref cloud_ep) = self.cloud_endpoint {
                 return cloud_ep.model.clone();
             }
+        }
+
+        // When TZ is configured, the Architect (Council role) routes to its own
+        // TZ function so inferences are tracked separately from the cloud manager.
+        if self.tensorzero_url.is_some() && role == SwarmRole::Council {
+            return "tensorzero::architect_plan".to_string();
         }
 
         let base_model = match self.stack_profile {
@@ -682,8 +691,15 @@ pub struct ClientSet {
     pub reasoning: openai::CompletionsClient,
     /// Client for Qwen3.5-397B-A17B (strategist/advisor tier)
     pub strategist: Option<openai::CompletionsClient>,
-    /// Client for CLIAPIProxy (cloud models: Opus 4.6, G3-Pro, etc.)
+    /// Direct client for CLIAPIProxy (cloud models: Opus 4.6, G3-Pro, etc.).
+    /// Used for fallback model matrix, cloud validation, and all non-manager cloud calls.
     pub cloud: Option<openai::CompletionsClient>,
+    /// TensorZero gateway client — present when `SWARM_TENSORZERO_URL` is set.
+    ///
+    /// Routes the primary cloud manager and Architect calls through TZ for
+    /// experiment tracking and A/B testing. The fallback model matrix always
+    /// uses `cloud` (direct CLIAPIProxy) to bypass TZ function-name routing.
+    pub cloud_tz: Option<openai::CompletionsClient>,
 }
 
 impl ClientSet {
@@ -724,6 +740,7 @@ impl ClientSet {
                 reasoning: cloud.clone(),
                 strategist: Some(cloud.clone()),
                 cloud: Some(cloud),
+                cloud_tz: None, // TZ doesn't apply in cloud_only mode
             });
         }
 
@@ -774,12 +791,28 @@ impl ClientSet {
             .transpose()
             .context("Failed to build cloud client (CLIAPIProxy)")?;
 
+        // Build a TZ gateway client when SWARM_TENSORZERO_URL is set and a cloud
+        // endpoint is configured. TZ handles auth to CLIAPIProxy internally via
+        // the SWARM_CLOUD_API_KEY env var in tensorzero.toml — no x-api-key needed here.
+        let cloud_tz = config
+            .tensorzero_url
+            .as_ref()
+            .filter(|_| config.cloud_endpoint.is_some())
+            .map(|tz_url| {
+                let tz_http = http_client_with_timeout(cloud_timeout)?;
+                tracing::info!(url = %tz_url, "Routing primary cloud client through TensorZero");
+                build_oai_client("not-needed", &format!("{tz_url}/openai/v1"), tz_http, None)
+            })
+            .transpose()
+            .context("Failed to build TensorZero cloud client")?;
+
         Ok(Self {
             local,
             coder,
             reasoning,
             strategist,
             cloud,
+            cloud_tz,
         })
     }
 }

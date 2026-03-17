@@ -336,10 +336,19 @@ impl AgentFactory {
             )
         });
 
-        if let Some(ref cloud_client) = self.clients.cloud {
+        // Prefer TZ gateway for the manager; fall back to direct CLIAPIProxy.
+        // cloud_tz is only set when SWARM_TENSORZERO_URL is configured.
+        let active_cloud = self.clients.cloud_tz.as_ref().or(self.clients.cloud.as_ref());
+        if let Some(cloud_client) = active_cloud {
             let cloud_ep = self.config.cloud_endpoint.as_ref().unwrap();
+            let manager_model = if self.config.tensorzero_url.is_some() {
+                "tensorzero::cloud_manager_delegation"
+            } else {
+                cloud_ep.model.as_str()
+            };
             info!(
-                model = %cloud_ep.model,
+                model = %manager_model,
+                tensorzero = self.config.tensorzero_url.is_some(),
                 "Building cloud-backed manager with proxy-prefixed workers"
             );
             // Workers get proxy_ prefix for CLIAPIProxy compatibility.
@@ -419,7 +428,7 @@ impl AgentFactory {
             };
             manager::build_cloud_manager(
                 cloud_client,
-                &cloud_ep.model,
+                manager_model,
                 workers,
                 wt_path,
                 &self.config.verifier_packages,
