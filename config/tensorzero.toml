@@ -108,9 +108,10 @@ api_key_location = "env::SWARM_CLOUD_API_KEY"
 # Each function maps to a distinct inference task in the swarm pipeline.
 
 # --- Cloud Manager: decomposes tasks, delegates to workers ---
+# No user_schema: Rig sends raw OpenAI chat messages, not template variables.
+# Templates below are kept for future GEPA via /inference but ignored by /openai/v1.
 [functions.cloud_manager_delegation]
 type = "chat"
-user_schema = "functions/cloud_manager_delegation/user_schema.json"
 
 [functions.cloud_manager_delegation.variants.opus_primary]
 type = "chat_completion"
@@ -119,9 +120,9 @@ system_template = "functions/cloud_manager_delegation/opus_primary/system_templa
 user_template = "functions/cloud_manager_delegation/opus_primary/user_template.minijinja"
 
 # --- Architect: reads codebase, produces SEARCH/REPLACE plans ---
+# No user_schema: same reason as cloud_manager_delegation.
 [functions.architect_plan]
 type = "chat"
-user_schema = "functions/architect_plan/user_schema.json"
 
 [functions.architect_plan.variants.opus_verbose]
 type = "chat_completion"
