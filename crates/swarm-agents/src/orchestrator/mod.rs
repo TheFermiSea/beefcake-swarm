@@ -475,6 +475,10 @@ async fn process_issue_core(
             issue.priority,
         );
 
+        // Pre-identify target files via file_targeting so the planner
+        // doesn't waste turns exploring the codebase.
+        let target_files = crate::file_targeting::find_target_files_by_grep(&wt_path, &issue.title);
+
         // Plan subtasks.
         let plan_result = crate::subtask::plan_subtasks(
             &plan_client,
@@ -482,6 +486,7 @@ async fn process_issue_core(
             &issue.title,
             &file_listing,
             &issue_context,
+            target_files.as_deref(),
         )
         .await;
 

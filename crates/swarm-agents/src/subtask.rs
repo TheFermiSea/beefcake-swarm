@@ -188,12 +188,15 @@ worker_type options:
 /// Ask the planner to decompose an issue into concurrent subtasks.
 ///
 /// Uses the cloud endpoint if available, otherwise the reasoning tier.
+/// When `target_files` is provided (from file_targeting), includes them prominently
+/// in the prompt so the planner focuses on those files instead of exploring.
 pub async fn plan_subtasks(
     client: &openai::CompletionsClient,
     model: &str,
     issue_objective: &str,
     file_listing: &str,
     issue_context: &str,
+    target_files: Option<&[String]>,
 ) -> Result<SubtaskPlan> {
     let agent = client
         .agent(model)
@@ -205,8 +208,29 @@ pub async fn plan_subtasks(
         }))
         .build();
 
+    // Pre-populate target files if file_targeting already identified them.
+    // This eliminates the planner's need to explore the codebase — the most
+    // common failure mode (spending all turns reading instead of planning).
+    let target_section = match target_files {
+        Some(files) if !files.is_empty() => {
+            let file_list = files
+                .iter()
+                .map(|f| format!("  - {f}"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "## Target Files (pre-identified by file targeting)\n\
+                 These files are the most likely to need modification:\n{file_list}\n\n\
+                 Use these as your primary target_files in the plan. Only add other files \
+                 if the objective clearly requires them.\n\n"
+            )
+        }
+        _ => String::new(),
+    };
+
     let prompt = format!(
         "## Issue Objective\n{issue_objective}\n\n\
+         {target_section}\
          ## Additional Context\n{issue_context}\n\n\
          ## Files in Workspace\n{file_listing}\n\n\
          Decompose this into concurrent subtasks. Output JSON only."

@@ -95,6 +95,12 @@ pub fn build_cloud_manager(
         builder = builder.tool(editor);
     }
 
+    // Direct plan application — instant alternative to proxy_editor.
+    // The manager can call apply_plan with the Architect's JSON output
+    // to apply edits deterministically (~0.1s) instead of routing through
+    // the Editor agent (15 turns, ~10 min on local models).
+    builder = builder.tool(crate::tools::apply_plan_tool::ApplyPlanTool::new(wt_path));
+
     // Reasoning worker only present in cloud manager
     if let Some(rw) = workers.reasoning_worker {
         builder = builder.tool(rw);

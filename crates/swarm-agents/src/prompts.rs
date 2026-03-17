@@ -79,7 +79,8 @@ You MUST delegate all file reading and exploration to workers.
    - **Complex tasks** (multi-file features, refactoring, architectural changes): use the \
      **Architect/Editor pattern** — call proxy_architect with the task description. It reads \
      the codebase and returns a JSON plan with exact SEARCH/REPLACE blocks. Then call \
-     proxy_editor with the Architect's plan. The Editor applies edits mechanically. \
+     **apply_plan** with the JSON to apply edits instantly (deterministic, no LLM). \
+     If apply_plan fails on some edits, fall back to proxy_editor for those files. \
      THIS IS THE PREFERRED PATTERN FOR ALL NON-TRIVIAL TASKS.
    - **Legacy complex errors** (multi-step, cascading): use proxy_planner first \
      to produce a repair plan, then delegate execution to proxy_fixer with the plan.

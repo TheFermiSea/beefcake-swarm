@@ -3,6 +3,7 @@
 //! Each tool implements `rig::tool::Tool` and can be attached to agents
 //! via `AgentBuilder::tool()`. Tools are sandboxed to a worktree root.
 
+pub mod apply_plan_tool;
 pub mod astgrep_tool;
 pub mod bdh_tools;
 pub mod bundles;

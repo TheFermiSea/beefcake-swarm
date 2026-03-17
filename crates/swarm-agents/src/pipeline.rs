@@ -172,6 +172,171 @@ impl ArchitectPlan {
     }
 }
 
+/// Directly apply an `ArchitectPlan` without invoking an LLM Editor.
+///
+/// For each edit, reads the target file, performs str_replace (exact match first,
+/// fuzzy fallback), and writes the result. Returns a summary of applied/failed edits.
+///
+/// This is the "direct" editor mode (`SWARM_EDITOR_MODE=direct`): zero LLM rounds
+/// for the edit phase, compared to 10-15 agentic rounds in the default mode.
+pub fn direct_apply_plan(plan: &ArchitectPlan, wt_path: &std::path::Path) -> DirectApplyResult {
+    let mut applied = Vec::new();
+    let mut failed = Vec::new();
+
+    for (i, edit) in plan.edits.iter().enumerate() {
+        let full_path = wt_path.join(&edit.file);
+
+        // Read current file
+        let content = match std::fs::read_to_string(&full_path) {
+            Ok(c) => c,
+            Err(e) => {
+                failed.push(format!("Edit {}: cannot read {}: {e}", i + 1, edit.file));
+                continue;
+            }
+        };
+
+        // Try exact match
+        let occurrences: Vec<usize> = {
+            let mut offsets = Vec::new();
+            let mut start = 0;
+            while let Some(pos) = content[start..].find(&edit.search) {
+                offsets.push(start + pos);
+                start += pos + 1;
+            }
+            offsets
+        };
+
+        let new_content = match occurrences.len() {
+            1 => {
+                let start = occurrences[0];
+                let end = start + edit.search.len();
+                let mut result =
+                    String::with_capacity(content.len() - edit.search.len() + edit.replace.len());
+                result.push_str(&content[..start]);
+                result.push_str(&edit.replace);
+                result.push_str(&content[end..]);
+                result
+            }
+            0 => {
+                // Fuzzy whitespace-normalized matching (same as patch_tool tier 4)
+                let norm_search: Vec<String> = edit
+                    .search
+                    .lines()
+                    .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .collect();
+                let content_lines: Vec<&str> = content.lines().collect();
+                let norm_content: Vec<String> = content_lines
+                    .iter()
+                    .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+                    .collect();
+
+                let mut matches = Vec::new();
+                for j in 0..content_lines
+                    .len()
+                    .saturating_sub(norm_search.len().saturating_sub(1))
+                {
+                    let window = &norm_content[j..j + norm_search.len()];
+                    if window.iter().zip(norm_search.iter()).all(|(a, b)| a == b) {
+                        matches.push(j);
+                    }
+                }
+
+                if matches.len() == 1 {
+                    let match_start = matches[0];
+                    let match_end = match_start + norm_search.len();
+                    let mut result = String::new();
+                    for (idx, line) in content_lines.iter().enumerate() {
+                        if idx == match_start {
+                            result.push_str(&edit.replace);
+                            result.push('\n');
+                        } else if idx >= match_start && idx < match_end {
+                            // skip replaced lines
+                        } else {
+                            result.push_str(line);
+                            result.push('\n');
+                        }
+                    }
+                    // Trim trailing extra newline if original didn't end with one
+                    if !content.ends_with('\n') && result.ends_with('\n') {
+                        result.pop();
+                    }
+                    result
+                } else {
+                    failed.push(format!(
+                        "Edit {}: search block not found in {} (0 exact, {} fuzzy matches)",
+                        i + 1,
+                        edit.file,
+                        matches.len()
+                    ));
+                    continue;
+                }
+            }
+            n => {
+                failed.push(format!(
+                    "Edit {}: search block matches {n} locations in {} — ambiguous",
+                    i + 1,
+                    edit.file
+                ));
+                continue;
+            }
+        };
+
+        // Write the modified file
+        if let Err(e) = std::fs::write(&full_path, &new_content) {
+            failed.push(format!(
+                "Edit {}: write failed for {}: {e}",
+                i + 1,
+                edit.file
+            ));
+            continue;
+        }
+
+        applied.push(format!(
+            "Edit {}: {} — {}",
+            i + 1,
+            edit.file,
+            edit.description
+        ));
+        info!(
+            file = %edit.file,
+            edit = i + 1,
+            total = plan.edits.len(),
+            "Direct editor: applied edit"
+        );
+    }
+
+    DirectApplyResult { applied, failed }
+}
+
+/// Result of directly applying an `ArchitectPlan` without an LLM Editor.
+#[derive(Debug, Clone)]
+pub struct DirectApplyResult {
+    /// Edits that were successfully applied.
+    pub applied: Vec<String>,
+    /// Edits that failed with reasons.
+    pub failed: Vec<String>,
+}
+
+impl DirectApplyResult {
+    /// Whether all edits were applied successfully.
+    pub fn all_succeeded(&self) -> bool {
+        self.failed.is_empty() && !self.applied.is_empty()
+    }
+
+    /// Format as a summary string for logging/display.
+    pub fn summary(&self) -> String {
+        let mut s = format!(
+            "Direct editor: {}/{} edits applied",
+            self.applied.len(),
+            self.applied.len() + self.failed.len()
+        );
+        for f in &self.failed {
+            s.push_str(&format!("\n  FAILED: {f}"));
+        }
+        s
+    }
+}
+
 /// An actionable hint extracted from a verifier report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifierHint {
