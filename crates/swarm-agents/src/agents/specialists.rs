@@ -18,8 +18,8 @@ use crate::tools::bundles::{self, WorkerRole};
 
 use super::coder::{worker_sampling_params, OaiAgent};
 
-const DEFAULT_PLANNER_MAX_TURNS: usize = 10;
-const DEFAULT_FIXER_MAX_TURNS: usize = 15;
+const DEFAULT_PLANNER_MAX_TURNS: usize = 15;
+const DEFAULT_FIXER_MAX_TURNS: usize = 25;
 
 fn planner_max_turns() -> usize {
     std::env::var("SWARM_PLANNER_MAX_TURNS")
@@ -109,8 +109,8 @@ pub fn build_fixer_named(
 
 // ── Architect/Editor Pattern ─────────────────────────────────────────────────
 
-const DEFAULT_ARCHITECT_MAX_TURNS: usize = 12;
-const DEFAULT_EDITOR_MAX_TURNS: usize = 10;
+const DEFAULT_ARCHITECT_MAX_TURNS: usize = 20;
+const DEFAULT_EDITOR_MAX_TURNS: usize = 15;
 
 fn architect_max_turns() -> usize {
     std::env::var("SWARM_ARCHITECT_MAX_TURNS")

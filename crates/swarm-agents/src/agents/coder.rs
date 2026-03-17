@@ -15,9 +15,13 @@ use crate::tools::bundles::{self, WorkerRole};
 pub type OaiAgent = Agent<openai::completion::CompletionModel>;
 
 /// Worker sub-agents (agent-as-tool) don't have RuntimeAdapter hooks,
-/// so max_turns is their only loop guard. Keep it tight.
-const DEFAULT_WORKER_MAX_TURNS: usize = 15;
-const DEFAULT_REASONING_MAX_TURNS: usize = 20;
+/// so max_turns is their only loop guard.
+///
+/// Raised from 15/20 after dogfood run (beefcake-jwhp) showed every worker
+/// hitting MaxTurnError — they burned all turns on read_file + run_command
+/// investigation, leaving none for actual edits.
+const DEFAULT_WORKER_MAX_TURNS: usize = 25;
+const DEFAULT_REASONING_MAX_TURNS: usize = 30;
 
 /// Default temperature for worker agents.
 ///
