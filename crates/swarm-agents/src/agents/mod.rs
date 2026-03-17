@@ -346,7 +346,7 @@ impl AgentFactory {
         if let Some(cloud_client) = active_cloud {
             let cloud_ep = self.config.cloud_endpoint.as_ref().unwrap();
             let manager_model = if self.config.tensorzero_url.is_some() {
-                "tensorzero::cloud_manager_delegation"
+                "tensorzero::function_name::cloud_manager_delegation"
             } else {
                 cloud_ep.model.as_str()
             };

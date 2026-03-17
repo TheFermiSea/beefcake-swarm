@@ -515,7 +515,7 @@ impl SwarmConfig {
         // When TZ is configured, the Architect (Council role) routes to its own
         // TZ function so inferences are tracked separately from the cloud manager.
         if self.tensorzero_url.is_some() && role == SwarmRole::Council {
-            return "tensorzero::architect_plan".to_string();
+            return "tensorzero::function_name::architect_plan".to_string();
         }
 
         let base_model = match self.stack_profile {
