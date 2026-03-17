@@ -12,6 +12,7 @@
 {"created_at":"2026-03-14T18:01:39Z","created_by":"TheFermiSea","depends_on_id":"beefcake-vg34","issue_id":"beefcake-1axl","type":"relates-to"}
 {"created_at":"2026-03-15T10:48:56Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-1cpr","type":"relates-to"}
 {"created_at":"2026-03-14T16:43:33Z","created_by":"TheFermiSea","depends_on_id":"beefcake-v7sh","issue_id":"beefcake-1hmj","type":"relates-to"}
+{"created_at":"2026-03-16T18:30:15Z","created_by":"TheFermiSea","depends_on_id":"beefcake-m6jr","issue_id":"beefcake-1m4h","type":"parent-child"}
 {"created_at":"2026-03-02T20:41:26Z","created_by":"claude-code","depends_on_id":"beefcake-2ynb","issue_id":"beefcake-1sov","type":"blocks"}
 {"created_at":"2026-03-02T20:41:30Z","created_by":"claude-code","depends_on_id":"beefcake-5t0a","issue_id":"beefcake-1sov","type":"blocks"}
 {"created_at":"2026-03-02T20:41:29Z","created_by":"claude-code","depends_on_id":"beefcake-66af","issue_id":"beefcake-1sov","type":"blocks"}
@@ -96,6 +97,7 @@
 {"created_at":"2026-02-19T12:35:55Z","created_by":"claude-code","depends_on_id":"beefcake-dy5","issue_id":"beefcake-790","type":"blocks"}
 {"created_at":"2026-02-19T12:35:55Z","created_by":"claude-code","depends_on_id":"beefcake-swarm-6a1","issue_id":"beefcake-790","type":"blocks"}
 {"created_at":"2026-02-19T12:35:54Z","created_by":"claude-code","depends_on_id":"beefcake-swarm-iye","issue_id":"beefcake-790","type":"blocks"}
+{"created_at":"2026-03-16T18:30:13Z","created_by":"TheFermiSea","depends_on_id":"beefcake-m6jr","issue_id":"beefcake-7jhw","type":"parent-child"}
 {"created_at":"2026-02-20T14:18:01Z","created_by":"claude-code","depends_on_id":"beefcake-6b4","issue_id":"beefcake-7kj","type":"blocks"}
 {"created_at":"2026-02-20T14:18:01Z","created_by":"claude-code","depends_on_id":"beefcake-9bd","issue_id":"beefcake-7kj","type":"blocks"}
 {"created_at":"2026-03-16T18:17:11Z","created_by":"TheFermiSea","depends_on_id":"beefcake-4yzj","issue_id":"beefcake-7pdl","type":"parent-child"}
@@ -110,6 +112,7 @@
 {"created_at":"2026-02-20T14:18:03Z","created_by":"claude-code","depends_on_id":"beefcake-tk3","issue_id":"beefcake-90u","type":"blocks"}
 {"created_at":"2026-02-17T21:07:19Z","created_by":"claude-code","depends_on_id":"beefcake-swarm-393","issue_id":"beefcake-91g","type":"blocks"}
 {"created_at":"2026-02-17T21:06:45Z","created_by":"claude-code","depends_on_id":"beefcake-swarm-hf5","issue_id":"beefcake-91g","type":"blocks"}
+{"created_at":"2026-03-16T18:30:14Z","created_by":"TheFermiSea","depends_on_id":"beefcake-m6jr","issue_id":"beefcake-9ezl","type":"parent-child"}
 {"created_at":"2026-03-15T11:50:20Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-9f04","type":"relates-to"}
 {"created_at":"2026-03-08T09:29:19Z","created_by":"TheFermiSea","depends_on_id":"beefcake-23y1","issue_id":"beefcake-9o82","type":"parent-child"}
 {"created_at":"2026-03-08T09:29:29Z","created_by":"TheFermiSea","depends_on_id":"beefcake-3qbp","issue_id":"beefcake-9o82","type":"parent-child"}
@@ -150,6 +153,7 @@
 {"created_at":"2026-03-03T10:36:01Z","created_by":"claude-code","depends_on_id":"beefcake-6ug7","issue_id":"beefcake-azr4","type":"blocks"}
 {"created_at":"2026-02-20T13:41:05Z","created_by":"claude-code","depends_on_id":"beefcake-5od","issue_id":"beefcake-b4j","type":"blocks"}
 {"created_at":"2026-03-15T10:49:04Z","created_by":"TheFermiSea","depends_on_id":"beefcake-n3m3","issue_id":"beefcake-b6ol","type":"relates-to"}
+{"created_at":"2026-03-16T18:30:13Z","created_by":"TheFermiSea","depends_on_id":"beefcake-m6jr","issue_id":"beefcake-b8rg","type":"parent-child"}
 {"created_at":"2026-03-03T08:18:54Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-bbtz","type":"blocks"}
 {"created_at":"2026-03-03T10:34:15Z","created_by":"claude-code","depends_on_id":"beefcake-ujvt","issue_id":"beefcake-bbtz","type":"blocks"}
 {"created_at":"2026-03-02T20:40:35Z","created_by":"claude-code","depends_on_id":"beefcake-vo4j","issue_id":"beefcake-bd13","type":"blocks"}
@@ -291,6 +295,7 @@
 {"created_at":"2026-03-08T11:57:54Z","created_by":"TheFermiSea","depends_on_id":"beefcake-hcnr","issue_id":"beefcake-fmre","type":"relates-to"}
 {"created_at":"2026-03-13T09:20:15Z","created_by":"TheFermiSea","depends_on_id":"beefcake-fzr5","issue_id":"beefcake-frxr","type":"blocks"}
 {"created_at":"2026-03-13T09:20:09Z","created_by":"TheFermiSea","depends_on_id":"beefcake-mmn3","issue_id":"beefcake-frxr","type":"relates-to"}
+{"created_at":"2026-03-16T18:30:11Z","created_by":"TheFermiSea","depends_on_id":"beefcake-m6jr","issue_id":"beefcake-fxu3","type":"parent-child"}
 {"created_at":"2026-03-13T09:20:08Z","created_by":"TheFermiSea","depends_on_id":"beefcake-mmn3","issue_id":"beefcake-fzr5","type":"relates-to"}
 {"created_at":"2026-03-03T10:33:58Z","created_by":"claude-code","depends_on_id":"beefcake-2hlt","issue_id":"beefcake-g27h","type":"blocks"}
 {"created_at":"2026-03-15T10:49:39Z","created_by":"TheFermiSea","depends_on_id":"beefcake-m1jf","issue_id":"beefcake-g78x","type":"blocks"}
@@ -668,6 +673,7 @@
 {"created_at":"2026-03-14T16:41:38Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tkq6","issue_id":"beefcake-v7sh","type":"relates-to"}
 {"created_at":"2026-03-14T16:43:09Z","created_by":"TheFermiSea","depends_on_id":"beefcake-tr9b","issue_id":"beefcake-v7sh","type":"relates-to"}
 {"created_at":"2026-03-14T16:43:25Z","created_by":"TheFermiSea","depends_on_id":"beefcake-va1d","issue_id":"beefcake-v7sh","type":"relates-to"}
+{"created_at":"2026-03-16T18:30:10Z","created_by":"TheFermiSea","depends_on_id":"beefcake-m6jr","issue_id":"beefcake-v8n7","type":"parent-child"}
 {"created_at":"2026-03-14T16:43:25Z","created_by":"TheFermiSea","depends_on_id":"beefcake-v7sh","issue_id":"beefcake-va1d","type":"relates-to"}
 {"created_at":"2026-03-13T09:20:55Z","created_by":"TheFermiSea","depends_on_id":"beefcake-mmn3","issue_id":"beefcake-vd8c","type":"parent-child"}
 {"created_at":"2026-03-13T09:21:42Z","created_by":"TheFermiSea","depends_on_id":"beefcake-p9gc","issue_id":"beefcake-vd8c","type":"blocks"}
