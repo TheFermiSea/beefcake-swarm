@@ -69,6 +69,109 @@ pub enum PlanRisk {
     High,
 }
 
+// ── Architect/Editor Pattern ─────────────────────────────────────────────────
+//
+// The Architect (cloud model) produces an ArchitectPlan with exact SEARCH/REPLACE
+// edit blocks. The Editor (local 27B) applies them mechanically. This turns complex
+// tasks into mechanical tasks from the local model's perspective.
+//
+// Flow: Cloud Architect → ArchitectPlan JSON → Local Editor applies edits
+//
+// Based on Aider's Architect/Editor pattern: the slow model's job is to translate
+// a plan into code, not to reason about the codebase.
+
+/// An architect plan with exact SEARCH/REPLACE edit blocks.
+///
+/// Unlike `ImplementationPlan` (which has vague `PlanStep` descriptions),
+/// this contains the exact code changes to make. The Editor applies them
+/// without needing to understand the codebase.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArchitectPlan {
+    /// High-level summary of what this plan does and why.
+    pub summary: String,
+    /// Ordered list of edits to apply. Each edit targets one file.
+    pub edits: Vec<ArchitectEdit>,
+    /// Files that will be modified (derived from edits).
+    pub target_files: Vec<String>,
+}
+
+/// A single SEARCH/REPLACE edit block produced by the Architect.
+///
+/// Contains the exact old code to find and the exact new code to replace it with.
+/// The Editor applies this by calling `edit_file(path, old_content, new_content)`.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub struct ArchitectEdit {
+    /// File to modify (relative to worktree root).
+    pub file: String,
+    /// Exact code to search for in the file. Must match file content exactly.
+    /// Include 3-5 lines of surrounding context for uniqueness.
+    pub search: String,
+    /// Exact replacement code. This replaces the `search` block verbatim.
+    pub replace: String,
+    /// Brief description of what this edit does (for the Editor's context).
+    pub description: String,
+}
+
+impl ArchitectPlan {
+    /// Validate the plan: at least one edit, all edits have non-empty search/replace.
+    pub fn validate(&self) -> Result<(), String> {
+        if self.edits.is_empty() {
+            return Err("Architect plan has no edits".into());
+        }
+        for (i, edit) in self.edits.iter().enumerate() {
+            if edit.file.is_empty() {
+                return Err(format!("Edit {i}: missing file path"));
+            }
+            if edit.search.is_empty() {
+                return Err(format!("Edit {i}: empty search block"));
+            }
+            if edit.replace.is_empty() && !edit.description.contains("delete") {
+                return Err(format!(
+                    "Edit {i}: empty replace block (use 'delete' in description if intentional)"
+                ));
+            }
+            if edit.search == edit.replace {
+                return Err(format!(
+                    "Edit {i}: search and replace are identical (no-op)"
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// Format the plan as instructions for the Editor agent.
+    pub fn to_editor_prompt(&self) -> String {
+        let mut prompt = format!("## Architect Plan: {}\n\n", self.summary);
+        prompt.push_str(&format!(
+            "Apply these {} edits in order:\n\n",
+            self.edits.len()
+        ));
+
+        for (i, edit) in self.edits.iter().enumerate() {
+            prompt.push_str(&format!(
+                "### Edit {} of {}: {}\n",
+                i + 1,
+                self.edits.len(),
+                edit.description
+            ));
+            prompt.push_str(&format!("**File:** `{}`\n\n", edit.file));
+            prompt.push_str("**SEARCH** (find this exact text):\n```\n");
+            prompt.push_str(&edit.search);
+            prompt.push_str("\n```\n\n**REPLACE** (replace with this):\n```\n");
+            prompt.push_str(&edit.replace);
+            prompt.push_str("\n```\n\n");
+        }
+
+        prompt.push_str("**Instructions:** For each edit above, call `edit_file` with:\n");
+        prompt.push_str("- `path`: the file path shown\n");
+        prompt.push_str("- `old_content`: the SEARCH block (exact text)\n");
+        prompt.push_str("- `new_content`: the REPLACE block (exact text)\n\n");
+        prompt.push_str("Apply edits in order. After ALL edits are applied, you are DONE.\n");
+
+        prompt
+    }
+}
+
 /// An actionable hint extracted from a verifier report.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VerifierHint {

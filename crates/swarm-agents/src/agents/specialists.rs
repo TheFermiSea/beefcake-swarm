@@ -1,4 +1,4 @@
-//! Specialist agent builders: planner and fixer.
+//! Specialist agent builders: planner, fixer, architect, and editor.
 //!
 //! These agents are registered as tools on the manager, enabling an explicit
 //! delegation protocol:
@@ -104,6 +104,109 @@ pub fn build_fixer_named(
             proxy_tools,
         ))
         .default_max_turns(fixer_max_turns())
+        .build()
+}
+
+// ── Architect/Editor Pattern ─────────────────────────────────────────────────
+
+const DEFAULT_ARCHITECT_MAX_TURNS: usize = 12;
+const DEFAULT_EDITOR_MAX_TURNS: usize = 10;
+
+fn architect_max_turns() -> usize {
+    std::env::var("SWARM_ARCHITECT_MAX_TURNS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_ARCHITECT_MAX_TURNS)
+}
+
+fn editor_max_turns() -> usize {
+    std::env::var("SWARM_EDITOR_MAX_TURNS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_EDITOR_MAX_TURNS)
+}
+
+/// Build the Architect specialist.
+///
+/// Read-only tools: read_file, list_files, run_command, search_code, colgrep, ast_grep.
+/// Produces `ArchitectPlan` JSON with exact SEARCH/REPLACE edit blocks.
+/// Never writes files — the Editor applies the plan.
+pub fn build_architect(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+) -> OaiAgent {
+    build_architect_named(client, model, wt_path, "architect", false)
+}
+
+/// Build the Architect specialist with a custom agent name.
+pub fn build_architect_named(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+    name: &str,
+    proxy_tools: bool,
+) -> OaiAgent {
+    client
+        .agent(model)
+        .name(name)
+        .description(
+            "Architect specialist. Reads the codebase and produces an exact SEARCH/REPLACE \
+             edit plan in JSON. The plan is then applied mechanically by the Editor agent. \
+             Use for complex multi-file changes that require deep codebase understanding.",
+        )
+        .preamble(prompts::ARCHITECT_PREAMBLE)
+        .temperature(0.2)
+        .additional_params(worker_sampling_params())
+        .tools(bundles::worker_tools(
+            wt_path,
+            WorkerRole::Planner, // Read-only tools (same as planner)
+            proxy_tools,
+        ))
+        .default_max_turns(architect_max_turns())
+        .build()
+}
+
+/// Build the Editor specialist.
+///
+/// Full editing tools: read_file, edit_file, write_file.
+/// Receives an ArchitectPlan and applies SEARCH/REPLACE blocks mechanically.
+/// Does NOT reason about code — just follows the plan.
+pub fn build_editor(client: &openai::CompletionsClient, model: &str, wt_path: &Path) -> OaiAgent {
+    build_editor_named(client, model, wt_path, "editor", false)
+}
+
+/// Build the Editor specialist with a custom agent name.
+pub fn build_editor_named(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+    name: &str,
+    proxy_tools: bool,
+) -> OaiAgent {
+    use super::coder::worker_temperature;
+    use rig::completion::message::ToolChoice;
+
+    client
+        .agent(model)
+        .name(name)
+        .description(
+            "Editor specialist. Applies exact SEARCH/REPLACE edits from an Architect's plan. \
+             Give it a plan with file paths and exact code blocks to find/replace. \
+             It applies each edit mechanically using edit_file.",
+        )
+        .preamble(prompts::EDITOR_PREAMBLE)
+        .temperature(worker_temperature())
+        .tool_choice(ToolChoice::Required) // Force tool calls (no prose-only responses)
+        .additional_params(worker_sampling_params())
+        .tools(bundles::worker_tools(
+            wt_path,
+            WorkerRole::General, // Full edit tools
+            proxy_tools,
+        ))
+        .default_max_turns(editor_max_turns())
         .build()
 }
 

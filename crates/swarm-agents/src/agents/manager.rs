@@ -41,6 +41,11 @@ pub struct ManagerWorkers {
     pub planner: OaiAgent,
     /// Implementation specialist — follows plans with targeted edits.
     pub fixer: OaiAgent,
+    /// Architect specialist — reads codebase, produces ArchitectPlan with exact
+    /// SEARCH/REPLACE edit blocks. Cloud model (Opus/Gemini). Read-only.
+    pub architect: Option<OaiAgent>,
+    /// Editor specialist — applies ArchitectPlan edits mechanically. Local 27B.
+    pub editor: Option<OaiAgent>,
     /// Qwen3.5-Architect reasoning worker (cloud manager only).
     pub reasoning_worker: Option<OaiAgent>,
     /// Qwen3.5-397B-A17B strategist advisor (strategist profile only).
@@ -81,6 +86,14 @@ pub fn build_cloud_manager(
         .tool(workers.rust_coder)
         .tool(workers.general_coder)
         .tool(workers.reviewer);
+
+    // Architect/Editor pattern (cloud manager only — Aider-inspired split)
+    if let Some(architect) = workers.architect {
+        builder = builder.tool(architect);
+    }
+    if let Some(editor) = workers.editor {
+        builder = builder.tool(editor);
+    }
 
     // Reasoning worker only present in cloud manager
     if let Some(rw) = workers.reasoning_worker {

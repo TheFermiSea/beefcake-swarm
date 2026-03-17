@@ -387,12 +387,31 @@ impl AgentFactory {
                 "proxy_reasoning_worker",
                 true,
             );
+            // Architect/Editor pattern: Architect runs on cloud (deep understanding),
+            // Editor runs on local 27B (fast mechanical edits).
+            let architect = {
+                let (a_client, a_model) = self.resolve_role_endpoint(SwarmRole::Council);
+                specialists::build_architect_named(
+                    &a_client,
+                    &a_model,
+                    wt_path,
+                    "proxy_architect",
+                    true,
+                )
+            };
+            let editor = {
+                let (e_client, e_model) = self.resolve_role_endpoint(SwarmRole::Scout);
+                specialists::build_editor_named(&e_client, &e_model, wt_path, "proxy_editor", true)
+            };
+
             let workers = manager::ManagerWorkers {
                 rust_coder,
                 general_coder,
                 reviewer,
                 planner,
                 fixer,
+                architect: Some(architect),
+                editor: Some(editor),
                 reasoning_worker: Some(reasoning_worker),
                 strategist,
                 notebook_bridge: self.notebook_bridge.clone(),
@@ -423,6 +442,8 @@ impl AgentFactory {
                 reviewer,
                 planner,
                 fixer,
+                architect: None, // Architect needs cloud model
+                editor: None,    // Editor only useful with Architect
                 reasoning_worker: None,
                 strategist,
                 notebook_bridge: self.notebook_bridge.clone(),
@@ -487,12 +508,27 @@ impl AgentFactory {
             "proxy_reasoning_worker",
             true,
         );
+        // Architect/Editor for this cloud manager path too
+        let architect = specialists::build_architect_named(
+            cloud_client,
+            model,
+            wt_path,
+            "proxy_architect",
+            true,
+        );
+        let editor = {
+            let (e_client, e_model) = self.resolve_role_endpoint(SwarmRole::Scout);
+            specialists::build_editor_named(&e_client, &e_model, wt_path, "proxy_editor", true)
+        };
+
         let workers = manager::ManagerWorkers {
             rust_coder,
             general_coder,
             reviewer,
             planner,
             fixer,
+            architect: Some(architect),
+            editor: Some(editor),
             reasoning_worker: Some(reasoning_worker),
             strategist,
             notebook_bridge: self.notebook_bridge.clone(),
