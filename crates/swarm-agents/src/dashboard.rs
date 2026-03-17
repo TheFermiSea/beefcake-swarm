@@ -431,6 +431,7 @@ mod tests {
             turns_until_first_write: None,
             write_by_turn_2: false,
             role_map_version: "v1".to_string(),
+            tensorzero_episode_id: None,
         }
     }
 

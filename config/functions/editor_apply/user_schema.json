@@ -1,0 +1,10 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "architect_plan": { "type": "string", "description": "JSON ArchitectPlan with SEARCH/REPLACE blocks" },
+    "target_files": { "type": "string", "description": "Comma-separated file paths from the plan" }
+  },
+  "required": ["architect_plan"],
+  "additionalProperties": false
+}

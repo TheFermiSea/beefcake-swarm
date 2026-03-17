@@ -1,0 +1,6 @@
+**Issue:** {{ issue_id }}
+**Objective:** {{ objective }}
+{% if error_context is defined and error_context %}
+**Error Context:**
+{{ error_context }}
+{% endif %}

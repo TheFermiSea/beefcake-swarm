@@ -1,0 +1,9 @@
+**Issue:** {{ issue_id }}
+**Objective:** {{ objective }}
+{% if error_context is defined and error_context %}
+**Errors:**
+{{ error_context }}
+{% endif %}
+{% if target_files is defined and target_files %}
+**Files:** {{ target_files }}
+{% endif %}

@@ -234,6 +234,10 @@ pub struct SessionMetrics {
     pub write_by_turn_2: bool,
     /// Version of the role model map.
     pub role_map_version: String,
+    /// TensorZero episode ID for linking inferences to feedback.
+    /// Format: `{issue_id}_{session_short_id}`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tensorzero_episode_id: Option<String>,
 }
 
 /// Result of a single cloud validation call.
@@ -260,6 +264,7 @@ pub struct MetricsCollector {
     repo_id: Option<String>,
     adapter_id: Option<String>,
     role_map_version: String,
+    tensorzero_episode_id: Option<String>,
 }
 
 /// In-flight state for the current iteration.
@@ -308,7 +313,22 @@ impl MetricsCollector {
             repo_id,
             adapter_id,
             role_map_version: role_map_version.to_string(),
+            tensorzero_episode_id: None,
         }
+    }
+
+    /// Set the TensorZero episode ID for this session.
+    ///
+    /// Episode IDs link all inferences for a single issue run,
+    /// enabling TensorZero to correlate feedback with specific
+    /// prompt variants and model configurations.
+    pub fn set_episode_id(&mut self, episode_id: String) {
+        self.tensorzero_episode_id = Some(episode_id);
+    }
+
+    /// Get the TensorZero episode ID, if set.
+    pub fn episode_id(&self) -> Option<&str> {
+        self.tensorzero_episode_id.as_deref()
     }
 
     /// Begin tracking a new iteration.
@@ -575,6 +595,7 @@ impl MetricsCollector {
             turns_until_first_write,
             write_by_turn_2,
             role_map_version: self.role_map_version,
+            tensorzero_episode_id: self.tensorzero_episode_id,
         }
     }
 }
@@ -1646,6 +1667,7 @@ mod tests {
             turns_until_first_write: None,
             write_by_turn_2: false,
             role_map_version: "v1".into(),
+            tensorzero_episode_id: None,
         };
 
         write_session_metrics(&metrics, dir.path());
@@ -1683,6 +1705,7 @@ mod tests {
             turns_until_first_write: None,
             write_by_turn_2: false,
             role_map_version: "v1".into(),
+            tensorzero_episode_id: None,
         };
         let metrics2 = SessionMetrics {
             session_id: "sess-2".into(),
@@ -1704,6 +1727,7 @@ mod tests {
             turns_until_first_write: None,
             write_by_turn_2: false,
             role_map_version: "v1".into(),
+            tensorzero_episode_id: None,
         };
 
         append_telemetry(&metrics1, dir.path());
@@ -1747,6 +1771,7 @@ mod tests {
             turns_until_first_write: None,
             write_by_turn_2: false,
             role_map_version: "v1".into(),
+            tensorzero_episode_id: None,
         };
         metrics1.iterations.push(IterationMetrics {
             iteration: 1,
@@ -1811,6 +1836,7 @@ mod tests {
             turns_until_first_write: None,
             write_by_turn_2: false,
             role_map_version: "v1".into(),
+            tensorzero_episode_id: None,
         };
         metrics2.iterations.push(IterationMetrics {
             iteration: 1,
@@ -1993,6 +2019,7 @@ mod tests {
             turns_until_first_write: None,
             write_by_turn_2: false,
             role_map_version: "v1".into(),
+            tensorzero_episode_id: None,
         }
     }
 
@@ -2397,6 +2424,7 @@ mod tests {
             turns_until_first_write: None,
             write_by_turn_2: false,
             role_map_version: "v1".into(),
+            tensorzero_episode_id: None,
         };
 
         write_execution_artifacts(&metrics, dir.path(), None);

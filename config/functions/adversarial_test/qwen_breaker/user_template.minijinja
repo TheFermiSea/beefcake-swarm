@@ -1,0 +1,10 @@
+Red-team the following changes:
+
+```diff
+{{ diff }}
+```
+{% if api_signatures is defined and api_signatures %}
+
+Public API signatures:
+{{ api_signatures }}
+{% endif %}

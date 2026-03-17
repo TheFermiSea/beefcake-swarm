@@ -339,6 +339,11 @@ pub struct SwarmConfig {
     /// QLoRA/LoRA adapter identifier for the coder model.
     /// Populated from `SWARM_ADAPTER_ID`.
     pub adapter_id: Option<String>,
+    /// TensorZero gateway URL (e.g., "http://localhost:3000").
+    /// When set, cloud inference calls are routed through TensorZero for
+    /// experiment tracking, A/B testing, and feedback collection.
+    /// Populated from `SWARM_TENSORZERO_URL` env var.
+    pub tensorzero_url: Option<String>,
 }
 
 impl Default for SwarmConfig {
@@ -424,6 +429,9 @@ impl Default for SwarmConfig {
             strategist_endpoint: Self::strategist_from_env(),
             repo_id: std::env::var("SWARM_REPO_ID").ok(),
             adapter_id: std::env::var("SWARM_ADAPTER_ID").ok(),
+            tensorzero_url: std::env::var("SWARM_TENSORZERO_URL")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
         }
     }
 }
@@ -653,6 +661,7 @@ impl SwarmConfig {
             stack_profile: SwarmStackProfile::HybridBalancedV1,
             repo_id: None,
             adapter_id: None,
+            tensorzero_url: None,
         }
     }
 }

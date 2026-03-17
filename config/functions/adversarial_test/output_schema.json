@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "verdict": { "type": "string", "enum": ["clean", "broken", "inconclusive"] },
+    "tests_generated": { "type": "integer" },
+    "tests_passed": { "type": "integer" },
+    "tests_failed": { "type": "integer" },
+    "failing_tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "test_name": { "type": "string" },
+          "attack_vector": { "type": "string" },
+          "failure_message": { "type": "string" },
+          "test_file": { "type": "string" }
+        },
+        "required": ["test_name", "attack_vector", "failure_message", "test_file"]
+      }
+    },
+    "strategies_used": { "type": "array", "items": { "type": "string" } }
+  },
+  "required": ["verdict", "tests_generated", "tests_passed", "tests_failed", "failing_tests", "strategies_used"],
+  "additionalProperties": false
+}

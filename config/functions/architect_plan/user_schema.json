@@ -1,0 +1,12 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "issue_id": { "type": "string", "description": "Beads issue ID" },
+    "objective": { "type": "string", "description": "Task description" },
+    "error_context": { "type": "string", "description": "Compiler errors or verifier output" },
+    "target_files": { "type": "string", "description": "Comma-separated file paths to focus on" }
+  },
+  "required": ["issue_id", "objective"],
+  "additionalProperties": false
+}

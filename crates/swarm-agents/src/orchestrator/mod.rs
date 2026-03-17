@@ -290,6 +290,16 @@ async fn process_issue_core(
         "v1",
     );
 
+    // --- TensorZero episode tracking ---
+    let tensorzero_episode_id = config.tensorzero_url.as_ref().map(|_| {
+        let ep = crate::tensorzero::generate_episode_id(&issue.id, session.session_id());
+        info!(episode_id = %ep, "TensorZero episode tracking enabled");
+        ep
+    });
+    if let Some(ref ep_id) = tensorzero_episode_id {
+        metrics.set_episode_id(ep_id.clone());
+    }
+
     // --- Acceptance policy ---
     let acceptance_policy = AcceptancePolicy::default();
 
@@ -2518,6 +2528,19 @@ async fn process_issue_core(
     let session_metrics = metrics.finalize(success, &final_tier);
     telemetry::write_session_metrics(&session_metrics, &wt_path);
     telemetry::append_telemetry(&session_metrics, worktree_bridge.repo_root());
+
+    // --- TensorZero feedback ---
+    if let (Some(ref tz_url), Some(ref ep_id)) = (&config.tensorzero_url, &tensorzero_episode_id) {
+        let wall_secs = session_metrics.elapsed_ms as f64 / 1000.0;
+        crate::tensorzero::post_episode_feedback(
+            tz_url,
+            ep_id,
+            success,
+            session_metrics.total_iterations,
+            wall_secs,
+        )
+        .await;
+    }
 
     // Record final outcome on the root span
     otel::record_process_result(

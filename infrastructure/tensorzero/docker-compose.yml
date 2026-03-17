@@ -1,0 +1,90 @@
+# TensorZero Gateway stack for Beefcake Swarm
+#
+# Deploys on ai-proxy alongside CLIAPIProxy (port 8317).
+# Gateway: port 3000 (host network — needs direct access to HPC cluster IPs)
+# UI: port 4000 (bridge network)
+# Postgres: port 5433 on host (maps to 5432 inside container)
+#
+# Usage:
+#   cd infrastructure/tensorzero
+#   docker compose up -d
+#
+# Test:
+#   curl http://localhost:3000/health
+
+services:
+  gateway:
+    image: tensorzero/gateway
+    network_mode: host
+    volumes:
+      - ../../config:/app/config:ro
+    command: --config-file /app/config/tensorzero.toml
+    environment:
+      SWARM_CLOUD_API_KEY: ${SWARM_CLOUD_API_KEY:?Set SWARM_CLOUD_API_KEY in .env or environment}
+      # Gateway on host network reaches postgres via localhost:5433 (mapped port)
+      TENSORZERO_POSTGRES_URL: postgres://tensorzero:tensorzero@localhost:5433/tensorzero
+    # No ports: needed — host network binds directly to :3000
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "wget",
+          "--no-verbose",
+          "--tries=1",
+          "--spider",
+          "http://localhost:3000/health",
+        ]
+      start_period: 10s
+      start_interval: 1s
+      timeout: 1s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway-run-postgres-migrations:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  ui:
+    image: tensorzero/ui
+    environment:
+      # UI reaches gateway via host IP (gateway is on host network)
+      TENSORZERO_GATEWAY_URL: http://host.docker.internal:3000
+    ports:
+      - "4000:4000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+
+  postgres:
+    image: tensorzero/postgres:17
+    command: ["postgres", "-c", "cron.database_name=tensorzero"]
+    environment:
+      POSTGRES_DB: tensorzero
+      POSTGRES_USER: tensorzero
+      POSTGRES_PASSWORD: tensorzero
+    ports:
+      - "5433:5432"
+    volumes:
+      - tensorzero-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tensorzero -d tensorzero"]
+      start_period: 30s
+      start_interval: 1s
+      timeout: 1s
+    restart: unless-stopped
+
+  gateway-run-postgres-migrations:
+    image: tensorzero/gateway
+    environment:
+      # Migration container on bridge network reaches postgres by service name
+      TENSORZERO_POSTGRES_URL: postgres://tensorzero:tensorzero@postgres:5432/tensorzero
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["--run-postgres-migrations"]
+
+volumes:
+  tensorzero-pgdata:
