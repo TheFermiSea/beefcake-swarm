@@ -108,39 +108,34 @@ api_key_location = "env::SWARM_CLOUD_API_KEY"
 # Each function maps to a distinct inference task in the swarm pipeline.
 
 # --- Cloud Manager: decomposes tasks, delegates to workers ---
-# No user_schema: Rig sends raw OpenAI chat messages, not template variables.
-# Templates below are kept for future GEPA via /inference but ignored by /openai/v1.
+# Pure proxy: no schema or templates. Rig sends raw OpenAI chat messages.
+# TZ logs the inference and routes to the configured model. Templates in
+# config/functions/ are preserved for future GEPA via native /inference API.
 [functions.cloud_manager_delegation]
 type = "chat"
 
 [functions.cloud_manager_delegation.variants.opus_primary]
 type = "chat_completion"
 model = "claude_opus"
-system_template = "functions/cloud_manager_delegation/opus_primary/system_template.minijinja"
-user_template = "functions/cloud_manager_delegation/opus_primary/user_template.minijinja"
 
 # --- Architect: reads codebase, produces SEARCH/REPLACE plans ---
-# No user_schema: same reason as cloud_manager_delegation.
+# Pure proxy: same as cloud_manager_delegation.
 [functions.architect_plan]
 type = "chat"
 
 [functions.architect_plan.variants.opus_verbose]
 type = "chat_completion"
 model = "claude_opus"
-system_template = "functions/architect_plan/opus_verbose/system_template.minijinja"
-user_template = "functions/architect_plan/opus_verbose/user_template.minijinja"
 
-# A/B test: concise variant with stripped-down prompt
-[functions.architect_plan.variants.opus_concise]
+# A/B test: concise variant routes to Sonnet for cost comparison
+[functions.architect_plan.variants.sonnet_concise]
 type = "chat_completion"
-model = "claude_opus"
-system_template = "functions/architect_plan/opus_concise/system_template.minijinja"
-user_template = "functions/architect_plan/opus_concise/user_template.minijinja"
+model = "claude_sonnet"
 
-# 50/50 split between verbose and concise Architect prompts
+# 50/50 split between Opus and Sonnet for the Architect
 [functions.architect_plan.experimentation]
 type = "static"
-candidate_variants = { "opus_verbose" = 0.5, "opus_concise" = 0.5 }
+candidate_variants = { "opus_verbose" = 0.5, "sonnet_concise" = 0.5 }
 
 # --- Editor: applies Architect's SEARCH/REPLACE blocks mechanically ---
 [functions.editor_apply]
