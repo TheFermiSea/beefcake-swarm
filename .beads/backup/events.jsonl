@@ -1608,3 +1608,29 @@
 {"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T19:19:37Z","event_type":"created","id":3844,"issue_id":"beefcake-8jp2","new_value":"","old_value":""}
 {"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T19:19:38Z","event_type":"created","id":3845,"issue_id":"beefcake-oipt","new_value":"","old_value":""}
 {"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T19:45:30Z","event_type":"created","id":3846,"issue_id":"beefcake-yn5a","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T19:45:55Z","event_type":"created","id":3847,"issue_id":"beefcake-eqyu","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T19:45:57Z","event_type":"created","id":3848,"issue_id":"beefcake-v1ug","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T19:45:59Z","event_type":"created","id":3849,"issue_id":"beefcake-a557","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T19:46:00Z","event_type":"created","id":3850,"issue_id":"beefcake-998r","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T19:46:27Z","event_type":"status_changed","id":3851,"issue_id":"beefcake-v1ug","new_value":"{\"status\":\"in_progress\"}","old_value":"{\"id\":\"beefcake-v1ug\",\"title\":\"Add complexity guard to verifier pipeline\",\"description\":\"After the existing quality gates (fmt, clippy, check, test) pass, add a complexity check that measures: (1) net lines changed, (2) number of new files created, (3) cyclomatic complexity delta (via cargo-geiger or ast-grep counting). If the change adds disproportionate complexity for the improvement (e.g., 200 lines added for a 1-line bug fix), flag it for review or rejection. Implements autoresearch's principle: 'if improvement is tiny but adds complexity, reject it; if same improvement removes code, it's a simplification win.' Configurable thresholds via env vars.\",\"status\":\"open\",\"priority\":2,\"issue_type\":\"task\",\"owner\":\"squires.b@gmail.com\",\"created_at\":\"2026-03-17T00:45:58Z\",\"created_by\":\"TheFermiSea\",\"updated_at\":\"2026-03-17T00:45:58Z\"}"}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T19:55:34Z","event_type":"closed","id":3852,"issue_id":"beefcake-v1ug","new_value":"Implemented complexity guard with 3 configurable thresholds, auto-enabled in adaptive mode. 6 tests, all passing.","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:20:51Z","event_type":"created","id":3853,"issue_id":"beefcake-dst3","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:20:53Z","event_type":"created","id":3854,"issue_id":"beefcake-qi9r","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:20:56Z","event_type":"created","id":3855,"issue_id":"beefcake-6h12","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:20:58Z","event_type":"created","id":3856,"issue_id":"beefcake-jfa5","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:23:17Z","event_type":"created","id":3857,"issue_id":"beefcake-j8d0","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:23:32Z","event_type":"created","id":3858,"issue_id":"beefcake-p2wo","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:23:33Z","event_type":"created","id":3859,"issue_id":"beefcake-k6iz","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:23:34Z","event_type":"created","id":3860,"issue_id":"beefcake-povc","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:28:53Z","event_type":"created","id":3861,"issue_id":"beefcake-zmlk","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:41Z","event_type":"created","id":3862,"issue_id":"beefcake-1saq","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:43Z","event_type":"created","id":3863,"issue_id":"beefcake-ijj4","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:44Z","event_type":"created","id":3864,"issue_id":"beefcake-aa8i","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:46Z","event_type":"created","id":3865,"issue_id":"beefcake-8y77","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:48Z","event_type":"created","id":3866,"issue_id":"beefcake-f563","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:49Z","event_type":"created","id":3867,"issue_id":"beefcake-ef34","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:51Z","event_type":"created","id":3868,"issue_id":"beefcake-svvp","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:52Z","event_type":"created","id":3869,"issue_id":"beefcake-jwhp","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:54Z","event_type":"created","id":3870,"issue_id":"beefcake-jy68","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:55Z","event_type":"created","id":3871,"issue_id":"beefcake-tp29","new_value":"","old_value":""}
+{"actor":"TheFermiSea","comment":null,"created_at":"2026-03-16T20:29:57Z","event_type":"created","id":3872,"issue_id":"beefcake-0mji","new_value":"","old_value":""}
