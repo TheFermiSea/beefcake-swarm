@@ -439,13 +439,16 @@ impl WorktreeBridge {
                 .context("Failed to check worktree status")?;
 
             let status_text = String::from_utf8_lossy(&status.stdout);
-            // Filter out .beads entries — these are beads infrastructure noise
-            // (symlink type changes, bd-modified backup files) not real code.
+            // Filter out operational artifacts — these are infrastructure noise,
+            // not real code changes. Includes .beads/ (beads DB), .swarm-* (telemetry,
+            // workpad, experiment ledger), and .beadhub (coordination config).
             let non_beads_changes: Vec<&str> = status_text
                 .lines()
                 .filter(|line| {
                     let path = line.get(3..).unwrap_or("");
                     !path.starts_with(".beads")
+                        && !path.starts_with(".swarm-")
+                        && !path.starts_with(".beadhub")
                 })
                 .collect();
 
