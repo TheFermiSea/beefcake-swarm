@@ -85,6 +85,17 @@ api_key_location = "none"
 [models.qwen_reasoning]
 routing = ["vasp02"]
 
+# --- HydraCoder MoE on vasp-02:8082 ---
+
+[models.hydracoder]
+routing = ["vasp02_hydra"]
+
+[models.hydracoder.providers.vasp02_hydra]
+type = "openai"
+model_name = "HydraCoder.i1-Q4_K_M.gguf"
+api_base = "http://10.0.0.21:8082/v1"
+api_key_location = "none"
+
 [models.qwen_reasoning.providers.vasp02]
 type = "openai"
 model_name = "Qwen3.5-122B-A10B"
@@ -166,14 +177,18 @@ model = "strand_rust_14b"
 type = "chat_completion"
 model = "tessa_rust_7b"
 
+[functions.editor_apply.variants.hydracoder]
+type = "chat_completion"
+model = "hydracoder"
+
 [functions.editor_apply.variants.qwen_122b]
 type = "chat_completion"
 model = "qwen_coder"
 
-# 40/40/20 split: favor fast Rust models for mechanical edits
+# 4-way editor experiment: which model applies SEARCH/REPLACE best?
 [functions.editor_apply.experimentation]
 type = "static"
-candidate_variants = { "strand_14b" = 0.4, "tessa_7b" = 0.4, "qwen_122b" = 0.2 }
+candidate_variants = { "strand_14b" = 0.3, "tessa_7b" = 0.3, "hydracoder" = 0.2, "qwen_122b" = 0.2 }
 
 # --- Worker Code Edit: Rust specialist and general coder ---
 # Pure proxy — A/B tests Strand-14B vs 122B MoE for code generation.
@@ -188,10 +203,14 @@ model = "strand_rust_14b"
 type = "chat_completion"
 model = "qwen_coder"
 
-# 50/50 Strand-14B vs Qwen-122B for code generation quality comparison
+[functions.worker_code_edit.variants.hydracoder]
+type = "chat_completion"
+model = "hydracoder"
+
+# 3-way split: Strand-14B vs HydraCoder-31B-MoE vs Qwen-122B
 [functions.worker_code_edit.experimentation]
 type = "static"
-candidate_variants = { "strand_rust" = 0.5, "qwen_coder" = 0.5 }
+candidate_variants = { "strand_rust" = 0.34, "hydracoder" = 0.33, "qwen_coder" = 0.33 }
 
 # --- Code Review: blind reviewer ---
 # Pure proxy — uses Strand-14B (fast Rust analysis)
@@ -229,13 +248,18 @@ type = "chat"
 type = "chat_completion"
 model = "strand_rust_14b"
 
+[functions.code_fixing.variants.hydra_fixer]
+type = "chat_completion"
+model = "hydracoder"
+
 [functions.code_fixing.variants.qwen_fixer]
 type = "chat_completion"
 model = "qwen_coder"
 
+# 3-way code fixing experiment
 [functions.code_fixing.experimentation]
 type = "static"
-candidate_variants = { "strand_fixer" = 0.5, "qwen_fixer" = 0.5 }
+candidate_variants = { "strand_fixer" = 0.34, "hydra_fixer" = 0.33, "qwen_fixer" = 0.33 }
 
 # --- Adversarial Testing: red-team agent ---
 # Pure proxy — uses Tessa-7B for fast adversarial probing
