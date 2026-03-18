@@ -33,6 +33,7 @@ LOG_DIR="${DOGFOOD_LOG_DIR:-${REPO_ROOT}/logs/dogfood}"
 ISSUE_LIST="${DOGFOOD_ISSUE_LIST:-}"
 PARALLEL="${DOGFOOD_PARALLEL:-1}"
 ISSUE_QUERY_BIN="${DOGFOOD_BEADS_BIN:-bdh}"
+DISCOVER=0                              # --discover: auto-fetch new issues when list exhausted
 
 # CLI overrides
 while [[ $# -gt 0 ]]; do
@@ -42,6 +43,7 @@ while [[ $# -gt 0 ]]; do
     --log-dir)     LOG_DIR="$2"; shift 2 ;;
     --issue-list)  ISSUE_LIST="$2"; shift 2 ;;
     --parallel)    PARALLEL="$2"; shift 2 ;;
+    --discover)    DISCOVER=1; shift ;;
     *)             echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -101,6 +103,7 @@ log "  Logs:     $LOG_DIR"
 log "  Cooldown: ${COOLDOWN}s"
 log "  Parallel: $PARALLEL"
 log "  Max runs: $([ "$MAX_RUNS" -eq 0 ] && echo 'unlimited' || echo "$MAX_RUNS")"
+log "  Discover: $([ "$DISCOVER" -eq 1 ] && echo 'ON (auto-fetch new issues)' || echo 'OFF')"
 
 if [[ -n "$ISSUE_LIST" ]]; then
   read -ra ISSUES <<< "$ISSUE_LIST"
@@ -257,13 +260,34 @@ if [[ "$PARALLEL" -le 1 ]]; then
     if [[ ${#ISSUES[@]} -gt 0 ]]; then
       IDX=$((RUN_COUNT - 1))
       if [[ $IDX -ge ${#ISSUES[@]} ]]; then
-        log "All ${#ISSUES[@]} issues processed. Stopping."
-        break
+        if [[ "$DISCOVER" -eq 1 ]]; then
+          # Discover new issues from bdh ready
+          log "Issue list exhausted — discovering new issues from bdh ready..."
+          mapfile -t NEW_ISSUES < <("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+          if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
+            ISSUES+=("${NEW_ISSUES[@]}")
+            log "  Discovered ${#NEW_ISSUES[@]} new issues: ${NEW_ISSUES[*]}"
+            ISSUE_ID="${ISSUES[$IDX]}"
+          else
+            log "  No new ready issues. Waiting ${COOLDOWN}s before retry..."
+            sleep "$COOLDOWN"
+            continue
+          fi
+        else
+          log "All ${#ISSUES[@]} issues processed. Stopping."
+          break
+        fi
+      else
+        ISSUE_ID="${ISSUES[$IDX]}"
       fi
-      ISSUE_ID="${ISSUES[$IDX]}"
     else
       ISSUE_ID=$("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null | head -n1 || true)
       if [[ -z "$ISSUE_ID" ]]; then
+        if [[ "$DISCOVER" -eq 1 ]]; then
+          log "No ready issues. Waiting ${COOLDOWN}s before retry..."
+          sleep "$COOLDOWN"
+          continue
+        fi
         log "No more ready issues. Stopping."
         break
       fi
@@ -276,8 +300,8 @@ if [[ "$PARALLEL" -le 1 ]]; then
       FAIL_COUNT=$((FAIL_COUNT + 1))
     fi
 
-    # Check if more work exists
-    if [[ ${#ISSUES[@]} -eq 0 ]]; then
+    # Check if more work exists (skip in discover mode — it loops forever)
+    if [[ ${#ISSUES[@]} -eq 0 && "$DISCOVER" -eq 0 ]]; then
       READY_COUNT=$("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json count 2>/dev/null || echo "0")
       if [[ "$READY_COUNT" -eq 0 ]]; then
         log "No more ready issues. Stopping."
@@ -288,7 +312,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
 
     # Cooldown (unless done)
     if [[ "$MAX_RUNS" -gt 0 && "$RUN_COUNT" -ge "$MAX_RUNS" ]]; then break; fi
-    if [[ ${#ISSUES[@]} -gt 0 && $RUN_COUNT -ge ${#ISSUES[@]} ]]; then break; fi
+    if [[ ${#ISSUES[@]} -gt 0 && $RUN_COUNT -ge ${#ISSUES[@]} && "$DISCOVER" -eq 0 ]]; then break; fi
 
     log "  Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
