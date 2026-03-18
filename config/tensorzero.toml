@@ -40,29 +40,45 @@ level = "inference"
 
 # ─── Models ──────────────────────────────────────────────────────────────────
 # Local HPC endpoints use OpenAI-compatible protocol (llama.cpp).
-# All 3 nodes run Qwen3.5-397B-A17B (Q4_K_M, --parallel 2 each).
 # Cloud endpoints use CLIAPIProxy on ai-proxy (localhost from host network).
 #
 # Gateway runs with network_mode: host so it can reach vasp nodes directly
 # by IP and CLIAPIProxy on localhost:8317.
+#
+# Cluster layout (2026-03-18):
+#   vasp-03:8081 — Strand-Rust-Coder-14B (Rust specialist, 4 parallel, 65K ctx)
+#   vasp-03:8082 — Tessa-Rust-T1-7B (fast Rust scout, 4 parallel, 32K ctx)
+#   vasp-01:8081 — Qwen3.5-122B-A10B MoE (coder, 2 parallel, CPU offload)
+#   vasp-02:8081 — Qwen3.5-122B-A10B MoE (reasoning, 2 parallel, CPU offload)
 
-# --- Local HPC models (Qwen3.5-397B-A17B on V100S cluster) ---
+# --- Rust-specialized models on vasp-03 ---
 
-[models.qwen_fast]
-routing = ["vasp03"]
+[models.strand_rust_14b]
+routing = ["vasp03_strand"]
 
-[models.qwen_fast.providers.vasp03]
+[models.strand_rust_14b.providers.vasp03_strand]
 type = "openai"
-model_name = "Qwen3.5-397B-A17B"
+model_name = "Strand-Rust-Coder-14B-v1-Q4_K_M.gguf"
 api_base = "http://10.0.0.22:8081/v1"
 api_key_location = "none"
+
+[models.tessa_rust_7b]
+routing = ["vasp03_tessa"]
+
+[models.tessa_rust_7b.providers.vasp03_tessa]
+type = "openai"
+model_name = "Tessa-Rust-T1-7B-Q4_K_M.gguf"
+api_base = "http://10.0.0.22:8082/v1"
+api_key_location = "none"
+
+# --- General-purpose MoE models on vasp-01/02 ---
 
 [models.qwen_coder]
 routing = ["vasp01"]
 
 [models.qwen_coder.providers.vasp01]
 type = "openai"
-model_name = "Qwen3.5-397B-A17B"
+model_name = "Qwen3.5-122B-A10B"
 api_base = "http://10.0.0.20:8081/v1"
 api_key_location = "none"
 
@@ -71,7 +87,7 @@ routing = ["vasp02"]
 
 [models.qwen_reasoning.providers.vasp02]
 type = "openai"
-model_name = "Qwen3.5-397B-A17B"
+model_name = "Qwen3.5-122B-A10B"
 api_base = "http://10.0.0.21:8081/v1"
 api_key_location = "none"
 
@@ -138,90 +154,94 @@ type = "static"
 candidate_variants = { "opus_verbose" = 0.5, "sonnet_concise" = 0.5 }
 
 # --- Editor: applies Architect's SEARCH/REPLACE blocks mechanically ---
+# Pure proxy — Rig sends raw messages. A/B tests Strand-14B vs Tessa-7B vs 122B.
 [functions.editor_apply]
 type = "chat"
-user_schema = "functions/editor_apply/user_schema.json"
 
-[functions.editor_apply.variants.qwen_editor]
+[functions.editor_apply.variants.strand_14b]
 type = "chat_completion"
-model = "qwen_fast"
-system_template = "functions/editor_apply/qwen_editor/system_template.minijinja"
-user_template = "functions/editor_apply/qwen_editor/user_template.minijinja"
+model = "strand_rust_14b"
 
-# --- Worker Code Edit: Rust specialist and general coder ---
-[functions.worker_code_edit]
-type = "chat"
-user_schema = "functions/worker_code_edit/user_schema.json"
-
-[functions.worker_code_edit.variants.qwen_rust_coder]
+[functions.editor_apply.variants.tessa_7b]
 type = "chat_completion"
-model = "qwen_fast"
-system_template = "functions/worker_code_edit/qwen_rust_coder/system_template.minijinja"
-user_template = "functions/worker_code_edit/qwen_rust_coder/user_template.minijinja"
+model = "tessa_rust_7b"
 
-[functions.worker_code_edit.variants.qwen_general_coder]
+[functions.editor_apply.variants.qwen_122b]
 type = "chat_completion"
 model = "qwen_coder"
-system_template = "functions/worker_code_edit/qwen_general_coder/system_template.minijinja"
-user_template = "functions/worker_code_edit/qwen_general_coder/user_template.minijinja"
+
+# 40/40/20 split: favor fast Rust models for mechanical edits
+[functions.editor_apply.experimentation]
+type = "static"
+candidate_variants = { "strand_14b" = 0.4, "tessa_7b" = 0.4, "qwen_122b" = 0.2 }
+
+# --- Worker Code Edit: Rust specialist and general coder ---
+# Pure proxy — A/B tests Strand-14B vs 122B MoE for code generation.
+[functions.worker_code_edit]
+type = "chat"
+
+[functions.worker_code_edit.variants.strand_rust]
+type = "chat_completion"
+model = "strand_rust_14b"
+
+[functions.worker_code_edit.variants.qwen_coder]
+type = "chat_completion"
+model = "qwen_coder"
+
+# 50/50 Strand-14B vs Qwen-122B for code generation quality comparison
+[functions.worker_code_edit.experimentation]
+type = "static"
+candidate_variants = { "strand_rust" = 0.5, "qwen_coder" = 0.5 }
 
 # --- Code Review: blind reviewer ---
+# Pure proxy — uses Strand-14B (fast Rust analysis)
 [functions.code_review]
-type = "json"
-user_schema = "functions/code_review/user_schema.json"
-output_schema = "functions/code_review/output_schema.json"
+type = "chat"
 
-[functions.code_review.variants.qwen_reviewer]
+[functions.code_review.variants.strand_reviewer]
 type = "chat_completion"
-model = "qwen_fast"
-system_template = "functions/code_review/qwen_reviewer/system_template.minijinja"
-user_template = "functions/code_review/qwen_reviewer/user_template.minijinja"
-json_mode = "on"
+model = "strand_rust_14b"
 
 # --- Deep Reasoning: complex analysis ---
+# Pure proxy — stays on 122B MoE for deep thinking
 [functions.deep_reasoning]
 type = "chat"
-user_schema = "functions/deep_reasoning/user_schema.json"
 
 [functions.deep_reasoning.variants.qwen_122b]
 type = "chat_completion"
 model = "qwen_reasoning"
-system_template = "functions/deep_reasoning/qwen_122b/system_template.minijinja"
-user_template = "functions/deep_reasoning/qwen_122b/user_template.minijinja"
 
-# --- Task Planning: read-only analysis, structured repair plans ---
+# --- Task Planning: structured repair plans ---
+# Pure proxy — 122B for complex planning
 [functions.task_planning]
-type = "json"
-user_schema = "functions/task_planning/user_schema.json"
-output_schema = "functions/task_planning/output_schema.json"
+type = "chat"
 
 [functions.task_planning.variants.qwen_planner]
 type = "chat_completion"
 model = "qwen_coder"
-system_template = "functions/task_planning/qwen_planner/system_template.minijinja"
-user_template = "functions/task_planning/qwen_planner/user_template.minijinja"
-json_mode = "on"
 
 # --- Code Fixing: takes a plan and implements it ---
+# Pure proxy — A/B test Strand-14B vs 122B
 [functions.code_fixing]
 type = "chat"
-user_schema = "functions/code_fixing/user_schema.json"
+
+[functions.code_fixing.variants.strand_fixer]
+type = "chat_completion"
+model = "strand_rust_14b"
 
 [functions.code_fixing.variants.qwen_fixer]
 type = "chat_completion"
-model = "qwen_fast"
-system_template = "functions/code_fixing/qwen_fixer/system_template.minijinja"
-user_template = "functions/code_fixing/qwen_fixer/user_template.minijinja"
+model = "qwen_coder"
+
+[functions.code_fixing.experimentation]
+type = "static"
+candidate_variants = { "strand_fixer" = 0.5, "qwen_fixer" = 0.5 }
 
 # --- Adversarial Testing: red-team agent ---
+# Pure proxy — uses Tessa-7B for fast adversarial probing
 [functions.adversarial_test]
-type = "json"
-user_schema = "functions/adversarial_test/user_schema.json"
-output_schema = "functions/adversarial_test/output_schema.json"
+type = "chat"
 
-[functions.adversarial_test.variants.qwen_breaker]
+[functions.adversarial_test.variants.tessa_breaker]
 type = "chat_completion"
-model = "qwen_fast"
-system_template = "functions/adversarial_test/qwen_breaker/system_template.minijinja"
-user_template = "functions/adversarial_test/qwen_breaker/user_template.minijinja"
-json_mode = "on"
+model = "tessa_rust_7b"
