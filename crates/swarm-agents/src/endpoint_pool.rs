@@ -30,15 +30,32 @@ pub struct EndpointPool {
 
 impl EndpointPool {
     /// Create a pool with all 3 nodes (fast + coder + reasoning).
-    /// Use for health monitoring and non-code-generation tasks.
+    ///
+    /// When `SWARM_TENSORZERO_URL` is set, all model names are replaced with the
+    /// TZ function name `tensorzero::function_name::worker_code_edit` so every
+    /// inference is routed through TZ for experiment tracking.
     pub fn new(clients: &ClientSet, config: &SwarmConfig) -> Self {
+        let tz_model = config
+            .tensorzero_url
+            .as_ref()
+            .map(|_| "tensorzero::function_name::worker_code_edit".to_string());
         Self {
             workers: vec![
-                (clients.local.clone(), config.fast_endpoint.model.clone()),
-                (clients.coder.clone(), config.coder_endpoint.model.clone()),
+                (
+                    clients.local.clone(),
+                    tz_model
+                        .clone()
+                        .unwrap_or_else(|| config.fast_endpoint.model.clone()),
+                ),
+                (
+                    clients.coder.clone(),
+                    tz_model
+                        .clone()
+                        .unwrap_or_else(|| config.coder_endpoint.model.clone()),
+                ),
                 (
                     clients.reasoning.clone(),
-                    config.reasoning_endpoint.model.clone(),
+                    tz_model.unwrap_or_else(|| config.reasoning_endpoint.model.clone()),
                 ),
             ],
             tier_names: TIER_NAMES_ALL.to_vec(),

@@ -462,11 +462,11 @@ async fn process_issue_core(
         info!(id = %issue.id, "Using concurrent subtask dispatch");
 
         // Prefer local reasoning tier for planning (escalation ladder compliance).
-        // Only fall back to cloud if reasoning endpoint is unavailable.
+        // Use resolve_role_model to get the TZ function name when TZ is configured.
         let (plan_client, plan_model) = {
             (
                 factory.clients.reasoning.clone(),
-                config.reasoning_endpoint.model.clone(),
+                config.resolve_role_model(SwarmRole::Planner),
             )
         };
 
