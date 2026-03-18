@@ -149,6 +149,10 @@ pub async fn process_issue(
 
         let success = outcome.is_success();
         if success {
+            // Commit edits before merge (mode runner may leave uncommitted changes).
+            if let Err(e) = git_commit_changes(&wt_path, 0).await {
+                warn!(id = %issue.id, "Failed to commit mode runner edits: {e}");
+            }
             info!(id = %issue.id, ?mode, "Mode runner succeeded — merging");
             match worktree_bridge.merge_and_remove(&issue.id) {
                 Ok(()) => {
@@ -2430,6 +2434,13 @@ async fn process_issue_core(
             let svc = knowledge_sync::KnowledgeSyncService::new(kb);
             let captures = svc.capture_from_retrospective(&retro, &issue.id, &issue.title);
             debug!(count = captures.len(), "Retrospective captures uploaded");
+        }
+
+        // Commit all edits before merging — workers modify files but don't commit.
+        // Without this, merge_and_remove fails with "uncommitted changes" and the
+        // entire resolution is lost (the bug that blocked beefcake-swarm-004).
+        if let Err(e) = git_commit_changes(&wt_path, session.iteration() as u32).await {
+            warn!(id = %issue.id, "Failed to commit worker edits before merge: {e}");
         }
 
         info!(
