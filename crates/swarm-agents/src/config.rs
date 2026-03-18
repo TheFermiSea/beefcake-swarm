@@ -512,10 +512,23 @@ impl SwarmConfig {
             }
         }
 
-        // When TZ is configured, the Architect (Council role) routes to its own
-        // TZ function so inferences are tracked separately from the cloud manager.
-        if self.tensorzero_url.is_some() && role == SwarmRole::Council {
-            return "tensorzero::function_name::architect_plan".to_string();
+        // When TZ is configured, map every role to a TZ function name so all
+        // inferences are tracked and A/B tested. TZ routes each function to the
+        // configured model variants (Strand-14B, Tessa-7B, HydraCoder, 122B, etc.)
+        if self.tensorzero_url.is_some() {
+            return match role {
+                SwarmRole::Council => "tensorzero::function_name::architect_plan",
+                SwarmRole::Scout | SwarmRole::Reviewer => "tensorzero::function_name::code_review",
+                SwarmRole::RustWorker | SwarmRole::GeneralWorker => {
+                    "tensorzero::function_name::worker_code_edit"
+                }
+                SwarmRole::Fixer => "tensorzero::function_name::code_fixing",
+                SwarmRole::Planner => "tensorzero::function_name::task_planning",
+                SwarmRole::ReasoningWorker => "tensorzero::function_name::deep_reasoning",
+                SwarmRole::Strategist => "tensorzero::function_name::deep_reasoning",
+                SwarmRole::LocalManagerFallback => "tensorzero::function_name::worker_code_edit",
+            }
+            .to_string();
         }
 
         let base_model = match self.stack_profile {
@@ -744,29 +757,45 @@ impl ClientSet {
             });
         }
 
-        let local = build_oai_client(
-            &config.fast_endpoint.api_key,
-            &config.fast_endpoint.url,
-            local_http.clone(),
-            None,
-        )
-        .context("Failed to build local/fast client (vasp-03)")?;
+        // When TZ is configured, route ALL local inference through TZ's OpenAI
+        // endpoint so every call is logged with function/variant for A/B testing.
+        // Without this, only cloud manager calls go through TZ and local model
+        // experiments are invisible.
+        let (local, coder, reasoning) = if let Some(ref tz_url) = config.tensorzero_url {
+            let tz_base = format!("{tz_url}/openai/v1");
+            tracing::info!(url = %tz_url, "Routing ALL local clients through TensorZero");
+            let tz_local = build_oai_client("not-needed", &tz_base, local_http.clone(), None)
+                .context("Failed to build TZ local client")?;
+            // All three local clients point at TZ — the model name (set per-agent
+            // via resolve_role_model) determines which TZ function handles each call.
+            (tz_local.clone(), tz_local.clone(), tz_local)
+        } else {
+            let local = build_oai_client(
+                &config.fast_endpoint.api_key,
+                &config.fast_endpoint.url,
+                local_http.clone(),
+                None,
+            )
+            .context("Failed to build local/fast client (vasp-03)")?;
 
-        let coder = build_oai_client(
-            &config.coder_endpoint.api_key,
-            &config.coder_endpoint.url,
-            local_http.clone(),
-            None,
-        )
-        .context("Failed to build coder client (vasp-01)")?;
+            let coder = build_oai_client(
+                &config.coder_endpoint.api_key,
+                &config.coder_endpoint.url,
+                local_http.clone(),
+                None,
+            )
+            .context("Failed to build coder client (vasp-01)")?;
 
-        let reasoning = build_oai_client(
-            &config.reasoning_endpoint.api_key,
-            &config.reasoning_endpoint.url,
-            local_http.clone(),
-            None,
-        )
-        .context("Failed to build reasoning client (vasp-02)")?;
+            let reasoning = build_oai_client(
+                &config.reasoning_endpoint.api_key,
+                &config.reasoning_endpoint.url,
+                local_http.clone(),
+                None,
+            )
+            .context("Failed to build reasoning client (vasp-02)")?;
+
+            (local, coder, reasoning)
+        };
 
         let strategist = config
             .strategist_endpoint
