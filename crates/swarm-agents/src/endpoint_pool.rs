@@ -19,8 +19,7 @@ use crate::config::{ClientSet, SwarmConfig};
 /// Tier names matching ClusterHealth's status map keys (all 3 nodes).
 const TIER_NAMES_ALL: [&str; 3] = ["fast", "coder", "reasoning"];
 
-/// Tier names for the worker-only pool (excludes 27B scout).
-const TIER_NAMES_WORKERS: [&str; 2] = ["coder", "reasoning"];
+// TIER_NAMES_WORKERS removed — all nodes now run the same model.
 
 pub struct EndpointPool {
     workers: Vec<(openai::CompletionsClient, String)>, // (client, model_name)
@@ -48,18 +47,22 @@ impl EndpointPool {
         }
     }
 
-    /// Create a worker-only pool with coder + reasoning (both 122B).
-    /// Excludes the 27B scout/reviewer which is not tuned for code generation.
+    /// Create a worker pool with all 3 nodes.
+    ///
+    /// Previously excluded the fast/scout node (27B model not tuned for code gen).
+    /// All nodes now run the same Qwen3.5-397B-A17B model, so the exclusion is
+    /// removed. This is now equivalent to `new()` — kept for backward compat.
     pub fn new_workers(clients: &ClientSet, config: &SwarmConfig) -> Self {
         Self {
             workers: vec![
+                (clients.local.clone(), config.fast_endpoint.model.clone()),
                 (clients.coder.clone(), config.coder_endpoint.model.clone()),
                 (
                     clients.reasoning.clone(),
                     config.reasoning_endpoint.model.clone(),
                 ),
             ],
-            tier_names: TIER_NAMES_WORKERS.to_vec(),
+            tier_names: TIER_NAMES_ALL.to_vec(),
             counter: Arc::new(AtomicUsize::new(0)),
             health: None,
         }
