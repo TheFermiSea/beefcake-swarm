@@ -49,6 +49,8 @@ services:
     environment:
       # UI reaches gateway via host IP (gateway is on host network)
       TENSORZERO_GATEWAY_URL: http://host.docker.internal:3000
+      # Postgres connection for full dashboard features (inference browsing, metrics)
+      TENSORZERO_POSTGRES_URL: postgres://tensorzero:tensorzero@host.docker.internal:5433/tensorzero
     ports:
       - "4000:4000"
     extra_hosts:
