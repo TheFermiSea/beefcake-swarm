@@ -93,7 +93,7 @@ routing = ["vasp02_hydra"]
 [models.hydracoder.providers.vasp02_hydra]
 type = "openai"
 model_name = "HydraCoder.i1-Q4_K_M.gguf"
-api_base = "http://10.0.0.21:8082/v1"
+api_base = "http://10.0.0.21:8083/v1"
 api_key_location = "none"
 
 [models.qwen_reasoning.providers.vasp02]
