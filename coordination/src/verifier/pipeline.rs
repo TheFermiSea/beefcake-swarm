@@ -570,6 +570,14 @@ impl Verifier {
         for arg in &self.config.extra_cargo_args {
             cmd.arg(arg);
         }
+        // Clear SWARM_* env vars so tests that assert compiled-in defaults
+        // (like test_default_config) aren't polluted by the dogfood loop's
+        // environment. Without this, the test gate fails spuriously.
+        for (key, _) in std::env::vars() {
+            if key.starts_with("SWARM_") {
+                cmd.env_remove(&key);
+            }
+        }
 
         match self.run_with_timeout(&mut cmd).await {
             Ok(output) => {
