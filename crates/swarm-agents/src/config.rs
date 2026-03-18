@@ -915,8 +915,24 @@ mod tests {
     #[test]
     fn test_default_config() {
         let _guard = ENV_LOCK.lock().unwrap();
-        // Unset the environment variable so we test the default value
-        std::env::remove_var("SWARM_MAX_RETRIES");
+        // Unset environment variables so we test the compiled-in defaults.
+        // Without this, the test fails in dogfood where run-swarm.sh sets these.
+        for var in [
+            "SWARM_MAX_RETRIES",
+            "SWARM_FAST_URL",
+            "SWARM_FAST_MODEL",
+            "SWARM_FAST_API_KEY",
+            "SWARM_CODER_URL",
+            "SWARM_CODER_MODEL",
+            "SWARM_REASONING_URL",
+            "SWARM_REASONING_MODEL",
+            "SWARM_CLOUD_URL",
+            "SWARM_CLOUD_API_KEY",
+            "SWARM_CLOUD_MODEL",
+            "SWARM_MAX_NO_CHANGE",
+        ] {
+            std::env::remove_var(var);
+        }
         let config = SwarmConfig::default();
         assert_eq!(config.max_retries, 10);
         assert!(config.fast_endpoint.url.contains("vasp-03"));
