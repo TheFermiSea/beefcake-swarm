@@ -295,6 +295,11 @@ async fn process_issue_core(
     );
 
     // --- TensorZero episode tracking ---
+    // Capture wall-clock start for resolving TZ-assigned episode IDs later.
+    let tz_session_start_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
     let tensorzero_episode_id = config.tensorzero_url.as_ref().map(|_| {
         let ep = crate::tensorzero::generate_episode_id(&issue.id, session.session_id());
         info!(episode_id = %ep, "TensorZero episode tracking enabled");
@@ -303,6 +308,25 @@ async fn process_issue_core(
     if let Some(ref ep_id) = tensorzero_episode_id {
         metrics.set_episode_id(ep_id.clone());
     }
+
+    // --- TensorZero performance insights (Phase 3) ---
+    let tz_directives = if let Some(ref pg_url) = config.tensorzero_pg_url {
+        match crate::tz_insights::TzInsights::new(pg_url, config.tz_insights_ttl_secs) {
+            Ok(tz) => {
+                let d = tz.get_directives().await;
+                if !d.is_empty() {
+                    info!(count = d.len(), "Loaded TZ performance insights");
+                }
+                d
+            }
+            Err(e) => {
+                warn!(error = %e, "TZ insights init failed");
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
 
     // --- Acceptance policy ---
     let acceptance_policy = AcceptancePolicy::default();
@@ -1061,6 +1085,14 @@ async fn process_issue_core(
         if !directives.is_empty() {
             task_prompt.push_str("\n**Learned patterns (from previous sessions):**\n");
             for d in &directives {
+                task_prompt.push_str(&format!("- {d}\n"));
+            }
+        }
+
+        // --- TZ performance insights injection (Phase 3) ---
+        if !tz_directives.is_empty() {
+            task_prompt.push_str("\n**Performance insights (from TZ experiment data):**\n");
+            for d in &tz_directives {
                 task_prompt.push_str(&format!("- {d}\n"));
             }
         }
@@ -2546,16 +2578,33 @@ async fn process_issue_core(
     telemetry::append_telemetry(&session_metrics, worktree_bridge.repo_root());
 
     // --- TensorZero feedback ---
-    if let (Some(ref tz_url), Some(ref ep_id)) = (&config.tensorzero_url, &tensorzero_episode_id) {
+    // Phase 1 fix: when PG URL is available, resolve the actual episode IDs that
+    // TZ assigned (not our self-generated ones) and post feedback to those.
+    // Falls back to the original self-generated episode_id if PG is unavailable.
+    if let Some(ref tz_url) = config.tensorzero_url {
         let wall_secs = session_metrics.elapsed_ms as f64 / 1000.0;
-        crate::tensorzero::post_episode_feedback(
-            tz_url,
-            ep_id,
-            success,
-            session_metrics.total_iterations,
-            wall_secs,
-        )
-        .await;
+        if let Some(ref pg_url) = config.tensorzero_pg_url {
+            crate::tensorzero::post_resolved_feedback(
+                tz_url,
+                pg_url,
+                tz_session_start_secs,
+                success,
+                session_metrics.total_iterations,
+                wall_secs,
+            )
+            .await;
+        } else if let Some(ref ep_id) = tensorzero_episode_id {
+            // Legacy fallback: use self-generated episode_id (may fail if TZ
+            // doesn't recognize it, but harmless — feedback is best-effort)
+            crate::tensorzero::post_episode_feedback(
+                tz_url,
+                ep_id,
+                success,
+                session_metrics.total_iterations,
+                wall_secs,
+            )
+            .await;
+        }
     }
 
     // Record final outcome on the root span

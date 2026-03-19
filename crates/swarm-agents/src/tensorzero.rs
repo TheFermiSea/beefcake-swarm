@@ -137,6 +137,87 @@ pub fn generate_episode_id(issue_id: &str, session_id: &str) -> String {
     )
 }
 
+/// Resolve actual episode IDs from TZ Postgres for feedback posting.
+///
+/// The swarm generates its own episode_id via `generate_episode_id()`, but TZ's
+/// OpenAI-compat endpoint auto-generates different episode_ids per inference
+/// (since Rig can't inject the `tensorzero::episode_id` extra body param).
+///
+/// This function queries TZ Postgres for distinct episode_ids from recent
+/// inferences and returns them so feedback can be posted to the correct targets.
+///
+/// Returns empty Vec on any error (fail-safe).
+pub async fn resolve_episode_ids(pg_url: &str, session_start_secs: f64) -> Vec<String> {
+    let Ok((client, connection)) = tokio_postgres::connect(pg_url, tokio_postgres::NoTls).await
+    else {
+        warn!("Failed to connect to TZ Postgres for episode ID resolution");
+        return Vec::new();
+    };
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            warn!(error = %e, "TZ Postgres connection error during episode resolution");
+        }
+    });
+
+    // Query distinct episode_ids from inferences created after session start.
+    // We use a generous 60s buffer before session start to catch early inferences.
+    let cutoff_secs = (session_start_secs - 60.0).max(0.0);
+    let rows = match client
+        .query(
+            r#"
+SELECT DISTINCT episode_id::text
+FROM tensorzero.chat_inferences
+WHERE created_at > to_timestamp($1)
+ORDER BY episode_id::text
+"#,
+            &[&cutoff_secs],
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "Failed to query TZ episode IDs");
+            return Vec::new();
+        }
+    };
+
+    let ids: Vec<String> = rows.iter().filter_map(|row| row.get(0)).collect();
+    if ids.is_empty() {
+        warn!("No TZ episode IDs found for this session — feedback will be skipped");
+    } else {
+        info!(count = ids.len(), "Resolved TZ episode IDs for feedback");
+    }
+    ids
+}
+
+/// Post feedback to all resolved TZ episode IDs.
+///
+/// Wraps `post_episode_feedback` to handle the many-episode case where each
+/// TZ inference gets its own episode_id. Posts the same outcome metrics to
+/// every episode in the session.
+pub async fn post_resolved_feedback(
+    gateway_url: &str,
+    pg_url: &str,
+    session_start_secs: f64,
+    success: bool,
+    iterations: u32,
+    wall_time_secs: f64,
+) {
+    let episode_ids = resolve_episode_ids(pg_url, session_start_secs).await;
+    if episode_ids.is_empty() {
+        return;
+    }
+
+    for ep_id in &episode_ids {
+        post_episode_feedback(gateway_url, ep_id, success, iterations, wall_time_secs).await;
+    }
+    info!(
+        episodes = episode_ids.len(),
+        success, "Posted TZ feedback to all resolved episodes"
+    );
+}
+
 /// Check if a TensorZero gateway is reachable.
 pub async fn check_gateway(gateway_url: &str) -> bool {
     let health_url = format!("{gateway_url}/health");

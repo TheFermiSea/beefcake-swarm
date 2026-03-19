@@ -344,6 +344,14 @@ pub struct SwarmConfig {
     /// experiment tracking, A/B testing, and feedback collection.
     /// Populated from `SWARM_TENSORZERO_URL` env var.
     pub tensorzero_url: Option<String>,
+    /// TensorZero Postgres URL for reading performance insights.
+    /// Auto-detected when `SWARM_TENSORZERO_URL` is set (defaults to
+    /// `postgres://tensorzero:tensorzero@localhost:5433/tensorzero`).
+    /// Explicitly overridden via `SWARM_TENSORZERO_PG_URL` env var.
+    pub tensorzero_pg_url: Option<String>,
+    /// Cache TTL for TZ insights (seconds). Default: 1800 (30 min).
+    /// Populated from `SWARM_TZ_INSIGHTS_TTL_SECS` env var.
+    pub tz_insights_ttl_secs: u64,
 }
 
 impl Default for SwarmConfig {
@@ -432,6 +440,21 @@ impl Default for SwarmConfig {
             tensorzero_url: std::env::var("SWARM_TENSORZERO_URL")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
+            tensorzero_pg_url: std::env::var("SWARM_TENSORZERO_PG_URL")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .or_else(|| {
+                    std::env::var("SWARM_TENSORZERO_URL")
+                        .ok()
+                        .filter(|s| !s.trim().is_empty())
+                        .map(|_| {
+                            "postgres://tensorzero:tensorzero@localhost:5433/tensorzero".into()
+                        })
+                }),
+            tz_insights_ttl_secs: std::env::var("SWARM_TZ_INSIGHTS_TTL_SECS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1800),
         }
     }
 }
@@ -684,6 +707,8 @@ impl SwarmConfig {
             repo_id: None,
             adapter_id: None,
             tensorzero_url: None,
+            tensorzero_pg_url: None,
+            tz_insights_ttl_secs: 1800,
         }
     }
 }

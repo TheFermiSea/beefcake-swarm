@@ -38,6 +38,16 @@ type = "float"
 optimize = "max"
 level = "inference"
 
+[metrics.verifier_gates_passed]
+type = "float"
+optimize = "max"
+level = "episode"
+
+[metrics.iteration_efficiency]
+type = "float"
+optimize = "min"
+level = "episode"
+
 # ─── Models ──────────────────────────────────────────────────────────────────
 # Local HPC endpoints use OpenAI-compatible protocol (llama.cpp).
 # Cloud endpoints use CLIAPIProxy on ai-proxy (localhost from host network).
@@ -159,10 +169,13 @@ model = "claude_opus"
 type = "chat_completion"
 model = "claude_sonnet"
 
-# 50/50 split between Opus and Sonnet for the Architect
+# Adaptive: TZ shifts traffic to the variant that maximizes task_resolved.
+# Falls back to equal weights until feedback data accumulates (Phase 1 fix).
 [functions.architect_plan.experimentation]
-type = "static"
-candidate_variants = { "opus_verbose" = 0.5, "sonnet_concise" = 0.5 }
+type = "adaptive"
+candidate_variants = ["opus_verbose", "sonnet_concise"]
+metric = "task_resolved"
+update_period_s = 300
 
 # --- Editor: applies Architect's SEARCH/REPLACE blocks mechanically ---
 # Pure proxy — Rig sends raw messages. A/B tests Strand-14B vs Tessa-7B vs 122B.
@@ -181,8 +194,10 @@ type = "chat_completion"
 model = "qwen_reasoning"
 
 [functions.editor_apply.experimentation]
-type = "static"
-candidate_variants = { "qwen_coder" = 0.5, "qwen_reasoning" = 0.5 }
+type = "adaptive"
+candidate_variants = ["qwen_coder", "qwen_reasoning"]
+metric = "task_resolved"
+update_period_s = 300
 
 # --- Worker Code Edit: Rust specialist and general coder ---
 # Pure proxy — A/B tests Strand-14B vs 122B MoE for code generation.
@@ -197,10 +212,12 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "qwen_reasoning"
 
-# 50/50 between the two 122B nodes (Strand excluded — template issue)
+# Adaptive: shifts traffic to the higher-resolving 122B node.
 [functions.worker_code_edit.experimentation]
-type = "static"
-candidate_variants = { "qwen_coder" = 0.5, "qwen_reasoning" = 0.5 }
+type = "adaptive"
+candidate_variants = ["qwen_coder", "qwen_reasoning"]
+metric = "task_resolved"
+update_period_s = 300
 
 # --- Code Review: blind reviewer ---
 # Pure proxy — uses Strand-14B (fast Rust analysis)
@@ -243,8 +260,10 @@ type = "chat_completion"
 model = "qwen_reasoning"
 
 [functions.code_fixing.experimentation]
-type = "static"
-candidate_variants = { "qwen_fixer" = 0.5, "qwen_reasoning_fixer" = 0.5 }
+type = "adaptive"
+candidate_variants = ["qwen_fixer", "qwen_reasoning_fixer"]
+metric = "task_resolved"
+update_period_s = 300
 
 # --- Adversarial Testing: red-team agent ---
 # Pure proxy — uses Tessa-7B for fast adversarial probing

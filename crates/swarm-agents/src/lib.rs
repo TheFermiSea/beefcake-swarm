@@ -26,5 +26,6 @@ pub mod subtask;
 pub mod telemetry;
 pub mod tensorzero;
 pub mod tools;
+pub mod tz_insights;
 pub mod work_protocol;
 pub mod worktree_bridge;
