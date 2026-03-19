@@ -156,6 +156,77 @@ impl BeadsBridge {
         Ok(stdout.trim().to_string())
     }
 
+    // ── Molecule primitives (child issues + dependencies + labels) ────
+
+    /// Add a blocking dependency: `issue_id` depends on `depends_on_id`.
+    ///
+    /// Maps to `bd dep add <issue_id> <depends_on_id> --type blocks`.
+    pub fn add_dependency(&self, issue_id: &str, depends_on_id: &str) -> Result<()> {
+        self.run_bd_ok(&["dep", "add", issue_id, depends_on_id, "--type", "blocks"])?;
+        Ok(())
+    }
+
+    /// Add a label to an issue.
+    ///
+    /// Uses the `dim:value` convention for structured labels (e.g., `target-file:src/foo.rs`).
+    pub fn add_label(&self, issue_id: &str, label: &str) -> Result<()> {
+        self.run_bd_ok(&["label", "add", issue_id, label])?;
+        Ok(())
+    }
+
+    /// Create a molecule: parent epic with child subtask issues and blocking dependencies.
+    ///
+    /// Each child blocks the parent. When all children close, the parent auto-unblocks.
+    /// Returns the list of child issue IDs created.
+    pub fn create_molecule(
+        &self,
+        parent_id: &str,
+        subtasks: &[(String, Vec<String>)], // (objective, target_files)
+    ) -> Result<Vec<String>> {
+        let mut child_ids = Vec::with_capacity(subtasks.len());
+
+        for (i, (objective, target_files)) in subtasks.iter().enumerate() {
+            // Create child issue with a compact title.
+            let title = if objective.len() > 80 {
+                format!("subtask-{}: {}...", i + 1, &objective[..77])
+            } else {
+                format!("subtask-{}: {}", i + 1, objective)
+            };
+            let child_id = self.create(&title, "task", 1)?;
+
+            // Parent waits for this child (child blocks parent).
+            if let Err(e) = self.add_dependency(parent_id, &child_id) {
+                tracing::warn!(
+                    parent = %parent_id,
+                    child = %child_id,
+                    error = %e,
+                    "Failed to add dependency — molecule tracking degraded"
+                );
+            }
+
+            // Tag child with target file labels for observability.
+            for file in target_files {
+                let label = format!("target-file:{file}");
+                let _ = self.add_label(&child_id, &label);
+            }
+
+            // Link back to parent for traceability.
+            let parent_label = format!("parent:{parent_id}");
+            let _ = self.add_label(&child_id, &parent_label);
+
+            child_ids.push(child_id);
+        }
+
+        tracing::info!(
+            parent = %parent_id,
+            children = ?child_ids,
+            "Created molecule: {} child issues",
+            child_ids.len()
+        );
+
+        Ok(child_ids)
+    }
+
     /// Look up a single issue by ID.
     pub fn show(&self, id: &str) -> Result<BeadsIssue> {
         let stdout = self.run_bd_ok(&["show", id, "--json"])?;

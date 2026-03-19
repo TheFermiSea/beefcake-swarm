@@ -531,6 +531,11 @@ async fn process_issue_core(
                     warn!(id = %issue.id, error = %e, "Failed to init workpad — workers proceed without comms");
                 }
 
+                // Create beads molecule (child issues) for subtask tracking.
+                // Non-fatal — dispatch proceeds even if molecule creation fails.
+                let molecule_map =
+                    crate::subtask::create_molecule_for_plan(&plan, &issue.id, &wt_path);
+
                 // Dispatch workers concurrently, bounded by endpoint pool capacity
                 // (number of inference nodes, not parallel_issues which is a separate concern).
                 let max_concurrent = factory.endpoint_pool.capacity();
@@ -544,6 +549,9 @@ async fn process_issue_core(
                     timeout,
                 )
                 .await;
+
+                // Close molecule child issues based on worker results.
+                crate::subtask::close_molecule_children(&outcome.results, &molecule_map, &wt_path);
 
                 let succeeded = outcome.success_count();
                 let total = outcome.results.len();
@@ -1389,6 +1397,10 @@ async fn process_issue_core(
                     warn!(id = %issue.id, error = %e, "Failed to init workpad");
                 }
 
+                // Create beads molecule for subtask tracking.
+                let molecule_map =
+                    crate::subtask::create_molecule_for_plan(&manager_plan, &issue.id, &wt_path);
+
                 let max_concurrent = factory.endpoint_pool.capacity();
                 let timeout = timeout_from_env("SWARM_LOCAL_HTTP_TIMEOUT_SECS", 900).as_secs();
                 let outcome = crate::subtask::dispatch_subtasks(
@@ -1400,6 +1412,9 @@ async fn process_issue_core(
                     timeout,
                 )
                 .await;
+
+                // Close molecule child issues.
+                crate::subtask::close_molecule_children(&outcome.results, &molecule_map, &wt_path);
 
                 outcome.log_summary();
 

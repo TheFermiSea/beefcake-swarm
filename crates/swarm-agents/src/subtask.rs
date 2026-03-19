@@ -26,6 +26,7 @@ use tokio::task::JoinSet;
 use tracing::{debug, error, info, warn};
 
 use crate::agents::coder;
+use crate::beads_bridge::IssueTracker;
 use crate::endpoint_pool::EndpointPool;
 use crate::runtime_adapter::{AdapterConfig, AdapterReport, RuntimeAdapter};
 use crate::tools::bundles::{self, WorkerRole};
@@ -133,6 +134,82 @@ impl DispatchOutcome {
                 has_written = result.report.as_ref().map(|r| r.has_written).unwrap_or(false),
                 "Worker result"
             );
+        }
+    }
+}
+
+// ── Molecule tracking ────────────────────────────────────────────────────────
+
+/// Create beads child issues for each subtask in the plan (molecule pattern).
+///
+/// Returns a map from subtask ID → beads issue ID. The child issues have:
+/// - Blocking dependency on the parent (parent waits for all children)
+/// - `target-file:` labels for each assigned file
+/// - `parent:` label linking back to the parent issue
+///
+/// Failures are non-fatal — molecule tracking is optional observability.
+/// The JoinSet dispatch will proceed regardless.
+pub fn create_molecule_for_plan(
+    plan: &SubtaskPlan,
+    parent_issue_id: &str,
+    wt_path: &Path,
+) -> std::collections::HashMap<String, String> {
+    let bridge = crate::beads_bridge::BeadsBridge::with_worktree(wt_path);
+    let subtask_data: Vec<(String, Vec<String>)> = plan
+        .subtasks
+        .iter()
+        .map(|s| (s.objective.clone(), s.target_files.clone()))
+        .collect();
+
+    match bridge.create_molecule(parent_issue_id, &subtask_data) {
+        Ok(child_ids) => {
+            let mut map = std::collections::HashMap::new();
+            for (subtask, child_id) in plan.subtasks.iter().zip(child_ids) {
+                // Claim the child issue so it shows as in_progress.
+                let _ = bridge.try_claim(&child_id);
+                map.insert(subtask.id.clone(), child_id);
+            }
+            map
+        }
+        Err(e) => {
+            warn!(
+                parent = %parent_issue_id,
+                error = %e,
+                "Failed to create molecule — subtask tracking unavailable"
+            );
+            std::collections::HashMap::new()
+        }
+    }
+}
+
+/// Close beads child issues based on subtask results.
+///
+/// Successful subtasks get closed with a success reason.
+/// Failed subtasks remain open for retry or human review.
+pub fn close_molecule_children(
+    results: &[SubtaskResult],
+    molecule_map: &std::collections::HashMap<String, String>,
+    wt_path: &Path,
+) {
+    if molecule_map.is_empty() {
+        return;
+    }
+
+    let bridge = crate::beads_bridge::BeadsBridge::with_worktree(wt_path);
+    for result in results {
+        if let Some(child_id) = molecule_map.get(&result.subtask_id) {
+            if result.success {
+                if let Err(e) = bridge.close(child_id, Some("Subtask completed successfully")) {
+                    debug!(child = %child_id, error = %e, "Failed to close molecule child");
+                }
+            } else {
+                // Leave failed subtasks open — they'll show in `bd list --status in_progress`
+                debug!(
+                    child = %child_id,
+                    subtask = %result.subtask_id,
+                    "Subtask failed — leaving child issue open for retry"
+                );
+            }
         }
     }
 }
