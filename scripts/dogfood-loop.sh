@@ -2,7 +2,7 @@
 # dogfood-loop.sh — Run swarm-agents on beads issues, optionally in parallel.
 #
 # Usage:
-#   ./scripts/dogfood-loop.sh                    # Pick from bdh ready (default)
+#   ./scripts/dogfood-loop.sh                    # Pick from bd ready (default)
 #   ./scripts/dogfood-loop.sh --max-runs 5       # Stop after 5 runs
 #   ./scripts/dogfood-loop.sh --cooldown 120     # 2-minute cooldown between runs
 #   ./scripts/dogfood-loop.sh --parallel 3       # Run up to 3 issues concurrently
@@ -32,7 +32,7 @@ COOLDOWN="${DOGFOOD_COOLDOWN:-60}"
 LOG_DIR="${DOGFOOD_LOG_DIR:-${REPO_ROOT}/logs/dogfood}"
 ISSUE_LIST="${DOGFOOD_ISSUE_LIST:-}"
 PARALLEL="${DOGFOOD_PARALLEL:-1}"
-ISSUE_QUERY_BIN="${DOGFOOD_BEADS_BIN:-bdh}"
+ISSUE_QUERY_BIN="${DOGFOOD_BEADS_BIN:-bd}"
 DISCOVER=0                              # --discover: auto-fetch new issues when list exhausted
 
 # CLI overrides

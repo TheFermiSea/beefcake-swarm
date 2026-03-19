@@ -7,7 +7,6 @@ use clap::Parser;
 use tracing::{error, info, warn};
 
 use swarm_agents::agents::AgentFactory;
-use swarm_agents::bdh_bridge::BdhBridge;
 use swarm_agents::beads_bridge::{BeadsBridge, BeadsIssue, IssueTracker, NoOpTracker};
 use swarm_agents::config::{check_endpoint_with_model, SwarmConfig};
 use swarm_agents::modes::SwarmMode;
@@ -595,34 +594,14 @@ async fn dispatch_parallel_issues(
     Ok(())
 }
 
-/// Returns true if `SWARM_USE_BDH=1` is set, selecting BdhBridge over BeadsBridge.
-fn use_bdh() -> bool {
-    std::env::var("SWARM_USE_BDH")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-}
-
-/// Create the appropriate issue tracker based on the `SWARM_USE_BDH` env var.
-///
-/// When `SWARM_USE_BDH=1`, returns a [`BdhBridge`] for multi-agent coordination
-/// (atomic claiming, mail/chat, file locking). Otherwise returns a [`BeadsBridge`]
-/// for direct `bd` CLI integration.
+/// Create the issue tracker (always uses native `bd` CLI).
 fn new_tracker() -> Box<dyn IssueTracker> {
-    if use_bdh() {
-        info!("Using BdhBridge (SWARM_USE_BDH=1)");
-        Box::new(BdhBridge::new())
-    } else {
-        Box::new(BeadsBridge::new())
-    }
+    Box::new(BeadsBridge::new())
 }
 
-/// Look up a single issue by ID, using the appropriate bridge.
+/// Look up a single issue by ID via `bd show`.
 fn show_issue(id: &str) -> Result<BeadsIssue> {
-    if use_bdh() {
-        BdhBridge::new().show(id)
-    } else {
-        BeadsBridge::new().show(id)
-    }
+    BeadsBridge::new().show(id)
 }
 
 async fn shutdown_signal() {

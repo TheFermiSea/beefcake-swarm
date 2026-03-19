@@ -21,8 +21,7 @@ pub use dispatch::{format_compact_task_prompt, format_task_prompt, route_to_code
 pub use helpers::try_scaffold_fallback;
 pub(crate) use helpers::{
     bool_from_env, create_stuck_intervention, detect_failure_patterns, load_directives,
-    poll_worker_chat, query_kb_with_failsafe, save_directives, tier_from_env, timeout_from_env,
-    u32_from_env,
+    query_kb_with_failsafe, save_directives, tier_from_env, timeout_from_env, u32_from_env,
 };
 pub(crate) use validation::{
     cloud_validate, extract_local_validator_feedback, extract_validator_feedback, local_validate,
@@ -447,7 +446,6 @@ async fn process_issue_core(
     let mut success = false;
     let mut last_report: Option<VerifierReport> = None;
     let mut last_validator_feedback: Vec<ValidatorFeedback> = Vec::new();
-    let mut worker_chat_messages: Option<String> = None;
     let mut span_summary = SpanSummary::new();
     let mut consecutive_validator_failures: u32 = 0;
     // Tracks whether the previous iteration's agent called edit_file/write_file.
@@ -939,20 +937,14 @@ async fn process_issue_core(
             }
         }
 
-        // --- Chat polling (bdh Phase 4) ---
-        // Between iterations, check if any worker sent a chat message.
+        // --- Mail polling (native beads) ---
+        // Between iterations, check if any agent sent a mail message.
         // Messages are injected into the next agent prompt as additional context.
-        if iteration > 1 {
-            if let Some(ref chat_context) = poll_worker_chat(&wt_path) {
-                info!(
-                    iteration,
-                    chat_len = chat_context.len(),
-                    "Injecting worker chat messages into prompt"
-                );
-                // chat_context will be appended to the objective below
-                worker_chat_messages = Some(chat_context.clone());
-            }
-        }
+        let mail_context = if iteration > 1 {
+            crate::beads_bridge::poll_mail_inbox(&wt_path)
+        } else {
+            None
+        };
 
         // Build the full objective: title + description (if available).
         // The description contains file lists, implementation details, and context
@@ -962,10 +954,10 @@ async fn process_issue_core(
             _ => issue.title.clone(),
         };
 
-        // Append worker chat messages if any were received between iterations
-        if let Some(ref chat) = worker_chat_messages.take() {
-            full_objective.push_str("\n\n## Worker Messages (from previous iteration)\n");
-            full_objective.push_str(chat);
+        // Append mail messages if any were received between iterations
+        if let Some(ref mail) = mail_context {
+            full_objective.push_str("\n\n## Agent Mail (from previous iteration)\n");
+            full_objective.push_str(mail);
         }
 
         // Pack context with tier-appropriate token budget

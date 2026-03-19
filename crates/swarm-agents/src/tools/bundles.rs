@@ -16,9 +16,6 @@ use std::sync::Arc;
 use rig::tool::ToolDyn;
 
 use super::astgrep_tool::AstGrepTool;
-use super::bdh_tools::{
-    ChatCheckTool, ChatSendTool, CheckLocksTool, CheckMailTool, SendMailTool, TeamStatusTool,
-};
 use super::colgrep_tool::ColGrepTool;
 use super::exec_tool::RunCommandTool;
 use super::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
@@ -50,22 +47,12 @@ pub enum WorkerRole {
 
 /// Build the tool bundle for a worker agent.
 ///
-/// Delegates to [`process_tactical_tools`] for the core tactical tools,
-/// then appends worker chat tools for bdh coordination.
+/// Delegates to [`process_tactical_tools`] for the core tactical tools.
 ///
 /// When `proxy` is true, tools are wrapped with `proxy_` prefixed names
 /// for CLIAPIProxy compatibility.
 pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dyn ToolDyn>> {
-    let mut tools = process_tactical_tools(wt_path, role, proxy);
-
-    // Workers get chat_send when bdh coordination is active.
-    // This lets workers signal the manager when stuck or need clarification.
-    // (Planners and Strategists are read-only — no chat needed.)
-    if role != WorkerRole::Planner && role != WorkerRole::Strategist {
-        tools.extend(worker_chat_tools(wt_path));
-    }
-
-    tools
+    process_tactical_tools(wt_path, role, proxy)
 }
 
 /// Build a worker tool bundle with a file allowlist for subtask dispatch.
@@ -130,44 +117,13 @@ pub fn manager_tools(
     kernel_strategy_tools(wt_path, verifier_packages, proxy)
 }
 
-/// Build bdh coordination tools for the manager agent.
+/// Coordination tools placeholder.
 ///
-/// Returns coordination tools when `SWARM_USE_BDH=1`, empty vec otherwise.
-/// These give the manager team awareness: who's working on what, file locks,
-/// and inter-agent messaging (including chat).
-pub fn coordination_tools(wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
-    let use_bdh = std::env::var("SWARM_USE_BDH")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    if !use_bdh {
-        return vec![];
-    }
-
-    vec![
-        Box::new(TeamStatusTool::new(wt_path)),
-        Box::new(CheckMailTool::new(wt_path)),
-        Box::new(SendMailTool::new(wt_path)),
-        Box::new(CheckLocksTool::new(wt_path)),
-        Box::new(ChatSendTool::new(wt_path)),
-        Box::new(ChatCheckTool::new(wt_path)),
-    ]
-}
-
-/// Build bdh chat tools for worker agents.
-///
-/// Returns chat_send when `SWARM_USE_BDH=1`, empty vec otherwise.
-/// Workers can signal the manager when stuck or when they need clarification.
-pub fn worker_chat_tools(wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
-    let use_bdh = std::env::var("SWARM_USE_BDH")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-
-    if !use_bdh {
-        return vec![];
-    }
-
-    vec![Box::new(ChatSendTool::new(wt_path))]
+/// BeadHub coordination tools (team_status, check_mail, send_mail, check_locks,
+/// chat_send, chat_check) were removed in the native beads migration.
+/// Phase 2 will re-add messaging via `bd mail` primitives.
+pub fn coordination_tools(_wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
+    vec![]
 }
 
 /// Build the **strategy-only** tool bundle for the kernel (cloud manager).

@@ -59,13 +59,6 @@ claiming and closing — you focus on solving the problem.
   target_files. The orchestrator dispatches workers concurrently and verifies the combined result. \
   Integration files (Cargo.toml, mod.rs, lib.rs, main.rs) may only appear in one subtask.
 
-## Coordination Tools (when bdh is active)
-- **team_status**: Check what other agents are working on before delegating.
-- **check_locks**: See which files are locked before assigning work.
-- **send_mail**: Notify other agents of important changes (async, fire-and-forget).
-- **check_mail**: Read messages from other agents.
-- **chat_send**: Send a chat message to another agent (non-blocking).
-- **chat_check**: Check for pending chat messages from workers.
 
 **You do NOT have proxy_read_file or proxy_list_files.** Workers have these tools. \
 You MUST delegate all file reading and exploration to workers.
@@ -169,13 +162,6 @@ status changes — you focus on solving the problem.
 - **list_changed_files**: List uncommitted changes (git status --short). Quick way to see \
   what files have been modified, added, or deleted.
 
-## Coordination Tools (when bdh is active)
-- **team_status**: Check what other agents are working on before delegating.
-- **check_locks**: See which files are locked before assigning work.
-- **send_mail**: Notify other agents of important changes (async, fire-and-forget).
-- **check_mail**: Read messages from other agents.
-- **chat_send**: Send a chat message to another agent (non-blocking).
-- **chat_check**: Check for pending chat messages from workers.
 
 ## Delegation Protocol
 1. Read relevant files to understand the problem.

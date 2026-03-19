@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::path::Path;
 use std::process::Command;
 
 /// A beads issue as returned by `bd list --json`.
@@ -83,9 +84,15 @@ impl IssueTracker for NoOpTracker {
 /// Bridge to the beads CLI binary (`bd`).
 ///
 /// beads is a Go binary — we shell out to it.
-/// The binary name is read from the `SWARM_BEADS_BIN` env var, defaulting to `"bdh"`.
+/// The binary name is read from the `SWARM_BEADS_BIN` env var, defaulting to `"bd"`.
+///
+/// Optionally operates within a specific worktree directory (for worktree-scoped
+/// commands like `bd mail` where identity comes from `BD_ACTOR`).
 pub struct BeadsBridge {
     bin: String,
+    /// Working directory for bd commands. When set, commands run in this directory
+    /// (which must have `.beads/` access, typically via symlink from the worktree).
+    wt_path: Option<std::path::PathBuf>,
 }
 
 impl Default for BeadsBridge {
@@ -97,47 +104,64 @@ impl Default for BeadsBridge {
 impl BeadsBridge {
     pub fn new() -> Self {
         Self {
-            bin: std::env::var("SWARM_BEADS_BIN").unwrap_or_else(|_| "bdh".into()),
+            bin: std::env::var("SWARM_BEADS_BIN").unwrap_or_else(|_| "bd".into()),
+            wt_path: None,
         }
+    }
+
+    /// Create a BeadsBridge that runs commands in a specific worktree directory.
+    ///
+    /// The worktree must have `.beads/` access (typically via symlink).
+    /// Identity comes from `BD_ACTOR` env var, not a server-side file.
+    pub fn with_worktree(wt_path: impl Into<std::path::PathBuf>) -> Self {
+        Self {
+            bin: std::env::var("SWARM_BEADS_BIN").unwrap_or_else(|_| "bd".into()),
+            wt_path: Some(wt_path.into()),
+        }
+    }
+
+    /// Run a bd command, optionally in the configured worktree directory.
+    fn run_bd(&self, args: &[&str]) -> Result<std::process::Output> {
+        let mut cmd = Command::new(&self.bin);
+        cmd.args(args);
+        if let Some(ref wt) = self.wt_path {
+            cmd.current_dir(wt);
+        }
+        cmd.output()
+            .with_context(|| format!("Failed to run `{} {}`", self.bin, args.join(" ")))
+    }
+
+    /// Run a bd command and return stdout on success, bail on failure.
+    fn run_bd_ok(&self, args: &[&str]) -> Result<String> {
+        let output = self.run_bd(args)?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            anyhow::bail!(
+                "{} {} failed: {stderr}",
+                self.bin,
+                args.first().unwrap_or(&"")
+            );
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
     }
 
     /// Create a new issue, returns the issue ID.
     pub fn create(&self, title: &str, issue_type: &str, priority: u8) -> Result<String> {
-        let output = Command::new(&self.bin)
-            .args([
-                "create",
-                &format!("--title={title}"),
-                &format!("--type={issue_type}"),
-                &format!("--priority={priority}"),
-            ])
-            .output()
-            .context(format!("Failed to run `{} create`", self.bin))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("{} create failed: {stderr}", self.bin);
-        }
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stdout = self.run_bd_ok(&[
+            "create",
+            &format!("--title={title}"),
+            &format!("--type={issue_type}"),
+            &format!("--priority={priority}"),
+        ])?;
         Ok(stdout.trim().to_string())
     }
-}
 
-impl BeadsBridge {
     /// Look up a single issue by ID.
     pub fn show(&self, id: &str) -> Result<BeadsIssue> {
-        let output = Command::new(&self.bin)
-            .args(["show", id, "--json"])
-            .output()
-            .context(format!("Failed to run `{} show {id}`", self.bin))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("{} show failed: {stderr}", self.bin);
-        }
+        let stdout = self.run_bd_ok(&["show", id, "--json"])?;
 
         // `bd show --json` returns an array with one element
-        let issues: Vec<BeadsIssue> = serde_json::from_slice(&output.stdout)
+        let issues: Vec<BeadsIssue> = serde_json::from_str(&stdout)
             .context(format!("Failed to parse {} show output", self.bin))?;
 
         issues
@@ -145,71 +169,83 @@ impl BeadsBridge {
             .next()
             .context(format!("No issue found with id {id}"))
     }
+
+    // ── Native messaging (bd mail) ────────────────────────────────────
+
+    /// Send a mail message to another agent via `bd mail send`.
+    ///
+    /// Identity comes from `BD_ACTOR` env var (set in `run-swarm.sh`).
+    /// Messages are stored as Dolt rows and sync with `bd dolt push/pull`.
+    pub fn send_mail(&self, to: &str, subject: &str, message: &str) -> Result<()> {
+        self.run_bd_ok(&["mail", "send", to, "-s", subject, "-m", message])?;
+        Ok(())
+    }
+
+    /// Check the inbox for incoming messages.
+    ///
+    /// Returns the raw output from `bd mail inbox`.
+    /// Empty or "no messages" means no pending mail.
+    pub fn check_inbox(&self) -> Result<String> {
+        self.run_bd_ok(&["mail", "inbox"])
+    }
+
+    /// Read a specific mail message by ID.
+    pub fn read_mail(&self, msg_id: &str) -> Result<String> {
+        self.run_bd_ok(&["mail", "read", msg_id])
+    }
+
+    /// Reply to a mail message.
+    pub fn reply_mail(&self, msg_id: &str, message: &str) -> Result<()> {
+        self.run_bd_ok(&["mail", "reply", msg_id, "-m", message])?;
+        Ok(())
+    }
 }
 
 impl IssueTracker for BeadsBridge {
     /// List ready issues (open and not blocked), sorted by priority.
     fn list_ready(&self) -> Result<Vec<BeadsIssue>> {
-        let output = Command::new(&self.bin)
-            .args(["ready", "--json"])
-            .output()
-            .context(format!(
-                "Failed to run `{} ready`. Is beads installed?",
-                self.bin
-            ))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("{} ready failed: {stderr}", self.bin);
-        }
-
-        let issues: Vec<BeadsIssue> = serde_json::from_slice(&output.stdout)
-            .context(format!("Failed to parse {} ready output", self.bin))?;
-
+        let stdout = self.run_bd_ok(&["ready", "--json"])?;
+        let issues: Vec<BeadsIssue> =
+            serde_json::from_str(&stdout).context("Failed to parse bd ready output")?;
         Ok(issues)
     }
 
     /// Update issue status.
     fn update_status(&self, id: &str, status: &str) -> Result<()> {
-        let output = Command::new(&self.bin)
-            .args(["update", id, &format!("--status={status}")])
-            .output()
-            .context(format!("Failed to run `{} update`", self.bin))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("{} update failed: {stderr}", self.bin);
-        }
-
+        self.run_bd_ok(&["update", id, &format!("--status={status}")])?;
         Ok(())
     }
 
     /// Close an issue.
     fn close(&self, id: &str, reason: Option<&str>) -> Result<()> {
-        let mut args = vec!["close".to_string(), id.to_string()];
+        let mut args = vec!["close", id];
+        let reason_arg;
         if let Some(r) = reason {
-            args.push(format!("--reason={r}"));
+            reason_arg = format!("--reason={r}");
+            args.push(&reason_arg);
         }
-
-        let output = Command::new(&self.bin)
-            .args(&args)
-            .output()
-            .context(format!("Failed to run `{} close`", self.bin))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            anyhow::bail!("{} close failed: {stderr}", self.bin);
-        }
-
+        self.run_bd_ok(&args)?;
         Ok(())
     }
 
-    /// Atomically claim an issue: check status first, then update.
+    /// Claim an issue using `bd update --claim`.
     ///
-    /// Returns `Ok(false)` if the issue is already `in_progress` or `closed`,
-    /// preventing two orchestrator instances from claiming the same issue.
+    /// The native `--claim` flag transitions the issue to `in_progress` and
+    /// records the actor identity. Returns `Ok(false)` if already claimed.
     fn try_claim(&self, id: &str) -> Result<bool> {
-        // Check current status before claiming
+        let output = self.run_bd(&["update", id, "--claim"])?;
+        if output.status.success() {
+            return Ok(true);
+        }
+
+        // --claim fails if already claimed — check if it's a "not open" error
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("already") || stderr.contains("not open") || stderr.contains("claimed") {
+            tracing::info!(id = %id, "Issue already claimed or closed, skipping");
+            return Ok(false);
+        }
+
+        // Unexpected error — fall back to show + update
         let issue = self.show(id)?;
         if issue.status != "open" {
             tracing::info!(
@@ -219,8 +255,46 @@ impl IssueTracker for BeadsBridge {
             );
             return Ok(false);
         }
-
         self.update_status(id, "in_progress")?;
         Ok(true)
+    }
+}
+
+/// Poll the `bd mail inbox` for messages directed at the current actor.
+///
+/// Returns `Some(inbox_text)` if there are unread messages, `None` otherwise.
+/// Fails silently — mail unavailability never blocks orchestration.
+pub fn poll_mail_inbox(wt_path: &Path) -> Option<String> {
+    let bridge = BeadsBridge::with_worktree(wt_path);
+    match bridge.check_inbox() {
+        Ok(inbox) if !inbox.trim().is_empty() && !inbox.contains("no messages") => {
+            tracing::info!(
+                inbox_len = inbox.len(),
+                "Unread mail messages detected between iterations"
+            );
+            Some(inbox)
+        }
+        Ok(_) => None,
+        Err(e) => {
+            tracing::debug!(error = %e, "Mail inbox check failed (non-fatal)");
+            None
+        }
+    }
+}
+
+/// Send an escalation mail when the orchestrator is stuck on an issue.
+///
+/// Sends to "lead" (the swarm lead actor). Non-blocking — failures are logged
+/// but never propagate errors.
+pub fn escalate_via_mail(wt_path: &Path, issue_id: &str, reason: &str) {
+    let bridge = BeadsBridge::with_worktree(wt_path);
+    let subject = format!("Stuck: {issue_id}");
+    match bridge.send_mail("lead", &subject, reason) {
+        Ok(()) => tracing::info!(issue_id, "Escalation mail sent via bd mail"),
+        Err(e) => tracing::warn!(
+            issue_id,
+            error = %e,
+            "bd mail send failed (non-fatal — escalation recorded in intervention file)"
+        ),
     }
 }

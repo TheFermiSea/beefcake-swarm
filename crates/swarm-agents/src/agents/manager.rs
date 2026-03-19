@@ -130,7 +130,7 @@ pub fn build_cloud_manager(
         builder = builder.tools(kb_tools);
     }
 
-    // Coordination tools (bdh team status, mail, locks — active when SWARM_USE_BDH=1)
+    // Coordination tools (placeholder — Phase 2 will add `bd mail` tools)
     let coord_tools = bundles::coordination_tools(wt_path);
     if !coord_tools.is_empty() {
         builder = builder.tools(coord_tools);
@@ -187,7 +187,7 @@ pub fn build_local_manager(
         builder = builder.tools(kb_tools);
     }
 
-    // Coordination tools (bdh team status, mail, locks — active when SWARM_USE_BDH=1)
+    // Coordination tools (placeholder — Phase 2 will add `bd mail` tools)
     let coord_tools = bundles::coordination_tools(wt_path);
     if !coord_tools.is_empty() {
         builder = builder.tools(coord_tools);

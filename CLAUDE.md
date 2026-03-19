@@ -147,7 +147,7 @@ All tiers default to Qwen3.5-397B-A17B. run-swarm.sh and config.rs are now align
 | `SWARM_MIN_OBJECTIVE_LEN` | `10` | Minimum issue title length |
 | `SWARM_CLOUD_HTTP_TIMEOUT_SECS` | `300` | Per-request HTTP timeout for cloud API calls (5 min) |
 | `SWARM_LOCAL_HTTP_TIMEOUT_SECS` | `900` | Per-request HTTP timeout for local LLM calls (15 min) |
-| `SWARM_BEADS_BIN` | `bdh` | Beads CLI binary name |
+| `SWARM_BEADS_BIN` | `bd` | Beads CLI binary name |
 | `RUST_LOG` | `info` | Log level (see Debug & Monitoring) |
 
 ## Dogfood Operations
@@ -229,7 +229,7 @@ INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed wor
 
 ## External Tools (install separately)
 
-- `bdh` (beads): `curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash` — Go binary, issue tracker CLI. Invoked via subprocess (see `beads_bridge.rs`).
+- `bd` (beads): `curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash` — Go binary, issue tracker CLI. Invoked via subprocess (see `beads_bridge.rs`). Humans may also use `bdh` wrapper for convenience.
 - `bv` (beads_viewer): `go install github.com/Dicklesworthstone/beads_viewer@latest`
 - `gastown`: `go install github.com/steveyegge/gastown@latest` — Git worktree isolation per agent task.
 - `nlm` (notebooklm-mcp-cli): `uv tool install notebooklm-mcp-cli` — NotebookLM CLI for knowledge base queries. Auth: `nlm login`.
@@ -337,7 +337,7 @@ Enabled via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`.
 
 ### Teammate Workflow
 
-1. Claim issue: `bdh update <id> --status in_progress`
+1. Claim issue: `bd update <id> --status in_progress`
 2. Create branch: `git checkout -b swarm/<issue-id>`
 3. Implement the fix/feature
 4. Quality gates auto-run on task completion (fmt, clippy, check, test)
@@ -357,75 +357,29 @@ export SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0
 
 Each teammate works on `swarm/<issue-id>`. Lead assigns non-overlapping issues.
 
-<!-- BEADHUB:START -->
-## BeadHub Coordination Rules
+## Beads Coordination (Native)
 
-This project uses `bdh` for multi-agent coordination and issue tracking, `bdh` is a wrapper on top of `bd` (beads). Commands starting with : like `bdh :status` are managed by `bdh`. Other commands are sent to `bd`.
+The swarm uses native `bd` (beads) directly for issue tracking and coordination.
+BeadHub was removed — all `bdh :aweb` and `bdh :init` commands are gone.
 
-You are expected to work and coordinate with a team of agents. ALWAYS prioritize the team vs your particular task.
-
-You will see notifications telling you that other agents have written mails or chat messages, or are waiting for you. NEVER ignore notifications. It is rude towards your fellow agents. Do not be rude.
-
-Your goal is for the team to succeed in the shared project.
-
-The active project policy as well as the expected behaviour associated to your role is shown via `bdh :policy`.
-
-## Start Here (Every Session)
+### Start Here (Every Session)
 
 ```bash
-bdh :policy    # READ CAREFULLY and follow diligently
-bdh :status    # who am I? (alias/workspace/role) + team status
-bdh ready      # find unblocked work
+bd ready       # find unblocked work
+bd list        # see all issues
 ```
 
-Use `bdh :help` for bdh-specific help.
+### Rules
 
-## Rules
+- Use `bd` (not `bdh`) in the swarm codebase — the orchestrator calls `bd` directly
+- Humans may use `bdh` for convenience (it wraps `bd`)
+- Identity is set via `BD_ACTOR` env var (e.g., `BD_ACTOR=worker-vasp03-beefcake-abc1`)
+- Sync with `bd dolt push/pull` to the Dolt remote on ai-proxy
 
-- Always use `bdh` (not `bd`) so work is coordinated
-- Default to mail (`bdh :aweb mail list|open|send`) for coordination; use chat (`bdh :aweb chat pending|open|send-and-wait|send-and-leave|history|extend-wait`) when you need a conversation with another agent.
-- Respond immediately to WAITING notifications — someone is blocked.
-- Notifications are for YOU, the agent, not for the human.
-- Don't overwrite the work of other agents without coordinating first.
-- ALWAYS check what other agents are working on with bdh :status which will tell you which beads they have claimed and what files they are working on (reservations).
-- `bdh` derives your identity from the `.beadhub` file in the current worktree. If you run it from another directory you will be impersonating another agent, do not do that.
-- Prioritize good communication — your goal is for the team to succeed
-
-## Using mail
-
-Mail is fire-and-forget — use it for status updates, handoffs, and non-blocking questions.
+### Native Messaging (Phase 2)
 
 ```bash
-bdh :aweb mail send <alias> "message"                         # Send a message
-bdh :aweb mail send <alias> "message" --subject "API design"  # With subject
-bdh :aweb mail list                                           # Check your inbox
-bdh :aweb mail open <alias>                                   # Read & acknowledge
+BD_ACTOR=worker-1 bd mail send lead -s "Stuck on issue" -m "Details..."
+bd mail inbox          # Check for messages
+bd mail read <id>      # Read a specific message
 ```
-
-## Using chat
-
-Chat sessions are persistent per participant pair. Use `--start-conversation` when initiating a new exchange (longer wait timeout).
-
-**Starting a conversation:**
-```bash
-bdh :aweb chat send-and-wait <alias> "question" --start-conversation
-```
-
-**Replying (when someone is waiting for you):**
-```bash
-bdh :aweb chat send-and-wait <alias> "response"
-```
-
-**Final reply (you don't need their answer):**
-```bash
-bdh :aweb chat send-and-leave <alias> "thanks, got it"
-```
-
-**Other commands:**
-```bash
-bdh :aweb chat pending          # List conversations with unread messages
-bdh :aweb chat open <alias>     # Read unread messages
-bdh :aweb chat history <alias>  # Full conversation history
-bdh :aweb chat extend-wait <alias> "need more time"  # Ask for patience
-```
-<!-- BEADHUB:END -->

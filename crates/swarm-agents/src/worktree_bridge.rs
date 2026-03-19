@@ -342,23 +342,6 @@ impl WorktreeBridge {
             }
         }
 
-        // Initialize bdh identity in the worktree when SWARM_USE_BDH=1.
-        // This creates a `.beadhub` file that identifies this agent for all
-        // subsequent bdh commands (mail, chat, locks, team status).
-        if std::env::var("SWARM_USE_BDH")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
-        {
-            let alias = format!("worker-{safe_id}");
-            let bdh = crate::bdh_bridge::BdhBridge::new();
-            if let Err(e) = bdh.init_worktree(&wt_path, &alias, "coder") {
-                tracing::warn!(
-                    error = %e,
-                    "bdh :init failed — coordination features unavailable for this worktree"
-                );
-            }
-        }
-
         Ok(wt_path)
     }
 
@@ -386,18 +369,6 @@ impl WorktreeBridge {
         let safe_id = Self::sanitize_id(issue_id);
         let wt_path = self.base_dir.join(&safe_id);
         let branch = format!("swarm/{safe_id}");
-
-        // Release any bdh file locks before merging.
-        if wt_path.exists()
-            && std::env::var("SWARM_USE_BDH")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
-        {
-            let lock_mgr = crate::file_lock::FileLockManager::new(&wt_path);
-            if let Err(e) = lock_mgr.unlock_all_mine() {
-                tracing::warn!(error = %e, "Failed to release file locks before merge");
-            }
-        }
 
         // Clean up orchestrator-generated artifact files that aren't part of the source code.
         // These are created by the harness (ProgressTracker, SessionManager) during the
@@ -631,18 +602,6 @@ impl WorktreeBridge {
         let safe_id = Self::sanitize_id(issue_id);
         let wt_path = self.base_dir.join(&safe_id);
         let branch = format!("swarm/{safe_id}");
-
-        // Release any bdh file locks held by this worktree's agent identity.
-        if wt_path.exists()
-            && std::env::var("SWARM_USE_BDH")
-                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false)
-        {
-            let lock_mgr = crate::file_lock::FileLockManager::new(&wt_path);
-            if let Err(e) = lock_mgr.unlock_all_mine() {
-                tracing::warn!(error = %e, "Failed to release file locks during cleanup");
-            }
-        }
 
         // Abort any in-progress merge (may have left repo in conflicted state)
         let _ = Command::new("git")

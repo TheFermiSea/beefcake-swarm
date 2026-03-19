@@ -5,7 +5,6 @@
 
 pub mod apply_plan_tool;
 pub mod astgrep_tool;
-pub mod bdh_tools;
 pub mod bundles;
 pub mod cargo_metadata_tool;
 pub mod colgrep_tool;
@@ -104,7 +103,7 @@ pub(crate) async fn run_command_with_timeout(
 ///
 /// `.beads/` contains the issue tracker database — agents deleting it caused
 /// 100% dogfood failure rate on 2026-03-14. `.git/` is obviously off-limits.
-const FORBIDDEN_PREFIXES: &[&str] = &[".beads", ".git", ".beadhub", ".dolt"];
+const FORBIDDEN_PREFIXES: &[&str] = &[".beads", ".git", ".dolt"];
 
 /// Validate that a resolved path stays within the sandbox root and does not
 /// touch forbidden directories (`.beads/`, `.git/`, etc.).

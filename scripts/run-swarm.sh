@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 export RUST_LOG="${RUST_LOG:-info}"
-export SWARM_USE_BDH="${SWARM_USE_BDH:-1}"
-export SWARM_BDH_BIN="${SWARM_BDH_BIN:-bdh}"
+# Native beads: swarm uses `bd` directly (BeadHub removed).
+# BD_ACTOR identifies this orchestrator instance for `bd mail` messaging.
+# Defaults to hostname-based identity; override for multi-instance setups.
+export BD_ACTOR="${BD_ACTOR:-swarm-$(hostname -s 2>/dev/null || echo worker)}"
 # Scout/Fast tier: Qwen3.5-27B-Opus-Distilled on vasp-03 (VRAM-resident, 65K context, ~34 tok/s)
 # Distilled from Claude 4.6 Opus reasoning trajectories. Rollback: see /scratch/ai/rollback-vasp03.txt
 export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-03:8081/v1}"
@@ -72,7 +74,7 @@ PY
 else
   echo "Worker-first mode: SWARM_CLOUD_URL not set, using local models only"
 fi
-export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bdh}"
+export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
 
 # ── sccache: shared C/C++ compilation cache ──
 # Eliminates redundant proc-macro and native dep builds across worktrees.
