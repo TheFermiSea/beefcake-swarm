@@ -340,7 +340,20 @@ else
 
   # Launch issues in batches of $PARALLEL
   IDX=0
-  while [[ $IDX -lt ${#ISSUES[@]} ]]; do
+  while [[ $IDX -lt ${#ISSUES[@]} || "$DISCOVER" -eq 1 ]]; do
+    # When discover is on and we've exhausted the list, fetch new issues
+    if [[ $IDX -ge ${#ISSUES[@]} && "$DISCOVER" -eq 1 ]]; then
+      log "Issue list exhausted — discovering new issues from bdh ready..."
+      mapfile -t NEW_ISSUES < <("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+      if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
+        ISSUES+=("${NEW_ISSUES[@]}")
+        log "  Discovered ${#NEW_ISSUES[@]} new issues: ${NEW_ISSUES[*]}"
+      else
+        log "  No new ready issues. Waiting ${COOLDOWN}s..."
+        sleep "$COOLDOWN"
+        continue
+      fi
+    fi
     BATCH_SIZE=$PARALLEL
     REMAINING=$(( ${#ISSUES[@]} - IDX ))
     if [[ $BATCH_SIZE -gt $REMAINING ]]; then
@@ -378,18 +391,6 @@ else
     log "  Batch complete. Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
 
-    # Discover new issues when list is exhausted
-    if [[ $IDX -ge ${#ISSUES[@]} && "$DISCOVER" -eq 1 ]]; then
-      log "Issue list exhausted — discovering new issues from bdh ready..."
-      mapfile -t NEW_ISSUES < <("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
-      if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
-        ISSUES+=("${NEW_ISSUES[@]}")
-        log "  Discovered ${#NEW_ISSUES[@]} new issues: ${NEW_ISSUES[*]}"
-      else
-        log "  No new ready issues. Waiting ${COOLDOWN}s..."
-        sleep "$COOLDOWN"
-      fi
-    fi
   done
 fi
 
