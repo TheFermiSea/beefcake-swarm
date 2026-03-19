@@ -169,32 +169,25 @@ candidate_variants = { "opus_verbose" = 0.5, "sonnet_concise" = 0.5 }
 [functions.editor_apply]
 type = "chat"
 
-# All models now on llama-server v50 which stringifies tool call arguments.
-[functions.editor_apply.variants.strand_14b]
-type = "chat_completion"
-model = "strand_rust_14b"
-
-[functions.editor_apply.variants.tessa_7b]
-type = "chat_completion"
-model = "tessa_rust_7b"
-
-[functions.editor_apply.variants.qwen_122b]
+# Strand/Tessa excluded from TZ — Qwen2.5-Coder chat template still returns
+# tool call arguments as objects even on llama-server v50. The v50 fix only
+# covers Qwen3 templates. These models work fine when called directly.
+[functions.editor_apply.variants.qwen_coder]
 type = "chat_completion"
 model = "qwen_coder"
 
-# 3-way editor experiment: Rust specialists vs generalist
+[functions.editor_apply.variants.qwen_reasoning]
+type = "chat_completion"
+model = "qwen_reasoning"
+
 [functions.editor_apply.experimentation]
 type = "static"
-candidate_variants = { "strand_14b" = 0.4, "tessa_7b" = 0.3, "qwen_122b" = 0.3 }
+candidate_variants = { "qwen_coder" = 0.5, "qwen_reasoning" = 0.5 }
 
 # --- Worker Code Edit: Rust specialist and general coder ---
 # Pure proxy — A/B tests Strand-14B vs 122B MoE for code generation.
 [functions.worker_code_edit]
 type = "chat"
-
-[functions.worker_code_edit.variants.strand_rust]
-type = "chat_completion"
-model = "strand_rust_14b"
 
 [functions.worker_code_edit.variants.qwen_coder]
 type = "chat_completion"
@@ -204,10 +197,10 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "qwen_reasoning"
 
-# 3-way split: Strand-14B vs two 122B nodes
+# 50/50 between the two 122B nodes (Strand excluded — template issue)
 [functions.worker_code_edit.experimentation]
 type = "static"
-candidate_variants = { "strand_rust" = 0.34, "qwen_coder" = 0.33, "qwen_reasoning" = 0.33 }
+candidate_variants = { "qwen_coder" = 0.5, "qwen_reasoning" = 0.5 }
 
 # --- Code Review: blind reviewer ---
 # Pure proxy — uses Strand-14B (fast Rust analysis)
@@ -241,18 +234,17 @@ model = "qwen_coder"
 [functions.code_fixing]
 type = "chat"
 
-[functions.code_fixing.variants.strand_fixer]
-type = "chat_completion"
-model = "strand_rust_14b"
-
 [functions.code_fixing.variants.qwen_fixer]
 type = "chat_completion"
 model = "qwen_coder"
 
-# 50/50 Strand vs 122B for code fixing
+[functions.code_fixing.variants.qwen_reasoning_fixer]
+type = "chat_completion"
+model = "qwen_reasoning"
+
 [functions.code_fixing.experimentation]
 type = "static"
-candidate_variants = { "strand_fixer" = 0.5, "qwen_fixer" = 0.5 }
+candidate_variants = { "qwen_fixer" = 0.5, "qwen_reasoning_fixer" = 0.5 }
 
 # --- Adversarial Testing: red-team agent ---
 # Pure proxy — uses Tessa-7B for fast adversarial probing
