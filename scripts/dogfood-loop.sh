@@ -374,10 +374,21 @@ else
 
     IDX=$((IDX + BATCH_SIZE))
 
-    # Cooldown between batches (unless done)
-    if [[ $IDX -lt ${#ISSUES[@]} ]]; then
-      log "  Batch complete. Cooling down ${COOLDOWN}s..."
-      sleep "$COOLDOWN"
+    # Cooldown between batches
+    log "  Batch complete. Cooling down ${COOLDOWN}s..."
+    sleep "$COOLDOWN"
+
+    # Discover new issues when list is exhausted
+    if [[ $IDX -ge ${#ISSUES[@]} && "$DISCOVER" -eq 1 ]]; then
+      log "Issue list exhausted — discovering new issues from bdh ready..."
+      mapfile -t NEW_ISSUES < <("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+      if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
+        ISSUES+=("${NEW_ISSUES[@]}")
+        log "  Discovered ${#NEW_ISSUES[@]} new issues: ${NEW_ISSUES[*]}"
+      else
+        log "  No new ready issues. Waiting ${COOLDOWN}s..."
+        sleep "$COOLDOWN"
+      fi
     fi
   done
 fi
