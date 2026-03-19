@@ -148,6 +148,7 @@ All tiers default to Qwen3.5-397B-A17B. run-swarm.sh and config.rs are now align
 | `SWARM_CLOUD_HTTP_TIMEOUT_SECS` | `300` | Per-request HTTP timeout for cloud API calls (5 min) |
 | `SWARM_LOCAL_HTTP_TIMEOUT_SECS` | `900` | Per-request HTTP timeout for local LLM calls (15 min) |
 | `SWARM_BEADS_BIN` | `bd` | Beads CLI binary name |
+| `SWARM_OTEL_ENDPOINT` | *(empty)* | OTLP endpoint for beads metrics (e.g., `http://victoriametrics:4318`) |
 | `RUST_LOG` | `info` | Log level (see Debug & Monitoring) |
 
 ## Dogfood Operations
@@ -383,3 +384,24 @@ BD_ACTOR=worker-1 bd mail send lead -s "Stuck on issue" -m "Details..."
 bd mail inbox          # Check for messages
 bd mail read <id>      # Read a specific message
 ```
+
+### Event Hooks (Phase 4)
+
+Shell scripts in `.beads/hooks/` run on issue lifecycle events. Each receives JSON issue data on stdin from beads. All hooks fail silently and never block.
+
+| Hook | Trigger | Action |
+|------|---------|--------|
+| `on_close` | Issue closed | Logs `issue.closed` to `.swarm-hook-events.jsonl` |
+| `on_create` | Issue created | Logs `issue.created`; auto-claims if `swarm-ready` label present |
+| `on_update` | Issue updated | Logs `issue.updated` with status and actor |
+
+Events are appended as JSONL to `$REPO_ROOT/.swarm-hook-events.jsonl` (gitignored). The orchestrator can poll this file for real-time visibility into issue state changes.
+
+Hooks require `jq` for structured JSON output but fall back to sed-based extraction when unavailable.
+
+### OpenTelemetry (Phase 5)
+
+Native beads exports operational metrics via OTLP when configured:
+- `bd_issue_*`: open/closed/in_progress counts (backlog health)
+- `bd_storage_*`: Dolt operation duration
+- Set `SWARM_OTEL_ENDPOINT=http://collector:4318` in env to enable

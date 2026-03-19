@@ -76,6 +76,14 @@ else
 fi
 export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
 
+# ── Beads OpenTelemetry ──
+# Export beads operational metrics (issue counts, storage ops) to OTLP collector.
+# Complements TensorZero inference metrics.
+if [[ -n "${SWARM_OTEL_ENDPOINT:-}" ]]; then
+    bd config set telemetry.endpoint "$SWARM_OTEL_ENDPOINT" 2>/dev/null || true
+    bd config set telemetry.enabled true 2>/dev/null || true
+fi
+
 # ── sccache: shared C/C++ compilation cache ──
 # Eliminates redundant proc-macro and native dep builds across worktrees.
 # Install: cargo install sccache

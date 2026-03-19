@@ -51,6 +51,7 @@ venv/
 .swarm-session.json
 .swarm-resume.json
 .swarm-telemetry.jsonl
+.swarm-hook-events.jsonl
 
 # Generated / external tool output
 repomix-output.xml
