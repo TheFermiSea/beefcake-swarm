@@ -16,6 +16,12 @@
 //! (team_status, check_mail, send_mail, chat_send, etc.). Messages are stored
 //! as Dolt rows and sync via `bd dolt push/pull`.
 //!
+//! # Inline Usage Notes
+//!
+//! - `BeadsBridge::send_mail` is called directly for low-level messaging
+//! - Workpad tools provide a file-based abstraction layer
+//! - Both mechanisms support concurrent subtask coordination
+//!
 //! Flow:
 //! 1. Planner agent analyzes issue + codebase → produces `SubtaskPlan` (JSON)
 //! 2. Dispatcher fans out N workers via `JoinSet` + `Semaphore`

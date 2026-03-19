@@ -126,8 +126,13 @@ pub fn manager_tools(
 /// `BeadsBridge::check_inbox` primitives. The `bd mail` command stores
 /// messages as Dolt rows and syncs via `bd dolt push/pull`.
 ///
-/// These primitives enable inter-worker communication during concurrent
-/// subtask execution (see `subtask.rs`), where workers announce their
+/// # Inline Usage Notes
+///
+/// - `BeadsBridge::send_mail` provides direct native messaging
+/// - Workpad tools (`announce` + `check_announcements`) offer file-based abstraction
+/// - Both are used in `subtask.rs` for concurrent worker coordination
+///
+/// These primitives enable inter-worker communication during concurrent/// subtask execution (see `subtask.rs`), where workers announce their
 /// progress and interface changes via `bd mail send`.
 ///
 /// Phase 2 will re-add higher-level coordination abstractions on top of
