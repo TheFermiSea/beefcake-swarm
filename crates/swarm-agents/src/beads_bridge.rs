@@ -247,6 +247,11 @@ impl BeadsBridge {
     ///
     /// Identity comes from `BD_ACTOR` env var (set in `run-swarm.sh`).
     /// Messages are stored as Dolt rows and sync with `bd dolt push/pull`.
+    ///
+    /// # Arguments
+    /// * `to` - Recipient actor name (e.g., "lead", "worker-1")
+    /// * `subject` - Mail subject line
+    /// * `message` - Mail body content
     pub fn send_mail(&self, to: &str, subject: &str, message: &str) -> Result<()> {
         self.run_bd_ok(&["mail", "send", to, "-s", subject, "-m", message])?;
         Ok(())
