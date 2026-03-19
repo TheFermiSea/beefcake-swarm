@@ -121,7 +121,17 @@ pub fn manager_tools(
 ///
 /// BeadHub coordination tools (team_status, check_mail, send_mail, check_locks,
 /// chat_send, chat_check) were removed in the native beads migration.
-/// Phase 2 will re-add messaging via `bd mail` primitives.
+///
+/// Native messaging is now handled via `BeadsBridge::send_mail` and
+/// `BeadsBridge::check_inbox` primitives. The `bd mail` command stores
+/// messages as Dolt rows and syncs via `bd dolt push/pull`.
+///
+/// These primitives enable inter-worker communication during concurrent
+/// subtask execution (see `subtask.rs`), where workers announce their
+/// progress and interface changes via `bd mail send`.
+///
+/// Phase 2 will re-add higher-level coordination abstractions on top of
+/// the native messaging primitives.
 pub fn coordination_tools(_wt_path: &Path) -> Vec<Box<dyn ToolDyn>> {
     vec![]
 }

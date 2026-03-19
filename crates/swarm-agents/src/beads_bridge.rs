@@ -252,6 +252,18 @@ impl BeadsBridge {
     /// * `to` - Recipient actor name (e.g., "lead", "worker-1")
     /// * `subject` - Mail subject line
     /// * `message` - Mail body content
+    ///
+    /// # Example
+    /// ```ignore
+    /// let bridge = BeadsBridge::new();
+    /// bridge.send_mail("lead", "Task Complete", "I finished the assigned work.")?;
+    /// ```
+    ///
+    /// # Native Beads Migration
+    ///
+    /// This method is part of the native beads messaging layer that replaces
+    /// the previous BeadHub coordination tools. It enables inter-worker
+    /// communication during concurrent subtask execution (see `subtask.rs`).
     pub fn send_mail(&self, to: &str, subject: &str, message: &str) -> Result<()> {
         self.run_bd_ok(&["mail", "send", to, "-s", subject, "-m", message])?;
         Ok(())

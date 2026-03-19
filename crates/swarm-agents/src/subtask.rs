@@ -4,6 +4,18 @@
 //! targeting specific files. Workers execute subtasks concurrently in
 //! the same worktree, then the verifier runs on the combined result.
 //!
+//! # Native Beads Integration
+//!
+//! This module uses `BeadsBridge::send_mail` for inter-worker communication
+//! during concurrent execution. Workers announce their progress and interface
+//! changes via `bd mail send`, allowing other workers to adapt before their
+//! final edits. The workpad tools (`announce` + `check_announcements`) provide
+//! a higher-level abstraction over the native messaging primitives.
+//!
+//! The native messaging layer replaces the previous BeadHub coordination tools
+//! (team_status, check_mail, send_mail, chat_send, etc.). Messages are stored
+//! as Dolt rows and sync via `bd dolt push/pull`.
+//!
 //! Flow:
 //! 1. Planner agent analyzes issue + codebase → produces `SubtaskPlan` (JSON)
 //! 2. Dispatcher fans out N workers via `JoinSet` + `Semaphore`
