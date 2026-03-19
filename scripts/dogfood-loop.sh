@@ -153,13 +153,16 @@ elif sys.argv[1] == "count":
         print(0)
 elif sys.argv[1] == "ids":
     # bdh ready --json returns {"tasks": [...]} or a bare list
+    # Each task has "task_ref" (e.g. "beefcake-swarm-042") not "id"
     items = payload
     if isinstance(payload, dict) and "tasks" in payload:
         items = payload["tasks"]
     if isinstance(items, list):
         for item in items:
-            if isinstance(item, dict) and item.get("id"):
-                print(item["id"])
+            if isinstance(item, dict):
+                ref = item.get("task_ref") or item.get("id") or ""
+                if ref:
+                    print(ref)
 ' "$@"
 }
 
