@@ -354,6 +354,52 @@ impl IssueTracker for BeadsBridge {
     }
 }
 
+/// Resolve the actor identity for this orchestrator instance.
+///
+/// Implements the canonical fallback chain:
+/// 1. `BD_ACTOR` environment variable (set by `run-swarm.sh` or the caller)
+/// 2. `git config user.name` (local git identity)
+/// 3. `hostname -s` (short hostname)
+/// 4. Hard-coded fallback `"worker"` (always succeeds)
+///
+/// # Example
+/// ```
+/// let actor = swarm_agents::beads_bridge::default_actor();
+/// println!("Running as: {actor}");
+/// ```
+pub fn default_actor() -> String {
+    // 1. Explicit override via BD_ACTOR env var.
+    if let Ok(actor) = std::env::var("BD_ACTOR") {
+        let actor = actor.trim().to_string();
+        if !actor.is_empty() {
+            return actor;
+        }
+    }
+
+    // 2. Git user.name from local config.
+    if let Ok(output) = Command::new("git").args(["config", "user.name"]).output() {
+        if output.status.success() {
+            let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !name.is_empty() {
+                return name;
+            }
+        }
+    }
+
+    // 3. Short hostname.
+    if let Ok(output) = Command::new("hostname").arg("-s").output() {
+        if output.status.success() {
+            let host = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !host.is_empty() {
+                return host;
+            }
+        }
+    }
+
+    // 4. Hard-coded last-resort fallback.
+    "worker".to_string()
+}
+
 /// Poll the `bd mail inbox` for messages directed at the current actor.
 ///
 /// Returns `Some(inbox_text)` if there are unread messages, `None` otherwise.
