@@ -144,10 +144,20 @@ if sys.argv[1] == "field":
     else:
         print(value)
 elif sys.argv[1] == "count":
-    print(len(payload) if isinstance(payload, list) else 0)
-elif sys.argv[1] == "ids":
+    # Handle both list and dict-with-tasks-key formats
     if isinstance(payload, list):
-        for item in payload:
+        print(len(payload))
+    elif isinstance(payload, dict) and "tasks" in payload:
+        print(len(payload["tasks"]))
+    else:
+        print(0)
+elif sys.argv[1] == "ids":
+    # bdh ready --json returns {"tasks": [...]} or a bare list
+    items = payload
+    if isinstance(payload, dict) and "tasks" in payload:
+        items = payload["tasks"]
+    if isinstance(items, list):
+        for item in items:
             if isinstance(item, dict) and item.get("id"):
                 print(item["id"])
 ' "$@"
