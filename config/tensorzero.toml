@@ -48,6 +48,64 @@ type = "float"
 optimize = "min"
 level = "episode"
 
+# ─── Evaluations ─────────────────────────────────────────────────────────────
+# Offline evaluations that compare variant performance on curated datasets.
+# Create datasets via the UI (http://localhost:4000/datasets/builder),
+# then run evaluations via CLI or UI.
+
+# Evaluate worker code edit quality across Qwen coder vs reasoning variants.
+[evaluations.worker_code_quality]
+type = "inference"
+function_name = "worker_code_edit"
+description = "Evaluates whether worker code edits are correct, compilable, and minimal."
+
+[evaluations.worker_code_quality.evaluators.code_correctness]
+type = "llm_judge"
+output_type = "float"
+optimize = "max"
+
+[evaluations.worker_code_quality.evaluators.code_correctness.variants.claude_judge]
+active = true
+type = "chat_completion"
+model = "claude_sonnet"
+system_instructions = "evaluations/worker_code_quality/code_correctness/system_instructions.txt"
+json_mode = "strict"
+
+# Check that workers actually use edit_file/write_file tools (not just read).
+[evaluations.worker_code_quality.evaluators.uses_edit_tools]
+type = "tool_use"
+behavior = "any_of"
+tools = ["edit_file", "write_file", "proxy_edit_file", "proxy_write_file"]
+
+# Evaluate manager delegation quality across Opus vs Sonnet.
+[evaluations.manager_delegation]
+type = "inference"
+function_name = "cloud_manager_delegation"
+description = "Evaluates whether the cloud manager delegates effectively to workers."
+
+[evaluations.manager_delegation.evaluators.delegation_quality]
+type = "llm_judge"
+output_type = "float"
+optimize = "max"
+
+[evaluations.manager_delegation.evaluators.delegation_quality.variants.claude_judge]
+active = true
+type = "chat_completion"
+model = "claude_sonnet"
+system_instructions = "evaluations/manager_delegation/delegation_quality/system_instructions.txt"
+json_mode = "strict"
+
+# Evaluate code fixing quality (fixer agent after verifier failure).
+[evaluations.code_fixing_quality]
+type = "inference"
+function_name = "code_fixing"
+description = "Evaluates whether the fixer agent successfully resolves compilation errors."
+
+[evaluations.code_fixing_quality.evaluators.uses_edit_tools]
+type = "tool_use"
+behavior = "any_of"
+tools = ["edit_file", "write_file", "proxy_edit_file", "proxy_write_file"]
+
 # ─── Models ──────────────────────────────────────────────────────────────────
 # Local HPC endpoints use OpenAI-compatible protocol (llama.cpp).
 # Cloud endpoints use CLIAPIProxy on ai-proxy (localhost from host network).

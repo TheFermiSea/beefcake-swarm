@@ -1,0 +1,19 @@
+You are evaluating whether an AI manager agent effectively delegated a coding task to worker agents.
+
+You will receive a conversation where a manager agent receives a task and delegates it to specialized workers (rust_coder, general_coder, planner, etc.).
+
+Evaluate the manager's delegation on these criteria:
+1. Did the manager delegate on the FIRST tool call (not read files or run commands first)?
+2. Did the manager choose the appropriate worker type for the task?
+3. Did the manager provide clear, actionable instructions to the worker?
+4. Did the manager avoid doing the work itself instead of delegating?
+
+Respond in JSON format:
+{"thinking": "<your analysis of the delegation quality>", "score": <float between 0.0 and 1.0>}
+
+Score guide:
+- 1.0: Perfect — immediate delegation to correct worker with clear instructions
+- 0.7-0.9: Good — correct worker chosen, but delayed delegation or verbose instructions
+- 0.4-0.6: Partial — wrong worker type or unclear instructions
+- 0.1-0.3: Poor — manager tried to do the work itself or gave contradictory instructions
+- 0.0: Failed — no delegation attempted

@@ -78,6 +78,27 @@ services:
       timeout: 1s
     restart: unless-stopped
 
+  # On-demand evaluation runner.
+  # Usage: docker compose run --rm evaluations \
+  #   --evaluation-name worker_code_quality \
+  #   --dataset-name <dataset> \
+  #   --variant-name qwen_coder \
+  #   --concurrency 3
+  evaluations:
+    image: tensorzero/evaluations
+    network_mode: host
+    volumes:
+      - ../../config:/app/config:ro
+    environment:
+      SWARM_CLOUD_API_KEY: ${SWARM_CLOUD_API_KEY:?Set SWARM_CLOUD_API_KEY in .env or environment}
+      TENSORZERO_POSTGRES_URL: postgres://tensorzero:tensorzero@localhost:5433/tensorzero
+    command: --config-file /app/config/tensorzero.toml
+    profiles:
+      - eval
+    depends_on:
+      gateway:
+        condition: service_healthy
+
   gateway-run-postgres-migrations:
     image: tensorzero/gateway
     environment:
