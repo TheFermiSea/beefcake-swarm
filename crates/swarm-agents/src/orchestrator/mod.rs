@@ -91,17 +91,34 @@ pub(crate) use crate::git_ops::{
 
 /// Run the verifier pipeline, dispatching to ScriptVerifier for non-Rust targets.
 ///
-/// This is the single dispatch point for all 8 verifier call sites in the
+/// This is the single dispatch point for all verifier call sites in the
 /// orchestrator. When a `.swarm/profile.toml` defines a non-Rust language,
 /// the ScriptVerifier runs shell commands instead of cargo gates.
+///
+/// When `skip_test` is true, the test gate is excluded (used for baseline
+/// verification where worktree env may cause false test failures).
 async fn run_verifier(
     wt_path: &Path,
     verifier_config: &VerifierConfig,
     language_profile: &Option<LanguageProfile>,
 ) -> VerifierReport {
+    run_verifier_opts(wt_path, verifier_config, language_profile, false).await
+}
+
+/// Like `run_verifier` but with explicit skip_test control.
+async fn run_verifier_opts(
+    wt_path: &Path,
+    verifier_config: &VerifierConfig,
+    language_profile: &Option<LanguageProfile>,
+    skip_test: bool,
+) -> VerifierReport {
     if let Some(profile) = language_profile {
         if !profile.is_rust() {
-            let script_verifier = ScriptVerifier::new(wt_path, profile.clone());
+            let mut profile = profile.clone();
+            if skip_test {
+                profile.gates.retain(|g| !g.name.eq_ignore_ascii_case("test"));
+            }
+            let script_verifier = ScriptVerifier::new(wt_path, profile);
             return script_verifier.run_pipeline().await;
         }
     }
@@ -868,7 +885,7 @@ async fn process_issue_core(
             check_test: false, // Skip tests — worktree env can cause false failures
             ..verifier_config.clone()
         };
-        let baseline_report = run_verifier(&wt_path, &baseline_config, &language_profile).await;
+        let baseline_report = run_verifier_opts(&wt_path, &baseline_config, &language_profile, true).await;
         let gates_passed = baseline_report
             .gates
             .iter()
