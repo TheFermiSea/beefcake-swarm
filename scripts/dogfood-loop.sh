@@ -34,6 +34,7 @@ ISSUE_LIST="${DOGFOOD_ISSUE_LIST:-}"
 PARALLEL="${DOGFOOD_PARALLEL:-1}"
 ISSUE_QUERY_BIN="${DOGFOOD_BEADS_BIN:-bd}"
 DISCOVER=0                              # --discover: auto-fetch new issues when list exhausted
+TARGET_REPO=""                          # --repo-root: target an external repo (default: self)
 
 # CLI overrides
 while [[ $# -gt 0 ]]; do
@@ -44,9 +45,20 @@ while [[ $# -gt 0 ]]; do
     --issue-list)  ISSUE_LIST="$2"; shift 2 ;;
     --parallel)    PARALLEL="$2"; shift 2 ;;
     --discover)    DISCOVER=1; shift ;;
+    --repo-root)   TARGET_REPO="$2"; shift 2 ;;
     *)             echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
+
+# When targeting an external repo, bd commands run in that repo's directory
+# and run-swarm.sh gets --repo-root passed through.
+EXTRA_SWARM_ARGS=()
+BD_RUN_DIR="$REPO_ROOT"
+if [[ -n "$TARGET_REPO" ]]; then
+  TARGET_REPO="$(cd "$TARGET_REPO" && pwd)"  # absolutize
+  BD_RUN_DIR="$TARGET_REPO"
+  EXTRA_SWARM_ARGS+=("--repo-root" "$TARGET_REPO")
+fi
 
 mkdir -p "$LOG_DIR"
 
@@ -63,20 +75,7 @@ if ! flock -n 200; then
 fi
 echo $$ > "$LOCKFILE"
 
-# ── sccache: shared C/C++ compilation cache ──
-# Eliminates redundant proc-macro and native dep builds across worktrees.
-# Install: cargo install sccache
-if command -v sccache &>/dev/null; then
-    export RUSTC_WRAPPER=sccache
-    export SCCACHE_DIR="${SCCACHE_DIR:-/tmp/beefcake-sccache}"
-    mkdir -p "$SCCACHE_DIR"
-fi
-
-# ── Shared target directory ──
-# Multiple worktrees share one target dir to avoid redundant dep builds.
-# Cargo handles concurrent access with its own locking.
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/beefcake-shared-target}"
-mkdir -p "$CARGO_TARGET_DIR"
+# Note: sccache/CARGO_TARGET_DIR are set by run-swarm.sh (gated on target language)
 
 # --- Telemetry ---
 DOGFOOD_START=$(date +%s)
@@ -89,6 +88,11 @@ log() {
   echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*"
 }
 
+# Run bd commands in the target repo directory (for multi-repo support).
+bd_cmd() {
+  (cd "$BD_RUN_DIR" && "$ISSUE_QUERY_BIN" "$@")
+}
+
 record_run() {
   local run_num="$1" issue_id="$2" exit_code="$3" elapsed="$4" log_file="$5"
   printf '{"run":%d,"issue":"%s","exit_code":%d,"elapsed_s":%d,"timestamp":"%s","log":"%s"}\n' \
@@ -98,7 +102,12 @@ record_run() {
 
 # --- Pre-flight ---
 log "Dogfood loop starting"
-log "  Repo:     $REPO_ROOT"
+log "  Engine:   $REPO_ROOT"
+if [[ -n "$TARGET_REPO" ]]; then
+  log "  Target:   $TARGET_REPO (external repo)"
+else
+  log "  Target:   $REPO_ROOT (self-dogfood)"
+fi
 log "  Logs:     $LOG_DIR"
 log "  Cooldown: ${COOLDOWN}s"
 log "  Parallel: $PARALLEL"
@@ -177,7 +186,7 @@ run_issue() {
   # Including the description gives find_target_files_by_grep more identifiers
   # to search for (e.g., "edit_file", "verifier") beyond just the title.
   # Try bdh first, fall back to JSONL backup if bdh/bd fails (Dolt server issues).
-  issue_title=$("$ISSUE_QUERY_BIN" show "$issue_id" --json 2>/dev/null | parse_bdh_json field title 1000 2>/dev/null)
+  issue_title=$(bd_cmd show "$issue_id" --json 2>/dev/null | parse_bdh_json field title 1000 2>/dev/null)
   if [[ -z "$issue_title" || "$issue_title" == "Issue $issue_id" ]]; then
     # Fall back to JSONL backup (always available, no Dolt needed)
     local jsonl_path="${REPO_ROOT}/.beads/backup/issues.jsonl"
@@ -195,7 +204,7 @@ with open('$jsonl_path') as f:
   fi
   issue_title="${issue_title:-Issue $issue_id}"
 
-  issue_desc=$("$ISSUE_QUERY_BIN" show "$issue_id" --json 2>/dev/null | parse_bdh_json field description 300 2>/dev/null)
+  issue_desc=$(bd_cmd show "$issue_id" --json 2>/dev/null | parse_bdh_json field description 300 2>/dev/null)
   if [[ -z "$issue_desc" ]]; then
     local jsonl_path="${REPO_ROOT}/.beads/backup/issues.jsonl"
     if [[ -f "$jsonl_path" ]]; then
@@ -216,7 +225,7 @@ with open('$jsonl_path') as f:
   else
     issue_objective="$issue_title"
   fi
-  issue_args=(--issue "$issue_id" --objective "$issue_objective")
+  issue_args=(--issue "$issue_id" --objective "$issue_objective" "${EXTRA_SWARM_ARGS[@]}")
 
   log "  [run $run_num] Starting issue=$issue_id log=$run_log"
 
@@ -286,7 +295,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
         if [[ "$DISCOVER" -eq 1 ]]; then
           # Discover new issues from bdh ready
           log "Issue list exhausted — discovering new issues from bdh ready..."
-          mapfile -t NEW_ISSUES < <("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+          mapfile -t NEW_ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
           if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
             ISSUES+=("${NEW_ISSUES[@]}")
             log "  Discovered ${#NEW_ISSUES[@]} new issues: ${NEW_ISSUES[*]}"
@@ -304,7 +313,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
         ISSUE_ID="${ISSUES[$IDX]}"
       fi
     else
-      ISSUE_ID=$("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null | head -n1 || true)
+      ISSUE_ID=$(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null | head -n1 || true)
       if [[ -z "$ISSUE_ID" ]]; then
         if [[ "$DISCOVER" -eq 1 ]]; then
           log "No ready issues. Waiting ${COOLDOWN}s before retry..."
@@ -325,7 +334,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
 
     # Check if more work exists (skip in discover mode — it loops forever)
     if [[ ${#ISSUES[@]} -eq 0 && "$DISCOVER" -eq 0 ]]; then
-      READY_COUNT=$("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json count 2>/dev/null || echo "0")
+      READY_COUNT=$(bd_cmd ready --json 2>/dev/null | parse_bdh_json count 2>/dev/null || echo "0")
       if [[ "$READY_COUNT" -eq 0 ]]; then
         log "No more ready issues. Stopping."
         break
@@ -347,7 +356,7 @@ else
   # Build the issue queue
   if [[ ${#ISSUES[@]} -eq 0 ]]; then
     # Auto mode: fetch ready issues from beads
-    mapfile -t ISSUES < <("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+    mapfile -t ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
     if [[ ${#ISSUES[@]} -eq 0 ]]; then
       log "No ready issues found. Stopping."
       exit 0
@@ -367,7 +376,7 @@ else
     # When discover is on and we've exhausted the list, fetch new issues
     if [[ $IDX -ge ${#ISSUES[@]} && "$DISCOVER" -eq 1 ]]; then
       log "Issue list exhausted — discovering new issues from bdh ready..."
-      mapfile -t NEW_ISSUES < <("$ISSUE_QUERY_BIN" ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+      mapfile -t NEW_ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
       if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
         ISSUES+=("${NEW_ISSUES[@]}")
         log "  Discovered ${#NEW_ISSUES[@]} new issues: ${NEW_ISSUES[*]}"

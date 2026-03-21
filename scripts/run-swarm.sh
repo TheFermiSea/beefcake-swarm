@@ -91,19 +91,34 @@ if [[ -n "${SWARM_OTEL_ENDPOINT:-}" ]]; then
     bd config set telemetry.enabled true 2>/dev/null || true
 fi
 
-# ── sccache: shared C/C++ compilation cache ──
-# Eliminates redundant proc-macro and native dep builds across worktrees.
-# Install: cargo install sccache
-if command -v sccache &>/dev/null; then
-    export RUSTC_WRAPPER=sccache
-    export SCCACHE_DIR="${SCCACHE_DIR:-/tmp/beefcake-sccache}"
-    mkdir -p "$SCCACHE_DIR"
+# ── Detect target repo language ──
+# If --repo-root points to a non-Rust target, skip Rust-specific env vars.
+_REPO_ROOT=""
+for arg in "$@"; do
+    if [[ "$_prev_arg" == "--repo-root" ]]; then
+        _REPO_ROOT="$arg"
+    fi
+    _prev_arg="$arg"
+done
+_TARGET_LANG="rust"
+if [[ -n "$_REPO_ROOT" && -f "$_REPO_ROOT/.swarm/profile.toml" ]]; then
+    _TARGET_LANG="$(grep -m1 '^language' "$_REPO_ROOT/.swarm/profile.toml" 2>/dev/null | sed 's/.*= *"\(.*\)"/\1/' || echo rust)"
 fi
 
-# ── Shared target directory ──
-# Multiple worktrees share one target dir to avoid redundant dep builds.
-# Cargo handles concurrent access with its own locking.
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/beefcake-shared-target}"
-mkdir -p "$CARGO_TARGET_DIR"
+# ── sccache + shared target dir (Rust targets only) ──
+if [[ "$_TARGET_LANG" == "rust" ]]; then
+    if command -v sccache &>/dev/null; then
+        export RUSTC_WRAPPER=sccache
+        export SCCACHE_DIR="${SCCACHE_DIR:-/tmp/beefcake-sccache}"
+        mkdir -p "$SCCACHE_DIR"
+    fi
+    export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/beefcake-shared-target}"
+    mkdir -p "$CARGO_TARGET_DIR"
+else
+    echo "Non-Rust target (${_TARGET_LANG}): skipping RUSTC_WRAPPER and CARGO_TARGET_DIR"
+fi
+
+# ── Ensure PATH includes uv-installed tools (ruff, black, mypy, pytest) ──
+export PATH="$HOME/.local/bin:$PATH"
 
 exec cargo run -p swarm-agents -- "$@"
