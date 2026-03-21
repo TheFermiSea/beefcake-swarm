@@ -94,6 +94,7 @@ fi
 # ── Detect target repo language ──
 # If --repo-root points to a non-Rust target, skip Rust-specific env vars.
 _REPO_ROOT=""
+_prev_arg=""
 for arg in "$@"; do
     if [[ "$_prev_arg" == "--repo-root" ]]; then
         _REPO_ROOT="$arg"
