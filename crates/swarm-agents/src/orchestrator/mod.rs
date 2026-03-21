@@ -1715,14 +1715,24 @@ async fn process_issue_core(
                     let clippy_ok = gate_ok("clippy");
                     let check_ok = gate_ok("check");
 
-                    if fmt_ok && clippy_ok && check_ok {
+                    // For non-Rust targets (ScriptVerifier), gate names differ
+                    // (lint/format/typecheck vs fmt/clippy/check). Use all_green
+                    // as the universal acceptance criterion.
+                    let compile_clean = if is_script_verifier {
+                        report.all_green
+                    } else {
+                        fmt_ok && clippy_ok && check_ok
+                    };
+
+                    if compile_clean {
                         info!(
                             iteration,
+                            all_green = report.all_green,
                             fmt_ok,
                             clippy_ok,
                             check_ok,
                             "Compile-clean short-circuit (agent failure path): \
-                             worker wrote files and fmt+clippy+check pass despite agent termination. Accepting."
+                             worker wrote files and quality gates pass despite agent termination. Accepting."
                         );
 
                         // Log experiment TSV
