@@ -160,10 +160,13 @@ impl DispatchOutcome {
 
 /// Create beads child issues for each subtask in the plan (molecule pattern).
 ///
-/// Returns a map from subtask ID → beads issue ID. The child issues have:
+/// **Disabled by default** — set `SWARM_MOLECULE_TRACKING=1` to enable.
+/// When disabled, returns an empty map (molecule tracking is skipped).
+///
+/// When enabled, child issues are created with:
 /// - Blocking dependency on the parent (parent waits for all children)
 /// - `target-file:` labels for each assigned file
-/// - `parent:` label linking back to the parent issue
+/// - `parent:` and `molecule-child` labels for filtering
 ///
 /// Failures are non-fatal — molecule tracking is optional observability.
 /// The JoinSet dispatch will proceed regardless.
@@ -172,6 +175,16 @@ pub fn create_molecule_for_plan(
     parent_issue_id: &str,
     wt_path: &Path,
 ) -> std::collections::HashMap<String, String> {
+    // Gate behind env var — molecule children pollute `bd ready` if not
+    // properly closed, causing infinite retry loops in the dogfood loop.
+    let enabled = std::env::var("SWARM_MOLECULE_TRACKING")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+
+    if !enabled {
+        return std::collections::HashMap::new();
+    }
+
     let bridge = crate::beads_bridge::BeadsBridge::with_worktree(wt_path);
     let subtask_data: Vec<(String, Vec<String>)> = plan
         .subtasks
@@ -183,8 +196,9 @@ pub fn create_molecule_for_plan(
         Ok(child_ids) => {
             let mut map = std::collections::HashMap::new();
             for (subtask, child_id) in plan.subtasks.iter().zip(child_ids) {
-                // Claim the child issue so it shows as in_progress.
+                // Claim + label so molecule children don't appear in bd ready.
                 let _ = bridge.try_claim(&child_id);
+                let _ = bridge.add_label(&child_id, "molecule-child");
                 map.insert(subtask.id.clone(), child_id);
             }
             map

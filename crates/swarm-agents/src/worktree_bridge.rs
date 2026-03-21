@@ -144,11 +144,27 @@ impl WorktreeBridge {
         let wt_path = self.base_dir.join(&safe_id);
         let branch = format!("swarm/{safe_id}");
 
+        // Clean up stale worktree from a previous failed run.
+        // Without this, the loop retries the same issue forever.
         if wt_path.exists() {
-            bail!(
-                "Worktree already exists for {issue_id}: {}",
-                wt_path.display()
+            tracing::warn!(
+                issue_id = %issue_id,
+                path = %wt_path.display(),
+                "Stale worktree found — removing before retry"
             );
+            let _ = Command::new("git")
+                .args([
+                    "worktree",
+                    "remove",
+                    "--force",
+                    &wt_path.display().to_string(),
+                ])
+                .current_dir(&self.repo_root)
+                .output();
+            // If git worktree remove failed, force-delete the directory
+            if wt_path.exists() {
+                let _ = std::fs::remove_dir_all(&wt_path);
+            }
         }
 
         // Clean up stale branches from previous failed runs
@@ -902,8 +918,9 @@ mod tests {
         let list = bridge.list().expect("list worktrees");
         assert!(list.iter().any(|w| w.branch == "swarm/test-issue"));
 
-        // Creating the same one again should fail
-        assert!(bridge.create("test-issue").is_err());
+        // Creating the same one again should succeed (auto-cleans stale worktree)
+        let wt_path2 = bridge.create("test-issue").expect("re-create worktree after cleanup");
+        assert!(wt_path2.exists());
     }
 
     #[test]
