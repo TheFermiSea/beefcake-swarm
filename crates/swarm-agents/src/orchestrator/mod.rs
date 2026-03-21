@@ -288,6 +288,13 @@ async fn process_issue_core(
         );
     }
 
+    // --- Mutation archive (Phase 4a: evolutionary tracking) ---
+    let archive = crate::mutation_archive::MutationArchive::new(worktree_bridge.repo_root());
+    let archive_language = language_profile
+        .as_ref()
+        .map(|p| p.language.clone())
+        .unwrap_or_else(|| "rust".to_string());
+
     // --- Initialize harness components ---
     let mut session = SessionManager::new(wt_path.clone(), config.max_retries);
     let git_mgr = GitManager::new(&wt_path, "[swarm]");
@@ -2550,6 +2557,51 @@ async fn process_issue_core(
             ),
         );
 
+        // --- Defensive PR Safety Net (Phase 5d, Open SWE pattern) ---
+        //
+        // If the worktree has uncommitted changes from a failed run, commit them
+        // to the swarm branch and push. This ensures no agent work is lost — the
+        // branch can be inspected, cherry-picked, or used as context for retry.
+        if git_has_meaningful_changes(&wt_path).await {
+            info!(id = %issue.id, "Defensive safety net: capturing partial progress");
+            let _ = std::process::Command::new("git")
+                .args(["add", "-A"])
+                .current_dir(&wt_path)
+                .output();
+            let msg = format!(
+                "swarm: WIP partial progress on {} (failed after {} iterations)",
+                issue.id,
+                session.iteration()
+            );
+            let _ = std::process::Command::new("git")
+                .args(["commit", "-m", &msg])
+                .current_dir(&wt_path)
+                .output();
+            // Push the branch so it's visible on the remote
+            let branch = format!("swarm/{}", issue.id);
+            match std::process::Command::new("git")
+                .args(["push", "origin", &branch, "--force-with-lease"])
+                .current_dir(&wt_path)
+                .output()
+            {
+                Ok(ref out) if out.status.success() => {
+                    info!(
+                        id = %issue.id,
+                        branch = %branch,
+                        "Defensive safety net: pushed WIP branch"
+                    );
+                }
+                Ok(ref out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    debug!(id = %issue.id, stderr = %stderr.trim(), "WIP branch push failed (non-fatal)");
+                }
+                Err(e) => {
+                    debug!(id = %issue.id, error = %e, "WIP branch push failed (non-fatal)");
+                }
+            }
+            let _ = beads.update_status(&issue.id, "open"); // ensure it stays open for retry
+        }
+
         // --- Integration Point 4: Retrospective knowledge capture (failure) ---
         if let Some(kb) = knowledge_base {
             let entries = progress.read_all().unwrap_or_default();
@@ -2753,6 +2805,56 @@ async fn process_issue_core(
         info!(sessions = reader.sessions().len(), "\n{summary}");
     } else {
         debug!("No telemetry file found — skipping KB refresh and dashboard");
+    }
+
+    // --- Mutation archive (Phase 4a: evolutionary tracking) ---
+    {
+        let mut record = crate::mutation_archive::build_record(
+            &issue.id,
+            &issue.title,
+            &archive_language,
+            success,
+            session.iteration(),
+            &format!("{:?}", escalation.current_tier),
+            &config.resolve_role_model(SwarmRole::Planner), // primary model
+            process_start.elapsed().as_secs(),
+        );
+        record.auto_fix_only = success && session.iteration() == 0;
+        if let Some(ref report) = last_report {
+            record.error_categories = report
+                .unique_error_categories()
+                .iter()
+                .map(|c| format!("{c:?}"))
+                .collect();
+            record.first_failure_gate = report.first_failure.clone();
+        }
+        if !success {
+            record.failure_reason = Some(escalation.summary());
+        }
+        // Count changed lines from git diff
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["diff", "--stat", "main"])
+            .current_dir(&wt_path)
+            .output()
+        {
+            let stat = String::from_utf8_lossy(&output.stdout);
+            for line in stat.lines() {
+                if line.contains("insertion") {
+                    if let Some(n) = line.split_whitespace().nth(0).and_then(|s| s.parse().ok()) {
+                        record.lines_added = n;
+                    }
+                }
+                if line.contains("deletion") {
+                    for word in line.split_whitespace() {
+                        if let Ok(n) = word.parse::<u32>() {
+                            record.lines_removed = n;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        archive.record(&record);
     }
 
     Ok(success)
