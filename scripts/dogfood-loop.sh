@@ -256,6 +256,28 @@ with open('$jsonl_path') as f:
       log "  [run $run_num] Post-merge: scanning for new issues..."
       MAX_ISSUES=5 bash "$REPO_ROOT/scripts/generate-issues.sh" "$BD_RUN_DIR" >> "$run_log" 2>&1 || true
     fi
+
+    # Post-merge benchmark gate: verify physics correctness on GPU.
+    # Classifies the merge (physics-touching vs cosmetic), then runs
+    # the appropriate benchmark tier on vasp-03.
+    if [[ -n "$TARGET_REPO" && -x "$REPO_ROOT/scripts/post-merge-benchmark.sh" ]]; then
+      change_type=$(bash "$REPO_ROOT/scripts/post-merge-benchmark.sh" classify "$BD_RUN_DIR" 2>/dev/null || echo "skip")
+      if [[ "$change_type" != "skip" ]]; then
+        log "  [run $run_num] Running $change_type benchmark gate..."
+        if bash "$REPO_ROOT/scripts/post-merge-benchmark.sh" run "$BD_RUN_DIR" "$change_type" "$issue_id" >> "$run_log" 2>&1; then
+          log "  [run $run_num] Benchmark PASSED ($change_type)"
+        else
+          log "  [run $run_num] Benchmark FAILED ($change_type) — creating regression issue"
+          bd_cmd create \
+            --title="BUG: Benchmark regression after $issue_id merge" \
+            --description="Post-merge $change_type benchmark failed after merging $issue_id (sha=$(git -C "$BD_RUN_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)). The change may have broken physics correctness. Check /cluster/shared/cf-libs-bench/repo/output/benchmark_gate/ for results." \
+            --type=bug --priority=1 2>/dev/null || true
+          FAIL_COUNT=$((FAIL_COUNT + 1))
+        fi
+      else
+        log "  [run $run_num] Benchmark skipped (cosmetic-only changes)"
+      fi
+    fi
   else
     log "  [run $run_num] FAILED  issue=$issue_id exit=$exit_code (${elapsed}s)"
     tail -3 "$run_log" | while IFS= read -r line; do

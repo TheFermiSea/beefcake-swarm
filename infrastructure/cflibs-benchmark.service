@@ -1,0 +1,30 @@
+# cflibs-benchmark.service — Nightly CF-LIBS physics regression benchmark.
+#
+# Deploy to: ~/.config/systemd/user/cflibs-benchmark.service (on ai-proxy)
+#
+# Drains vasp-03 inference, runs the comprehensive benchmark suite on GPU,
+# then restores inference. Results stored on NFS at
+# /cluster/shared/cf-libs-bench/repo/output/benchmark_gate/<sha>/
+#
+# Enable: systemctl --user enable --now cflibs-benchmark.timer
+
+[Unit]
+Description=CF-LIBS physics regression benchmark (GPU on vasp-03)
+After=network-online.target
+
+[Service]
+Type=oneshot
+TimeoutStartSec=3600
+WorkingDirectory=%h/code/beefcake-swarm
+
+# Always drain for nightly (full GPU access)
+Environment=BENCH_DRAIN=1
+Environment=BENCH_TIMEOUT=3600
+
+ExecStart=%h/code/beefcake-swarm/scripts/post-merge-benchmark.sh run %h/code/CF-LIBS nightly nightly-regression
+
+# Ensure inference is restored even if benchmark crashes
+ExecStopPost=%h/code/beefcake-swarm/scripts/post-merge-benchmark.sh restore
+
+[Install]
+WantedBy=default.target

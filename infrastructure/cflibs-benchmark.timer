@@ -1,0 +1,20 @@
+# cflibs-benchmark.timer — Weekly physics regression benchmark.
+#
+# Deploy to: ~/.config/systemd/user/cflibs-benchmark.timer (on ai-proxy)
+#
+# Runs every Saturday at 04:00 UTC (Friday 9pm PT) when cluster load is low.
+#
+# Enable: systemctl --user enable --now cflibs-benchmark.timer
+# Status: systemctl --user list-timers cflibs-benchmark.timer
+# Manual: systemctl --user start cflibs-benchmark.service
+
+[Unit]
+Description=Weekly CF-LIBS physics regression benchmark
+
+[Timer]
+OnCalendar=Sat *-*-* 04:00 UTC
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target
