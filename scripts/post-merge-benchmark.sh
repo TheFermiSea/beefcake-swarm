@@ -210,6 +210,21 @@ run_benchmark_on_host() {
 
   case "$tier" in
     light)
+      # Comprehensive with small N: validates forward model + inversion (~35s)
+      python_cmd="${BENCH_VENV}/bin/python scripts/run_comprehensive_benchmark.py \
+        --db ASD_da/libs_production.db \
+        --n-compositions 10 \
+        --output-dir $output_dir"
+      ;;
+    heavy)
+      # Comprehensive with full sweep: broader parameter coverage (~3-5 min)
+      python_cmd="${BENCH_VENV}/bin/python scripts/run_comprehensive_benchmark.py \
+        --db ASD_da/libs_production.db \
+        --n-compositions 50 \
+        --output-dir $output_dir"
+      ;;
+    nightly)
+      # Unified benchmark: full identification + composition on real spectra (~30 min)
       python_cmd="${BENCH_VENV}/bin/python scripts/run_unified_benchmark.py \
         --quick --max-outer-folds 1 \
         --sections all \
@@ -217,12 +232,6 @@ run_benchmark_on_host() {
         --composition-workflows iterative \
         --db-path ASD_da/libs_production.db \
         --data-dir data \
-        --output-dir $output_dir"
-      ;;
-    heavy|nightly)
-      python_cmd="${BENCH_VENV}/bin/python scripts/run_comprehensive_benchmark.py \
-        --db ASD_da/libs_production.db \
-        --n-compositions 50 \
         --output-dir $output_dir"
       ;;
     *)
