@@ -61,7 +61,7 @@ pub fn build_planner_named(
         .description(
             "Planning specialist. Analyzes errors and produces structured JSON repair plans.",
         )
-        .preamble(prompts::PLANNER_PREAMBLE)
+        .preamble(&prompts::load_prompt("planner", wt_path, prompts::PLANNER_PREAMBLE))
         .temperature(0.2)
         .additional_params(sampling)
         .tools(bundles::worker_tools(
@@ -95,7 +95,7 @@ pub fn build_fixer_named(
         .description(
             "Implementation specialist. Follows structured plans to write targeted code fixes.",
         )
-        .preamble(prompts::FIXER_PREAMBLE)
+        .preamble(&prompts::load_prompt("fixer", wt_path, prompts::FIXER_PREAMBLE))
         .temperature(0.2)
         .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(
@@ -157,7 +157,7 @@ pub fn build_architect_named(
              edit plan in JSON. The plan is then applied mechanically by the Editor agent. \
              Use for complex multi-file changes that require deep codebase understanding.",
         )
-        .preamble(prompts::ARCHITECT_PREAMBLE)
+        .preamble(&prompts::load_prompt("architect", wt_path, prompts::ARCHITECT_PREAMBLE))
         .temperature(0.2)
         .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(
@@ -197,7 +197,7 @@ pub fn build_editor_named(
              Give it a plan with file paths and exact code blocks to find/replace. \
              It applies each edit mechanically using edit_file.",
         )
-        .preamble(prompts::EDITOR_PREAMBLE)
+        .preamble(&prompts::load_prompt("editor", wt_path, prompts::EDITOR_PREAMBLE))
         .temperature(worker_temperature())
         .tool_choice(ToolChoice::Required) // Force tool calls (no prose-only responses)
         .additional_params(worker_sampling_params())

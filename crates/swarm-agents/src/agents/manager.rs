@@ -73,11 +73,12 @@ pub fn build_cloud_manager(
     wt_path: &Path,
     verifier_packages: &[String],
 ) -> OaiAgent {
+    let preamble = prompts::load_prompt("manager", wt_path, prompts::CLOUD_MANAGER_PREAMBLE);
     let mut builder = client
         .agent(model)
         .name("manager")
         .description("Cloud-backed orchestrator that delegates to local HPC model workers")
-        .preamble(prompts::CLOUD_MANAGER_PREAMBLE)
+        .preamble(&preamble)
         .temperature(0.3)
         // Agent-as-Tool: specialists
         .tool(workers.planner)
@@ -149,11 +150,12 @@ pub fn build_local_manager(
     wt_path: &Path,
     verifier_packages: &[String],
 ) -> OaiAgent {
+    let preamble = prompts::load_prompt("local_manager", wt_path, prompts::LOCAL_MANAGER_PREAMBLE);
     let mut builder = client
         .agent(model)
         .name("manager")
         .description("Orchestrator that decomposes tasks and delegates to specialized workers")
-        .preamble(prompts::LOCAL_MANAGER_PREAMBLE)
+        .preamble(&preamble)
         .temperature(crate::agents::coder::worker_temperature())
         // Agent-as-Tool: specialists
         .tool(workers.planner)

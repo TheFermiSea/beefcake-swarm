@@ -146,11 +146,12 @@ pub fn build_rust_coder_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
+    let preamble = prompts::load_prompt("coder", wt_path, prompts::RUST_CODER_PREAMBLE);
     client
         .agent(model)
         .name(name)
         .description("Rust specialist for borrow checker, lifetimes, trait bounds, type errors")
-        .preamble(prompts::RUST_CODER_PREAMBLE)
+        .preamble(&preamble)
         .temperature(worker_temperature())
         .tool_choice(worker_tool_choice())
         .additional_params(worker_sampling_params())
@@ -183,11 +184,12 @@ pub fn build_reasoning_worker_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
+    let preamble = prompts::load_prompt("reasoning_worker", wt_path, prompts::REASONING_WORKER_PREAMBLE);
     client
         .agent(model)
         .name(name)
         .description("Deep reasoning specialist for complex Rust architecture and debugging")
-        .preamble(prompts::REASONING_WORKER_PREAMBLE)
+        .preamble(&preamble)
         .temperature(worker_temperature())
         .tool_choice(worker_tool_choice())
         .additional_params(worker_sampling_params())
@@ -210,11 +212,12 @@ pub fn build_strategist_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
+    let preamble = prompts::load_prompt("reasoning_worker", wt_path, prompts::REASONING_WORKER_PREAMBLE);
     client
         .agent(model)
         .name(name)
         .description("Architectural strategist and advisor for high-level decision making")
-        .preamble(prompts::REASONING_WORKER_PREAMBLE) // Reusing reasoning preamble for now
+        .preamble(&preamble) // Falls back to reasoning_worker prompt
         .temperature(worker_temperature())
         .tool_choice(worker_tool_choice())
         .additional_params(worker_sampling_params())
@@ -250,11 +253,12 @@ pub fn build_general_coder_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
+    let preamble = prompts::load_prompt("coder", wt_path, prompts::GENERAL_CODER_PREAMBLE);
     client
         .agent(model)
         .name(name)
         .description("General coding agent for multi-file scaffolding and cross-cutting changes")
-        .preamble(prompts::GENERAL_CODER_PREAMBLE)
+        .preamble(&preamble)
         .temperature(worker_temperature())
         .tool_choice(worker_tool_choice())
         .additional_params(worker_sampling_params())

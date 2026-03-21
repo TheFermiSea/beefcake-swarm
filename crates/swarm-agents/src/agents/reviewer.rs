@@ -14,7 +14,7 @@ use super::coder::OaiAgent;
 /// NO tools — the reviewer only sees a diff passed via prompt.
 /// Returns PASS or FAIL on the first line.
 pub fn build_reviewer(client: &openai::CompletionsClient, model: &str) -> OaiAgent {
-    build_reviewer_named(client, model, "reviewer")
+    build_reviewer_named(client, model, "reviewer", None)
 }
 
 /// Build the blind reviewer with a custom agent name.
@@ -22,12 +22,17 @@ pub fn build_reviewer_named(
     client: &openai::CompletionsClient,
     model: &str,
     name: &str,
+    wt_path: Option<&std::path::Path>,
 ) -> OaiAgent {
+    let preamble = match wt_path {
+        Some(path) => prompts::load_prompt("reviewer", path, prompts::REVIEWER_PREAMBLE),
+        None => prompts::REVIEWER_PREAMBLE.to_string(),
+    };
     client
         .agent(model)
         .name(name)
         .description("Blind code reviewer. Returns strict JSON validation output.")
-        .preamble(prompts::REVIEWER_PREAMBLE)
+        .preamble(&preamble)
         .temperature(0.1)
         .build()
 }
