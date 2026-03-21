@@ -65,7 +65,12 @@ mkdir -p "$LOG_DIR"
 # ── Lockfile: prevent overlapping loop instances ──
 # Uses flock(1) for atomic, race-free locking. The lock is automatically
 # released when the process exits (including crashes/signals).
-LOCKFILE="/tmp/dogfood-loop.lock"
+# Lockfile includes target repo name to allow parallel loops on different repos.
+_LOCK_SUFFIX=""
+if [[ -n "$TARGET_REPO" ]]; then
+  _LOCK_SUFFIX="-$(basename "$TARGET_REPO")"
+fi
+LOCKFILE="/tmp/dogfood-loop${_LOCK_SUFFIX}.lock"
 exec 200>"$LOCKFILE"
 if ! flock -n 200; then
     EXISTING_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "unknown")
