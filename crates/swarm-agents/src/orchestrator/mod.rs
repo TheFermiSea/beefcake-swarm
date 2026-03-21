@@ -1043,6 +1043,30 @@ async fn process_issue_core(
             _ => issue.title.clone(),
         };
 
+        // --- Self-improvement: inject archive context (Phase 4b) ---
+        //
+        // Query the mutation archive for past similar fixes and inject what
+        // worked into the objective. This closes the feedback loop:
+        //   past outcomes → archive → prompt context → better next attempt
+        if iteration == 1 {
+            // On first iteration, inject past fix patterns for similar errors
+            if let Some(ref report) = last_report {
+                let error_cats: Vec<String> = report
+                    .unique_error_categories()
+                    .iter()
+                    .map(|c| format!("{c:?}"))
+                    .collect();
+                if let Some(context) = archive.context_for_issue(&error_cats) {
+                    full_objective.push_str("\n\n");
+                    full_objective.push_str(&context);
+                }
+            } else if let Some(context) = archive.context_for_issue(&[]) {
+                // No errors yet (first iteration) — inject general archive stats
+                full_objective.push_str("\n\n");
+                full_objective.push_str(&context);
+            }
+        }
+
         // Append mail messages if any were received between iterations
         if let Some(ref mail) = mail_context {
             full_objective.push_str("\n\n## Agent Mail (from previous iteration)\n");
@@ -2587,6 +2611,47 @@ async fn process_issue_core(
         }
         beads.close(&issue.id, Some("Resolved by swarm orchestrator"))?;
         clear_resume_file(worktree_bridge.repo_root());
+
+        // --- Self-improvement: post-merge quality scan ---
+        //
+        // After successful merge, run the verifier on the repo root to check
+        // if the merge introduced or unmasked new issues. Log the results
+        // to the quality trend file for tracking codebase health over time.
+        if is_script_verifier {
+            let scan_report = run_verifier(
+                worktree_bridge.repo_root(),
+                &verifier_config,
+                &language_profile,
+            )
+            .await;
+            // Append quality metrics to trend file
+            let trend_path = worktree_bridge
+                .repo_root()
+                .join(".swarm")
+                .join("quality-trend.jsonl");
+            if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                "timestamp": chrono::Utc::now().to_rfc3339(),
+                "issue_resolved": issue.id,
+                "gates_passed": scan_report.gates_passed,
+                "gates_total": scan_report.gates_total,
+                "all_green": scan_report.all_green,
+                "summary": scan_report.summary(),
+            })) {
+                let _ = std::fs::OpenOptions::new()
+                    .create(true)
+                    .append(true)
+                    .open(&trend_path)
+                    .and_then(|mut f| {
+                        use std::io::Write;
+                        writeln!(f, "{json}")
+                    });
+                info!(
+                    id = %issue.id,
+                    summary = %scan_report.summary(),
+                    "Post-merge quality scan recorded"
+                );
+            }
+        }
         info!(id = %issue.id, "Issue closed");
     } else {
         session.fail();

@@ -240,56 +240,83 @@ impl MutationArchive {
     /// error types, which models worked, and how many iterations they took.
     /// Returns None if no relevant history exists.
     pub fn context_for_issue(&self, error_categories: &[String]) -> Option<String> {
-        if error_categories.is_empty() {
-            // Check archive summary instead
-            let summary = self.summary();
-            if summary.total_attempts == 0 {
-                return None;
-            }
-            return Some(format!(
-                "## Archive Context\n\
-                 Prior attempts: {} total, {} resolved ({:.0}% success rate), \
-                 avg {:.1} iterations to resolve.\n",
-                summary.total_attempts,
-                summary.resolved,
-                if summary.total_attempts > 0 {
-                    summary.resolved as f64 / summary.total_attempts as f64 * 100.0
-                } else {
-                    0.0
-                },
-                summary.avg_iterations_to_resolve,
-            ));
+        let records = self.load_all();
+        if records.is_empty() {
+            return None;
         }
 
-        let mut context_parts = Vec::new();
-        for cat in error_categories {
-            let similar = self.query_by_error(cat, 3);
-            if !similar.is_empty() {
-                let examples: Vec<String> = similar
-                    .iter()
-                    .map(|r| {
-                        format!(
-                            "- \"{}\" resolved in {} iterations using {} ({})",
-                            r.issue_title,
-                            r.iterations,
-                            r.model,
-                            r.tier,
-                        )
-                    })
-                    .collect();
-                context_parts.push(format!(
-                    "Past fixes for {cat} errors:\n{}",
-                    examples.join("\n")
+        let mut parts = Vec::new();
+
+        // Summary stats
+        let summary = self.summary();
+        parts.push(format!(
+            "Prior run history: {} attempts, {} resolved ({:.0}% success rate), \
+             avg {:.1} iterations when successful.",
+            summary.total_attempts,
+            summary.resolved,
+            if summary.total_attempts > 0 {
+                summary.resolved as f64 / summary.total_attempts as f64 * 100.0
+            } else {
+                0.0
+            },
+            summary.avg_iterations_to_resolve,
+        ));
+
+        // Strategy advice from successful runs
+        let successful: Vec<&MutationRecord> = records.iter().filter(|r| r.resolved).collect();
+        if !successful.is_empty() {
+            let avg_iter: f64 =
+                successful.iter().map(|r| r.iterations as f64).sum::<f64>() / successful.len() as f64;
+            if avg_iter <= 2.0 {
+                parts.push(
+                    "Strategy: past fixes resolved quickly (<=2 iterations). \
+                     Read the target file first, make a focused edit, and let the verifier confirm."
+                        .to_string(),
+                );
+            } else {
+                parts.push(format!(
+                    "Strategy: past fixes averaged {avg_iter:.0} iterations. \
+                     Consider reading the file structure carefully before editing.",
                 ));
             }
         }
 
-        if context_parts.is_empty() {
+        // Failure pattern analysis
+        let failed: Vec<&MutationRecord> = records.iter().filter(|r| !r.resolved).collect();
+        if !failed.is_empty() {
+            // Check common failure reasons
+            let timeout_count = failed
+                .iter()
+                .filter(|r| r.iterations >= 10)
+                .count();
+            if timeout_count > failed.len() / 2 {
+                parts.push(
+                    "WARNING: Most past failures exhausted all iterations. \
+                     Make your edits early — do not spend turns only reading files."
+                        .to_string(),
+                );
+            }
+        }
+
+        // Similar error category matches
+        if !error_categories.is_empty() {
+            for cat in error_categories {
+                let similar = self.query_by_error(cat, 2);
+                for r in &similar {
+                    parts.push(format!(
+                        "Similar fix: \"{}\" resolved in {} iteration(s).",
+                        r.issue_title, r.iterations,
+                    ));
+                }
+            }
+        }
+
+        if parts.is_empty() {
             None
         } else {
             Some(format!(
-                "## Archive Context (similar past fixes)\n\n{}\n",
-                context_parts.join("\n\n")
+                "## Lessons from Past Runs\n\n{}\n",
+                parts.join("\n")
             ))
         }
     }

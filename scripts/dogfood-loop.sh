@@ -247,6 +247,15 @@ with open('$jsonl_path') as f:
 
   if [[ $exit_code -eq 0 ]]; then
     log "  [run $run_num] SUCCESS issue=$issue_id (${elapsed}s)"
+    SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+
+    # Self-improvement: after successful merge, scan for new issues.
+    # The fix may have unmasked new lint/type violations or created
+    # opportunities for further improvement.
+    if [[ -n "$TARGET_REPO" && -x "$REPO_ROOT/scripts/generate-issues.sh" ]]; then
+      log "  [run $run_num] Post-merge: scanning for new issues..."
+      MAX_ISSUES=5 bash "$REPO_ROOT/scripts/generate-issues.sh" "$BD_RUN_DIR" >> "$run_log" 2>&1 || true
+    fi
   else
     log "  [run $run_num] FAILED  issue=$issue_id exit=$exit_code (${elapsed}s)"
     tail -3 "$run_log" | while IFS= read -r line; do
