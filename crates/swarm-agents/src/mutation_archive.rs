@@ -233,6 +233,66 @@ impl MutationArchive {
     pub fn path(&self) -> &Path {
         &self.path
     }
+
+    /// Generate context about past similar issues for the manager prompt.
+    ///
+    /// Returns a short text block describing past resolutions of similar
+    /// error types, which models worked, and how many iterations they took.
+    /// Returns None if no relevant history exists.
+    pub fn context_for_issue(&self, error_categories: &[String]) -> Option<String> {
+        if error_categories.is_empty() {
+            // Check archive summary instead
+            let summary = self.summary();
+            if summary.total_attempts == 0 {
+                return None;
+            }
+            return Some(format!(
+                "## Archive Context\n\
+                 Prior attempts: {} total, {} resolved ({:.0}% success rate), \
+                 avg {:.1} iterations to resolve.\n",
+                summary.total_attempts,
+                summary.resolved,
+                if summary.total_attempts > 0 {
+                    summary.resolved as f64 / summary.total_attempts as f64 * 100.0
+                } else {
+                    0.0
+                },
+                summary.avg_iterations_to_resolve,
+            ));
+        }
+
+        let mut context_parts = Vec::new();
+        for cat in error_categories {
+            let similar = self.query_by_error(cat, 3);
+            if !similar.is_empty() {
+                let examples: Vec<String> = similar
+                    .iter()
+                    .map(|r| {
+                        format!(
+                            "- \"{}\" resolved in {} iterations using {} ({})",
+                            r.issue_title,
+                            r.iterations,
+                            r.model,
+                            r.tier,
+                        )
+                    })
+                    .collect();
+                context_parts.push(format!(
+                    "Past fixes for {cat} errors:\n{}",
+                    examples.join("\n")
+                ));
+            }
+        }
+
+        if context_parts.is_empty() {
+            None
+        } else {
+            Some(format!(
+                "## Archive Context (similar past fixes)\n\n{}\n",
+                context_parts.join("\n\n")
+            ))
+        }
+    }
 }
 
 /// Summary statistics from the mutation archive.

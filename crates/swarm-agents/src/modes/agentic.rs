@@ -70,7 +70,7 @@ impl AgenticRunner {
 
     fn preamble(&self) -> String {
         format!(
-            r#"You are an expert Rust programmer making targeted edits to files in a code workspace.
+            r#"You are an expert programmer making targeted edits to files in a code workspace.
 
 ## Working directory
 All files are relative to: {}

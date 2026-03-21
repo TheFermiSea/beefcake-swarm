@@ -161,17 +161,26 @@ pub fn kernel_strategy_tools(
     // Search tools (search_code, colgrep, ast_grep) belong exclusively in
     // process_tactical_tools() for workers. The manager MUST delegate all
     // code exploration to workers via proxy_rust_coder/proxy_general_coder.
+    // Load language profile for non-Rust verifier dispatch
+    let profile = coordination::LanguageProfile::load(wt_path);
+
     if proxy {
         vec![
             Box::new(ProxyRunVerifier(
-                RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec()),
+                RunVerifierTool::new(wt_path)
+                    .with_packages(verifier_packages.to_vec())
+                    .with_language_profile(profile.clone()),
             )),
             Box::new(ProxyGetDiff(GetDiffTool::new(wt_path))),
             Box::new(ProxyListChangedFiles(ListChangedFilesTool::new(wt_path))),
         ]
     } else {
         vec![
-            Box::new(RunVerifierTool::new(wt_path).with_packages(verifier_packages.to_vec())),
+            Box::new(
+                RunVerifierTool::new(wt_path)
+                    .with_packages(verifier_packages.to_vec())
+                    .with_language_profile(profile),
+            ),
             Box::new(GetDiffTool::new(wt_path)),
             Box::new(ListChangedFilesTool::new(wt_path)),
         ]

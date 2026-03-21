@@ -924,6 +924,22 @@ async fn process_issue_core(
         );
     }
 
+    // --- Archive-informed context (Phase 4b: UCB model insights) ---
+    //
+    // Query the mutation archive for past similar fixes and log UCB scores.
+    // Archive context is available to the orchestrator for future prompt injection.
+    {
+        let summary = archive.summary();
+        if summary.total_attempts > 0 {
+            info!(
+                attempts = summary.total_attempts,
+                resolved = summary.resolved,
+                rate = format!("{:.0}%", summary.resolved as f64 / summary.total_attempts as f64 * 100.0),
+                "Mutation archive: prior history available"
+            );
+        }
+    }
+
     // --- Main loop: implement → verify → review → escalate ---
     loop {
         let iteration = match session.next_iteration() {

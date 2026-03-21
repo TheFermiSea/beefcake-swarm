@@ -17,12 +17,16 @@ pub struct RunVerifierArgs {
     pub mode: Option<String>,
 }
 
-/// Run the deterministic verifier pipeline (cargo fmt, clippy, check, test)
-/// and return a structured report.
+/// Run the quality gate pipeline and return a structured report.
+///
+/// For Rust targets: runs cargo fmt, clippy, check, test.
+/// For non-Rust targets: runs shell commands from `.swarm/profile.toml`.
 pub struct RunVerifierTool {
     pub working_dir: PathBuf,
     /// Scope cargo commands to specific packages (empty = whole workspace).
     pub packages: Vec<String>,
+    /// Language profile for non-Rust targets (None = use built-in Rust verifier).
+    pub language_profile: Option<coordination::LanguageProfile>,
 }
 
 impl RunVerifierTool {
@@ -30,11 +34,17 @@ impl RunVerifierTool {
         Self {
             working_dir: working_dir.to_path_buf(),
             packages: Vec::new(),
+            language_profile: None,
         }
     }
 
     pub fn with_packages(mut self, packages: Vec<String>) -> Self {
         self.packages = packages;
+        self
+    }
+
+    pub fn with_language_profile(mut self, profile: Option<coordination::LanguageProfile>) -> Self {
+        self.language_profile = profile;
         self
     }
 }
@@ -46,11 +56,27 @@ impl Tool for RunVerifierTool {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
+        let desc = if let Some(ref profile) = self.language_profile {
+            if !profile.is_rust() {
+                let gate_names: Vec<&str> = profile.gates.iter().map(|g| g.name.as_str()).collect();
+                format!(
+                    "Run the {} quality gate pipeline: {}. Returns a structured pass/fail report.",
+                    profile.language,
+                    gate_names.join(", ")
+                )
+            } else {
+                "Run the Rust quality gate pipeline: cargo fmt, clippy, check, test. \
+                 Returns a structured pass/fail report with error categories."
+                    .to_string()
+            }
+        } else {
+            "Run the Rust quality gate pipeline: cargo fmt, clippy, check, test. \
+             Returns a structured pass/fail report with error categories."
+                .to_string()
+        };
         ToolDefinition {
             name: "run_verifier".into(),
-            description: "Run the Rust quality gate pipeline: cargo fmt, clippy, check, test. \
-                          Returns a structured pass/fail report with error categories."
-                .into(),
+            description: desc.into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -65,17 +91,31 @@ impl Tool for RunVerifierTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        use coordination::verifier::{Verifier, VerifierConfig};
+        use coordination::verifier::{ScriptVerifier, Verifier, VerifierConfig};
 
-        let mut config = match args.mode.as_deref() {
-            Some("quick") => VerifierConfig::quick(),
-            Some("compile") => VerifierConfig::compile_only(),
-            _ => VerifierConfig::default(),
+        // Dispatch to ScriptVerifier for non-Rust targets
+        let report = if let Some(ref profile) = self.language_profile {
+            if !profile.is_rust() {
+                let sv = ScriptVerifier::new(&self.working_dir, profile.clone());
+                sv.run_pipeline().await
+            } else {
+                let mut config = match args.mode.as_deref() {
+                    Some("quick") => VerifierConfig::quick(),
+                    Some("compile") => VerifierConfig::compile_only(),
+                    _ => VerifierConfig::default(),
+                };
+                config.packages = self.packages.clone();
+                Verifier::new(&self.working_dir, config).run_pipeline().await
+            }
+        } else {
+            let mut config = match args.mode.as_deref() {
+                Some("quick") => VerifierConfig::quick(),
+                Some("compile") => VerifierConfig::compile_only(),
+                _ => VerifierConfig::default(),
+            };
+            config.packages = self.packages.clone();
+            Verifier::new(&self.working_dir, config).run_pipeline().await
         };
-        config.packages = self.packages.clone();
-
-        let verifier = Verifier::new(&self.working_dir, config);
-        let report = verifier.run_pipeline().await;
 
         // Return the summary as a string for the agent to reason about
         let mut output = String::new();

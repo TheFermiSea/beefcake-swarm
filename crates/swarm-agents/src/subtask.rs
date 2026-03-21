@@ -252,7 +252,7 @@ pub fn close_molecule_children(
 ///
 /// The planner receives the issue objective and a file listing, then outputs
 /// a JSON `SubtaskPlan` that decomposes the work into non-overlapping subtasks.
-pub const SUBTASK_PLANNER_PROMPT: &str = r#"You are a task decomposition planner for a Rust coding swarm.
+pub const SUBTASK_PLANNER_PROMPT: &str = r#"You are a task decomposition planner for an autonomous coding swarm.
 
 Your job: decompose a coding task into 2-4 INDEPENDENT subtasks that can be executed
 by separate workers CONCURRENTLY in the same worktree.
@@ -268,11 +268,11 @@ CRITICAL RULES:
 4. Keep subtask objectives specific and actionable — include exact file paths,
    function names, and what to change.
 5. Use `context_files` for files a worker needs to READ but not modify.
-6. INTEGRATION FILES (Cargo.toml, Cargo.lock, mod.rs, lib.rs, main.rs) may only
-   appear in ONE subtask's target_files. If multiple subtasks need to modify them,
-   assign them to subtask-1 and describe the needed changes from other subtasks
-   in subtask-1's objective. The orchestrator runs a serial fixer pass if integration
-   is still needed after parallel execution.
+6. INTEGRATION FILES (package manifests like Cargo.toml/pyproject.toml, module
+   init files like mod.rs/__init__.py, and entry points like main.rs/main.py)
+   may only appear in ONE subtask's target_files. If multiple subtasks need to
+   modify them, assign them to subtask-1 and describe the needed changes from
+   other subtasks in subtask-1's objective.
 
 Output ONLY valid JSON matching this schema (no markdown fences, no explanation):
 
@@ -282,15 +282,15 @@ Output ONLY valid JSON matching this schema (no markdown fences, no explanation)
     {
       "id": "subtask-1",
       "objective": "What this worker should do, with specific file paths and function names",
-      "target_files": ["path/to/file1.rs", "path/to/file2.rs"],
-      "context_files": ["path/to/read_only.rs"],
+      "target_files": ["path/to/file1.ext", "path/to/file2.ext"],
+      "context_files": ["path/to/read_only.ext"],
       "worker_type": "general_coder"
     }
   ]
 }
 
 worker_type options:
-- "rust_coder": Rust specialist (borrow checker, lifetimes, trait bounds)
+- "rust_coder": Language specialist (type system, borrow checker, trait bounds)
 - "general_coder": General purpose (scaffolding, multi-file, config changes)
 "#;
 
@@ -628,7 +628,7 @@ fn build_subtask_system_prompt(subtask: &Subtask, wt_path: &Path) -> String {
     };
 
     format!(
-        r#"You are a Rust engineer executing ONE subtask of a larger parallel plan.
+        r#"You are a software engineer executing ONE subtask of a larger parallel plan.
 
 ## YOUR ASSIGNED FILES (you may ONLY modify these)
 {target_list}
