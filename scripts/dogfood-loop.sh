@@ -238,6 +238,16 @@ with open('$jsonl_path') as f:
     tail -3 "$run_log" | while IFS= read -r line; do
       log "    $line"
     done
+
+    # Cloud council postmortem: diagnose failure, update issue, reopen for retry.
+    if [[ -x "$REPO_ROOT/scripts/postmortem-review.sh" ]]; then
+      log "  [run $run_num] Running cloud council postmortem..."
+      if bash "$REPO_ROOT/scripts/postmortem-review.sh" "$issue_id" "$run_log" >> "$LOGFILE" 2>&1; then
+        log "  [run $run_num] Postmortem complete — issue reopened with guidance"
+      else
+        log "  [run $run_num] Postmortem failed (non-fatal)"
+      fi
+    fi
   fi
 
   record_run "$run_num" "$issue_id" "$exit_code" "$elapsed" "$run_log"
