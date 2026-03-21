@@ -77,8 +77,9 @@ use coordination::otel::{self, SpanSummary};
 use coordination::rollout::FeatureFlags;
 use coordination::save_session_state;
 use coordination::{
-    ContextPacker, EscalationEngine, EscalationState, GitManager, ProgressTracker, SessionManager,
-    SwarmTier, TierBudget, TurnPolicy, ValidatorFeedback, Verifier, VerifierConfig, VerifierReport,
+    ContextPacker, EscalationEngine, EscalationState, GitManager, LanguageProfile, ProgressTracker,
+    ScriptVerifier, SessionManager, SwarmTier, TierBudget, TurnPolicy, ValidatorFeedback, Verifier,
+    VerifierConfig, VerifierReport,
 };
 
 // Git commit, retry, diff-counting, and artifact-collection helpers live in
@@ -87,6 +88,27 @@ pub use crate::git_ops::git_commit_changes;
 pub(crate) use crate::git_ops::{
     collect_artifacts_from_diff, count_diff_lines, git_has_meaningful_changes,
 };
+
+/// Run the verifier pipeline, dispatching to ScriptVerifier for non-Rust targets.
+///
+/// This is the single dispatch point for all 8 verifier call sites in the
+/// orchestrator. When a `.swarm/profile.toml` defines a non-Rust language,
+/// the ScriptVerifier runs shell commands instead of cargo gates.
+async fn run_verifier(
+    wt_path: &Path,
+    verifier_config: &VerifierConfig,
+    language_profile: &Option<LanguageProfile>,
+) -> VerifierReport {
+    if let Some(profile) = language_profile {
+        if !profile.is_rust() {
+            let script_verifier = ScriptVerifier::new(wt_path, profile.clone());
+            return script_verifier.run_pipeline().await;
+        }
+    }
+    // Default: Rust verifier
+    let verifier = Verifier::new(wt_path, verifier_config.clone());
+    verifier.run_pipeline().await
+}
 
 /// Process a single issue through the implement → verify → review → escalate loop.
 ///
@@ -247,6 +269,24 @@ async fn process_issue_core(
             return Err(e);
         }
     };
+
+    // --- Load language profile (beefcake-loop: multi-language support) ---
+    //
+    // If the target repo has `.swarm/profile.toml`, load it. Non-Rust profiles
+    // use ScriptVerifier (shell commands) instead of the built-in Rust Verifier.
+    // When absent or language="rust", behavior is unchanged.
+    let language_profile = LanguageProfile::load(&wt_path);
+    let is_script_verifier = language_profile
+        .as_ref()
+        .is_some_and(|p| !p.is_rust());
+
+    if is_script_verifier {
+        info!(
+            language = %language_profile.as_ref().unwrap().language,
+            gates = language_profile.as_ref().unwrap().gates.len(),
+            "Using ScriptVerifier for non-Rust target repo"
+        );
+    }
 
     // --- Initialize harness components ---
     let mut session = SessionManager::new(wt_path.clone(), config.max_retries);
@@ -643,8 +683,7 @@ async fn process_issue_core(
 
                 // Run verifier on the combined result (skip if all subtasks failed).
                 let report = if succeeded > 0 {
-                    let verifier = Verifier::new(&wt_path, verifier_config.clone());
-                    Some(verifier.run_pipeline().await)
+                    Some(run_verifier(&wt_path, &verifier_config, &language_profile).await)
                 } else {
                     None
                 };
@@ -714,8 +753,7 @@ async fn process_issue_core(
                     match rig::completion::Prompt::prompt(&fixer, &fixer_prompt).await {
                         Ok(_response) => {
                             info!(id = %issue.id, "Serial fixer post-pass completed — re-running verifier");
-                            let verifier2 = Verifier::new(&wt_path, verifier_config.clone());
-                            let report2 = verifier2.run_pipeline().await;
+                            let report2 = run_verifier(&wt_path, &verifier_config, &language_profile).await;
 
                             if report2.all_green {
                                 info!(
@@ -819,8 +857,7 @@ async fn process_issue_core(
             check_test: false, // Skip tests — worktree env can cause false failures
             ..verifier_config.clone()
         };
-        let baseline_verifier = Verifier::new(&wt_path, baseline_config);
-        let baseline_report = baseline_verifier.run_pipeline().await;
+        let baseline_report = run_verifier(&wt_path, &baseline_config, &language_profile).await;
         let gates_passed = baseline_report
             .gates
             .iter()
@@ -1439,8 +1476,7 @@ async fn process_issue_core(
                     } else {
                         verifier_config.clone()
                     };
-                    let verifier = Verifier::new(&wt_path, current_verifier_config);
-                    let report = verifier.run_pipeline().await;
+                    let report = run_verifier(&wt_path, &current_verifier_config, &language_profile).await;
 
                     if report.all_green {
                         info!(
@@ -1613,8 +1649,7 @@ async fn process_issue_core(
                 } else {
                     verifier_config.clone()
                 };
-                let verifier = Verifier::new(&wt_path, current_verifier_config);
-                let report = verifier.run_pipeline().await;
+                let report = run_verifier(&wt_path, &current_verifier_config, &language_profile).await;
 
                 // Compile-clean short-circuit on agent failure path:
                 // The agent may have been terminated by the adapter (repeated edit failure,
@@ -1918,8 +1953,7 @@ async fn process_issue_core(
             } else {
                 verifier_config.clone()
             };
-            let verifier = Verifier::new(&wt_path, current_verifier_config);
-            let report = verifier.run_pipeline().await;
+            let report = run_verifier(&wt_path, &current_verifier_config, &language_profile).await;
             let decision = engine.decide(&mut escalation, &report);
             last_report = Some(report);
             metrics.finish_iteration();
@@ -1962,8 +1996,7 @@ async fn process_issue_core(
         } else {
             verifier_config.clone()
         };
-        let verifier = Verifier::new(&wt_path, current_verifier_config);
-        let mut report = verifier.run_pipeline().await;
+        let mut report = run_verifier(&wt_path, &current_verifier_config, &language_profile).await;
         let verifier_elapsed = verifier_start.elapsed();
         metrics.record_verifier_time(verifier_elapsed);
         otel::record_iteration_result(
@@ -2159,8 +2192,7 @@ async fn process_issue_core(
                     } else {
                         verifier_config.clone()
                     };
-                    let rb_verifier = Verifier::new(&wt_path, rb_verifier_config);
-                    let rb_report = rb_verifier.run_pipeline().await;
+                    let rb_report = run_verifier(&wt_path, &rb_verifier_config, &language_profile).await;
                     info!(
                         iteration,
                         rollback_errors = rb_report.failure_signals.len(),

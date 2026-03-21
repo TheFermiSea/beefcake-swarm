@@ -159,8 +159,8 @@ pub use feedback::correction_loop::{
 
 // Re-export verifier types
 pub use verifier::{
-    GateOutcome, GateResult, ValidatorFeedback, ValidatorIssueType, Verifier, VerifierConfig,
-    VerifierReport,
+    GateOutcome, GateResult, LanguageProfile, ScriptVerifier, ValidatorFeedback,
+    ValidatorIssueType, Verifier, VerifierConfig, VerifierReport,
 };
 
 // Re-export key escalation types
