@@ -121,4 +121,12 @@ fi
 # ── Ensure PATH includes uv-installed tools (ruff, black, mypy, pytest) ──
 export PATH="$HOME/.local/bin:$PATH"
 
-exec cargo run -p swarm-agents -- "$@"
+# Use prebuilt release binary if available, otherwise fall back to cargo run.
+# The release binary is 10x faster to start (no compilation) and runs faster.
+# Build with: CARGO_TARGET_DIR=/tmp/beefcake-shared-target cargo build -p swarm-agents --release
+_RELEASE_BIN="${CARGO_TARGET_DIR:-/tmp/beefcake-shared-target}/release/swarm-agents"
+if [[ -x "$_RELEASE_BIN" ]]; then
+    exec "$_RELEASE_BIN" "$@"
+else
+    exec cargo run -p swarm-agents -- "$@"
+fi
