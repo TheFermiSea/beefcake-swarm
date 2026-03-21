@@ -8,6 +8,7 @@
 
 use crate::feedback::compiler::CargoMessage;
 use crate::feedback::error_parser::RustcErrorParser;
+use crate::verifier::language_profile::{GateSpec, LanguageProfile};
 use crate::verifier::report::{GateOutcome, GateResult, VerifierReport};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -1399,5 +1400,451 @@ test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
         assert_eq!(report.gates[0].outcome, GateOutcome::Skipped);
         assert_eq!(report.gates[1].gate, "doc");
         assert_eq!(report.gates[1].outcome, GateOutcome::Skipped);
+    }
+}
+
+// ── ScriptVerifier ───────────────────────────────────────────────────────────
+//
+// Shell-native polyglot verifier for non-Rust targets.
+// Inspired by SWE-agent's design: quality gates are just shell commands.
+// Runs each GateSpec from `.swarm/profile.toml` in order.
+
+/// Shell-native verifier that runs arbitrary quality gate commands.
+///
+/// Used for non-Rust target repos. Each gate is a shell command defined in
+/// the target repo's `.swarm/profile.toml`. The existing Rust `Verifier` is
+/// used when the profile language is "rust" or no profile exists.
+pub struct ScriptVerifier {
+    /// Working directory (target repo worktree root)
+    working_dir: PathBuf,
+    /// Language profile loaded from `.swarm/profile.toml`
+    profile: LanguageProfile,
+}
+
+impl ScriptVerifier {
+    /// Create a new ScriptVerifier for the given worktree and profile.
+    pub fn new(working_dir: impl AsRef<Path>, profile: LanguageProfile) -> Self {
+        Self {
+            working_dir: working_dir.as_ref().to_path_buf(),
+            profile,
+        }
+    }
+
+    /// Run the full quality gate pipeline defined in the language profile.
+    ///
+    /// Returns a standard `VerifierReport` — the rest of the orchestrator loop
+    /// is language-agnostic and operates on `VerifierReport` regardless of
+    /// whether the Rust `Verifier` or `ScriptVerifier` produced it.
+    pub async fn run_pipeline(&self) -> VerifierReport {
+        let start = Instant::now();
+        let mut report = VerifierReport::new(self.working_dir.display().to_string());
+
+        // Populate git info
+        report.branch = self.git_branch();
+        report.commit = self.git_commit();
+
+        if self.profile.gates.is_empty() {
+            tracing::warn!(
+                language = %self.profile.language,
+                "No quality gates defined in profile — reporting all green"
+            );
+            report.finalize(start.elapsed());
+            return report;
+        }
+
+        // Collect remaining gate names for skip_remaining
+        let gate_names: Vec<&str> = self.profile.gates.iter().map(|g| g.name.as_str()).collect();
+
+        for (i, gate) in self.profile.gates.iter().enumerate() {
+            let result = self.run_script_gate(gate).await;
+            let failed = result.outcome == GateOutcome::Failed;
+            let is_blocking = gate.blocking;
+            report.add_gate(result);
+
+            if failed && is_blocking && !self.profile.comprehensive {
+                // Skip remaining gates
+                for remaining_name in &gate_names[i + 1..] {
+                    report.add_gate(GateResult {
+                        gate: remaining_name.to_string(),
+                        outcome: GateOutcome::Skipped,
+                        duration_ms: 0,
+                        exit_code: None,
+                        error_count: 0,
+                        warning_count: 0,
+                        errors: vec![],
+                        stderr_excerpt: Some("Skipped (previous blocking gate failed)".to_string()),
+                    });
+                }
+                break;
+            }
+        }
+
+        report.finalize(start.elapsed());
+        report
+    }
+
+    /// Run a single gate as a shell command with timeout.
+    async fn run_script_gate(&self, gate: &GateSpec) -> GateResult {
+        let start = Instant::now();
+        let timeout_dur = Duration::from_secs(gate.timeout_secs);
+
+        let mut cmd = tokio::process::Command::new(&gate.command);
+        cmd.args(&gate.args)
+            .current_dir(&self.working_dir)
+            .kill_on_drop(true);
+
+        // Create a new process group on Unix so timeout kills the entire tree
+        #[cfg(unix)]
+        cmd.process_group(0);
+
+        tracing::debug!(
+            gate = %gate.name,
+            command = %gate.command,
+            args = ?gate.args,
+            timeout_secs = gate.timeout_secs,
+            "Running script gate"
+        );
+
+        let result = tokio::time::timeout(timeout_dur, cmd.output()).await;
+
+        match result {
+            Ok(Ok(output)) => {
+                let exit_code = output.status.code();
+                let passed = output.status.success();
+                let stderr = self.truncate_output(&output.stderr);
+                let stdout = self.truncate_output(&output.stdout);
+
+                // Combine stdout + stderr for context (many tools report to stdout)
+                let combined = if stderr.is_empty() {
+                    stdout
+                } else if stdout.is_empty() {
+                    stderr
+                } else {
+                    format!("{stdout}\n---\n{stderr}")
+                };
+
+                let outcome = if passed {
+                    GateOutcome::Passed
+                } else if gate.blocking {
+                    GateOutcome::Failed
+                } else {
+                    GateOutcome::Warning
+                };
+
+                tracing::info!(
+                    gate = %gate.name,
+                    outcome = %outcome,
+                    exit_code = ?exit_code,
+                    duration_ms = start.elapsed().as_millis() as u64,
+                    "Script gate completed"
+                );
+
+                GateResult {
+                    gate: gate.name.clone(),
+                    outcome,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code,
+                    error_count: if passed { 0 } else { 1 },
+                    warning_count: 0,
+                    errors: vec![],
+                    stderr_excerpt: if combined.is_empty() {
+                        None
+                    } else {
+                        Some(combined)
+                    },
+                }
+            }
+            Ok(Err(e)) => {
+                tracing::warn!(gate = %gate.name, error = %e, "Script gate failed to execute");
+                GateResult {
+                    gate: gate.name.clone(),
+                    outcome: if gate.blocking {
+                        GateOutcome::Failed
+                    } else {
+                        GateOutcome::Warning
+                    },
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code: None,
+                    error_count: 1,
+                    warning_count: 0,
+                    errors: vec![],
+                    stderr_excerpt: Some(format!("Failed to execute: {e}")),
+                }
+            }
+            Err(_) => {
+                tracing::warn!(
+                    gate = %gate.name,
+                    timeout_secs = gate.timeout_secs,
+                    "Script gate timed out"
+                );
+                GateResult {
+                    gate: gate.name.clone(),
+                    outcome: GateOutcome::Failed,
+                    duration_ms: start.elapsed().as_millis() as u64,
+                    exit_code: None,
+                    error_count: 1,
+                    warning_count: 0,
+                    errors: vec![],
+                    stderr_excerpt: Some(format!(
+                        "Gate timed out after {}s",
+                        gate.timeout_secs
+                    )),
+                }
+            }
+        }
+    }
+
+    /// Truncate output to configured max bytes.
+    fn truncate_output(&self, output: &[u8]) -> String {
+        let max = self.profile.stderr_max_bytes;
+        let s = String::from_utf8_lossy(output);
+        if s.len() > max {
+            format!("{}... (truncated, {} total bytes)", &s[..max], s.len())
+        } else {
+            s.to_string()
+        }
+    }
+
+    /// Get current git branch name.
+    fn git_branch(&self) -> Option<String> {
+        Command::new("git")
+            .args(["rev-parse", "--abbrev-ref", "HEAD"])
+            .current_dir(&self.working_dir)
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Get current git commit SHA.
+    fn git_commit(&self) -> Option<String> {
+        Command::new("git")
+            .args(["rev-parse", "--short", "HEAD"])
+            .current_dir(&self.working_dir)
+            .output()
+            .ok()
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
+    }
+
+    /// Run auto-fix commands from the profile (the "Janitor" layer).
+    ///
+    /// Returns true if any fix command was attempted.
+    pub async fn run_auto_fix(&self) -> bool {
+        if self.profile.auto_fix.is_empty() {
+            return false;
+        }
+
+        let mut any_attempted = false;
+
+        for fix_cmd in &self.profile.auto_fix {
+            any_attempted = true;
+            let mut cmd = tokio::process::Command::new(&fix_cmd.command);
+            cmd.args(&fix_cmd.args)
+                .current_dir(&self.working_dir)
+                .kill_on_drop(true);
+
+            tracing::info!(
+                command = %fix_cmd.command,
+                args = ?fix_cmd.args,
+                "Running auto-fix command"
+            );
+
+            match tokio::time::timeout(Duration::from_secs(120), cmd.output()).await {
+                Ok(Ok(output)) => {
+                    if output.status.success() {
+                        tracing::info!(command = %fix_cmd.command, "Auto-fix succeeded");
+                    } else {
+                        let stderr = String::from_utf8_lossy(&output.stderr);
+                        tracing::warn!(
+                            command = %fix_cmd.command,
+                            "Auto-fix exited with errors: {}",
+                            &stderr[..stderr.len().min(200)]
+                        );
+                    }
+                }
+                Ok(Err(e)) => {
+                    tracing::warn!(command = %fix_cmd.command, error = %e, "Auto-fix failed to run");
+                }
+                Err(_) => {
+                    tracing::warn!(command = %fix_cmd.command, "Auto-fix timed out after 120s");
+                }
+            }
+        }
+
+        any_attempted
+    }
+}
+
+#[cfg(test)]
+mod script_verifier_tests {
+    use super::*;
+
+    fn test_profile() -> LanguageProfile {
+        LanguageProfile {
+            language: "python".to_string(),
+            source_extensions: vec![".py".to_string()],
+            package_manifest: "pyproject.toml".to_string(),
+            integration_files: vec!["pyproject.toml".to_string()],
+            gates: vec![
+                GateSpec {
+                    name: "echo_pass".to_string(),
+                    command: "true".to_string(),
+                    args: vec![],
+                    blocking: true,
+                    timeout_secs: 10,
+                },
+                GateSpec {
+                    name: "echo_fail".to_string(),
+                    command: "false".to_string(),
+                    args: vec![],
+                    blocking: true,
+                    timeout_secs: 10,
+                },
+                GateSpec {
+                    name: "should_skip".to_string(),
+                    command: "true".to_string(),
+                    args: vec![],
+                    blocking: true,
+                    timeout_secs: 10,
+                },
+            ],
+            auto_fix: vec![],
+            comprehensive: false,
+            stderr_max_bytes: 4096,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_script_verifier_fail_fast() {
+        let profile = test_profile();
+        let verifier = ScriptVerifier::new("/tmp", profile);
+        let report = verifier.run_pipeline().await;
+
+        assert!(!report.all_green);
+        assert_eq!(report.gates.len(), 3);
+        assert_eq!(report.gates[0].outcome, GateOutcome::Passed);
+        assert_eq!(report.gates[1].outcome, GateOutcome::Failed);
+        assert_eq!(report.gates[2].outcome, GateOutcome::Skipped);
+        assert_eq!(report.first_failure, Some("echo_fail".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_script_verifier_all_pass() {
+        let profile = LanguageProfile {
+            language: "test".to_string(),
+            gates: vec![
+                GateSpec {
+                    name: "gate1".to_string(),
+                    command: "true".to_string(),
+                    args: vec![],
+                    blocking: true,
+                    timeout_secs: 10,
+                },
+                GateSpec {
+                    name: "gate2".to_string(),
+                    command: "true".to_string(),
+                    args: vec![],
+                    blocking: true,
+                    timeout_secs: 10,
+                },
+            ],
+            ..LanguageProfile {
+                language: String::new(),
+                source_extensions: vec![],
+                package_manifest: String::new(),
+                integration_files: vec![],
+                gates: vec![],
+                auto_fix: vec![],
+                comprehensive: false,
+                stderr_max_bytes: 4096,
+            }
+        };
+        let verifier = ScriptVerifier::new("/tmp", profile);
+        let report = verifier.run_pipeline().await;
+
+        assert!(report.all_green);
+        assert_eq!(report.gates_passed, 2);
+        assert_eq!(report.gates_total, 2);
+    }
+
+    #[tokio::test]
+    async fn test_script_verifier_non_blocking_failure() {
+        let profile = LanguageProfile {
+            language: "test".to_string(),
+            gates: vec![
+                GateSpec {
+                    name: "advisory".to_string(),
+                    command: "false".to_string(),
+                    args: vec![],
+                    blocking: false, // non-blocking — should become Warning
+                    timeout_secs: 10,
+                },
+                GateSpec {
+                    name: "required".to_string(),
+                    command: "true".to_string(),
+                    args: vec![],
+                    blocking: true,
+                    timeout_secs: 10,
+                },
+            ],
+            ..LanguageProfile {
+                language: String::new(),
+                source_extensions: vec![],
+                package_manifest: String::new(),
+                integration_files: vec![],
+                gates: vec![],
+                auto_fix: vec![],
+                comprehensive: false,
+                stderr_max_bytes: 4096,
+            }
+        };
+        let verifier = ScriptVerifier::new("/tmp", profile);
+        let report = verifier.run_pipeline().await;
+
+        assert!(report.all_green); // Warning gates don't block all_green
+        assert_eq!(report.gates[0].outcome, GateOutcome::Warning);
+        assert_eq!(report.gates[1].outcome, GateOutcome::Passed);
+    }
+
+    #[tokio::test]
+    async fn test_script_verifier_with_output() {
+        let profile = LanguageProfile {
+            language: "test".to_string(),
+            gates: vec![GateSpec {
+                name: "echo_test".to_string(),
+                command: "echo".to_string(),
+                args: vec!["hello world".to_string()],
+                blocking: true,
+                timeout_secs: 10,
+            }],
+            ..LanguageProfile {
+                language: String::new(),
+                source_extensions: vec![],
+                package_manifest: String::new(),
+                integration_files: vec![],
+                gates: vec![],
+                auto_fix: vec![],
+                comprehensive: false,
+                stderr_max_bytes: 4096,
+            }
+        };
+        let verifier = ScriptVerifier::new("/tmp", profile);
+        let report = verifier.run_pipeline().await;
+
+        assert!(report.all_green);
+        // echo outputs to stdout, so stderr_excerpt should contain "hello world"
+        let excerpt = report.gates[0].stderr_excerpt.as_ref().unwrap();
+        assert!(excerpt.contains("hello world"));
     }
 }

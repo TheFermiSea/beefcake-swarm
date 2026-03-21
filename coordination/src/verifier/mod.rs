@@ -31,14 +31,16 @@
 //! println!("Gates passed: {}/{}", report.gates_passed, report.gates_total);
 //! ```
 
+pub mod language_profile;
 pub mod normalized;
 pub mod pipeline;
 pub mod report;
 pub mod risk_profile;
 pub mod safety_scan;
 
+pub use language_profile::LanguageProfile;
 pub use normalized::{ErrorBucket, GateSummary, NormalizedOutput};
-pub use pipeline::{Verifier, VerifierConfig};
+pub use pipeline::{ScriptVerifier, Verifier, VerifierConfig};
 pub use report::{GateOutcome, GateResult, ValidatorFeedback, ValidatorIssueType, VerifierReport};
 pub use risk_profile::DiffRiskProfile;
 pub use safety_scan::{SafetyWarning, WarningCategory};

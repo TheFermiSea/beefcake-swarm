@@ -3,6 +3,16 @@
 //! Prompt versioning: bump `PROMPT_VERSION` whenever preamble content changes.
 //! This enables tracing which prompt version produced a given agent response,
 //! useful for debugging regressions in agent behavior.
+//!
+//! # Dynamic Prompt Loading (Phase 2 — beefcake-loop)
+//!
+//! Target repos can override prompts by placing markdown files in `.swarm/prompts/`.
+//! Use `PromptLoader::load("manager", worktree_path, CLOUD_MANAGER_PREAMBLE)` to
+//! load from the target repo with fallback to the built-in constant.
+//!
+//! Inspired by Open SWE's AGENTS.md pattern.
+
+use std::path::Path;
 
 /// Prompt version. Bump on any preamble content change.
 pub const PROMPT_VERSION: &str = "8.0.0";
@@ -728,3 +738,88 @@ After running tests, return ONLY valid JSON (no markdown outside JSON):
 - Do NOT modify any existing source files — only create new test files.
 - Do NOT run git commit. The orchestrator handles commits.
 ";
+
+// ── PromptLoader ─────────────────────────────────────────────────────────────
+//
+// Loads role-specific prompts from `.swarm/prompts/` in the target repo,
+// falling back to the built-in Rust-specific constants when files are absent.
+// Inspired by Open SWE's AGENTS.md convention.
+
+/// Load a prompt for a given role from the target repo's `.swarm/prompts/` directory.
+///
+/// If the file exists, returns its contents. Otherwise, returns the provided default.
+/// This enables target repos to customize agent behavior without code changes.
+///
+/// # Role Mapping
+///
+/// | Role Name | File | Default Constant |
+/// |-----------|------|-----------------|
+/// | `"manager"` | `manager.md` | `CLOUD_MANAGER_PREAMBLE` |
+/// | `"local_manager"` | `local_manager.md` | `LOCAL_MANAGER_PREAMBLE` |
+/// | `"coder"` | `coder.md` | `GENERAL_CODER_PREAMBLE` |
+/// | `"rust_coder"` | `rust_coder.md` | `RUST_CODER_PREAMBLE` |
+/// | `"reviewer"` | `reviewer.md` | `REVIEWER_PREAMBLE` |
+/// | `"planner"` | `planner.md` | `PLANNER_PREAMBLE` |
+/// | `"fixer"` | `fixer.md` | `FIXER_PREAMBLE` |
+/// | `"architect"` | `architect.md` | `ARCHITECT_PREAMBLE` |
+/// | `"editor"` | `editor.md` | `EDITOR_PREAMBLE` |
+/// | `"reasoning_worker"` | `reasoning_worker.md` | `REASONING_WORKER_PREAMBLE` |
+/// | `"breaker"` | `breaker.md` | `BREAKER_PREAMBLE` |
+pub fn load_prompt(role: &str, worktree_path: &Path, default: &str) -> String {
+    let prompt_path = worktree_path
+        .join(".swarm")
+        .join("prompts")
+        .join(format!("{role}.md"));
+
+    match std::fs::read_to_string(&prompt_path) {
+        Ok(content) if !content.trim().is_empty() => {
+            tracing::info!(
+                role,
+                path = %prompt_path.display(),
+                "Loaded custom prompt from target repo"
+            );
+            content
+        }
+        Ok(_) => {
+            tracing::debug!(role, "Custom prompt file is empty — using built-in default");
+            default.to_string()
+        }
+        Err(_) => {
+            tracing::debug!(role, "No custom prompt found — using built-in default");
+            default.to_string()
+        }
+    }
+}
+
+#[cfg(test)]
+mod prompt_loader_tests {
+    use super::*;
+
+    #[test]
+    fn test_load_prompt_returns_default_when_no_file() {
+        let result = load_prompt("manager", Path::new("/nonexistent"), "default text");
+        assert_eq!(result, "default text");
+    }
+
+    #[test]
+    fn test_load_prompt_reads_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join(".swarm").join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(prompts_dir.join("manager.md"), "Custom manager prompt").unwrap();
+
+        let result = load_prompt("manager", dir.path(), "default text");
+        assert_eq!(result, "Custom manager prompt");
+    }
+
+    #[test]
+    fn test_load_prompt_ignores_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let prompts_dir = dir.path().join(".swarm").join("prompts");
+        std::fs::create_dir_all(&prompts_dir).unwrap();
+        std::fs::write(prompts_dir.join("manager.md"), "  \n  ").unwrap();
+
+        let result = load_prompt("manager", dir.path(), "default text");
+        assert_eq!(result, "default text");
+    }
+}
