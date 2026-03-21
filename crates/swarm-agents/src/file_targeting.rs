@@ -3,12 +3,37 @@
 use std::path::Path;
 use tracing::{debug, warn};
 
-/// Search the worktree for .rs files containing CamelCase identifiers from the objective.
+/// Build a grep `--include` pattern from source extensions.
+///
+/// For `[".py", ".pyi"]` → `"*.{py,pyi}"`.
+/// For `[".rs"]` → `"*.rs"`.
+/// For empty (no profile) → `"*.rs"` (backward compatible default).
+fn include_pattern_from_extensions(extensions: &[String]) -> String {
+    if extensions.is_empty() {
+        return "*.rs".to_string();
+    }
+    let exts: Vec<&str> = extensions
+        .iter()
+        .map(|e| e.trim_start_matches('.'))
+        .collect();
+    if exts.len() == 1 {
+        format!("*.{}", exts[0])
+    } else {
+        format!("*.{{{}}}", exts.join(","))
+    }
+}
+
+/// Search the worktree for source files containing identifiers from the objective.
 ///
 /// Returns `Some(files)` if grep finds matches, `None` otherwise.
-/// This is critical for initial packs where the context packer's file_contexts
-/// (which covers only ~18 files due to token budget) may not include the target file.
-pub(crate) fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Option<Vec<String>> {
+/// Uses `source_extensions` from the language profile to filter by file type.
+/// Defaults to `*.rs` when no extensions are provided (backward compatible).
+pub(crate) fn find_target_files_by_grep(
+    wt_root: &Path,
+    objective: &str,
+    source_extensions: &[String],
+) -> Option<Vec<String>> {
+    let include = include_pattern_from_extensions(source_extensions);
     // Extract CamelCase identifiers (likely struct/type/trait names)
     let camel: Vec<&str> = objective
         .split(|c: char| !c.is_alphanumeric() && c != '_')
@@ -45,9 +70,10 @@ pub(crate) fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Opti
     }
 
     let mut all_files: Vec<String> = Vec::new();
+    let include_arg = format!("--include={include}");
     for pattern in patterns.iter().take(6) {
         match std::process::Command::new("grep")
-            .args(["-rl", "--include=*.rs", pattern])
+            .args(["-rl", &include_arg, pattern])
             .current_dir(wt_root)
             .output()
         {
@@ -101,7 +127,7 @@ pub(crate) fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Opti
                 score += 2;
             } else if f.starts_with("patches/") {
                 score = score.saturating_sub(2);
-            } else if f.contains("/tests/") || f.ends_with("_test.rs") || f.ends_with("_tests.rs") {
+            } else if f.contains("/tests/") || f.contains("test_") || f.ends_with("_test.rs") || f.ends_with("_tests.rs") {
                 score = score.saturating_sub(1);
             }
             (score, f)
@@ -122,7 +148,14 @@ pub(crate) fn find_target_files_by_grep(wt_root: &Path, objective: &str) -> Opti
 /// Combines committed changes (git diff main..HEAD) and working-tree
 /// changes (git status --porcelain) to produce a deduplicated list of
 /// package names. Falls back to an empty Vec (= full workspace) on any error.
-pub(crate) fn detect_changed_packages(wt_path: &Path) -> Vec<String> {
+///
+/// For non-Rust targets (when `is_rust` is false), returns empty immediately
+/// since Cargo package scoping doesn't apply.
+pub(crate) fn detect_changed_packages(wt_path: &Path, is_rust: bool) -> Vec<String> {
+    if !is_rust {
+        tracing::debug!("detect_changed_packages: non-Rust target, targeting full project");
+        return Vec::new();
+    }
     let mut changed_files: std::collections::HashSet<std::path::PathBuf> = Default::default();
 
     // Committed changes since branching from main

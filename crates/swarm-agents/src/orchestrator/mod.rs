@@ -504,7 +504,7 @@ async fn process_issue_core(
     // If explicit packages are configured (CLI --package or SWARM_VERIFIER_PACKAGES), use those.
     // Otherwise, detect from git-changed files to avoid missing breakage in other crates.
     let initial_packages = if config.verifier_packages.is_empty() {
-        detect_changed_packages(&wt_path)
+        detect_changed_packages(&wt_path, !is_script_verifier)
     } else {
         config.verifier_packages.clone()
     };
@@ -543,7 +543,11 @@ async fn process_issue_core(
 
         // Pre-identify target files via file_targeting so the planner
         // doesn't waste turns exploring the codebase.
-        let target_files = crate::file_targeting::find_target_files_by_grep(&wt_path, &issue.title);
+        let src_exts = language_profile
+            .as_ref()
+            .map(|p| p.source_extensions.clone())
+            .unwrap_or_default();
+        let target_files = crate::file_targeting::find_target_files_by_grep(&wt_path, &issue.title, &src_exts);
 
         // Plan subtasks.
         let plan_result = crate::subtask::plan_subtasks(
@@ -958,7 +962,7 @@ async fn process_issue_core(
             if let Some(ref report) = last_report {
                 if !report.all_green {
                     if let Some(fixed_report) =
-                        try_auto_fix(&wt_path, &verifier_config, iteration).await
+                        try_auto_fix(&wt_path, &verifier_config, iteration, &language_profile).await
                     {
                         if fixed_report.all_green {
                             info!(
@@ -1470,7 +1474,7 @@ async fn process_issue_core(
                 if outcome.success_count() > 0 {
                     let current_verifier_config = if config.verifier_packages.is_empty() {
                         VerifierConfig {
-                            packages: detect_changed_packages(&wt_path),
+                            packages: detect_changed_packages(&wt_path, !is_script_verifier),
                             ..verifier_config.clone()
                         }
                     } else {
@@ -1643,7 +1647,7 @@ async fn process_issue_core(
                 );
                 let current_verifier_config = if config.verifier_packages.is_empty() {
                     VerifierConfig {
-                        packages: detect_changed_packages(&wt_path),
+                        packages: detect_changed_packages(&wt_path, !is_script_verifier),
                         ..verifier_config.clone()
                     }
                 } else {
@@ -1947,7 +1951,7 @@ async fn process_issue_core(
             // verifier to establish baseline.
             let current_verifier_config = if config.verifier_packages.is_empty() {
                 VerifierConfig {
-                    packages: detect_changed_packages(&wt_path),
+                    packages: detect_changed_packages(&wt_path, !is_script_verifier),
                     ..verifier_config.clone()
                 }
             } else {
@@ -1990,7 +1994,7 @@ async fn process_issue_core(
         let verifier_start = std::time::Instant::now();
         let current_verifier_config = if config.verifier_packages.is_empty() {
             VerifierConfig {
-                packages: detect_changed_packages(&wt_path),
+                packages: detect_changed_packages(&wt_path, !is_script_verifier),
                 ..verifier_config.clone()
             }
         } else {
@@ -2023,7 +2027,7 @@ async fn process_issue_core(
         // --- Auto-fix: try to resolve trivial failures without LLM delegation ---
         let mut auto_fix_applied = false;
         if !report.all_green {
-            if let Some(fixed_report) = try_auto_fix(&wt_path, &verifier_config, iteration).await {
+            if let Some(fixed_report) = try_auto_fix(&wt_path, &verifier_config, iteration, &language_profile).await {
                 report = fixed_report;
                 auto_fix_applied = true;
                 metrics.record_auto_fix();
@@ -2186,7 +2190,7 @@ async fn process_issue_core(
                     // reflects the pre-regression error state, not the regressed state.
                     let rb_verifier_config = if config.verifier_packages.is_empty() {
                         VerifierConfig {
-                            packages: detect_changed_packages(&wt_path),
+                            packages: detect_changed_packages(&wt_path, !is_script_verifier),
                             ..verifier_config.clone()
                         }
                     } else {

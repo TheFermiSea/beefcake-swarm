@@ -309,7 +309,7 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
             // Grep the worktree for CamelCase identifiers from the objective.
             // The context packer's file_contexts only covers ~18 files (token budget)
             // and likely misses the target file in large workspaces (402 .rs files).
-            find_target_files_by_grep(wt_root, &packet.objective).unwrap_or_else(|| {
+            find_target_files_by_grep(wt_root, &packet.objective, &[]).unwrap_or_else(|| {
                 // Final fallback: first 3 file_contexts
                 packet
                     .file_contexts

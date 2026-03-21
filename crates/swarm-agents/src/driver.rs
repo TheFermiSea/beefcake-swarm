@@ -247,7 +247,7 @@ impl<'a> OrchestratorContext<'a> {
 
         // Verifier config
         let initial_packages = if config.verifier_packages.is_empty() {
-            detect_changed_packages(&wt_path)
+            detect_changed_packages(&wt_path, true)
         } else {
             config.verifier_packages.clone()
         };
@@ -428,7 +428,7 @@ pub async fn handle_planning(ctx: &mut OrchestratorContext<'_>) -> Result<StateT
         if let Some(ref report) = ctx.last_report {
             if !report.all_green {
                 if let Some(fixed_report) =
-                    try_auto_fix(&ctx.wt_path, &ctx.verifier_config, iteration).await
+                    try_auto_fix(&ctx.wt_path, &ctx.verifier_config, iteration, &None).await
                 {
                     if fixed_report.all_green {
                         info!(
@@ -892,7 +892,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
             let engine = EscalationEngine::new();
             let current_vc = if ctx.config.verifier_packages.is_empty() {
                 VerifierConfig {
-                    packages: detect_changed_packages(&ctx.wt_path),
+                    packages: detect_changed_packages(&ctx.wt_path, true),
                     ..ctx.verifier_config.clone()
                 }
             } else {
@@ -1028,7 +1028,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         let engine = EscalationEngine::new();
         let current_vc = if ctx.config.verifier_packages.is_empty() {
             VerifierConfig {
-                packages: detect_changed_packages(&ctx.wt_path),
+                packages: detect_changed_packages(&ctx.wt_path, true),
                 ..ctx.verifier_config.clone()
             }
         } else {
@@ -1075,7 +1075,7 @@ pub async fn handle_verifying(ctx: &mut OrchestratorContext<'_>) -> Result<State
     let verifier_start = Instant::now();
     let current_vc = if ctx.config.verifier_packages.is_empty() {
         VerifierConfig {
-            packages: detect_changed_packages(&ctx.wt_path),
+            packages: detect_changed_packages(&ctx.wt_path, true),
             ..ctx.verifier_config.clone()
         }
     } else {
@@ -1103,7 +1103,7 @@ pub async fn handle_verifying(ctx: &mut OrchestratorContext<'_>) -> Result<State
     ctx.auto_fix_applied = false;
     if !report.all_green {
         if let Some(fixed_report) =
-            try_auto_fix(&ctx.wt_path, &ctx.verifier_config, iteration).await
+            try_auto_fix(&ctx.wt_path, &ctx.verifier_config, iteration, &None).await
         {
             report = fixed_report;
             ctx.auto_fix_applied = true;
@@ -1148,7 +1148,7 @@ pub async fn handle_verifying(ctx: &mut OrchestratorContext<'_>) -> Result<State
                 if rolled_back {
                     let rb_vc = if ctx.config.verifier_packages.is_empty() {
                         VerifierConfig {
-                            packages: detect_changed_packages(&ctx.wt_path),
+                            packages: detect_changed_packages(&ctx.wt_path, true),
                             ..ctx.verifier_config.clone()
                         }
                     } else {
