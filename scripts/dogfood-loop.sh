@@ -270,7 +270,7 @@ with open('$jsonl_path') as f:
           log "  [run $run_num] Benchmark FAILED ($change_type) — creating regression issue"
           bd_cmd create \
             --title="BUG: Benchmark regression after $issue_id merge" \
-            --description="Post-merge $change_type benchmark failed after merging $issue_id (sha=$(git -C "$BD_RUN_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)). The change may have broken physics correctness. Check /cluster/shared/cf-libs-bench/repo/output/benchmark_gate/ for results." \
+            --description="Post-merge $change_type benchmark failed after merging $issue_id (sha=$(git -C "$BD_RUN_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown)). The change may have broken physics correctness. Check benchmark output on vasp-03 at /scratch/cf-libs-bench/repo/output/benchmark_gate/ for results." \
             --type=bug --priority=1 2>/dev/null || true
           FAIL_COUNT=$((FAIL_COUNT + 1))
         fi

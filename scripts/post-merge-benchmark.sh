@@ -26,7 +26,7 @@ set -euo pipefail
 
 # --- Configuration ---
 BENCH_HOST="${BENCH_HOST:-root@10.0.0.22}"
-BENCH_NFS_PATH="${BENCH_NFS_PATH:-/cluster/shared/cf-libs-bench/repo}"
+BENCH_NFS_PATH="${BENCH_NFS_PATH:-/scratch/cf-libs-bench/repo}"
 BENCH_DRAIN="${BENCH_DRAIN:-0}"
 BENCH_SKIP_SYNC="${BENCH_SKIP_SYNC:-0}"
 BENCH_TIMEOUT="${BENCH_TIMEOUT:-1800}"
