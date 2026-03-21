@@ -198,17 +198,19 @@ run_benchmark_on_host() {
   local git_sha="$2"
   local shared_gpu="${3:-1}"  # 1 = try shared GPU, 0 = exclusive
 
+  # JAX env vars go BEFORE timeout (not after — timeout treats its first
+  # non-option arg as the command to exec, so env vars after it fail).
   local jax_env="JAX_PLATFORMS=cuda"
   if [[ "$shared_gpu" == "1" ]]; then
     jax_env="$jax_env XLA_PYTHON_CLIENT_PREALLOCATE=false XLA_PYTHON_CLIENT_MEM_FRACTION=0.5"
   fi
 
-  local bench_cmd output_dir
+  local python_cmd output_dir
   output_dir="output/benchmark_gate/${git_sha}"
 
   case "$tier" in
     light)
-      bench_cmd="$jax_env ${BENCH_VENV}/bin/python scripts/run_unified_benchmark.py \
+      python_cmd="${BENCH_VENV}/bin/python scripts/run_unified_benchmark.py \
         --quick --max-outer-folds 1 \
         --sections all \
         --id-workflows alias comb \
@@ -218,7 +220,7 @@ run_benchmark_on_host() {
         --output-dir $output_dir"
       ;;
     heavy|nightly)
-      bench_cmd="$jax_env ${BENCH_VENV}/bin/python scripts/run_comprehensive_benchmark.py \
+      python_cmd="${BENCH_VENV}/bin/python scripts/run_comprehensive_benchmark.py \
         --db ASD_da/libs_production.db \
         --n-compositions 50 \
         --output-dir $output_dir"
@@ -234,7 +236,7 @@ run_benchmark_on_host() {
   local bench_output
   bench_output=$(ssh -o ConnectTimeout=10 "$BENCH_HOST" \
     "cd $BENCH_NFS_PATH && HOME=/tmp CUDA_CACHE_PATH=/tmp/cuda-cache \
-     timeout $BENCH_TIMEOUT $bench_cmd" 2>&1) || exit_code=$?
+     $jax_env timeout $BENCH_TIMEOUT $python_cmd" 2>&1) || exit_code=$?
 
   # Detect OOM
   if echo "$bench_output" | grep -qiE 'out.of.memory|OOM|RESOURCE_EXHAUSTED|XLA_PYTHON_CLIENT'; then
