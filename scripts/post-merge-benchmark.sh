@@ -210,13 +210,13 @@ run_benchmark_on_host() {
 
   case "$tier" in
     light)
-      # Use comprehensive benchmark with small N until unified benchmark
-      # KeyError:'alias' is fixed (CF-LIBS-yrp6). Swap back to:
-      #   run_unified_benchmark.py --quick --max-outer-folds 1 --sections all
-      #   --id-workflows alias comb --composition-workflows iterative
-      python_cmd="${BENCH_VENV}/bin/python scripts/run_comprehensive_benchmark.py \
-        --db ASD_da/libs_production.db \
-        --n-compositions 10 \
+      python_cmd="${BENCH_VENV}/bin/python scripts/run_unified_benchmark.py \
+        --quick --max-outer-folds 1 \
+        --sections all \
+        --id-workflows alias comb \
+        --composition-workflows iterative \
+        --db-path ASD_da/libs_production.db \
+        --data-dir data \
         --output-dir $output_dir"
       ;;
     heavy|nightly)
