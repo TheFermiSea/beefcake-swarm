@@ -144,6 +144,16 @@ impl WorktreeBridge {
         let wt_path = self.base_dir.join(&safe_id);
         let branch = format!("swarm/{safe_id}");
 
+        // Remove stale git lock files that prevent worktree/branch operations.
+        // These accumulate from crashed git processes or rapid retry cycles.
+        for lock_name in &["packed-refs.lock", "index.lock", "HEAD.lock"] {
+            let lock_path = self.repo_root.join(".git").join(lock_name);
+            if lock_path.exists() {
+                tracing::warn!(lock = %lock_path.display(), "Removing stale git lock file");
+                let _ = std::fs::remove_file(&lock_path);
+            }
+        }
+
         // Clean up stale worktree from a previous failed run.
         // Without this, the loop retries the same issue forever.
         if wt_path.exists() {
@@ -919,7 +929,9 @@ mod tests {
         assert!(list.iter().any(|w| w.branch == "swarm/test-issue"));
 
         // Creating the same one again should succeed (auto-cleans stale worktree)
-        let wt_path2 = bridge.create("test-issue").expect("re-create worktree after cleanup");
+        let wt_path2 = bridge
+            .create("test-issue")
+            .expect("re-create worktree after cleanup");
         assert!(wt_path2.exists());
     }
 
