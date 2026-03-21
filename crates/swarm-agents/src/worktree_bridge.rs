@@ -59,6 +59,25 @@ pub fn retry_git_command(args: &[&str], working_dir: &Path, max_retries: u32) ->
     unreachable!()
 }
 
+/// Remove stale git lock files from a repository's `.git/` directory.
+///
+/// Lock files accumulate from crashed git processes, rapid retry cycles, or
+/// concurrent dogfood runs. They block ALL git operations (branch -D, worktree
+/// add, etc.) with "Another git process seems to be running" errors.
+///
+/// Called before each lock-sensitive git operation rather than once at the top
+/// of `create()`, because intermediate operations (worktree remove, prune) can
+/// create new lock files.
+fn clean_git_locks(repo_root: &Path) {
+    for lock_name in &["packed-refs.lock", "index.lock", "HEAD.lock"] {
+        let lock_path = repo_root.join(".git").join(lock_name);
+        if lock_path.exists() {
+            tracing::warn!(lock = %lock_path.display(), "Removing stale git lock file");
+            let _ = std::fs::remove_file(&lock_path);
+        }
+    }
+}
+
 /// Manages git worktrees for swarm agent tasks.
 pub struct WorktreeBridge {
     base_dir: PathBuf,
@@ -144,15 +163,9 @@ impl WorktreeBridge {
         let wt_path = self.base_dir.join(&safe_id);
         let branch = format!("swarm/{safe_id}");
 
-        // Remove stale git lock files that prevent worktree/branch operations.
-        // These accumulate from crashed git processes or rapid retry cycles.
-        for lock_name in &["packed-refs.lock", "index.lock", "HEAD.lock"] {
-            let lock_path = self.repo_root.join(".git").join(lock_name);
-            if lock_path.exists() {
-                tracing::warn!(lock = %lock_path.display(), "Removing stale git lock file");
-                let _ = std::fs::remove_file(&lock_path);
-            }
-        }
+        // Clean locks before any git operations. Called multiple times because
+        // each git command can leave new stale locks if it crashes.
+        clean_git_locks(&self.repo_root);
 
         // Clean up stale worktree from a previous failed run.
         // Without this, the loop retries the same issue forever.
@@ -193,19 +206,26 @@ impl WorktreeBridge {
 
         let branch_list = String::from_utf8_lossy(&check_output.stdout);
         if !branch_list.trim().is_empty() {
-            // 3. If branch exists, delete it
+            // 3. If branch exists, delete it — clean locks first since worktree
+            //    remove/prune above may have left new stale lock files.
+            clean_git_locks(&self.repo_root);
             tracing::warn!(branch = %branch, "Branch already exists, deleting");
-            let del_output = Command::new("git")
-                .args(["branch", "-D", &branch])
-                .current_dir(&self.repo_root)
-                .output()
-                .context("Failed to delete existing branch")?;
+            let del_output = retry_git_command(
+                &["branch", "-D", &branch],
+                &self.repo_root,
+                3,
+            )
+            .context("Failed to delete existing branch")?;
 
             if !del_output.status.success() {
                 let stderr = String::from_utf8_lossy(&del_output.stderr);
                 bail!("Failed to delete existing branch {branch}: {stderr}");
             }
         }
+
+        // Clean locks again before worktree add — branch -D above may have
+        // left new lock files if it needed retries.
+        clean_git_locks(&self.repo_root);
 
         let wt_path_str = wt_path.display().to_string();
         let output = retry_git_command(
