@@ -392,33 +392,47 @@ pub fn parse_subtask_plan(raw: &str) -> Result<SubtaskPlan> {
 
     // Validate: integration files appear in at most one subtask.
     if plan.subtasks.len() > 1 {
-        validate_integration_files(&plan)?;
+        validate_integration_files(&plan, None)?;
     }
 
     Ok(plan)
 }
 
-/// Well-known integration files that should only appear in one subtask.
-const INTEGRATION_FILE_PATTERNS: &[&str] =
+/// Default integration files for Rust projects (used when no profile is loaded).
+const DEFAULT_INTEGRATION_FILES: &[&str] =
     &["Cargo.toml", "Cargo.lock", "mod.rs", "lib.rs", "main.rs"];
 
 /// Check if a filename matches an integration file pattern.
-fn is_integration_file(path: &str) -> bool {
+///
+/// Uses profile `integration_files` when available, falls back to Rust defaults.
+fn is_integration_file(path: &str, profile_files: Option<&[String]>) -> bool {
     let filename = std::path::Path::new(path)
         .file_name()
         .and_then(|f| f.to_str())
         .unwrap_or(path);
-    INTEGRATION_FILE_PATTERNS.contains(&filename)
+    match profile_files {
+        Some(files) => files.iter().any(|f| {
+            let f_name = std::path::Path::new(f)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(f);
+            filename == f_name
+        }),
+        None => DEFAULT_INTEGRATION_FILES.contains(&filename),
+    }
 }
 
 /// Validate that integration files appear in at most one subtask.
-fn validate_integration_files(plan: &SubtaskPlan) -> Result<()> {
+fn validate_integration_files(
+    plan: &SubtaskPlan,
+    profile_files: Option<&[String]>,
+) -> Result<()> {
     let mut integration_owners: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
     for subtask in &plan.subtasks {
         for file in &subtask.target_files {
-            if is_integration_file(file) {
+            if is_integration_file(file, profile_files) {
                 if let Some(owner) = integration_owners.get(file) {
                     anyhow::bail!(
                         "integration file {file} appears in both {owner} and {} — \
@@ -1015,14 +1029,30 @@ mod tests {
     }
 
     #[test]
-    fn integration_file_detection() {
-        assert!(is_integration_file("Cargo.toml"));
-        assert!(is_integration_file("src/mod.rs"));
-        assert!(is_integration_file("crates/foo/src/lib.rs"));
-        assert!(is_integration_file("src/main.rs"));
-        assert!(is_integration_file("Cargo.lock"));
-        assert!(!is_integration_file("src/parser.rs"));
-        assert!(!is_integration_file("src/config.rs"));
+    fn integration_file_detection_default() {
+        // Default (Rust) integration files
+        assert!(is_integration_file("Cargo.toml", None));
+        assert!(is_integration_file("src/mod.rs", None));
+        assert!(is_integration_file("crates/foo/src/lib.rs", None));
+        assert!(is_integration_file("src/main.rs", None));
+        assert!(is_integration_file("Cargo.lock", None));
+        assert!(!is_integration_file("src/parser.rs", None));
+        assert!(!is_integration_file("src/config.rs", None));
+    }
+
+    #[test]
+    fn integration_file_detection_python() {
+        let python_files = vec![
+            "pyproject.toml".to_string(),
+            "conftest.py".to_string(),
+            "__init__.py".to_string(),
+        ];
+        assert!(is_integration_file("pyproject.toml", Some(&python_files)));
+        assert!(is_integration_file("cflibs/__init__.py", Some(&python_files)));
+        assert!(is_integration_file("tests/conftest.py", Some(&python_files)));
+        assert!(!is_integration_file("cflibs/plasma/state.py", Some(&python_files)));
+        // Rust files should NOT match Python profile
+        assert!(!is_integration_file("Cargo.toml", Some(&python_files)));
     }
 
     #[test]

@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -258,7 +258,7 @@ async fn main() -> Result<()> {
             }
         } else {
             // Try fetching from beads/bdh for rich title + description
-            match show_issue(issue_id) {
+            match show_issue(issue_id, args.repo_root.as_deref()) {
                 Ok(mut issue) => {
                     issue.status = "open".to_string(); // ensure processable
                     issue
@@ -344,7 +344,7 @@ async fn main() -> Result<()> {
         let mut batch: Vec<BeadsIssue> = Vec::new();
         // Cap at parallel_issues to avoid overwhelming the cluster (Issue 6 fix).
         for id in args.issues.iter().take(config.parallel_issues) {
-            match show_issue(id) {
+            match show_issue(id, args.repo_root.as_deref()) {
                 Ok(issue) => batch.push(issue),
                 Err(e) => {
                     warn!(id = %id, error = %e, "Could not fetch issue details — skipping");
@@ -366,8 +366,8 @@ async fn main() -> Result<()> {
         .await?;
     } else if let Ok(target_id) = std::env::var("SWARM_ISSUE") {
         // Branch 3: SWARM_ISSUE env var — fetch specific issue from beads/bdh
-        let tracker = new_tracker();
-        let issue = match show_issue(&target_id) {
+        let tracker = new_tracker(args.repo_root.as_deref());
+        let issue = match show_issue(&target_id, args.repo_root.as_deref()) {
             Ok(i) => i,
             Err(e) => {
                 error!(target_id = %target_id, error = %e, "SWARM_ISSUE not found");
@@ -397,7 +397,7 @@ async fn main() -> Result<()> {
         }
     } else {
         // Branch 4: Default — claim up to parallel_issues from beads/bdh and fan-out
-        let tracker = new_tracker();
+        let tracker = new_tracker(args.repo_root.as_deref());
         let issues = match tracker.list_ready() {
             Ok(issues) => issues,
             Err(e) => {
@@ -523,7 +523,7 @@ async fn dispatch_parallel_issues(
             let factory_clone = factory.clone();
             let config_clone = config.clone();
             let wb_clone = Arc::clone(worktree_bridge);
-            let beads_clone = new_tracker();
+            let beads_clone = new_tracker(Some(worktree_bridge.repo_root()));
             let kb_clone = knowledge_base.clone();
             let rt = rt_handle.clone();
             let cancel = Arc::clone(&cancel_flag);
@@ -595,13 +595,23 @@ async fn dispatch_parallel_issues(
 }
 
 /// Create the issue tracker (always uses native `bd` CLI).
-fn new_tracker() -> Box<dyn IssueTracker> {
-    Box::new(BeadsBridge::new())
+///
+/// When `repo_root` is provided (via `--repo-root`), the tracker runs `bd`
+/// commands in that directory so it accesses the target repo's `.beads/`
+/// database instead of the CWD's.
+fn new_tracker(repo_root: Option<&Path>) -> Box<dyn IssueTracker> {
+    match repo_root {
+        Some(path) => Box::new(BeadsBridge::with_worktree(path)),
+        None => Box::new(BeadsBridge::new()),
+    }
 }
 
 /// Look up a single issue by ID via `bd show`.
-fn show_issue(id: &str) -> Result<BeadsIssue> {
-    BeadsBridge::new().show(id)
+fn show_issue(id: &str, repo_root: Option<&Path>) -> Result<BeadsIssue> {
+    match repo_root {
+        Some(path) => BeadsBridge::with_worktree(path).show(id),
+        None => BeadsBridge::new().show(id),
+    }
 }
 
 async fn shutdown_signal() {
