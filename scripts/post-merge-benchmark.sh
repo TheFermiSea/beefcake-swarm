@@ -234,8 +234,15 @@ run_benchmark_on_host() {
   log "Running $tier benchmark on $BENCH_HOST (shared_gpu=$shared_gpu)..."
   local exit_code=0
   local bench_output
+
+  # Build LD_LIBRARY_PATH for pip-installed NVIDIA CUDA packages.
+  # JAX's cuda12 plugin needs cuSPARSE, cuBLAS, etc. at runtime.
+  local nvidia_ld_path
+  nvidia_ld_path="\$(echo ${BENCH_VENV}/lib*/python*/site-packages/nvidia/*/lib/ | tr ' ' ':')"
+
   bench_output=$(ssh -o ConnectTimeout=10 "$BENCH_HOST" \
     "cd $BENCH_NFS_PATH && HOME=/tmp CUDA_CACHE_PATH=/tmp/cuda-cache \
+     LD_LIBRARY_PATH=$nvidia_ld_path:\$LD_LIBRARY_PATH \
      $jax_env timeout $BENCH_TIMEOUT $python_cmd" 2>&1) || exit_code=$?
 
   # Detect OOM
