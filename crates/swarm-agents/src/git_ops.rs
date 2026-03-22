@@ -268,6 +268,43 @@ pub(crate) fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
     }
 }
 
+/// Get a compact summary of uncommitted changes for cross-worker context.
+///
+/// Returns a markdown-formatted list of changed files with +/- line counts.
+/// Used by the ClawTeam-style context sharing: workers see what previous
+/// iterations changed so they don't undo or duplicate work.
+///
+/// Returns empty string if no changes or git fails.
+pub(crate) fn diff_stat_summary(wt_path: &Path) -> String {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--stat", "--stat-width=60", "HEAD"])
+        .current_dir(wt_path)
+        .output();
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            let trimmed = stdout.trim();
+            if trimmed.is_empty() {
+                return String::new();
+            }
+            // Truncate to ~10 most-changed files to stay within prompt budget
+            let lines: Vec<&str> = trimmed.lines().collect();
+            if lines.len() <= 11 {
+                trimmed.to_string()
+            } else {
+                // Keep first 10 file lines + the summary line (last line)
+                let mut result: Vec<&str> = lines[..10].to_vec();
+                result.push("...");
+                if let Some(last) = lines.last() {
+                    result.push(last);
+                }
+                result.join("\n")
+            }
+        }
+        _ => String::new(),
+    }
+}
+
 /// Collect artifact records from the git diff between two commits.
 ///
 /// Parses `git diff --numstat` to determine which files were added, modified,

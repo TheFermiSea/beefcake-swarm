@@ -1227,12 +1227,22 @@ async fn process_issue_core(
             }
         }
 
-        // --- Work plan context injection (ClawTeam pattern) ---
-        // If the manager submitted a plan on a previous iteration, inject it
-        // as context so the strategy stays consistent across retries.
+        // --- Cross-worker context injection (ClawTeam adoption #3) ---
+        // On iteration 2+, inject: (a) the work plan from iteration 1, and
+        // (b) a git diff --stat summary showing what previous iterations changed.
+        // This prevents workers from undoing each other's work and keeps the
+        // strategy visible across retries.
         if iteration > 1 {
             if let Some(ref plan) = work_plan_slot.lock().ok().and_then(|s| s.clone()) {
                 task_prompt.push_str(&crate::tools::submit_plan_tool::format_plan_context(plan));
+            }
+            let diff_summary = crate::git_ops::diff_stat_summary(&wt_path);
+            if !diff_summary.is_empty() {
+                task_prompt.push_str("## Changes from Previous Iterations\n\n");
+                task_prompt.push_str("_Files modified by earlier workers. Build on these changes — do not revert them unless they caused the current error._\n\n");
+                task_prompt.push_str("```\n");
+                task_prompt.push_str(&diff_summary);
+                task_prompt.push_str("\n```\n\n");
             }
         }
 
