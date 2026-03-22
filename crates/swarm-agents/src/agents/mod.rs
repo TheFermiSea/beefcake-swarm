@@ -393,8 +393,12 @@ impl AgentFactory {
             );
 
             let (rev_client, rev_model) = self.resolve_role_endpoint(SwarmRole::Reviewer);
-            let reviewer =
-                reviewer::build_reviewer_named(&rev_client, &rev_model, "proxy_reviewer", Some(wt_path));
+            let reviewer = reviewer::build_reviewer_named(
+                &rev_client,
+                &rev_model,
+                "proxy_reviewer",
+                Some(wt_path),
+            );
 
             let (reas_client, reas_model) = self.resolve_role_endpoint(SwarmRole::ReasoningWorker);
             let reasoning_worker = coder::build_reasoning_worker_named(
@@ -515,7 +519,12 @@ impl AgentFactory {
         );
 
         let (rev_client, rev_model) = self.resolve_role_endpoint(SwarmRole::Reviewer);
-        let reviewer = reviewer::build_reviewer_named(&rev_client, &rev_model, "proxy_reviewer", Some(wt_path));
+        let reviewer = reviewer::build_reviewer_named(
+            &rev_client,
+            &rev_model,
+            "proxy_reviewer",
+            Some(wt_path),
+        );
 
         let (reas_client, reas_model) = self.resolve_role_endpoint(SwarmRole::ReasoningWorker);
         let reasoning_worker = coder::build_reasoning_worker_named(

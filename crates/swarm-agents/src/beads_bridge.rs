@@ -227,6 +227,32 @@ impl BeadsBridge {
         Ok(child_ids)
     }
 
+    /// Update an issue's description text.
+    ///
+    /// Maps to `bd update <id> --description="..."`.
+    /// Used by the reformulation engine to rewrite malformed task descriptions.
+    pub fn update_description(&self, id: &str, description: &str) -> Result<()> {
+        self.run_bd_ok(&["update", id, &format!("--description={description}")])?;
+        Ok(())
+    }
+
+    /// Append notes to an issue.
+    ///
+    /// Maps to `bd update <id> --notes="..."`.
+    /// Used by the reformulation engine to add learned directives.
+    pub fn update_notes(&self, id: &str, notes: &str) -> Result<()> {
+        self.run_bd_ok(&["update", id, &format!("--notes={notes}")])?;
+        Ok(())
+    }
+
+    /// Add a label to an issue (convenience re-export for reformulation engine).
+    ///
+    /// Used to tag issues with `swarm:needs-human-review` when reformulation
+    /// is exhausted.
+    pub fn add_swarm_label(&self, id: &str, label: &str) -> Result<()> {
+        self.add_label(id, label)
+    }
+
     /// Look up a single issue by ID.
     pub fn show(&self, id: &str) -> Result<BeadsIssue> {
         let stdout = self.run_bd_ok(&["show", id, "--json"])?;

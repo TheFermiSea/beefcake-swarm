@@ -210,12 +210,8 @@ impl WorktreeBridge {
             //    remove/prune above may have left new stale lock files.
             clean_git_locks(&self.repo_root);
             tracing::warn!(branch = %branch, "Branch already exists, deleting");
-            let del_output = retry_git_command(
-                &["branch", "-D", &branch],
-                &self.repo_root,
-                3,
-            )
-            .context("Failed to delete existing branch")?;
+            let del_output = retry_git_command(&["branch", "-D", &branch], &self.repo_root, 3)
+                .context("Failed to delete existing branch")?;
 
             if !del_output.status.success() {
                 let stderr = String::from_utf8_lossy(&del_output.stderr);

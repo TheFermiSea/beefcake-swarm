@@ -184,7 +184,11 @@ pub fn build_reasoning_worker_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::load_prompt("reasoning_worker", wt_path, prompts::REASONING_WORKER_PREAMBLE);
+    let preamble = prompts::load_prompt(
+        "reasoning_worker",
+        wt_path,
+        prompts::REASONING_WORKER_PREAMBLE,
+    );
     client
         .agent(model)
         .name(name)
@@ -212,7 +216,11 @@ pub fn build_strategist_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::load_prompt("reasoning_worker", wt_path, prompts::REASONING_WORKER_PREAMBLE);
+    let preamble = prompts::load_prompt(
+        "reasoning_worker",
+        wt_path,
+        prompts::REASONING_WORKER_PREAMBLE,
+    );
     client
         .agent(model)
         .name(name)

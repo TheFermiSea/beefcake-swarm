@@ -265,8 +265,8 @@ impl MutationArchive {
         // Strategy advice from successful runs
         let successful: Vec<&MutationRecord> = records.iter().filter(|r| r.resolved).collect();
         if !successful.is_empty() {
-            let avg_iter: f64 =
-                successful.iter().map(|r| r.iterations as f64).sum::<f64>() / successful.len() as f64;
+            let avg_iter: f64 = successful.iter().map(|r| r.iterations as f64).sum::<f64>()
+                / successful.len() as f64;
             if avg_iter <= 2.0 {
                 parts.push(
                     "Strategy: past fixes resolved quickly (<=2 iterations). \
@@ -285,10 +285,7 @@ impl MutationArchive {
         let failed: Vec<&MutationRecord> = records.iter().filter(|r| !r.resolved).collect();
         if !failed.is_empty() {
             // Check common failure reasons
-            let timeout_count = failed
-                .iter()
-                .filter(|r| r.iterations >= 10)
-                .count();
+            let timeout_count = failed.iter().filter(|r| r.iterations >= 10).count();
             if timeout_count > failed.len() / 2 {
                 parts.push(
                     "WARNING: Most past failures exhausted all iterations. \
@@ -356,6 +353,7 @@ impl std::fmt::Display for ArchiveSummary {
 ///
 /// This is the main entry point called from the orchestrator at each
 /// success/failure exit point.
+#[allow(clippy::too_many_arguments)]
 pub fn build_record(
     issue_id: &str,
     issue_title: &str,

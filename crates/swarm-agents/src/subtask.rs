@@ -423,10 +423,7 @@ fn is_integration_file(path: &str, profile_files: Option<&[String]>) -> bool {
 }
 
 /// Validate that integration files appear in at most one subtask.
-fn validate_integration_files(
-    plan: &SubtaskPlan,
-    profile_files: Option<&[String]>,
-) -> Result<()> {
+fn validate_integration_files(plan: &SubtaskPlan, profile_files: Option<&[String]>) -> Result<()> {
     let mut integration_owners: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
@@ -1048,9 +1045,18 @@ mod tests {
             "__init__.py".to_string(),
         ];
         assert!(is_integration_file("pyproject.toml", Some(&python_files)));
-        assert!(is_integration_file("cflibs/__init__.py", Some(&python_files)));
-        assert!(is_integration_file("tests/conftest.py", Some(&python_files)));
-        assert!(!is_integration_file("cflibs/plasma/state.py", Some(&python_files)));
+        assert!(is_integration_file(
+            "cflibs/__init__.py",
+            Some(&python_files)
+        ));
+        assert!(is_integration_file(
+            "tests/conftest.py",
+            Some(&python_files)
+        ));
+        assert!(!is_integration_file(
+            "cflibs/plasma/state.py",
+            Some(&python_files)
+        ));
         // Rust files should NOT match Python profile
         assert!(!is_integration_file("Cargo.toml", Some(&python_files)));
     }

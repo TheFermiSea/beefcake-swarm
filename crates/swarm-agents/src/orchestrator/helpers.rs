@@ -330,6 +330,38 @@ pub(crate) fn load_directives(repo_root: &Path) -> Vec<String> {
     directives
 }
 
+// ── Reformulation helpers ────────────────────────────────────────────
+
+/// Load failure ledger entries from a worktree's `.swarm-failure-ledger.jsonl`.
+pub(crate) fn load_failure_ledger(
+    worktree_path: &Path,
+) -> Vec<crate::telemetry::FailureLedgerEntry> {
+    let path = worktree_path.join(".swarm-failure-ledger.jsonl");
+    match std::fs::read_to_string(&path) {
+        Ok(content) => content
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect(),
+        Err(_) => Vec::new(),
+    }
+}
+
+/// List files changed in the worktree relative to main (via `git diff --name-only`).
+pub(crate) fn list_changed_files(worktree_path: &Path) -> Vec<String> {
+    match std::process::Command::new("git")
+        .args(["diff", "--name-only", "main"])
+        .current_dir(worktree_path)
+        .output()
+    {
+        Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter(|l| !l.is_empty())
+            .map(|l| l.to_string())
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

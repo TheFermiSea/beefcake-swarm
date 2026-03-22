@@ -1585,10 +1585,7 @@ impl ScriptVerifier {
                     error_count: 1,
                     warning_count: 0,
                     errors: vec![],
-                    stderr_excerpt: Some(format!(
-                        "Gate timed out after {}s",
-                        gate.timeout_secs
-                    )),
+                    stderr_excerpt: Some(format!("Gate timed out after {}s", gate.timeout_secs)),
                 }
             }
         }

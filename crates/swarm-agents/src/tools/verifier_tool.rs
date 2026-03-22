@@ -76,7 +76,7 @@ impl Tool for RunVerifierTool {
         };
         ToolDefinition {
             name: "run_verifier".into(),
-            description: desc.into(),
+            description: desc,
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
@@ -105,7 +105,9 @@ impl Tool for RunVerifierTool {
                     _ => VerifierConfig::default(),
                 };
                 config.packages = self.packages.clone();
-                Verifier::new(&self.working_dir, config).run_pipeline().await
+                Verifier::new(&self.working_dir, config)
+                    .run_pipeline()
+                    .await
             }
         } else {
             let mut config = match args.mode.as_deref() {
@@ -114,7 +116,9 @@ impl Tool for RunVerifierTool {
                 _ => VerifierConfig::default(),
             };
             config.packages = self.packages.clone();
-            Verifier::new(&self.working_dir, config).run_pipeline().await
+            Verifier::new(&self.working_dir, config)
+                .run_pipeline()
+                .await
         };
 
         // Return the summary as a string for the agent to reason about

@@ -66,6 +66,23 @@ struct CliArgs {
     /// When omitted the default implement→verify loop is used.
     #[arg(long, value_enum)]
     mode: Option<SwarmMode>,
+
+    /// Subcommand for specialized operations.
+    #[command(subcommand)]
+    command: Option<SubCommand>,
+}
+
+#[derive(clap::Subcommand, Debug)]
+enum SubCommand {
+    /// Pick the next workable issue from beads, filtering through reformulation state.
+    ///
+    /// Outputs a JSON object with the selected issue, or exits with code 1 if none available.
+    /// Used by dogfood-loop.sh to replace bash-side `bd ready` parsing.
+    PickNext {
+        /// Output as JSON (default: true).
+        #[arg(long, default_value_t = true)]
+        json: bool,
+    },
 }
 
 #[tokio::main]
@@ -77,6 +94,11 @@ async fn main() -> Result<()> {
         .init();
 
     let args = CliArgs::parse();
+
+    // --- Handle subcommands before full orchestrator initialization ---
+    if let Some(SubCommand::PickNext { json: _ }) = &args.command {
+        return handle_pick_next(args.repo_root.as_deref());
+    }
 
     let mut config = SwarmConfig::default();
 
@@ -612,6 +634,55 @@ fn show_issue(id: &str, repo_root: Option<&Path>) -> Result<BeadsIssue> {
         Some(path) => BeadsBridge::with_worktree(path).show(id),
         None => BeadsBridge::new().show(id),
     }
+}
+
+/// Handle the `pick-next` subcommand: select the next workable issue from beads,
+/// filtering through reformulation state to skip exhausted issues.
+///
+/// Outputs a JSON object on stdout. Exits with code 1 if no workable issue found.
+fn handle_pick_next(repo_root: Option<&Path>) -> Result<()> {
+    let repo_root = match repo_root {
+        Some(p) => p
+            .canonicalize()
+            .context("--repo-root path does not exist")?,
+        None => std::env::current_dir()?,
+    };
+
+    let tracker = new_tracker(Some(&repo_root));
+    let issues = match tracker.list_ready() {
+        Ok(issues) => issues,
+        Err(e) => {
+            eprintln!("Failed to query issues: {e}");
+            std::process::exit(1);
+        }
+    };
+
+    if issues.is_empty() {
+        eprintln!("No ready issues");
+        std::process::exit(1);
+    }
+
+    // Sort by priority then complexity (same as main orchestrator)
+    let mut sorted = issues;
+    sorted.sort_by_key(|i| (i.priority.unwrap_or(4), i.swarm_complexity_rank()));
+
+    // Filter through reformulation state
+    let store = swarm_agents::reformulation::ReformulationStore::new(&repo_root);
+    for candidate in &sorted {
+        if let Some(reason) = swarm_agents::reformulation::should_skip_issue(&store, &candidate.id)
+        {
+            eprintln!("Skipping {}: {reason}", candidate.id);
+            continue;
+        }
+
+        // Found a workable issue — output as JSON
+        let json = serde_json::to_string_pretty(candidate).context("Failed to serialize issue")?;
+        println!("{json}");
+        return Ok(());
+    }
+
+    eprintln!("All ready issues are exhausted or need human review");
+    std::process::exit(1);
 }
 
 async fn shutdown_signal() {

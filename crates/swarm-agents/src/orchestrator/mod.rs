@@ -116,7 +116,9 @@ async fn run_verifier_opts(
         if !profile.is_rust() {
             let mut profile = profile.clone();
             if skip_test {
-                profile.gates.retain(|g| !g.name.eq_ignore_ascii_case("test"));
+                profile
+                    .gates
+                    .retain(|g| !g.name.eq_ignore_ascii_case("test"));
             }
             let script_verifier = ScriptVerifier::new(wt_path, profile);
             return script_verifier.run_pipeline().await;
@@ -293,9 +295,7 @@ async fn process_issue_core(
     // use ScriptVerifier (shell commands) instead of the built-in Rust Verifier.
     // When absent or language="rust", behavior is unchanged.
     let language_profile = LanguageProfile::load(&wt_path);
-    let is_script_verifier = language_profile
-        .as_ref()
-        .is_some_and(|p| !p.is_rust());
+    let is_script_verifier = language_profile.as_ref().is_some_and(|p| !p.is_rust());
 
     if is_script_verifier {
         info!(
@@ -311,6 +311,18 @@ async fn process_issue_core(
         .as_ref()
         .map(|p| p.language.clone())
         .unwrap_or_else(|| "rust".to_string());
+
+    // --- Intent contract (reformulation engine: Phase 1) ---
+    // Capture the original task goal on first pickup so reformulations can't
+    // silently weaken it. The contract is append-only (first attempt only).
+    let reformulation_store =
+        crate::reformulation::ReformulationStore::new(worktree_bridge.repo_root());
+    let intent_contract = crate::reformulation::IntentContract::from_issue(
+        &issue.id,
+        &issue.title,
+        issue.description.as_deref(),
+    );
+    reformulation_store.save_contract(&intent_contract);
 
     // --- Initialize harness components ---
     let mut session = SessionManager::new(wt_path.clone(), config.max_retries);
@@ -571,7 +583,8 @@ async fn process_issue_core(
             .as_ref()
             .map(|p| p.source_extensions.clone())
             .unwrap_or_default();
-        let target_files = crate::file_targeting::find_target_files_by_grep(&wt_path, &issue.title, &src_exts);
+        let target_files =
+            crate::file_targeting::find_target_files_by_grep(&wt_path, &issue.title, &src_exts);
 
         // Plan subtasks.
         let plan_result = crate::subtask::plan_subtasks(
@@ -781,7 +794,8 @@ async fn process_issue_core(
                     match rig::completion::Prompt::prompt(&fixer, &fixer_prompt).await {
                         Ok(_response) => {
                             info!(id = %issue.id, "Serial fixer post-pass completed — re-running verifier");
-                            let report2 = run_verifier(&wt_path, &verifier_config, &language_profile).await;
+                            let report2 =
+                                run_verifier(&wt_path, &verifier_config, &language_profile).await;
 
                             if report2.all_green {
                                 info!(
@@ -885,7 +899,8 @@ async fn process_issue_core(
             check_test: false, // Skip tests — worktree env can cause false failures
             ..verifier_config.clone()
         };
-        let baseline_report = run_verifier_opts(&wt_path, &baseline_config, &language_profile, true).await;
+        let baseline_report =
+            run_verifier_opts(&wt_path, &baseline_config, &language_profile, true).await;
         let gates_passed = baseline_report
             .gates
             .iter()
@@ -934,7 +949,10 @@ async fn process_issue_core(
             info!(
                 attempts = summary.total_attempts,
                 resolved = summary.resolved,
-                rate = format!("{:.0}%", summary.resolved as f64 / summary.total_attempts as f64 * 100.0),
+                rate = format!(
+                    "{:.0}%",
+                    summary.resolved as f64 / summary.total_attempts as f64 * 100.0
+                ),
                 "Mutation archive: prior history available"
             );
         }
@@ -1544,7 +1562,8 @@ async fn process_issue_core(
                     } else {
                         verifier_config.clone()
                     };
-                    let report = run_verifier(&wt_path, &current_verifier_config, &language_profile).await;
+                    let report =
+                        run_verifier(&wt_path, &current_verifier_config, &language_profile).await;
 
                     if report.all_green {
                         info!(
@@ -1717,7 +1736,8 @@ async fn process_issue_core(
                 } else {
                     verifier_config.clone()
                 };
-                let report = run_verifier(&wt_path, &current_verifier_config, &language_profile).await;
+                let report =
+                    run_verifier(&wt_path, &current_verifier_config, &language_profile).await;
 
                 // Compile-clean short-circuit on agent failure path:
                 // The agent may have been terminated by the adapter (repeated edit failure,
@@ -2101,7 +2121,9 @@ async fn process_issue_core(
         // --- Auto-fix: try to resolve trivial failures without LLM delegation ---
         let mut auto_fix_applied = false;
         if !report.all_green {
-            if let Some(fixed_report) = try_auto_fix(&wt_path, &verifier_config, iteration, &language_profile).await {
+            if let Some(fixed_report) =
+                try_auto_fix(&wt_path, &verifier_config, iteration, &language_profile).await
+            {
                 report = fixed_report;
                 auto_fix_applied = true;
                 metrics.record_auto_fix();
@@ -2270,7 +2292,8 @@ async fn process_issue_core(
                     } else {
                         verifier_config.clone()
                     };
-                    let rb_report = run_verifier(&wt_path, &rb_verifier_config, &language_profile).await;
+                    let rb_report =
+                        run_verifier(&wt_path, &rb_verifier_config, &language_profile).await;
                     info!(
                         iteration,
                         rollback_errors = rb_report.failure_signals.len(),
@@ -2774,6 +2797,83 @@ async fn process_issue_core(
         save_directives(worktree_bridge.repo_root(), &directives);
     }
 
+    // --- Post-session: reformulation engine (self-correcting task rewrite) ---
+    //
+    // If the session failed, classify WHY and potentially rewrite the issue
+    // description so the next attempt has a solvable formulation. This replaces
+    // the bash postmortem-review.sh approach with Rust-native, rule-based logic.
+    if !success {
+        // Load failure ledger entries from the worktree
+        let failure_ledger = helpers::load_failure_ledger(&wt_path);
+        let files_changed = helpers::list_changed_files(&wt_path);
+        let error_cats: Vec<String> = last_report
+            .as_ref()
+            .map(|r| {
+                r.unique_error_categories()
+                    .iter()
+                    .map(|c| format!("{c:?}"))
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        let review_input = crate::reformulation::FailureReviewInput {
+            issue_id: issue.id.clone(),
+            issue_title: issue.title.clone(),
+            issue_description: issue.description.clone(),
+            failure_ledger,
+            iterations_used: session.iteration(),
+            max_iterations: config.max_retries,
+            files_changed,
+            error_categories: error_cats,
+            failure_reason: Some(escalation.summary()),
+        };
+
+        let result = crate::reformulation::reformulate(&reformulation_store, &review_input);
+
+        // Apply the reformulation result to the bead
+        let bridge = crate::beads_bridge::BeadsBridge::new();
+
+        if let Some(ref new_desc) = result.new_description {
+            match bridge.update_description(&issue.id, new_desc) {
+                Ok(()) => info!(
+                    id = %issue.id,
+                    classification = ?result.classification,
+                    "Reformulated issue description"
+                ),
+                Err(e) => warn!(
+                    id = %issue.id,
+                    error = %e,
+                    "Failed to update issue description (reformulation not applied)"
+                ),
+            }
+        }
+
+        if let Some(ref notes) = result.notes_appended {
+            if let Err(e) = bridge.update_notes(&issue.id, notes) {
+                warn!(
+                    id = %issue.id,
+                    error = %e,
+                    "Failed to append reformulation notes"
+                );
+            }
+        }
+
+        if result.escalated {
+            // Label the issue for human review instead of deferring
+            let _ = bridge.add_swarm_label(&issue.id, "swarm:needs-human-review");
+            warn!(
+                id = %issue.id,
+                "Reformulation exhausted — labeled for human review"
+            );
+        }
+
+        // Reset issue to open so the next loop iteration picks it up
+        // (with the rewritten description)
+        if !result.escalated {
+            let _ = beads.update_status(&issue.id, "open");
+        }
+    }
+
     // --- Write telemetry ---
     let final_tier = format!("{:?}", escalation.current_tier);
     let session_metrics = metrics.finalize(success, &final_tier);
@@ -2948,7 +3048,7 @@ async fn process_issue_core(
             let stat = String::from_utf8_lossy(&output.stdout);
             for line in stat.lines() {
                 if line.contains("insertion") {
-                    if let Some(n) = line.split_whitespace().nth(0).and_then(|s| s.parse().ok()) {
+                    if let Some(n) = line.split_whitespace().next().and_then(|s| s.parse().ok()) {
                         record.lines_added = n;
                     }
                 }

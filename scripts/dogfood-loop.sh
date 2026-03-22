@@ -389,17 +389,29 @@ if [[ "$PARALLEL" -le 1 ]]; then
         ISSUE_ID="${ISSUES[$IDX]}"
       fi
     else
-      # Pick from ready issues, skipping any that have hit the circuit breaker.
+      # Pick from ready issues using Rust-native reformulation-aware selection.
+      # Falls back to bash circuit breaker if `swarm-agents pick-next` is unavailable.
       ISSUE_ID=""
-      while IFS= read -r candidate; do
-        [[ -z "$candidate" ]] && continue
-        if issue_is_exhausted "$candidate"; then
-          defer_exhausted_issue "$candidate" "$MAX_ISSUE_FAILURES"
-          continue
+      PICK_NEXT_JSON=$(cargo run -p swarm-agents --quiet -- pick-next --json 2>/dev/null || true)
+      if [[ -n "$PICK_NEXT_JSON" ]]; then
+        ISSUE_ID=$(echo "$PICK_NEXT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
+        if [[ -n "$ISSUE_ID" ]]; then
+          log "  pick-next selected: $ISSUE_ID"
         fi
-        ISSUE_ID="$candidate"
-        break
-      done < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+      fi
+
+      # Fallback: bash-side circuit breaker (if pick-next unavailable or returned nothing)
+      if [[ -z "$ISSUE_ID" ]]; then
+        while IFS= read -r candidate; do
+          [[ -z "$candidate" ]] && continue
+          if issue_is_exhausted "$candidate"; then
+            defer_exhausted_issue "$candidate" "$MAX_ISSUE_FAILURES"
+            continue
+          fi
+          ISSUE_ID="$candidate"
+          break
+        done < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+      fi
 
       if [[ -z "$ISSUE_ID" ]]; then
         if [[ "$DISCOVER" -eq 1 ]]; then

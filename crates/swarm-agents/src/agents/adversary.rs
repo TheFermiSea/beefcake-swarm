@@ -52,7 +52,11 @@ pub fn build_breaker_named(
         .description(
             "Adversarial red-team agent. Generates edge-case tests to break implementations.",
         )
-        .preamble(&prompts::load_prompt("breaker", wt_path, prompts::BREAKER_PREAMBLE))
+        .preamble(&prompts::load_prompt(
+            "breaker",
+            wt_path,
+            prompts::BREAKER_PREAMBLE,
+        ))
         .temperature(0.4)
         .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(

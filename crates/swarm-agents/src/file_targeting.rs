@@ -127,7 +127,11 @@ pub(crate) fn find_target_files_by_grep(
                 score += 2;
             } else if f.starts_with("patches/") {
                 score = score.saturating_sub(2);
-            } else if f.contains("/tests/") || f.contains("test_") || f.ends_with("_test.rs") || f.ends_with("_tests.rs") {
+            } else if f.contains("/tests/")
+                || f.contains("test_")
+                || f.ends_with("_test.rs")
+                || f.ends_with("_tests.rs")
+            {
                 score = score.saturating_sub(1);
             }
             (score, f)
