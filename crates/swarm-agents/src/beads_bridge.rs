@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+use std::env;
 use std::path::Path;
 use std::process::Command;
 
@@ -398,7 +399,7 @@ impl IssueTracker for BeadsBridge {
 /// ```
 pub fn default_actor() -> String {
     // 1. Explicit override via BD_ACTOR env var.
-    if let Ok(actor) = std::env::var("BD_ACTOR") {
+    if let Ok(actor) = env::var("BD_ACTOR") {
         let actor = actor.trim().to_string();
         if !actor.is_empty() {
             return actor;
