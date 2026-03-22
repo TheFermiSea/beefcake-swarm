@@ -12,10 +12,13 @@ Rig agents → Gastown worktrees → Beads tracking → SLURM dispatch
 
 ```
 Cloud Manager (Opus 4.6 via CLIAPIProxy)
-    → delegates to local workers: 
-        - Scout/Reviewer (27B, 256K context on vasp-03)
-        - Integrator (122B RPC, 128K context on vasp-01+02)
-    → runs verifier after each worker completes
+    → cloud fallback: Opus 4.6 → Gemini 3.1 Pro → Sonnet 4.6 → Flash Lite
+    → delegates to local workers:
+        - Scout (Qwen3.5-27B-Opus-Distilled, 65K ctx on vasp-03)
+        - Coder (Qwen3.5-122B-A10B MoE, 65K ctx on vasp-01)
+        - Reasoning (Qwen3.5-122B-A10B MoE, 65K ctx on vasp-02)
+    → runs verifier after each worker completes (multi-language)
+    → circuit breaker after consecutive no-change iterations
     ↓ all budgets exhausted
 Human Intervention (blocking beads issue)
 ```
@@ -24,15 +27,17 @@ Human Intervention (blocking beads issue)
 
 | Crate | Description |
 |-------|-------------|
-| `coordination/` | Deterministic logic layer (~21k LOC). NO LLM calls, pure state machines. MCP server (rmcp) exposing tools via stdio. Includes verifier pipeline, escalation routing, ensemble voting, council escalation, harness session management, SLURM lifecycle, and OpenTelemetry-compatible tracing. |
-| `crates/swarm-agents/` | Rig-based orchestrator for the agent loop. Picks beads issues, creates worktrees, runs implementer/verifier/validator cycle, merges on pass. |
+| `coordination/` | Deterministic logic layer (~21k LOC). NO LLM calls, pure state machines. MCP server (rmcp) exposing tools via stdio. Includes multi-language verifier pipeline, escalation routing, ensemble voting, council escalation (Gemini 3.1 Pro / Opus 4.6 / GPT-5.2 Codex), harness session management, SLURM lifecycle, and OpenTelemetry tracing. |
+| `crates/swarm-agents/` | Rig-based orchestrator. Picks beads issues (up to 3 concurrently), creates worktrees, runs implement/verify cycle with cloud manager + local workers. Supports multi-language (Rust, Python, TypeScript, Go), TensorZero feedback loops, stack profiles for model routing, and mutation archiving. |
 
 ### Other Directories
 
-- `flywheel/` -- Forked TypeScript/Node project for mining prompts and task decomposition strategies.
-- `indexing/` -- Python scripts for code indexing (CocoIndex for semantic search/RAG).
+- `scripts/` -- Orchestration: `run-swarm.sh`, `dogfood-loop.sh`, benchmarking, deployment, issue generation.
+- `config/` -- TensorZero configuration: experiment tracking, A/B testing, evaluation functions.
 - `inference/` -- SLURM job scripts, systemd daemon, build/validate scripts for llama.cpp inference.
-- `infrastructure/` -- GPU dashboard, HPC watchdog, ai-proxy setup.
+- `infrastructure/` -- GPU dashboard, HPC watchdog, ai-proxy setup, TensorZero docker-compose.
+- `indexing/` -- Python scripts for code indexing (CocoIndex for semantic search/RAG).
+- `flywheel/` -- Forked TypeScript/Node project for prompt mining and task decomposition.
 - `docs/` -- Architecture docs, deployment guides, inference endpoint specs.
 
 ## Quick Start
@@ -60,27 +65,41 @@ docker compose up swarm-agents                          # Cloud-only mode
 docker compose --profile local-inference up             # With local llama-server
 ```
 
+## Dogfood Loop
+
+The primary operational mode. Continuously processes beads issues on ai-proxy:
+
+```bash
+./scripts/dogfood-loop.sh --parallel 3 --cooldown 120 --discover
+```
+
+Supports multi-repo targeting (`--repo-root <path>`), per-issue circuit breakers, and per-repo lockfiles. See [CLAUDE.md](CLAUDE.md#dogfood-operations) for full options.
+
 ## External Tools
 
 - [`bd` (beads)](https://github.com/steveyegge/beads) -- Issue tracker CLI
 - [`gastown`](https://github.com/steveyegge/gastown) -- Git worktree isolation per agent task
 - [`nlm` (notebooklm-mcp-cli)](https://pypi.org/project/notebooklm-mcp-cli/) -- NotebookLM CLI for knowledge base queries
 
-## Environment Variables
+## Key Environment Variables
 
 | Variable | Purpose |
 |----------|---------|
-| `ROUTER_URL` | LLM endpoint for coordination MCP |
-| `ARCHITECT_MODEL`, `CODER_MODEL`, `HYDRA_MODEL` | Model name overrides |
-| `SLURM_SCRIPTS_PATH`, `SLURM_ENDPOINTS_PATH`, `SLURM_HOST` | SLURM configuration |
+| `SWARM_CLOUD_URL`, `SWARM_CLOUD_API_KEY`, `SWARM_CLOUD_MODEL` | Cloud proxy (CLIAPIProxy) configuration |
+| `SWARM_FAST_MODEL`, `SWARM_CODER_MODEL`, `SWARM_REASONING_MODEL` | Local model overrides per tier |
+| `SWARM_PARALLEL_ISSUES` | Concurrent issues (default: 3, one per node) |
+| `SWARM_STACK_PROFILE` | Model routing profile (`hybrid_balanced_v1`, `small_specialist_v1`, `strategist_hybrid_v1`) |
+| `SWARM_TENSORZERO_URL` | TensorZero gateway for experiment tracking and A/B testing |
+| `SWARM_REPO_ID` | Target repository identifier for multi-repo support |
+| `SWARM_MAX_RETRIES` | Max iterations per issue (default: 10) |
+| `SWARM_MAX_NO_CHANGE` | Circuit breaker threshold (default: 2) |
 | `GEMINI_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` | Cloud escalation (council) |
-| `SWARM_CLOUD_URL`, `SWARM_CLOUD_API_KEY`, `SWARM_CLOUD_MODEL` | Cloud proxy configuration |
-| `SWARM_ISSUE` | Target a specific beads issue by ID |
 
-See [CLAUDE.md](CLAUDE.md) for the full list and agent contributor guidelines.
+See [CLAUDE.md](CLAUDE.md) for the full list (~40 env vars) and agent contributor guidelines.
 
 ## Documentation
 
-- [CLAUDE.md](CLAUDE.md) -- Agent instructions, model routing, cluster access, full environment reference
+- [CLAUDE.md](CLAUDE.md) -- Agent instructions, model routing, cluster access, full environment reference (~40 env vars)
 - [AGENTS.md](AGENTS.md) -- Issue tracking workflow, Rig patterns, session completion checklist
+- [docs/inference/INFERENCE-ENDPOINTS.md](docs/inference/INFERENCE-ENDPOINTS.md) -- Authoritative inference endpoint reference
 - [docs/architecture/](docs/architecture/) -- Deployment guides, strategy docs, architecture deep dives

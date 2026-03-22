@@ -1,6 +1,6 @@
 # Agent Instructions
 
-This project uses **bd** (beads) for issue tracking. Run `bdh onboard` to get started.
+This project uses **bd** (beads) for issue tracking. See [CLAUDE.md](CLAUDE.md) for full model routing, cluster access, and environment reference.
 
 ## Quick Reference
 
@@ -114,9 +114,10 @@ tail -f ~/code/beefcake-swarm/logs/dogfood/run-N-<issue>-*.log
 # Tool call distribution (requires RUST_LOG=debug)
 grep -o 'gen_ai.tool.name[^"]*"[^"]*"' logs/dogfood/run-*.log | sort | uniq -c | sort -rn
 
-# Check endpoint health (2026 RPC Ensemble)
-curl -s http://vasp-03:8081/health  # Scout/Reviewer (27B, 256K)
-curl -s http://vasp-01:8081/health  # Integrator (122B RPC Head)
+# Check endpoint health
+curl -s http://vasp-03:8081/health  # Scout (27B-Opus-Distilled, 65K ctx)
+curl -s http://vasp-01:8081/health  # Coder (122B-A10B MoE, 65K ctx)
+curl -s http://vasp-02:8081/health  # Reasoning (122B-A10B MoE, 65K ctx)
 ```
 
 ### Swarm Behavior Insights
@@ -125,29 +126,36 @@ curl -s http://vasp-01:8081/health  # Integrator (122B RPC Head)
 - Worker delegation uses `proxy_` prefixed tools (e.g., `proxy_rust_coder`, `proxy_reasoning_worker`)
 - `MaxTurnError` on a worker is expected — manager retries with a different worker
 - Verifier runs after each iteration, not just at the end
+- Parallel issue dispatch: up to 3 issues run concurrently (one per node, round-robin)
+- Cloud fallback cascade: if primary model (Opus 4.6) rate-limits, auto-falls through to Gemini 3.1 Pro → Sonnet 4.6 → Gemini 3.1 Flash Lite
+- Per-issue circuit breaker: after `SWARM_MAX_NO_CHANGE` (default: 2) consecutive no-change iterations, the loop aborts that issue
+- Multi-language verification: Rust uses cargo quality gates; Python/TypeScript/Go use `ScriptVerifier` with language-specific lint/test commands
 
 ## Swarm Architecture Quick Reference
 
 ```text
 ┌─────────────────────────────────────────────────────┐
-│  Cloud Manager (Claude Opus 4.6 thinking)           │
-│  via CLIAPIProxy on ai-proxy:8317                   │
+│  Cloud Manager (Claude Opus 4.6 via CLIAPIProxy)    │
+│  Fallback: Gemini 3.1 Pro → Sonnet 4.6 → Flash Lite│
 │  ────────────────────────────────────               │
 │  Plans work, delegates to local workers,            │
-│  reads/analyzes code, runs verifier                 │
+│  reads/analyzes code, reviews results               │
 ├─────────────────────────────────────────────────────┤
-│  Local Workers (2026 VRAM-Resident RPC)             │
-│  ┌─────────────────┬────────────────────────────────┐ │
-│  │ vasp-03:8081    │ vasp-01:8081 (Head)            │ │
-│  │ Scout / Reviewer│ Integrator (RPC)               │ │
-│  │ (27B, 256K CTX) │ (122B, 128K CTX)               │ │
-│  └─────────────────┴────────────────────────────────┘ │
-│                    │ vasp-02:50052 (Worker)         │ │
-│                    │ RPC Shard (27 layers)          │ │
-│                    └────────────────────────────────┘ │
+│  Local Workers (Independent Instances)              │
+│  ┌─────────────────────────────────────────────────┐│
+│  │ vasp-03:8081 — Qwen3.5-27B-Opus-Distilled      ││
+│  │ Scout, Reviewer, Fixer (VRAM-resident, 65K ctx) ││
+│  ├─────────────────────────────────────────────────┤│
+│  │ vasp-01:8081 — Qwen3.5-122B-A10B MoE           ││
+│  │ Coder, General Worker (expert-offload, 65K ctx) ││
+│  ├─────────────────────────────────────────────────┤│
+│  │ vasp-02:8081 — Qwen3.5-122B-A10B MoE           ││
+│  │ Planner, Reasoning Worker (expert-offload, 65K) ││
+│  └─────────────────────────────────────────────────┘│
 ├─────────────────────────────────────────────────────┤
-│  Verifier (deterministic quality gates)             │
+│  Verifier (deterministic, multi-language)           │
 │  cargo fmt → clippy → cargo check → cargo test      │
+│  + ScriptVerifier for Python/TypeScript/Go          │
 └─────────────────────────────────────────────────────┘
 ```
 
@@ -256,33 +264,7 @@ bd automatically syncs via Dolt:
 - ❌ Do NOT use external issue trackers
 - ❌ Do NOT duplicate tracking systems
 
-For more details, see README.md and docs/QUICKSTART.md.
-
-## Landing the Plane (Session Completion)
-
-**When ending a work session**, you MUST complete ALL steps below. Work is NOT complete until `git push` succeeds.
-
-**MANDATORY WORKFLOW:**
-
-1. **File issues for remaining work** - Create issues for anything that needs follow-up
-2. **Run quality gates** (if code changed) - Tests, linters, builds
-3. **Update issue status** - Close finished work, update in-progress items
-4. **PUSH TO REMOTE** - This is MANDATORY:
-   ```bash
-   git pull --rebase
-   bdh sync
-   git push
-   git status  # MUST show "up to date with origin"
-   ```
-5. **Clean up** - Clear stashes, prune remote branches
-6. **Verify** - All changes committed AND pushed
-7. **Hand off** - Provide context for next session
-
-**CRITICAL RULES:**
-- Work is NOT complete until `git push` succeeds
-- NEVER stop before pushing - that leaves work stranded locally
-- NEVER say "ready to push when you are" - YOU must push
-- If push fails, resolve and retry until it succeeds
+For more details, see [README.md](README.md) and [CLAUDE.md](CLAUDE.md).
 
 <!-- END BEADS INTEGRATION -->
 
