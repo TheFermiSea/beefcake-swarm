@@ -99,11 +99,11 @@ pub fn build_fixer_named(
         .description(
             "Implementation specialist. Follows structured plans to write targeted code fixes.",
         )
-        .preamble(&prompts::load_prompt(
+        .preamble(&prompts::build_worker_prompt(&prompts::load_prompt(
             "fixer",
             wt_path,
             prompts::FIXER_PREAMBLE,
-        ))
+        )))
         .temperature(0.2)
         .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(

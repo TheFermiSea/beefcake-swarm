@@ -146,7 +146,11 @@ pub fn build_rust_coder_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::load_prompt("coder", wt_path, prompts::RUST_CODER_PREAMBLE);
+    let preamble = prompts::build_worker_prompt(&prompts::load_prompt(
+        "coder",
+        wt_path,
+        prompts::RUST_CODER_PREAMBLE,
+    ));
     client
         .agent(model)
         .name(name)
@@ -184,11 +188,11 @@ pub fn build_reasoning_worker_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::load_prompt(
+    let preamble = prompts::build_worker_prompt(&prompts::load_prompt(
         "reasoning_worker",
         wt_path,
         prompts::REASONING_WORKER_PREAMBLE,
-    );
+    ));
     client
         .agent(model)
         .name(name)
@@ -216,11 +220,11 @@ pub fn build_strategist_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::load_prompt(
+    let preamble = prompts::build_worker_prompt(&prompts::load_prompt(
         "reasoning_worker",
         wt_path,
         prompts::REASONING_WORKER_PREAMBLE,
-    );
+    ));
     client
         .agent(model)
         .name(name)
@@ -261,7 +265,11 @@ pub fn build_general_coder_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::load_prompt("coder", wt_path, prompts::GENERAL_CODER_PREAMBLE);
+    let preamble = prompts::build_worker_prompt(&prompts::load_prompt(
+        "coder",
+        wt_path,
+        prompts::GENERAL_CODER_PREAMBLE,
+    ));
     client
         .agent(model)
         .name(name)

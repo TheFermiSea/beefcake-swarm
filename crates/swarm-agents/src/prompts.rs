@@ -15,7 +15,44 @@
 use std::path::Path;
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "8.0.0";
+pub const PROMPT_VERSION: &str = "9.0.0";
+
+/// Shared coordination block appended to all worker preambles.
+///
+/// Inspired by ClawTeam's CLI prompt injection pattern: workers are taught
+/// to self-report progress, discover issues, and communicate with the manager
+/// via `bd` (beads) commands and `chat_send`. This transforms workers from
+/// silent black boxes into self-reporting team members.
+///
+/// Appended to: RUST_CODER, GENERAL_CODER, REASONING_WORKER, FIXER.
+/// NOT appended to: REVIEWER, PLANNER, ARCHITECT, EDITOR, BREAKER (JSON-output or read-only roles).
+pub const WORKER_COORDINATION_BLOCK: &str = "
+## Team Coordination (ClawTeam pattern)
+
+You are part of a coordinated swarm team. The issue ID is in the task header as `**Issue:** <id>`.
+
+### Progress Reporting
+After completing a significant step (fixing a key error, finishing a subtask), report progress \
+via the `run_command` tool:
+```
+bd update <issue-id> --notes \"Progress: <what you did, 1-2 sentences>\"
+```
+This helps the manager track your work without waiting for the verifier.
+
+### Issue Discovery
+If you find bugs or missing tests UNRELATED to your current task, create a tracked issue:
+```
+bd create --title=\"Found: <description>\" --type=bug --priority=3
+bd dep add <new-id> <current-issue-id> --type discovered-from
+```
+Stay focused on your assigned task — the manager will prioritize discovered issues later.
+
+### Communication (when chat_send is available)
+- Task seems wrong or incomplete → `chat_send` to ask the manager for clarification
+- Stuck after 2 attempts → `chat_send` with what you tried and why it failed
+- Found something the manager should know → `chat_send` with a 1-sentence summary
+- Keep messages concise — the manager is orchestrating multiple workers
+";
 
 /// Cloud-backed manager preamble (Opus 4.6 / G3-Pro via CLIAPIProxy).
 ///
@@ -299,16 +336,11 @@ without calling the tool in the same response.
 - **SCOPE DISCIPLINE**: Only add/modify what the task asks for. Do NOT change existing \
   function signatures, rename variables, reformat untouched code, remove comments, \
   or 'clean up' code that already compiles.
-- If you find unrelated bugs, report them in your response: \
-  `DISCOVERED: <description>`. The manager will handle tracking.
 - Do NOT run git commit. The orchestrator handles commits.
-
-## Communication (when chat_send is available)
-- If the task description seems wrong or incomplete, use `chat_send` to ask the manager.
-- If you encounter an error pattern outside your expertise, use `chat_send` to flag it.
-- If you're stuck after 2 attempts, use `chat_send` with a summary of what you tried.
-- Keep messages concise — one sentence describing the problem and what you need.
 ";
+
+// Rust coder coordination block (appended at build time).
+// See `build_worker_prompt` for the assembly logic.
 
 /// General coding agent preamble (Qwen3.5-122B-A10B).
 pub const GENERAL_CODER_PREAMBLE: &str = "\
@@ -356,12 +388,6 @@ Prefer **search_code** for exact patterns. Prefer **ast_grep** for structural pa
 - Integration: leverage your distributed VRAM for large-scale architectural updates.
 - Configuration: Cargo.toml changes, feature flags, dependency management.
 
-## Discovery
-If you find a bug or missing test unrelated to your current task, create a tracked issue: \
-`bd create --title=\"Found: <description>\" --type=bug --priority=3` then \
-`bd dep add <new-id> <current-issue-id> --type discovered-from` \
-(the issue ID is in the task header as `**Issue:** <id>`). Stay focused on your task.
-
 ## Mandatory Workflow
 1. Read the target file(s) or explore the project structure. If file content is \
    already provided in the task prompt, skip this step.
@@ -393,12 +419,6 @@ without calling the tool in the same response.
   or 'clean up' code that already compiles. If a file has 10 methods and your task is \
   to add an 11th, the other 10 must be IDENTICAL in the output.
 - Do NOT run git commit. The orchestrator handles commits.
-
-## Communication (when chat_send is available)
-- If the task description seems wrong or incomplete, use `chat_send` to ask the manager.
-- If you encounter an error pattern outside your expertise, use `chat_send` to flag it.
-- If you're stuck after 2 attempts, use `chat_send` with a summary of what you tried.
-- Keep messages concise — one sentence describing the problem and what you need.
 ";
 
 /// Blind reviewer preamble (Qwen3.5-Implementer).
@@ -467,12 +487,6 @@ Do NOT run cargo check/test. Query related issues with `bd show <id>`.
 - Async/Send/Sync: diagnosing why types don't satisfy Send bounds across await points.
 - Architecture: when the fix requires restructuring (newtype pattern, interior mutability, etc.)
 
-## Discovery
-If your analysis reveals issues beyond the current task, create tracked issues: \
-`bd create --title=\"Found: <description>\" --type=bug --priority=3` then \
-`bd dep add <new-id> <current-issue-id> --type discovered-from` \
-(the issue ID is in the task header). Focus on the assigned task.
-
 ## Editing Files (IMPORTANT)
 1. Read the file with read_file to get hashline output (e.g. `42:a3|fn main()`)
 2. Use anchor_start=\"42:a3\" and anchor_end=\"55:0e\" with new_content for reliable edits. \
@@ -486,11 +500,6 @@ If your analysis reveals issues beyond the current task, create tracked issues: 
   return text starting with `BLOCKED:`.
 - Scope discipline: only change what the task asks for.
 - Do NOT run git commit or cargo check. The orchestrator handles both.
-
-## Communication (when chat_send is available)
-- If your analysis reveals the problem is more complex than expected, use `chat_send` \
-  to inform the manager before attempting the fix.
-- If the task requires architectural changes beyond your scope, use `chat_send` to flag it.
 ";
 
 /// Planner specialist preamble.
@@ -738,6 +747,21 @@ After running tests, return ONLY valid JSON (no markdown outside JSON):
 - Do NOT modify any existing source files — only create new test files.
 - Do NOT run git commit. The orchestrator handles commits.
 ";
+
+// ── Worker Prompt Assembly ───────────────────────────────────────────────────
+//
+// Combines a worker's base preamble with the shared WORKER_COORDINATION_BLOCK.
+// This is the ClawTeam-inspired injection: workers get self-reporting, discovery,
+// and communication instructions appended to their role-specific prompts.
+
+/// Build a complete worker prompt by appending the shared coordination block.
+///
+/// Use this for RUST_CODER, GENERAL_CODER, REASONING_WORKER, and FIXER.
+/// Do NOT use for REVIEWER, PLANNER, ARCHITECT, EDITOR, or BREAKER
+/// (they have specialized JSON output formats or are read-only).
+pub fn build_worker_prompt(base_preamble: &str) -> String {
+    format!("{base_preamble}{WORKER_COORDINATION_BLOCK}")
+}
 
 // ── PromptLoader ─────────────────────────────────────────────────────────────
 //
