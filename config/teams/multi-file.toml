@@ -1,0 +1,43 @@
+# Multi-file change team — for issues touching 3+ files.
+#
+# Flow: Architect plans → parallel Coders implement → Reviewer checks → Verifier
+# Uses concurrent subtask dispatch when files don't overlap.
+
+[team]
+name = "multi-file"
+description = "Multi-file changes: architect plans, coders execute in parallel"
+max_iterations = 10
+
+# Phase 1: Architect reads codebase and produces an edit plan
+[[team.phases]]
+name = "architect"
+role = "Council"
+model_tier = "cloud"
+objective = "Read the codebase, understand the full scope, and produce an ArchitectPlan with exact SEARCH/REPLACE blocks for each file."
+writes_code = false
+
+# Phase 2: Parallel coders implement the plan
+[[team.phases]]
+name = "implement"
+role = "GeneralWorker"
+model_tier = "coder"
+objective = "Apply the architect's plan. Each coder handles a subset of non-overlapping files."
+writes_code = true
+parallel = true
+
+# Phase 3: Reviewer checks the combined diff
+[[team.phases]]
+name = "review"
+role = "Reviewer"
+model_tier = "fast"
+objective = "Review the combined diff for correctness, safety, and scope discipline."
+writes_code = false
+
+# Phase 4 (on failure): Fixer addresses verifier errors
+[[team.phases]]
+name = "fix"
+role = "Fixer"
+model_tier = "coder"
+objective = "Fix verifier errors from the parallel implementation."
+writes_code = true
+trigger = "verifier_failure"

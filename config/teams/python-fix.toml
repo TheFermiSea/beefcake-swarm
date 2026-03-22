@@ -1,0 +1,31 @@
+# Python bug fix team — for non-Rust repos using ScriptVerifier.
+#
+# Uses general_coder (not rust_coder) and relies on language profile
+# for verification gates (pylint, pytest, etc.)
+
+[team]
+name = "python-fix"
+description = "Python bug fix: scout → code → verify via ScriptVerifier"
+max_iterations = 8
+
+[[team.phases]]
+name = "scout"
+role = "Scout"
+model_tier = "fast"
+objective = "Read the issue, identify affected Python files, check for existing tests."
+writes_code = false
+
+[[team.phases]]
+name = "implement"
+role = "GeneralWorker"
+model_tier = "coder"
+objective = "Implement the fix. Follow existing code style. Update tests if needed."
+writes_code = true
+
+[[team.phases]]
+name = "fix"
+role = "Fixer"
+model_tier = "coder"
+objective = "Fix lint/test failures from the previous attempt."
+writes_code = true
+trigger = "verifier_failure"

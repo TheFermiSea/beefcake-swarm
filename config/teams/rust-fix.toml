@@ -1,0 +1,43 @@
+# Standard Rust bug fix team — the default for most beads issues.
+#
+# Flow: Scout reads → Manager plans → Coder implements → Verifier checks
+# On failure: Fixer retries with error context, then escalates to Reasoning.
+
+[team]
+name = "rust-fix"
+description = "Standard Rust bug fix: scout → plan → code → verify"
+max_iterations = 10
+
+# Phase 1: Scout reads the codebase and identifies affected files
+[[team.phases]]
+name = "scout"
+role = "Scout"
+model_tier = "fast"
+objective = "Read the issue, identify affected files, and assess complexity. Report: files to modify, root cause hypothesis, risk level."
+writes_code = false
+
+# Phase 2: Coder implements the fix
+[[team.phases]]
+name = "implement"
+role = "RustWorker"
+model_tier = "coder"
+objective = "Implement the fix based on the issue description and any scout analysis."
+writes_code = true
+
+# Phase 3 (on failure): Fixer retries with error context
+[[team.phases]]
+name = "fix"
+role = "Fixer"
+model_tier = "coder"
+objective = "Fix the verifier errors from the previous attempt. Focus on the specific failures."
+writes_code = true
+trigger = "verifier_failure"
+
+# Phase 4 (escalation): Reasoning worker for complex issues
+[[team.phases]]
+name = "reason"
+role = "ReasoningWorker"
+model_tier = "reasoning"
+objective = "Deep analysis of the stuck issue. Trace root cause through type system, borrow checker, or architecture."
+writes_code = true
+trigger = "escalation"
