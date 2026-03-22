@@ -50,6 +50,11 @@ pub struct VerifierConfig {
     /// Enable adaptive gate selection based on diff risk profile.
     /// When true, deny/doc/nextest are auto-enabled based on what changed.
     pub adaptive: bool,
+    /// Override `CARGO_TARGET_DIR` for all cargo commands.
+    /// When set, ensures build artifacts are isolated to this path.
+    /// Use in tests to prevent cross-crate cache contamination when
+    /// a global `CARGO_TARGET_DIR` is set (e.g., on ai-proxy).
+    pub target_dir: Option<std::path::PathBuf>,
     /// Enable complexity guard (advisory gate).
     /// Flags changes that add disproportionate complexity.
     /// Inspired by autoresearch: "simpler is better."
@@ -77,6 +82,7 @@ impl Default for VerifierConfig {
             check_doc: false,
             use_nextest: false,
             adaptive: false,
+            target_dir: None,
             check_complexity: false,
             complexity_thresholds: super::risk_profile::ComplexityThresholds::default(),
         }
@@ -333,6 +339,13 @@ impl Verifier {
         cmd: &mut tokio::process::Command,
     ) -> Result<std::process::Output, String> {
         cmd.current_dir(&self.working_dir).kill_on_drop(true);
+
+        // Isolate build artifacts when a target_dir override is configured.
+        // Prevents cross-crate cache contamination in shared-CARGO_TARGET_DIR
+        // environments (e.g., ai-proxy's /tmp/beefcake-shared-target).
+        if let Some(ref target_dir) = self.config.target_dir {
+            cmd.env("CARGO_TARGET_DIR", target_dir);
+        }
 
         // Use sccache for compilation caching if available. This dramatically
         // speeds up repeated verifier runs across worktrees (90s → ~10s for

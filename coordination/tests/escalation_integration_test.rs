@@ -33,6 +33,9 @@ async fn verify_crate(temp: &tempfile::TempDir) -> coordination::verifier::Verif
         check_compile: true,
         check_test: false,
         comprehensive: false,
+        // Isolate build artifacts inside the temp crate to prevent cross-test
+        // cache contamination when CARGO_TARGET_DIR is set globally (ai-proxy).
+        target_dir: Some(temp.path().join("target")),
         ..Default::default()
     };
     let verifier = Verifier::new(temp.path(), config);
