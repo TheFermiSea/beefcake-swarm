@@ -17,6 +17,7 @@ use crate::notebook_bridge::KnowledgeBase;
 use crate::prompts;
 use crate::tools::bundles;
 use crate::tools::plan_parallel_tool::{PlanParallelWorkTool, PlanSlot};
+use crate::tools::submit_plan_tool::{SubmitPlanTool, WorkPlanSlot};
 
 use super::coder::OaiAgent;
 
@@ -56,6 +57,10 @@ pub struct ManagerWorkers {
     /// When the manager calls `plan_parallel_work`, the validated plan
     /// is stored here for the orchestrator to pick up and dispatch.
     pub plan_slot: Option<PlanSlot>,
+    /// Shared slot for the plan-before-execute gate (ClawTeam pattern).
+    /// When the manager calls `submit_plan`, its approach is captured here
+    /// and injected into subsequent iteration prompts.
+    pub work_plan_slot: Option<WorkPlanSlot>,
 }
 
 /// Build the cloud-backed Manager with reasoning_worker and coders as tools.
@@ -125,6 +130,11 @@ pub fn build_cloud_manager(
         builder = builder.tool(PlanParallelWorkTool::new(plan_slot));
     }
 
+    // Work plan submission tool (ClawTeam pattern — plan-before-execute gate).
+    if let Some(work_plan_slot) = workers.work_plan_slot.clone() {
+        builder = builder.tool(SubmitPlanTool::new(work_plan_slot, 1));
+    }
+
     // Knowledge base tool (optional — gracefully absent if not configured)
     let kb_tools = bundles::notebook_tool(workers.notebook_bridge, true);
     if !kb_tools.is_empty() {
@@ -181,6 +191,11 @@ pub fn build_local_manager(
     // Parallel work planning tool (optional).
     if let Some(plan_slot) = workers.plan_slot {
         builder = builder.tool(PlanParallelWorkTool::new(plan_slot));
+    }
+
+    // Work plan submission tool (ClawTeam pattern — plan-before-execute gate).
+    if let Some(work_plan_slot) = workers.work_plan_slot.clone() {
+        builder = builder.tool(SubmitPlanTool::new(work_plan_slot, 1));
     }
 
     // Knowledge base tool (optional)

@@ -17,6 +17,7 @@ pub mod notebook_tool;
 pub mod patch_tool;
 pub mod plan_parallel_tool;
 pub mod proxy_wrappers;
+pub mod submit_plan_tool;
 pub mod search_code_tool;
 pub mod shared;
 pub mod verifier_tool;

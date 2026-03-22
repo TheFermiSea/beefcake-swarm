@@ -61,6 +61,10 @@ pub struct AgentFactory {
     /// Set via [`AgentFactory::with_plan_slot`] before building the manager.
     /// The orchestrator checks this after each manager invocation.
     pub plan_slot: Option<PlanSlot>,
+    /// Shared slot where the manager deposits a work plan before delegating.
+    /// Set via [`AgentFactory::with_work_plan_slot`] before building the manager.
+    /// Enables the ClawTeam-style plan-before-execute gate.
+    pub work_plan_slot: Option<crate::tools::submit_plan_tool::WorkPlanSlot>,
 }
 
 impl AgentFactory {
@@ -80,6 +84,7 @@ impl AgentFactory {
             tool_factory: None,
             endpoint_pool,
             plan_slot: None,
+            work_plan_slot: None,
         })
     }
 
@@ -118,6 +123,18 @@ impl AgentFactory {
     /// a submitted subtask plan.
     pub fn with_plan_slot(mut self, slot: PlanSlot) -> Self {
         self.plan_slot = Some(slot);
+        self
+    }
+
+    /// Set a shared work plan slot for the plan-before-execute gate.
+    ///
+    /// When set, `build_manager()` includes the `submit_plan` tool.
+    /// The orchestrator injects the captured plan into subsequent iteration prompts.
+    pub fn with_work_plan_slot(
+        mut self,
+        slot: crate::tools::submit_plan_tool::WorkPlanSlot,
+    ) -> Self {
+        self.work_plan_slot = Some(slot);
         self
     }
 
@@ -437,6 +454,7 @@ impl AgentFactory {
                 strategist,
                 notebook_bridge: self.notebook_bridge.clone(),
                 plan_slot: self.plan_slot.clone(),
+                work_plan_slot: self.work_plan_slot.clone(),
             };
             manager::build_cloud_manager(
                 cloud_client,
@@ -469,6 +487,7 @@ impl AgentFactory {
                 strategist,
                 notebook_bridge: self.notebook_bridge.clone(),
                 plan_slot: self.plan_slot.clone(),
+                work_plan_slot: self.work_plan_slot.clone(),
             };
             manager::build_local_manager(
                 &m_client,
@@ -559,6 +578,7 @@ impl AgentFactory {
             strategist,
             notebook_bridge: self.notebook_bridge.clone(),
             plan_slot: self.plan_slot.clone(),
+            work_plan_slot: self.work_plan_slot.clone(),
         };
         Some(manager::build_cloud_manager(
             cloud_client,

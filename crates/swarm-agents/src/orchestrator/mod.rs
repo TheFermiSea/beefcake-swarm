@@ -465,7 +465,14 @@ async fn process_issue_core(
     // The manager's `plan_parallel_work` tool deposits a validated SubtaskPlan
     // here; the orchestrator checks it after each manager invocation.
     let plan_slot = crate::tools::plan_parallel_tool::new_plan_slot();
-    let factory = factory.clone().with_plan_slot(plan_slot.clone());
+    // ClawTeam pattern: plan-before-execute gate. The manager's `submit_plan`
+    // tool deposits its approach here; the orchestrator injects it as context
+    // in subsequent iteration prompts for consistency.
+    let work_plan_slot = crate::tools::submit_plan_tool::new_work_plan_slot();
+    let factory = factory
+        .clone()
+        .with_plan_slot(plan_slot.clone())
+        .with_work_plan_slot(work_plan_slot.clone());
     let manager = factory.build_manager(&wt_path);
 
     // --- Escalation state ---
@@ -1217,6 +1224,15 @@ async fn process_issue_core(
             task_prompt.push_str("\n**Performance insights (from TZ experiment data):**\n");
             for d in &tz_directives {
                 task_prompt.push_str(&format!("- {d}\n"));
+            }
+        }
+
+        // --- Work plan context injection (ClawTeam pattern) ---
+        // If the manager submitted a plan on a previous iteration, inject it
+        // as context so the strategy stays consistent across retries.
+        if iteration > 1 {
+            if let Some(ref plan) = work_plan_slot.lock().ok().and_then(|s| s.clone()) {
+                task_prompt.push_str(&crate::tools::submit_plan_tool::format_plan_context(plan));
             }
         }
 

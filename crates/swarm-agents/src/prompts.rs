@@ -135,8 +135,13 @@ You MUST delegate all file reading and exploration to workers.
 5. **When the verifier passes (all_green: true), IMMEDIATELY stop and return your summary.** \
    Do NOT spawn additional workers or re-verify. The task is DONE.
 
+## Plan-Before-Execute (FIRST iteration only)
+On your FIRST iteration (iteration 1), call **submit_plan** before delegating to any coder. \
+This records your approach so the orchestrator can track your strategy and inject it as \
+context on retries. Skip this on iteration 2+ (the plan is already recorded).
+
 ## CRITICAL: Delegate Immediately
-- Your FIRST action must be a delegation to a coder, fixer, or planner.
+- After submit_plan (iteration 1) or immediately (iteration 2+), delegate to a coder/fixer/planner.
 - You CANNOT read files yourself — delegate exploration to workers.
 - Include the objective, file paths, and specific instructions in every delegation.
 - Every turn you spend NOT delegating wastes 3-8 minutes of compute.
