@@ -35,6 +35,7 @@ PARALLEL="${DOGFOOD_PARALLEL:-1}"
 ISSUE_QUERY_BIN="${DOGFOOD_BEADS_BIN:-bd}"
 DISCOVER=0                              # --discover: auto-fetch new issues when list exhausted
 TARGET_REPO=""                          # --repo-root: target an external repo (default: self)
+MAX_ISSUE_FAILURES="${DOGFOOD_MAX_ISSUE_FAILURES:-3}"  # defer after N consecutive failures
 
 # CLI overrides
 while [[ $# -gt 0 ]]; do
@@ -46,6 +47,7 @@ while [[ $# -gt 0 ]]; do
     --parallel)    PARALLEL="$2"; shift 2 ;;
     --discover)    DISCOVER=1; shift ;;
     --repo-root)   TARGET_REPO="$2"; shift 2 ;;
+    --max-issue-failures) MAX_ISSUE_FAILURES="$2"; shift 2 ;;
     *)             echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -103,6 +105,44 @@ record_run() {
   printf '{"run":%d,"issue":"%s","exit_code":%d,"elapsed_s":%d,"timestamp":"%s","log":"%s"}\n' \
     "$run_num" "$issue_id" "$exit_code" "$elapsed" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$log_file" \
     >> "$SUMMARY_FILE"
+}
+
+# --- Circuit breaker: defer issues that fail too many times ---
+# Counts consecutive recent failures for an issue in the summary JSONL.
+# Returns 0 (true) if the issue has exceeded MAX_ISSUE_FAILURES.
+issue_is_exhausted() {
+  local issue_id="$1"
+  [[ ! -f "$SUMMARY_FILE" ]] && return 1
+
+  local consecutive_failures
+  consecutive_failures=$(python3 -c "
+import json, sys
+fails = 0
+# Read all runs for this issue, count consecutive failures from the end
+runs = []
+with open('$SUMMARY_FILE') as f:
+    for line in f:
+        try:
+            r = json.loads(line)
+            if r.get('issue') == '$issue_id':
+                runs.append(r)
+        except: pass
+# Count backwards from most recent
+for r in reversed(runs):
+    if r.get('exit_code', 1) != 0:
+        fails += 1
+    else:
+        break
+print(fails)
+" 2>/dev/null || echo "0")
+
+  [[ "$consecutive_failures" -ge "$MAX_ISSUE_FAILURES" ]]
+}
+
+defer_exhausted_issue() {
+  local issue_id="$1" consecutive_failures="$2"
+  log "  Circuit breaker: $issue_id failed $consecutive_failures consecutive times (limit: $MAX_ISSUE_FAILURES) — deferring"
+  bd_cmd update "$issue_id" --status=deferred 2>/dev/null || true
 }
 
 # --- Pre-flight ---
@@ -349,16 +389,35 @@ if [[ "$PARALLEL" -le 1 ]]; then
         ISSUE_ID="${ISSUES[$IDX]}"
       fi
     else
-      ISSUE_ID=$(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null | head -n1 || true)
+      # Pick from ready issues, skipping any that have hit the circuit breaker.
+      ISSUE_ID=""
+      while IFS= read -r candidate; do
+        [[ -z "$candidate" ]] && continue
+        if issue_is_exhausted "$candidate"; then
+          defer_exhausted_issue "$candidate" "$MAX_ISSUE_FAILURES"
+          continue
+        fi
+        ISSUE_ID="$candidate"
+        break
+      done < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+
       if [[ -z "$ISSUE_ID" ]]; then
         if [[ "$DISCOVER" -eq 1 ]]; then
-          log "No ready issues. Waiting ${COOLDOWN}s before retry..."
+          log "No ready issues (all exhausted or none available). Waiting ${COOLDOWN}s before retry..."
           sleep "$COOLDOWN"
           continue
         fi
         log "No more ready issues. Stopping."
         break
       fi
+    fi
+
+    # Final circuit breaker check for issues from the explicit list too
+    if [[ "$ISSUE_ID" != "auto" ]] && issue_is_exhausted "$ISSUE_ID"; then
+      defer_exhausted_issue "$ISSUE_ID" "$MAX_ISSUE_FAILURES"
+      log "  Skipping exhausted issue $ISSUE_ID"
+      sleep 5
+      continue
     fi
 
     log "=== Run $RUN_COUNT: issue=$ISSUE_ID ==="
