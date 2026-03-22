@@ -87,7 +87,8 @@ impl IssueTracker for NoOpTracker {
 /// The binary name is read from the `SWARM_BEADS_BIN` env var, defaulting to `"bd"`.
 ///
 /// Optionally operates within a specific worktree directory (for worktree-scoped
-/// commands like `bd mail` where identity comes from `BD_ACTOR`).
+/// commands like `bd mail` where identity comes from `BD_ACTOR`
+/// (resolved via [`default_actor()`]).
 pub struct BeadsBridge {
     bin: String,
     /// Working directory for bd commands. When set, commands run in this directory
@@ -112,7 +113,8 @@ impl BeadsBridge {
     /// Create a BeadsBridge that runs commands in a specific worktree directory.
     ///
     /// The worktree must have `.beads/` access (typically via symlink).
-    /// Identity comes from `BD_ACTOR` env var, not a server-side file.
+    /// Identity is resolved via [`default_actor()`] (BD_ACTOR env var → git
+    /// user.name → hostname → "worker"), not a server-side file.
     pub fn with_worktree(wt_path: impl Into<std::path::PathBuf>) -> Self {
         Self {
             bin: std::env::var("SWARM_BEADS_BIN").unwrap_or_else(|_| "bd".into()),
@@ -271,7 +273,8 @@ impl BeadsBridge {
 
     /// Send a mail message to another agent via `bd mail send`.
     ///
-    /// Identity comes from `BD_ACTOR` env var (set in `run-swarm.sh`).
+    /// Identity is resolved by [`default_actor()`] (BD_ACTOR env var →
+    /// git user.name → hostname → "worker"; set externally via `run-swarm.sh`).
     /// Messages are stored as Dolt rows and sync with `bd dolt push/pull`.
     ///
     /// # Arguments
