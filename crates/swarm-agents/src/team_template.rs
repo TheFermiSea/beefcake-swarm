@@ -92,7 +92,10 @@ impl PhaseConfig {
 impl TeamConfig {
     /// Get the default phases (no trigger — run on initial iterations).
     pub fn default_phases(&self) -> Vec<&PhaseConfig> {
-        self.phases.iter().filter(|p| p.is_default_phase()).collect()
+        self.phases
+            .iter()
+            .filter(|p| p.is_default_phase())
+            .collect()
     }
 
     /// Get the phase to use on verifier failure.
@@ -172,11 +175,7 @@ pub fn list_templates(repo_root: &Path) -> Vec<PathBuf> {
         .into_iter()
         .flatten()
         .filter_map(|e| e.ok())
-        .filter(|e| {
-            e.path()
-                .extension()
-                .is_some_and(|ext| ext == "toml")
-        })
+        .filter(|e| e.path().extension().is_some_and(|ext| ext == "toml"))
         .map(|e| e.path())
         .collect()
 }
