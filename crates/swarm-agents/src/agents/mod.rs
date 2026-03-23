@@ -37,13 +37,13 @@ use coder::OaiAgent;
 /// Holds pre-built `ClientSet` and config references needed to construct
 /// agents scoped to a particular worktree path.
 ///
-/// Cloning `AgentFactory` is cheap: all heavyweight state is reference-counted.
+/// Cloning `AgentFactory` is cheap: config is Arc-wrapped, tools are reference-counted.
 /// Parallel tasks should each hold a clone — the shared `EndpointPool` counter
 /// ensures each clone naturally selects the next node in round-robin order.
 #[derive(Clone)]
 pub struct AgentFactory {
     pub clients: ClientSet,
-    pub config: SwarmConfig,
+    pub config: Arc<SwarmConfig>,
     /// Shared knowledge base for the notebook tool (None if unavailable).
     pub notebook_bridge: Option<Arc<dyn KnowledgeBase>>,
     /// Centralized tool construction factory, scoped to a worktree.
@@ -79,7 +79,7 @@ impl AgentFactory {
         let endpoint_pool = EndpointPool::new(&clients, config);
         Ok(Self {
             clients,
-            config: config.clone(),
+            config: Arc::new(config.clone()),
             notebook_bridge: None,
             tool_factory: None,
             endpoint_pool,

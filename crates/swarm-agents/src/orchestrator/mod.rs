@@ -278,13 +278,6 @@ async fn process_issue_core(
     // Reject issues the swarm can't handle: epics, benchmark-execution tasks,
     // deferred status, and configurable reject patterns. Prevents wasting
     // iterations on unactionable work.
-    let reject_patterns: Vec<&str> = std::env::var("SWARM_REJECT_PATTERNS")
-        .ok()
-        .map(|s| s.leak() as &str)
-        .into_iter()
-        .flat_map(|s| s.split(','))
-        .filter(|s| !s.is_empty())
-        .collect();
     let title_lower = title_trimmed.to_lowercase();
     let desc_lower = issue
         .description
@@ -298,9 +291,9 @@ async fn process_issue_core(
         || combined.contains("run.*suite")
         || combined.contains("execute benchmark")
         || combined.contains("record performance metrics");
-    let matches_reject = reject_patterns
+    let matches_reject = config.reject_patterns
         .iter()
-        .any(|pat| combined.contains(&pat.to_lowercase()));
+        .any(|pat| combined.contains(pat.as_str()));
 
     if is_epic || is_benchmark_exec || matches_reject {
         let reason = if is_epic {
@@ -327,6 +320,7 @@ async fn process_issue_core(
         issue.description.as_deref(),
         config.cloud_endpoint.as_ref(),
         &config.cloud_model_catalog,
+        factory.clients.cloud.as_ref(),
     )
     .await;
     info!(
@@ -339,7 +333,7 @@ async fn process_issue_core(
     );
 
     // Build the phase-based model selector for this issue.
-    let _phase_selector = PhaseModelSelector::new(
+    let phase_selector = PhaseModelSelector::new(
         config.cloud_model_catalog.clone(),
         config.max_cost_per_issue,
     );
@@ -653,11 +647,9 @@ async fn process_issue_core(
         // Phase-based model selection for planning.
         // Try the phase selector first (picks strongest "plan" model from catalog),
         // then fall back to the legacy stack-profile routing.
-        let phase_plan_model = config.resolve_phase_model(
-            WorkflowPhase::Plan,
-            Some(&triage_result),
-            None,
-        );
+        let phase_plan_model = phase_selector
+            .select_for_phase(WorkflowPhase::Plan, Some(&triage_result), None)
+            .map(|entry| entry.model.clone());
         let (plan_client, plan_model) = if let Some(ref cloud_model) = phase_plan_model {
             info!(model = %cloud_model, "Phase selector: using cloud model for Plan phase");
             (
@@ -1455,7 +1447,7 @@ async fn process_issue_core(
                                     timeout_secs = worker_timeout.as_secs(),
                                     "rust_coder exceeded timeout — proceeding with changes on disk"
                                 );
-                                Ok("rust_coder timed out. Changes are on disk for verifier."
+                                Ok("[TIMEOUT] agent exceeded deadline — no response received, checking disk state"
                                     .to_string())
                             }
                         };
@@ -1490,7 +1482,7 @@ async fn process_issue_core(
                                     timeout_secs = worker_timeout.as_secs(),
                                     "general_coder exceeded timeout — proceeding with changes on disk"
                                 );
-                                Ok("general_coder timed out. Changes are on disk for verifier."
+                                Ok("[TIMEOUT] agent exceeded deadline — no response received, checking disk state"
                                     .to_string())
                             }
                         };
@@ -1560,7 +1552,7 @@ async fn process_issue_core(
                         );
                         // Return a synthetic "timed out" response so the verifier still runs.
                         // Any file changes the manager made are already on disk.
-                        Ok("Manager timed out. Changes are on disk for verifier.".to_string())
+                        Ok("[TIMEOUT] agent exceeded deadline — no response received, checking disk state".to_string())
                     }
                 };
 

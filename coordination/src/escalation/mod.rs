@@ -45,5 +45,5 @@ pub use delight::{DelightDetector, DelightIntensity, DelightKind, DelightSignal}
 pub use engine::{EscalationDecision, EscalationEngine};
 pub use friction::{FrictionDetector, FrictionKind, FrictionSeverity, FrictionSignal};
 pub use heuristics::{compute_heuristics, SessionSample, TelemetryHeuristics};
-pub use state::{EscalationState, SwarmTier, TierBudget, TurnPolicy};
+pub use state::{EscalationState, SwarmTier, TierBudget, TurnPolicy, MAX_ESCALATION_DEPTH};
 pub use worker_first::{classify_initial_tier, InitialTierRecommendation, TaskComplexity};

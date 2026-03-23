@@ -151,6 +151,72 @@ impl EndpointPool {
         (client, model.as_str())
     }
 
+    /// Select the next (client, model) pair, returning `None` if ALL endpoints
+    /// are currently known-down according to the health monitor.
+    ///
+    /// Unlike `next()` — which falls back to the default round-robin pick even
+    /// when all nodes are down — this variant lets the caller detect total
+    /// failure and fall back to cloud models instead of dispatching to a dead
+    /// local endpoint.
+    ///
+    /// Returns `None` only when a `ClusterHealth` monitor is attached AND all
+    /// endpoints report `Down` status with a fresh (non-locked) read.  When
+    /// health data is unavailable (no monitor, write-lock held, or any status is
+    /// `Unknown`/`Degraded`) it falls back to the standard round-robin pick.
+    pub fn next_or_none(&self) -> Option<(&openai::CompletionsClient, &str)> {
+        let n = self.workers.len();
+        let base = self.counter.fetch_add(1, Ordering::Relaxed);
+        let default_idx = base % n;
+
+        // Without health data, always return the default pick.
+        let health = match &self.health {
+            Some(h) => h,
+            None => {
+                let (client, model) = &self.workers[default_idx];
+                return Some((client, model.as_str()));
+            }
+        };
+
+        // Non-blocking read — fall back to round-robin if write lock is held.
+        let status_guard = match health.try_read_status() {
+            Some(guard) => guard,
+            None => {
+                let (client, model) = &self.workers[default_idx];
+                return Some((client, model.as_str()));
+            }
+        };
+
+        // Walk through all candidates in round-robin order.
+        // Return the first usable endpoint; treat Unknown status as optimistically
+        // usable (not yet probed — health check may not have run yet).
+        // Only return None when every endpoint is *confirmed* Down.
+        for offset in 0..n {
+            let idx = (base + offset) % n;
+            let tier_name = self.tier_names[idx];
+            match status_guard.get(tier_name) {
+                Some(s) if s.is_down() => {
+                    // Confirmed down — keep searching.
+                }
+                _ => {
+                    // Usable or Unknown — return this endpoint.
+                    if offset > 0 {
+                        debug!(
+                            skipped = offset,
+                            selected = tier_name,
+                            "next_or_none: skipped unhealthy endpoint(s)"
+                        );
+                    }
+                    let (client, model) = &self.workers[idx];
+                    return Some((client, model.as_str()));
+                }
+            }
+        }
+
+        // Every endpoint is confirmed Down — signal total failure to caller.
+        debug!("next_or_none: all endpoints confirmed down — returning None");
+        None
+    }
+
     /// Number of nodes in the pool (= 3 for the default cluster).
     pub fn capacity(&self) -> usize {
         self.workers.len()

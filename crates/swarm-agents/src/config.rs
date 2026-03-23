@@ -107,6 +107,8 @@ pub struct CloudModelEntry {
     pub capabilities: Vec<String>,
     /// Provider: "cliapi" (CLIAPIProxy) or "openrouter".
     pub provider: String,
+    /// Explicit capability ranking (higher = more capable). Used instead of cost as proxy.
+    pub capability_score: u32,
 }
 
 /// Catalog of all available cloud models.
@@ -134,6 +136,7 @@ impl CloudModelCatalog {
                 context_window: 200_000,
                 capabilities: vec!["plan".into(), "architect".into(), "review".into(), "reason".into()],
                 provider: "cliapi".into(),
+                capability_score: 100,
             },
             CloudModelEntry {
                 model: "claude-sonnet-4-6".into(),
@@ -143,6 +146,7 @@ impl CloudModelCatalog {
                 context_window: 200_000,
                 capabilities: vec!["plan".into(), "implement".into(), "review".into()],
                 provider: "cliapi".into(),
+                capability_score: 80,
             },
             CloudModelEntry {
                 model: "claude-haiku-4-5-20251001".into(),
@@ -152,6 +156,7 @@ impl CloudModelCatalog {
                 context_window: 200_000,
                 capabilities: vec!["triage".into(), "review".into(), "scout".into()],
                 provider: "cliapi".into(),
+                capability_score: 40,
             },
             // --- Antigravity / Google (via CLIAPIProxy) ---
             CloudModelEntry {
@@ -162,6 +167,7 @@ impl CloudModelCatalog {
                 context_window: 2_000_000,
                 capabilities: vec!["explore".into(), "plan".into(), "review".into(), "architect".into()],
                 provider: "cliapi".into(),
+                capability_score: 85,
             },
             CloudModelEntry {
                 model: "gemini-3-flash-preview".into(),
@@ -171,6 +177,7 @@ impl CloudModelCatalog {
                 context_window: 1_000_000,
                 capabilities: vec!["triage".into(), "explore".into(), "scout".into()],
                 provider: "cliapi".into(),
+                capability_score: 35,
             },
             CloudModelEntry {
                 model: "gemini-2.5-flash".into(),
@@ -180,6 +187,7 @@ impl CloudModelCatalog {
                 context_window: 1_000_000,
                 capabilities: vec!["triage".into(), "scout".into()],
                 provider: "cliapi".into(),
+                capability_score: 30,
             },
         ];
 
@@ -197,6 +205,7 @@ impl CloudModelCatalog {
                 context_window: 204_800,
                 capabilities: vec!["implement".into(), "review".into(), "plan".into()],
                 provider: "openrouter".into(),
+                capability_score: 60,
             });
         }
 
@@ -222,15 +231,11 @@ impl CloudModelCatalog {
             })
     }
 
-    /// Find the most capable model (highest cost as proxy for capability).
+    /// Find the most capable model (highest capability_score).
     pub fn strongest_for(&self, capability: &str) -> Option<&CloudModelEntry> {
         self.with_capability(capability)
             .into_iter()
-            .max_by(|a, b| {
-                a.cost_input_per_m
-                    .partial_cmp(&b.cost_input_per_m)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .max_by_key(|m| m.capability_score)
     }
 }
 
@@ -459,6 +464,10 @@ pub struct SwarmConfig {
     /// Set to 0.0 to disable cost budgeting (default).
     /// Populated from `SWARM_MAX_COST_PER_ISSUE` env var.
     pub max_cost_per_issue: f64,
+    /// Pre-parsed reject patterns from `SWARM_REJECT_PATTERNS` env var.
+    /// Issues matching any pattern are rejected before worktree creation.
+    /// Parsed once at config init to avoid per-issue `String::leak()`.
+    pub reject_patterns: Vec<String>,
     /// Number of iterations after which task prompts are pruned to save context.
     /// After this many iterations, only the system prompt, last 2 iteration results,
     /// and the latest verifier output are included in the prompt.
@@ -575,6 +584,11 @@ impl Default for SwarmConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0.0),
+            reject_patterns: std::env::var("SWARM_REJECT_PATTERNS")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.split(',').map(|p| p.trim().to_lowercase()).collect())
+                .unwrap_or_default(),
             prune_after_iteration: std::env::var("SWARM_PRUNE_AFTER_ITERATION")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -688,25 +702,6 @@ impl SwarmConfig {
                     .context("Council role requested but no cloud endpoint configured"),
             },
         }
-    }
-
-    /// Resolve model for a workflow phase using the phase-based selector.
-    ///
-    /// Returns `Some(model_id)` when a cloud model is recommended for this phase,
-    /// or `None` when the caller should fall back to local workers.
-    pub fn resolve_phase_model(
-        &self,
-        phase: crate::triage::WorkflowPhase,
-        triage: Option<&crate::triage::TriageResult>,
-        implementer_model: Option<&str>,
-    ) -> Option<String> {
-        let selector = crate::triage::PhaseModelSelector::new(
-            self.cloud_model_catalog.clone(),
-            self.max_cost_per_issue,
-        );
-        selector
-            .select_for_phase(phase, triage, implementer_model)
-            .map(|entry| entry.model.clone())
     }
 
     /// Resolve the appropriate model name for a given swarm role based on the active stack profile.
@@ -883,6 +878,7 @@ impl SwarmConfig {
             max_consecutive_no_change: 2,
             min_objective_len: 10,
             max_cost_per_issue: 0.0,
+            reject_patterns: Vec::new(),
             prune_after_iteration: 3,
             parallel_issues: 1,
             concurrent_subtasks: true,
@@ -1182,7 +1178,7 @@ mod tests {
         assert!(config.fast_endpoint.url.contains("vasp-03"));
         assert!(config.coder_endpoint.url.contains("vasp-01"));
         assert!(config.reasoning_endpoint.url.contains("vasp-02"));
-        assert_eq!(config.fast_endpoint.model, "Qwen3.5-27B-Distilled");
+        assert_eq!(config.fast_endpoint.model, "Qwen3-Coder-Next");
         assert_eq!(config.coder_endpoint.model, "Qwen3.5-122B-A10B");
         assert_eq!(config.reasoning_endpoint.model, "Qwen3.5-122B-A10B");
         assert_eq!(config.fast_endpoint.api_key, "not-needed");

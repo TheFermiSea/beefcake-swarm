@@ -4,7 +4,7 @@
 //! All decisions are deterministic — no LLM calls in this module.
 
 use crate::escalation::friction::{FrictionDetector, FrictionKind, FrictionSeverity};
-use crate::escalation::state::{EscalationReason, EscalationState, SwarmTier};
+use crate::escalation::state::{EscalationReason, EscalationState, SwarmTier, MAX_ESCALATION_DEPTH};
 use crate::feedback::error_parser::ErrorCategory;
 use crate::verifier::report::VerifierReport;
 use serde::{Deserialize, Serialize};
@@ -115,6 +115,29 @@ impl EscalationEngine {
 
         // Record this iteration in state
         state.record_iteration(error_categories, error_count, report.all_green, report.reward_score);
+
+        // Hard stop: escalation depth limit — prevents unforeseen Worker↔Council
+        // cycles that bypass per-tier budgets and the no-change circuit breaker.
+        if state.escalation_depth >= MAX_ESCALATION_DEPTH {
+            state.stuck = true;
+            return EscalationDecision {
+                target_tier: SwarmTier::Human,
+                escalated: true,
+                reason: format!(
+                    "Escalation depth limit reached ({} transitions ≥ {}): forcing human intervention",
+                    state.escalation_depth, MAX_ESCALATION_DEPTH
+                ),
+                resolved: false,
+                stuck: true,
+                needs_review: false,
+                action: SuggestedAction::FlagForHuman {
+                    reason: format!(
+                        "Issue {} exhausted escalation ladder ({} tier transitions)",
+                        state.bead_id, state.escalation_depth
+                    ),
+                },
+            };
+        }
 
         // Check: All green → success path
         if report.all_green {

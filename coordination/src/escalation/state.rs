@@ -210,6 +210,14 @@ impl std::fmt::Display for EscalationReason {
     }
 }
 
+/// Maximum number of tier transitions before forcing Human escalation.
+///
+/// Guards against unforeseen escalation cycles that bypass tier budgets and the
+/// no-change circuit breaker. With Worker=4 + Council=6 + Strategist=2 budgets
+/// the realistic maximum is ~4 transitions, so 8 gives headroom for edge cases
+/// while preventing infinite loops.
+pub const MAX_ESCALATION_DEPTH: u32 = 8;
+
 /// Full escalation state for a single beads issue
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EscalationState {
@@ -238,6 +246,12 @@ pub struct EscalationState {
     /// Consecutive iterations where no file changes were produced.
     /// Persists across SLURM preemptions for accurate no-change detection.
     pub consecutive_no_change: u32,
+    /// Number of tier transitions that have occurred.
+    ///
+    /// Incremented by `record_escalation`. When this reaches
+    /// `MAX_ESCALATION_DEPTH` the engine forces a Human transition regardless
+    /// of remaining tier budgets, preventing unforeseen escalation cycles.
+    pub escalation_depth: u32,
     /// Timestamp of last activity
     pub last_activity: DateTime<Utc>,
 }
@@ -263,6 +277,7 @@ impl EscalationState {
             resolved: false,
             stuck: false,
             consecutive_no_change: 0,
+            escalation_depth: 0,
             last_activity: Utc::now(),
         }
     }
@@ -364,6 +379,7 @@ impl EscalationState {
         };
         self.escalation_history.push(record);
         self.current_tier = to_tier;
+        self.escalation_depth += 1;
         self.last_activity = Utc::now();
     }
 

@@ -6,7 +6,12 @@
 //!
 //! Cost: ~$0.001 per issue using Haiku or Gemini Flash (cheapest "triage" models).
 
+use std::sync::atomic::{AtomicU64, Ordering};
+
 use anyhow::{Context, Result};
+use rig::client::CompletionClient;
+use rig::completion::Prompt;
+use rig::providers::openai;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
@@ -100,23 +105,30 @@ impl std::fmt::Display for WorkflowPhase {
 /// Each workflow phase queries the CloudModelCatalog for the best-fit model,
 /// using cost and capability matching. Falls back to local workers when cloud
 /// is unavailable or the cost budget is exceeded.
-#[derive(Debug, Clone)]
+///
+/// Uses `AtomicU64` for budget tracking so it is safe for concurrent use
+/// without locks. The budget is stored as the raw bit pattern of an `f64`;
+/// `u64::MAX` represents "unlimited".
+#[derive(Debug)]
 pub struct PhaseModelSelector {
     catalog: CloudModelCatalog,
-    /// Remaining cost budget in USD. None = unlimited.
-    cost_budget_remaining: Option<f64>,
+    /// Budget in USD stored as f64 bits. u64::MAX = unlimited.
+    cost_budget_bits: AtomicU64,
+}
+
+impl Clone for PhaseModelSelector {
+    fn clone(&self) -> Self {
+        Self {
+            catalog: self.catalog.clone(),
+            cost_budget_bits: AtomicU64::new(self.cost_budget_bits.load(Ordering::Relaxed)),
+        }
+    }
 }
 
 impl PhaseModelSelector {
     pub fn new(catalog: CloudModelCatalog, max_cost: f64) -> Self {
-        Self {
-            catalog,
-            cost_budget_remaining: if max_cost > 0.0 {
-                Some(max_cost)
-            } else {
-                None
-            },
-        }
+        let bits = if max_cost > 0.0 { max_cost.to_bits() } else { u64::MAX };
+        Self { catalog, cost_budget_bits: AtomicU64::new(bits) }
     }
 
     /// Select the best cloud model for a given workflow phase.
@@ -164,44 +176,57 @@ impl PhaseModelSelector {
                     .filter(|m| {
                         implementer_model.is_none_or(|imp| m.model != imp)
                     })
-                    .max_by(|a, b| {
-                        a.cost_input_per_m
-                            .partial_cmp(&b.cost_input_per_m)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
+                    .max_by_key(|m| m.capability_score)
             }
         };
 
         // Budget check: reject if estimated cost exceeds remaining budget.
         // Conservative estimate: 50K input tokens + 4K output tokens per phase call.
-        if let (Some(candidate), Some(remaining)) = (candidate, self.cost_budget_remaining) {
-            let estimated_cost =
-                (50_000.0 * candidate.cost_input_per_m + 4_000.0 * candidate.cost_output_per_m)
-                    / 1_000_000.0;
-            if estimated_cost > remaining {
-                info!(
-                    model = %candidate.model,
-                    estimated_cost,
-                    remaining,
-                    "Budget exceeded for phase {phase} — falling back to local"
-                );
-                return None;
+        if let Some(candidate) = candidate {
+            let bits = self.cost_budget_bits.load(Ordering::Relaxed);
+            if bits != u64::MAX {
+                let remaining = f64::from_bits(bits);
+                let estimated_cost =
+                    (50_000.0 * candidate.cost_input_per_m + 4_000.0 * candidate.cost_output_per_m)
+                        / 1_000_000.0;
+                if estimated_cost > remaining {
+                    info!(
+                        model = %candidate.model,
+                        estimated_cost,
+                        remaining,
+                        "Budget exceeded for phase {phase} — falling back to local"
+                    );
+                    return None;
+                }
             }
+            return Some(candidate);
         }
 
         candidate
     }
 
     /// Record cost spent, reducing the remaining budget.
-    pub fn record_cost(&mut self, cost_usd: f64) {
-        if let Some(ref mut remaining) = self.cost_budget_remaining {
-            *remaining = (*remaining - cost_usd).max(0.0);
-        }
+    ///
+    /// Uses an atomic compare-exchange loop so concurrent callers don't race.
+    pub fn record_cost(&self, cost_usd: f64) {
+        let _ = self.cost_budget_bits.fetch_update(
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+            |bits| {
+                if bits == u64::MAX {
+                    None // Unlimited — nothing to update.
+                } else {
+                    let remaining = f64::from_bits(bits);
+                    Some((remaining - cost_usd).max(0.0).to_bits())
+                }
+            },
+        );
     }
 
     /// Check if any budget remains (or if budgeting is disabled).
     pub fn has_budget(&self) -> bool {
-        self.cost_budget_remaining.is_none_or(|r| r > 0.0)
+        let bits = self.cost_budget_bits.load(Ordering::Relaxed);
+        bits == u64::MAX || f64::from_bits(bits) > 0.0
     }
 }
 
@@ -210,11 +235,16 @@ impl PhaseModelSelector {
 /// Attempts LLM-based triage using the cheapest "triage"-capable model from
 /// the catalog. Falls back to keyword-based heuristics if cloud is unavailable
 /// or the triage call fails.
+///
+/// When `cloud_client` is provided the call goes through Rig's `.prompt()` API,
+/// which participates in OpenTelemetry tracing and retry middleware. When it is
+/// `None`, the function falls back to a raw reqwest call (legacy path).
 pub async fn triage_issue(
     title: &str,
     description: Option<&str>,
     cloud: Option<&CloudEndpoint>,
     catalog: &CloudModelCatalog,
+    cloud_client: Option<&openai::CompletionsClient>,
 ) -> TriageResult {
     // Skip LLM triage if cloud is unavailable.
     let Some(cloud) = cloud else {
@@ -243,7 +273,7 @@ pub async fn triage_issue(
         .take(500)
         .collect::<String>();
 
-    let prompt = format!(
+    let prompt_text = format!(
         r#"You are a code issue classifier. Analyze this issue and respond with ONLY a JSON object (no markdown, no explanation).
 
 Issue title: {title}
@@ -261,7 +291,19 @@ Guidelines:
 - suggested_models: leave empty (system will fill based on complexity)"#
     );
 
-    match call_triage_model(cloud, &triage_model.model, &prompt).await {
+    // Prefer the pre-built Rig client (participates in OTel tracing + retry middleware).
+    // Fall back to the raw reqwest path when the client isn't available.
+    let call_result: Result<String> = if let Some(client) = cloud_client {
+        let agent = client.agent(&triage_model.model).build();
+        agent
+            .prompt(prompt_text.as_str())
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))
+    } else {
+        call_triage_model(cloud, &triage_model.model, &prompt_text).await
+    };
+
+    match call_result {
         Ok(response) => match parse_triage_response(&response) {
             Ok(mut result) => {
                 result.used_llm = true;
