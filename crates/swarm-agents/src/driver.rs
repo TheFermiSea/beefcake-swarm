@@ -1251,7 +1251,7 @@ pub async fn handle_validating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
                     "Auto-fix false positive (state driver)"
                 );
                 ctx.escalation
-                    .record_iteration(error_cats.clone(), 0, false);
+                    .record_iteration(error_cats.clone(), 0, false, 0.0);
                 ctx.metrics.finish_iteration();
                 return Ok(StateTransition::Advance {
                     to: OrchestratorState::Planning,
@@ -1297,7 +1297,7 @@ pub async fn handle_validating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
                     ctx.consecutive_validator_failures = 0;
                 } else {
                     ctx.escalation
-                        .record_iteration(error_cats, error_count, false);
+                        .record_iteration(error_cats, error_count, false, 0.0);
                     ctx.metrics.finish_iteration();
                     return Ok(StateTransition::Advance {
                         to: OrchestratorState::Planning,
@@ -1314,7 +1314,7 @@ pub async fn handle_validating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
         "Verifier passed — checking acceptance (state driver)"
     );
     ctx.escalation
-        .record_iteration(error_cats, error_count, true);
+        .record_iteration(error_cats, error_count, true, 1.0);
 
     if let Ok(hash) = ctx.git_mgr.current_commit() {
         let _ = ctx

@@ -206,7 +206,7 @@ mod tests {
     #[test]
     fn test_first_pass_success() {
         let mut s = EscalationState::new("t");
-        s.record_iteration(vec![], 0, true);
+        s.record_iteration(vec![], 0, true, 0.0);
         let signals = DelightDetector::detect(&s, &green_rep());
         assert!(has(&signals, |k| matches!(
             k,
@@ -222,8 +222,8 @@ mod tests {
     #[test]
     fn test_rapid_convergence() {
         let mut s = EscalationState::new("t");
-        s.record_iteration(vec![ErrorCategory::TypeMismatch], 10, false);
-        s.record_iteration(vec![ErrorCategory::TypeMismatch], 1, false);
+        s.record_iteration(vec![ErrorCategory::TypeMismatch], 10, false, 0.0);
+        s.record_iteration(vec![ErrorCategory::TypeMismatch], 1, false, 0.0);
         let signals = DelightDetector::detect(&s, &rep());
         assert!(has(&signals, |k| matches!(
             k,
@@ -234,9 +234,9 @@ mod tests {
     #[test]
     fn test_steady_progress() {
         let mut s = EscalationState::new("t");
-        s.record_iteration(vec![ErrorCategory::TypeMismatch], 6, false);
-        s.record_iteration(vec![ErrorCategory::TypeMismatch], 4, false);
-        s.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false);
+        s.record_iteration(vec![ErrorCategory::TypeMismatch], 6, false, 0.0);
+        s.record_iteration(vec![ErrorCategory::TypeMismatch], 4, false, 0.0);
+        s.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false, 0.0);
         let signals = DelightDetector::detect(&s, &rep());
         assert!(has(&signals, |k| matches!(
             k,
@@ -247,7 +247,7 @@ mod tests {
     #[test]
     fn test_efficient_resolution() {
         let mut s = EscalationState::new("t");
-        s.record_iteration(vec![], 0, true);
+        s.record_iteration(vec![], 0, true, 0.0);
         let signals = DelightDetector::detect(&s, &green_rep());
         assert!(has(&signals, |k| matches!(
             k,

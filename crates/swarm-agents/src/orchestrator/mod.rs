@@ -1290,6 +1290,29 @@ async fn process_issue_core(
             }
         }
 
+        // --- Active feedback injection (Robin pattern — adoption #2) ---
+        // Query mutation archive for similar past fixes (by error category + files)
+        // and inject as prompt context. Also injects anti-patterns (failed approaches).
+        // This closes the learning loop: successful patterns seed future attempts.
+        {
+            let error_cats: Vec<String> = packet
+                .failure_signals
+                .iter()
+                .map(|s| format!("{}", s.category))
+                .collect();
+            let files: Vec<String> = packet
+                .file_contexts
+                .iter()
+                .map(|f| f.file.clone())
+                .collect();
+            if !error_cats.is_empty() || !files.is_empty() {
+                let feedback = archive.format_feedback_context(&error_cats, &files);
+                if !feedback.is_empty() {
+                    task_prompt.push_str(&feedback);
+                }
+            }
+        }
+
         debug!(
             iteration,
             prompt_len = task_prompt.len(),
@@ -2281,7 +2304,7 @@ async fn process_issue_core(
                 );
 
                 // Record as successful iteration for escalation engine
-                escalation.record_iteration(error_cats.clone(), 0, true);
+                escalation.record_iteration(error_cats.clone(), 0, true, 1.0);
                 best_error_count = Some(0);
 
                 // Log experiment TSV
@@ -2448,7 +2471,7 @@ async fn process_issue_core(
                             ),
                         );
                         // Record this as a failed iteration and continue
-                        escalation.record_iteration(error_cats.clone(), 0, false);
+                        escalation.record_iteration(error_cats.clone(), 0, false, 0.0);
                         last_report = Some(report);
                         metrics.finish_iteration();
                         continue;
@@ -2508,7 +2531,7 @@ async fn process_issue_core(
                                 feedback_count = last_validator_feedback.len(),
                                 "Local validation rejected — looping with feedback"
                             );
-                            escalation.record_iteration(error_cats, error_count, false);
+                            escalation.record_iteration(error_cats, error_count, false, report.reward_score);
                             last_report = Some(report);
                             metrics.finish_iteration();
                             continue;
@@ -2523,7 +2546,7 @@ async fn process_issue_core(
                 iteration,
                 "Verifier passed (all gates green) — checking acceptance"
             );
-            escalation.record_iteration(error_cats, error_count, true);
+            escalation.record_iteration(error_cats, error_count, true, report.reward_score);
             best_error_count = Some(0);
 
             // Log experiment TSV: success

@@ -134,6 +134,10 @@ pub struct IterationRecord {
     pub all_green: bool,
     /// Whether errors changed from previous iteration
     pub progress_made: bool,
+    /// Dense reward score from verifier (0.0–1.0, Aviary pattern).
+    /// Enables reward-delta-based escalation decisions instead of
+    /// raw error count thresholds.
+    pub reward_score: f64,
 }
 
 /// Record of an escalation event
@@ -289,12 +293,28 @@ impl EscalationState {
         self.consecutive_no_change = 0;
     }
 
-    /// Record an iteration result
+    /// Compute the reward delta between the last two iterations.
+    ///
+    /// Positive = improving, negative = regressing, zero = no history.
+    /// Used by escalation engine for progress-aware decisions (DeepInnovator pattern).
+    pub fn reward_delta(&self) -> f64 {
+        let h = &self.iteration_history;
+        if h.len() < 2 {
+            return 0.0;
+        }
+        h[h.len() - 1].reward_score - h[h.len() - 2].reward_score
+    }
+
+    /// Record an iteration result.
+    ///
+    /// `reward_score` is the dense reward from the verifier (0.0–1.0, Aviary pattern).
+    /// Pass 0.0 if the verifier didn't run (e.g., agent-failure path).
     pub fn record_iteration(
         &mut self,
         error_categories: Vec<ErrorCategory>,
         error_count: usize,
         all_green: bool,
+        reward_score: f64,
     ) {
         self.total_iterations += 1;
         *self.tier_iterations.entry(self.current_tier).or_insert(0) += 1;
@@ -309,6 +329,7 @@ impl EscalationState {
             error_count,
             all_green,
             progress_made,
+            reward_score,
         };
 
         self.iteration_history.push(record);
@@ -468,11 +489,11 @@ mod tests {
     fn test_record_iteration() {
         let mut state = EscalationState::new("beads-123");
 
-        state.record_iteration(vec![ErrorCategory::Lifetime], 3, false);
+        state.record_iteration(vec![ErrorCategory::Lifetime], 3, false, 0.0);
         assert_eq!(state.total_iterations, 1);
         assert_eq!(state.remaining_budget(SwarmTier::Worker), 3);
 
-        state.record_iteration(vec![ErrorCategory::Lifetime], 3, false);
+        state.record_iteration(vec![ErrorCategory::Lifetime], 3, false, 0.0);
         assert_eq!(state.total_iterations, 2);
         assert_eq!(
             state.error_category_repeat_count(ErrorCategory::Lifetime),
@@ -485,12 +506,12 @@ mod tests {
         let mut state = EscalationState::new("beads-123");
 
         // Different categories — no repeat
-        state.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false);
-        state.record_iteration(vec![ErrorCategory::Lifetime], 1, false);
+        state.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false, 0.0);
+        state.record_iteration(vec![ErrorCategory::Lifetime], 1, false, 0.0);
         assert_eq!(state.most_repeated_category(), None);
 
         // Now lifetime repeats
-        state.record_iteration(vec![ErrorCategory::Lifetime], 1, false);
+        state.record_iteration(vec![ErrorCategory::Lifetime], 1, false, 0.0);
         let repeated = state.most_repeated_category();
         assert!(repeated.is_some());
         assert_eq!(repeated.unwrap().0, ErrorCategory::Lifetime);
@@ -500,7 +521,7 @@ mod tests {
     #[test]
     fn test_resolved_on_all_green() {
         let mut state = EscalationState::new("beads-123");
-        state.record_iteration(vec![], 0, true);
+        state.record_iteration(vec![], 0, true, 0.0);
         assert!(state.resolved);
     }
 
