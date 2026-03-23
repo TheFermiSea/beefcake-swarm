@@ -571,4 +571,49 @@ mod tests {
         // Cleanup
         let _ = fs::remove_dir_all(&tmp_dir);
     }
+
+    #[test]
+    fn test_beads_bridge_check_inbox_empty_via_poll_returns_none() {
+        // Create a temporary script that echoes empty output
+        let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_poll");
+        fs::create_dir_all(&tmp_dir).unwrap();
+        let script_path = tmp_dir.join("bd_mock");
+
+        // Write a mock script that echoes nothing (empty inbox)
+        let script_content =
+            "#!/bin/bash\n# Mock bd that returns empty output for mail inbox\nexit 0\n";
+        let mut file = fs::File::create(&script_path).unwrap();
+        file.write_all(script_content.as_bytes()).unwrap();
+        fs::set_permissions(
+            &script_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        // Set the mock binary
+        let old_bin = std::env::var("SWARM_BEADS_BIN").ok();
+        std::env::set_var("SWARM_BEADS_BIN", &script_path);
+
+        // Create a temporary worktree directory
+        let tmp_wt = tmp_dir.join("test_wt");
+        fs::create_dir_all(&tmp_wt).unwrap();
+
+        // Test that poll_mail_inbox returns None when BeadsBridge::check_inbox reports no messages
+        let result = poll_mail_inbox(&tmp_wt);
+        assert!(
+            result.is_none(),
+            "Expected None from poll_mail_inbox when inbox is empty, got {:?}",
+            result
+        );
+
+        // Restore original env var
+        if let Some(bin) = old_bin {
+            std::env::set_var("SWARM_BEADS_BIN", bin);
+        } else {
+            std::env::remove_var("SWARM_BEADS_BIN");
+        }
+
+        // Cleanup
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
 }
