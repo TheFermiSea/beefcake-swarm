@@ -326,6 +326,19 @@ impl Tool for WriteFileTool {
             }
         }
 
+        // Data fabrication guard: reject writes to data/results files that look
+        // like fabricated benchmark or experimental output.
+        if crate::tools::patch_tool::is_data_file(&args.path)
+            && crate::tools::patch_tool::looks_like_fabricated_data(&content)
+        {
+            return Err(ToolError::Policy(format!(
+                "write_file: BLOCKED — writing to data file '{}' with content that \
+                 looks like fabricated benchmark/experimental results. Workers cannot \
+                 run benchmarks directly. Return BLOCKED and let the manager escalate.",
+                args.path
+            )));
+        }
+
         let bytes = content.len();
         std::fs::write(&full_path, &content)?;
         Ok(format!("Wrote {bytes} bytes to {}", args.path))

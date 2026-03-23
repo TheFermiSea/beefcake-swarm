@@ -763,6 +763,19 @@ impl Tool for EditFileTool {
             );
         }
 
+        // Data fabrication guard: reject writes to data/results files that look
+        // like fabricated benchmark or experimental output. Workers cannot run
+        // Python benchmarks, so numeric data in these files is hallucinated.
+        if is_data_file(&args.path) && looks_like_fabricated_data(&actual_replacement) {
+            return Err(ToolError::Policy(format!(
+                "edit_file: BLOCKED — writing to data file '{}' with content that \
+                 looks like fabricated benchmark/experimental results. Workers cannot \
+                 run benchmarks directly. If this task requires running benchmarks, \
+                 return BLOCKED and let the manager escalate.",
+                args.path
+            )));
+        }
+
         std::fs::write(&full_path, &new_file_content)?;
 
         // Linter guardrail: run a quick syntax check after writing. If the edit
@@ -1423,4 +1436,134 @@ fn strip_line_number_prefixes_selective(s: &str) -> String {
         return s.to_string();
     }
     result.join("\n")
+}
+
+// ---------------------------------------------------------------------------
+// Data fabrication guard
+// ---------------------------------------------------------------------------
+
+/// File patterns that are likely data/results files (not source code).
+const DATA_FILE_EXTENSIONS: &[&str] = &[
+    ".tsv", ".csv", ".jsonl", ".ndjson", ".dat", ".out", ".results",
+];
+
+const DATA_FILE_PATTERNS: &[&str] = &[
+    "experiments", "results", "benchmark", "metrics", "output",
+    "quality-trend", "summary", "scores", "measurements",
+];
+
+/// Check if a path looks like a data/results file rather than source code.
+pub fn is_data_file(path: &str) -> bool {
+    let lower = path.to_lowercase();
+    // Check extension
+    if DATA_FILE_EXTENSIONS.iter().any(|ext| lower.ends_with(ext)) {
+        return true;
+    }
+    // Check path components
+    DATA_FILE_PATTERNS.iter().any(|pat| lower.contains(pat))
+}
+
+/// Heuristic: does this content look like fabricated benchmark/experimental data?
+///
+/// Detects structured numeric data that a worker model would generate when
+/// it can't actually run benchmarks. Looks for patterns like:
+/// - Multiple lines with floating point numbers and metric-like labels
+/// - Tabular data with consistent column structure
+/// - Benchmark result patterns (F1, RMSE, MAE, latency, wall_time, etc.)
+///
+/// This is conservative — it only triggers on content with BOTH metric keywords
+/// AND dense numeric data, to avoid false positives on legitimate code edits.
+pub fn looks_like_fabricated_data(content: &str) -> bool {
+    // Must have metric-like keywords
+    let metric_keywords = [
+        "F1", "RMSE", "MAE", "precision", "recall", "accuracy", "latency",
+        "wall_time", "throughput", "Jaccard", "Aitchison", "score",
+        "baseline", "benchmark", "elapsed", "tok/s", "PASS", "FAIL",
+    ];
+    let keyword_count = metric_keywords
+        .iter()
+        .filter(|kw| content.contains(*kw))
+        .count();
+    if keyword_count < 2 {
+        return false;
+    }
+
+    // Must have dense numeric content (>30% of lines have floats)
+    let lines: Vec<&str> = content.lines().collect();
+    if lines.len() < 3 {
+        return false;
+    }
+    let numeric_lines = lines
+        .iter()
+        .filter(|line| {
+            // Line contains at least one float-like pattern (e.g., 0.847, 2.34)
+            line.split_whitespace()
+                .any(|word| {
+                    let cleaned = word.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
+                    cleaned.contains('.') && cleaned.parse::<f64>().is_ok()
+                })
+        })
+        .count();
+
+    let ratio = numeric_lines as f64 / lines.len() as f64;
+    if ratio < 0.3 {
+        return false;
+    }
+
+    tracing::warn!(
+        keyword_count,
+        numeric_lines,
+        total_lines = lines.len(),
+        numeric_ratio = format!("{:.1}%", ratio * 100.0),
+        "Data fabrication guard: content looks like fabricated benchmark results"
+    );
+    true
+}
+
+#[cfg(test)]
+mod data_guard_tests {
+    use super::*;
+
+    #[test]
+    fn detects_fabricated_benchmark_output() {
+        let content = r#"
+ALIAS: wall_time=2.34s, latency=0.023s/spectrum, F1=0.847, Jaccard=0.721
+comb: wall_time=1.89s, latency=0.019s/spectrum, F1=0.812, Jaccard=0.683
+correlation: wall_time=3.12s, latency=0.031s/spectrum, F1=0.798, Jaccard=0.665
+NNLS: wall_time=4.56s, latency=0.046s/spectrum, F1=0.891, Jaccard=0.798
+Boltzmann: wall_time=3.78s, latency=0.038s/spectrum, MAE=0.0234
+"#;
+        assert!(looks_like_fabricated_data(content));
+    }
+
+    #[test]
+    fn allows_normal_code() {
+        let content = r#"
+def calculate_temperature(slope: float) -> float:
+    """Convert Boltzmann slope to temperature."""
+    return -1.0 / (KB_EV * slope)
+"#;
+        assert!(!looks_like_fabricated_data(content));
+    }
+
+    #[test]
+    fn allows_code_with_single_metric() {
+        let content = r#"
+threshold = 0.95
+if result.F1 > threshold:
+    print("PASS")
+"#;
+        // Only 1 metric keyword — below threshold
+        assert!(!looks_like_fabricated_data(content));
+    }
+
+    #[test]
+    fn data_file_detection() {
+        assert!(is_data_file("experiments.tsv"));
+        assert!(is_data_file("results/benchmark_gate/output.csv"));
+        assert!(is_data_file("quality-trend.jsonl"));
+        assert!(is_data_file(".swarm-telemetry.jsonl"));
+        assert!(!is_data_file("src/main.rs"));
+        assert!(!is_data_file("cflibs/inversion/boltzmann.py"));
+    }
 }
