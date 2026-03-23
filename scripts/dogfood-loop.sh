@@ -68,6 +68,12 @@ mkdir -p "$LOG_DIR"
 # Uses flock(1) for atomic, race-free locking. The lock is automatically
 # released when the process exits (including crashes/signals).
 # Lockfile includes target repo name to allow parallel loops on different repos.
+#
+# IMPORTANT: Never delete the lockfile! flock works on inodes, not paths.
+# If you rm the lockfile and recreate it, the new file gets a new inode
+# and flock sees it as a different lock — allowing zombie accumulation.
+# To stop the loop: kill the PID written inside the lockfile, or use
+# `flock -u 200` to release the lock explicitly.
 _LOCK_SUFFIX=""
 if [[ -n "$TARGET_REPO" ]]; then
   _LOCK_SUFFIX="-$(basename "$TARGET_REPO")"
@@ -76,11 +82,30 @@ LOCKFILE="/tmp/dogfood-loop${_LOCK_SUFFIX}.lock"
 exec 200>"$LOCKFILE"
 if ! flock -n 200; then
     EXISTING_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "unknown")
-    echo "ERROR: Another dogfood-loop is already running (pid=$EXISTING_PID)." >&2
-    echo "Kill it first: kill $EXISTING_PID" >&2
-    exit 1
+    # Stale lock check: if the PID in the lockfile is dead, the lock is stale.
+    # This happens when the previous loop was kill -9'd but children kept the
+    # fd open briefly. Truncate the lockfile (same inode!) to clear it, then retry.
+    if [[ "$EXISTING_PID" =~ ^[0-9]+$ ]] && ! kill -0 "$EXISTING_PID" 2>/dev/null; then
+        echo "WARNING: Stale lock (pid=$EXISTING_PID is dead). Reclaiming lock." >&2
+        # Truncate (not delete!) to preserve the inode for flock
+        : > "$LOCKFILE"
+        # Release the stale lock by closing and reopening the fd on the SAME inode
+        exec 200>&-
+        exec 200>"$LOCKFILE"
+        if ! flock -n 200; then
+            echo "ERROR: Could not reclaim stale lock. Another instance may have started." >&2
+            exit 1
+        fi
+    else
+        echo "ERROR: Another dogfood-loop is already running (pid=$EXISTING_PID)." >&2
+        echo "Kill it first: kill $EXISTING_PID" >&2
+        exit 1
+    fi
 fi
 echo $$ > "$LOCKFILE"
+
+# Process group cleanup is set up later (after CHILD_PIDS is defined).
+# See the `cleanup` function and `trap cleanup ...` below.
 
 # Note: sccache/CARGO_TARGET_DIR are set by run-swarm.sh (gated on target language)
 
@@ -344,15 +369,19 @@ with open('$jsonl_path') as f:
 CHILD_PIDS=()
 
 cleanup() {
-  log "Interrupted. Killing ${#CHILD_PIDS[@]} child processes..."
+  log "Interrupted. Killing ${#CHILD_PIDS[@]} tracked children + process group..."
+  # Kill tracked children first (specific PIDs from parallel dispatch)
   for pid in "${CHILD_PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true
   done
+  # Then kill entire process group to catch any untracked descendants
+  # (run-swarm.sh, swarm-agents, cargo, etc.) that would otherwise zombie.
+  kill -- -$$ 2>/dev/null || true
   wait 2>/dev/null || true
   log "Runs=$RUN_COUNT Success=$SUCCESS_COUNT Fail=$FAIL_COUNT"
   exit 130
 }
-trap cleanup INT TERM
+trap cleanup INT TERM EXIT
 
 if [[ "$PARALLEL" -le 1 ]]; then
   # --- Serial mode (original behavior) ---
