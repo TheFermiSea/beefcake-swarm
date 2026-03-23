@@ -273,6 +273,50 @@ async fn process_issue_core(
         return Ok(false);
     }
 
+    // --- Issue quality pre-filter (AI-Researcher pattern) ---
+    // Reject issues the swarm can't handle: epics, benchmark-execution tasks,
+    // deferred status, and configurable reject patterns. Prevents wasting
+    // iterations on unactionable work.
+    let reject_patterns: Vec<&str> = std::env::var("SWARM_REJECT_PATTERNS")
+        .ok()
+        .map(|s| s.leak() as &str)
+        .into_iter()
+        .flat_map(|s| s.split(','))
+        .filter(|s| !s.is_empty())
+        .collect();
+    let title_lower = title_trimmed.to_lowercase();
+    let desc_lower = issue
+        .description
+        .as_deref()
+        .unwrap_or("")
+        .to_lowercase();
+    let combined = format!("{} {}", title_lower, desc_lower);
+
+    let is_epic = title_lower.contains("[epic]") || title_lower.starts_with("epic:");
+    let is_benchmark_exec = combined.contains("run benchmark")
+        || combined.contains("run.*suite")
+        || combined.contains("execute benchmark")
+        || combined.contains("record performance metrics");
+    let matches_reject = reject_patterns
+        .iter()
+        .any(|pat| combined.contains(&pat.to_lowercase()));
+
+    if is_epic || is_benchmark_exec || matches_reject {
+        let reason = if is_epic {
+            "epic (not a code task)"
+        } else if is_benchmark_exec {
+            "benchmark execution (requires manual run)"
+        } else {
+            "matches SWARM_REJECT_PATTERNS"
+        };
+        warn!(
+            id = %issue.id,
+            reason,
+            "Pre-filter: rejecting issue the swarm cannot handle"
+        );
+        return Ok(false);
+    }
+
     // --- Claim issue ---
     beads.update_status(&issue.id, "in_progress")?;
     info!(id = %issue.id, "Claimed issue");
@@ -2176,6 +2220,7 @@ async fn process_issue_core(
         info!(
             iteration,
             all_green = report.all_green,
+            reward_score = format!("{:.3}", report.reward_score),
             summary = %report.summary(),
             "Verifier report"
         );
