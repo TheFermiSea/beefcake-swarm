@@ -392,7 +392,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
       # Pick from ready issues using Rust-native reformulation-aware selection.
       # Falls back to bash circuit breaker if `swarm-agents pick-next` is unavailable.
       ISSUE_ID=""
-      PICK_NEXT_JSON=$(cargo run -p swarm-agents --quiet -- pick-next --json 2>/dev/null || true)
+      PICK_NEXT_JSON=$(cd "$BD_RUN_DIR" && cargo run --manifest-path "$REPO_ROOT/Cargo.toml" -p swarm-agents --quiet -- pick-next --json 2>/dev/null || true)
       if [[ -n "$PICK_NEXT_JSON" ]]; then
         ISSUE_ID=$(echo "$PICK_NEXT_JSON" | python3 -c "import json,sys; print(json.load(sys.stdin).get('id',''))" 2>/dev/null || true)
         if [[ -n "$ISSUE_ID" ]]; then
