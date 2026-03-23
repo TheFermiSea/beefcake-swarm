@@ -1853,6 +1853,48 @@ async fn process_issue_core(
                         }
                         continue;
                     }
+                } else if !agent_has_written_prev && report.all_green && iteration <= 3 {
+                    // --- No-op resolution (ClawTeam insight) ---
+                    // Agent terminated without writing AND verifier still passes.
+                    // The task is already done — the codebase already satisfies
+                    // the issue requirements. Close without further iterations.
+                    info!(
+                        iteration,
+                        id = %issue.id,
+                        "No-op resolution: agent couldn't find changes to make, \
+                         but verifier passes. Issue appears already resolved."
+                    );
+
+                    if let Err(e) = git_commit_changes(&wt_path, iteration as u32).await {
+                        warn!(id = %issue.id, "Failed to commit (no-op path): {e}");
+                    }
+
+                    session.complete();
+                    let _ = progress.log_session_end(
+                        session.session_id(),
+                        session.iteration(),
+                        format!("Issue {} resolved (no-op: already clean)", issue.id),
+                    );
+
+                    info!(
+                        id = %issue.id,
+                        session_id = session.short_id(),
+                        elapsed = %session.elapsed_human(),
+                        "No-op resolution — merging worktree"
+                    );
+
+                    if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
+                        error!(id = %issue.id, "Merge failed: {e}");
+                        let _ = worktree_bridge.cleanup(&issue.id);
+                        let _ = beads.update_status(&issue.id, "open");
+                        return Err(e);
+                    }
+                    beads.close(
+                        &issue.id,
+                        Some("Resolved (no-op): codebase already satisfies requirements"),
+                    )?;
+                    clear_resume_file(worktree_bridge.repo_root());
+                    return Ok(true);
                 } else {
                     info!(
                         iteration,
