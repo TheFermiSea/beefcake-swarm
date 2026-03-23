@@ -573,9 +573,9 @@ mod tests {
     }
 
     #[test]
-    fn test_beads_bridge_check_inbox_empty_via_poll_returns_none() {
+    fn test_beads_bridge_check_inbox_empty_returns_none() {
         // Create a temporary script that echoes empty output
-        let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_poll");
+        let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_check");
         fs::create_dir_all(&tmp_dir).unwrap();
         let script_path = tmp_dir.join("bd_mock");
 
@@ -598,12 +598,19 @@ mod tests {
         let tmp_wt = tmp_dir.join("test_wt");
         fs::create_dir_all(&tmp_wt).unwrap();
 
-        // Test that poll_mail_inbox returns None when BeadsBridge::check_inbox reports no messages
-        let result = poll_mail_inbox(&tmp_wt);
+        // Test that BeadsBridge::check_inbox returns Ok with empty string when inbox is empty
+        let bridge = BeadsBridge::with_worktree(&tmp_wt);
+        let result = bridge.check_inbox();
         assert!(
-            result.is_none(),
-            "Expected None from poll_mail_inbox when inbox is empty, got {:?}",
+            result.is_ok(),
+            "Expected Ok result for check_inbox, got error: {:?}",
             result
+        );
+        let inbox = result.unwrap();
+        assert!(
+            inbox.trim().is_empty(),
+            "Expected empty inbox, got: {:?}",
+            inbox
         );
 
         // Restore original env var
