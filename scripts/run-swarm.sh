@@ -80,8 +80,10 @@ export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
 # Enable the inference → feedback → optimize loop by telling the orchestrator
 # where the TZ gateway and Postgres live. Without this, inferences are recorded
 # but evaluations/episodes never populate.
-export SWARM_TENSORZERO_URL="${SWARM_TENSORZERO_URL:-http://localhost:3000}"
-export SWARM_TENSORZERO_PG_URL="${SWARM_TENSORZERO_PG_URL:-postgres://tensorzero:tensorzero@localhost:5433/tensorzero}"
+# Use ${VAR-default} (no colon) so explicitly setting SWARM_TENSORZERO_URL=""
+# disables TZ routing (config.rs filters empty strings).
+export SWARM_TENSORZERO_URL="${SWARM_TENSORZERO_URL-http://localhost:3000}"
+export SWARM_TENSORZERO_PG_URL="${SWARM_TENSORZERO_PG_URL-postgres://tensorzero:tensorzero@localhost:5433/tensorzero}"
 
 # ── Beads OpenTelemetry ──
 # Export beads operational metrics (issue counts, storage ops) to OTLP collector.
