@@ -300,6 +300,7 @@ impl BeadsBridge {
     /// - Messages are queued locally and synced via `bd dolt push/pull`
     /// - The `to` field should match an actor name configured in the swarm
     /// - Failures are logged but do not propagate errors (non-blocking)
+    #[must_use = "send_mail returns a Result that should be handled"]
     pub fn send_mail(&self, to: &str, subject: &str, message: &str) -> Result<()> {
         self.run_bd_ok(&["mail", "send", to, "-s", subject, "-m", message])?;
         Ok(())
