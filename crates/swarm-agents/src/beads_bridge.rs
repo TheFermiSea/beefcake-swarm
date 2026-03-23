@@ -485,8 +485,11 @@ mod tests {
         // Write a mock script that echoes nothing (empty inbox)
         let script_content =
             "#!/bin/bash\n# Mock bd that returns empty output for mail inbox\nexit 0\n";
-        let mut file = fs::File::create(&script_path).unwrap();
-        file.write_all(script_content.as_bytes()).unwrap();
+        // Drop file handle before execution to avoid ETXTBSY race.
+        {
+            let mut file = fs::File::create(&script_path).unwrap();
+            file.write_all(script_content.as_bytes()).unwrap();
+        }
         fs::set_permissions(
             &script_path,
             std::os::unix::fs::PermissionsExt::from_mode(0o755),
@@ -530,8 +533,11 @@ mod tests {
         // Write a mock script that echoes nothing (empty inbox)
         let script_content =
             "#!/bin/bash\n# Mock bd that returns empty output for mail inbox\nexit 0\n";
-        let mut file = fs::File::create(&script_path).unwrap();
-        file.write_all(script_content.as_bytes()).unwrap();
+        // Drop file handle before execution to avoid ETXTBSY race.
+        {
+            let mut file = fs::File::create(&script_path).unwrap();
+            file.write_all(script_content.as_bytes()).unwrap();
+        }
         fs::set_permissions(
             &script_path,
             std::os::unix::fs::PermissionsExt::from_mode(0o755),
@@ -572,55 +578,4 @@ mod tests {
         let _ = fs::remove_dir_all(&tmp_dir);
     }
 
-    #[test]
-    fn test_beads_bridge_check_inbox_empty_returns_none() {
-        // Create a temporary script that echoes empty output
-        let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_check");
-        fs::create_dir_all(&tmp_dir).unwrap();
-        let script_path = tmp_dir.join("bd_mock");
-
-        // Write a mock script that echoes nothing (empty inbox)
-        let script_content =
-            "#!/bin/bash\n# Mock bd that returns empty output for mail inbox\nexit 0\n";
-        let mut file = fs::File::create(&script_path).unwrap();
-        file.write_all(script_content.as_bytes()).unwrap();
-        fs::set_permissions(
-            &script_path,
-            std::os::unix::fs::PermissionsExt::from_mode(0o755),
-        )
-        .unwrap();
-
-        // Set the mock binary
-        let old_bin = std::env::var("SWARM_BEADS_BIN").ok();
-        std::env::set_var("SWARM_BEADS_BIN", &script_path);
-
-        // Create a temporary worktree directory
-        let tmp_wt = tmp_dir.join("test_wt");
-        fs::create_dir_all(&tmp_wt).unwrap();
-
-        // Test that BeadsBridge::check_inbox returns Ok with empty string when inbox is empty
-        let bridge = BeadsBridge::with_worktree(&tmp_wt);
-        let result = bridge.check_inbox();
-        assert!(
-            result.is_ok(),
-            "Expected Ok result for check_inbox, got error: {:?}",
-            result
-        );
-        let inbox = result.unwrap();
-        assert!(
-            inbox.trim().is_empty(),
-            "Expected empty inbox, got: {:?}",
-            inbox
-        );
-
-        // Restore original env var
-        if let Some(bin) = old_bin {
-            std::env::set_var("SWARM_BEADS_BIN", bin);
-        } else {
-            std::env::remove_var("SWARM_BEADS_BIN");
-        }
-
-        // Cleanup
-        let _ = fs::remove_dir_all(&tmp_dir);
-    }
 }

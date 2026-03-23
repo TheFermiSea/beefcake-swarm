@@ -65,6 +65,7 @@ use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::config::{SwarmConfig, SwarmRole};
 use crate::knowledge_sync;
+use crate::triage::{self, PhaseModelSelector, WorkflowPhase};
 use crate::notebook_bridge::KnowledgeBase;
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
 use crate::worktree_bridge::WorktreeBridge;
@@ -317,6 +318,32 @@ async fn process_issue_core(
         return Ok(false);
     }
 
+    // --- Triage phase (Ensemble Swarm) ---
+    // Classify issue complexity, language, and suggested models using the cheapest
+    // triage-capable cloud model (~$0.001/issue). Falls back to keyword heuristics
+    // when cloud is unavailable or SWARM_SKIP_TRIAGE=1.
+    let triage_result = triage::triage_issue(
+        &issue.title,
+        issue.description.as_deref(),
+        config.cloud_endpoint.as_ref(),
+        &config.cloud_model_catalog,
+    )
+    .await;
+    info!(
+        id = %issue.id,
+        complexity = %triage_result.complexity,
+        language = %triage_result.language,
+        used_llm = triage_result.used_llm,
+        model = ?triage_result.triage_model,
+        "Triage complete"
+    );
+
+    // Build the phase-based model selector for this issue.
+    let _phase_selector = PhaseModelSelector::new(
+        config.cloud_model_catalog.clone(),
+        config.max_cost_per_issue,
+    );
+
     // --- Claim issue ---
     beads.update_status(&issue.id, "in_progress")?;
     info!(id = %issue.id, "Claimed issue");
@@ -529,20 +556,33 @@ async fn process_issue_core(
 
     let council_budget_iterations = u32_from_env("SWARM_COUNCIL_MAX_ITERATIONS", 6);
     let council_budget_consultations = u32_from_env("SWARM_COUNCIL_MAX_CONSULTATIONS", 6);
-    // Always classify the task to determine starting tier.
-    // Simple tasks (doc comments, lint fixes) go directly to Worker (local coders).
-    // Complex tasks (refactors, multi-file arch) go to Council (cloud manager).
-    // Unknown tasks default to Worker — workers write code; manager just reads files.
+    // Determine starting tier using both keyword classifier and triage result.
+    // The triage result (from LLM or keyword fallback) provides a richer signal
+    // than the legacy keyword-only classifier.
     let recommendation = classify_initial_tier(&issue.title, &[]);
+    // Override tier based on triage complexity when triage provides higher confidence.
+    let triage_tier = match triage_result.complexity {
+        triage::Complexity::Simple => SwarmTier::Worker,
+        triage::Complexity::Medium => recommendation.tier, // Defer to keyword classifier.
+        triage::Complexity::Complex | triage::Complexity::Critical => SwarmTier::Council,
+    };
+    let effective_tier = if triage_result.used_llm {
+        triage_tier // LLM triage has higher confidence than keywords.
+    } else {
+        recommendation.tier // Both are keyword-based; use the existing one.
+    };
     info!(
-        tier = ?recommendation.tier,
+        keyword_tier = ?recommendation.tier,
+        triage_tier = ?triage_tier,
+        effective_tier = ?effective_tier,
         complexity = %recommendation.complexity,
+        triage_complexity = %triage_result.complexity,
         confidence = recommendation.confidence,
         reason = %recommendation.reason,
-        "Task classification"
+        "Task classification (triage-enhanced)"
     );
-    // Allow explicit env override, otherwise use classifier recommendation.
-    let initial_tier = tier_from_env("SWARM_INITIAL_TIER", recommendation.tier);
+    // Allow explicit env override, otherwise use triage-enhanced recommendation.
+    let initial_tier = tier_from_env("SWARM_INITIAL_TIER", effective_tier);
     // Clamp: Council requires cloud endpoint. Without cloud, the local manager
     // can't delegate to workers effectively. Honor explicit env override.
     let initial_tier = if initial_tier == SwarmTier::Council
@@ -610,9 +650,21 @@ async fn process_issue_core(
     if config.concurrent_subtasks {
         info!(id = %issue.id, "Using concurrent subtask dispatch");
 
-        // Prefer local reasoning tier for planning (escalation ladder compliance).
-        // Use resolve_role_model to get the TZ function name when TZ is configured.
-        let (plan_client, plan_model) = {
+        // Phase-based model selection for planning.
+        // Try the phase selector first (picks strongest "plan" model from catalog),
+        // then fall back to the legacy stack-profile routing.
+        let phase_plan_model = config.resolve_phase_model(
+            WorkflowPhase::Plan,
+            Some(&triage_result),
+            None,
+        );
+        let (plan_client, plan_model) = if let Some(ref cloud_model) = phase_plan_model {
+            info!(model = %cloud_model, "Phase selector: using cloud model for Plan phase");
+            (
+                factory.clients.cloud.as_ref().unwrap_or(&factory.clients.reasoning).clone(),
+                cloud_model.clone(),
+            )
+        } else {
             (
                 factory.clients.reasoning.clone(),
                 config.resolve_role_model(SwarmRole::Planner),

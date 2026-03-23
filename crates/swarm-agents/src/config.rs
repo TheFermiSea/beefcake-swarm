@@ -10,7 +10,7 @@ use std::time::Duration;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SwarmStackProfile {
-    /// Qwen3.5-27B-Distilled on vasp-03, Qwen3.5-122B-A10B on vasp-01 (coder) + vasp-02 (reasoning)
+    /// Qwen3-Coder-Next on vasp-03, Qwen3.5-122B-A10B on vasp-01 (coder) + vasp-02 (reasoning)
     #[default]
     #[serde(rename = "hybrid_balanced_v1")]
     HybridBalancedV1,
@@ -415,7 +415,7 @@ impl CloudFallbackMatrix {
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
-    /// Qwen3.5-27B-Distilled on vasp-03:8081 (Scout/fast tier, 192K context, VRAM-resident)
+    /// Qwen3-Coder-Next on vasp-03:8081 (Scout/fast tier, 65K context, expert-offload MoE)
     pub fast_endpoint: Endpoint,
     /// Qwen3.5-122B-A10B on vasp-01:8081 (Coder/integrator, 65K context, expert-offload)
     pub coder_endpoint: Endpoint,
@@ -518,7 +518,7 @@ impl Default for SwarmConfig {
                 url: std::env::var("SWARM_FAST_URL")
                     .unwrap_or_else(|_| "http://vasp-03:8081/v1".into()),
                 model: std::env::var("SWARM_FAST_MODEL")
-                    .unwrap_or_else(|_| "Qwen3.5-27B-Distilled".into()),
+                    .unwrap_or_else(|_| "Qwen3-Coder-Next".into()),
                 tier: Tier::Fast,
                 api_key: std::env::var("SWARM_FAST_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
@@ -688,6 +688,25 @@ impl SwarmConfig {
                     .context("Council role requested but no cloud endpoint configured"),
             },
         }
+    }
+
+    /// Resolve model for a workflow phase using the phase-based selector.
+    ///
+    /// Returns `Some(model_id)` when a cloud model is recommended for this phase,
+    /// or `None` when the caller should fall back to local workers.
+    pub fn resolve_phase_model(
+        &self,
+        phase: crate::triage::WorkflowPhase,
+        triage: Option<&crate::triage::TriageResult>,
+        implementer_model: Option<&str>,
+    ) -> Option<String> {
+        let selector = crate::triage::PhaseModelSelector::new(
+            self.cloud_model_catalog.clone(),
+            self.max_cost_per_issue,
+        );
+        selector
+            .select_for_phase(phase, triage, implementer_model)
+            .map(|entry| entry.model.clone())
     }
 
     /// Resolve the appropriate model name for a given swarm role based on the active stack profile.

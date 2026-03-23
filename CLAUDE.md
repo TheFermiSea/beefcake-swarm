@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Model Selection & Routing
 
-- **Scout/Fast (vasp-03:8081):** Qwen3.5-27B-Opus-Distilled — VRAM-resident, 65K context, ~34 tok/s. Distilled from Claude 4.6 Opus reasoning trajectories. Used for scout, reviewer, fixer roles.
+- **Scout/Fast (vasp-03:8081):** Qwen3-Coder-Next — 80B/3B MoE, expert-offload, 65K context. Used for scout, reviewer, fixer roles.
 - **Coder (vasp-01:8081):** Qwen3.5-122B-A10B MoE — expert-offload, 65K context, ~5-8 tok/s. Multi-file code generation and integration.
 - **Reasoning (vasp-02:8081):** Qwen3.5-122B-A10B MoE — expert-offload, 65K context, ~5-8 tok/s. Complex reasoning, planning, architecture decisions.
 - **Cloud Manager:** Claude Opus 4.6 via CLIAPIProxy (localhost:8317). Fallback cascade: Gemini 3.1 Pro → Sonnet 4.6 → Gemini 3.1 Flash Lite.
@@ -87,7 +87,7 @@ Key modules:
 Cloud Manager (Claude Opus 4.6 via CLIAPIProxy, max 10 iterations)
     → cloud fallback: Opus 4.6 → Gemini 3.1 Pro → Sonnet 4.6 → Gemini 3.1 Flash Lite
     → delegates to local workers:
-        vasp-03:8081 — Qwen3.5-27B-Opus-Distilled (scout, reviewer, fixer)
+        vasp-03:8081 — Qwen3-Coder-Next (scout, reviewer, fixer)
         vasp-01:8081 — Qwen3.5-122B-A10B MoE (coder, general worker)
         vasp-02:8081 — Qwen3.5-122B-A10B MoE (planner, reasoning worker)
     → optional: Qwen3.5-397B-A17B strategist (advisor, non-writing arbitration)
@@ -117,12 +117,12 @@ Heterogeneous local cluster — each node runs a different model tier. See `docs
 
 | Tier | Endpoint | Model | Hardware | Throughput |
 |------|----------|-------|----------|------------|
-| Scout/Fast | http://vasp-03:8081/v1 | Qwen3.5-27B-Opus-Distilled Q4_K_M | V100S 32GB (VRAM-resident) | ~34 tok/s |
+| Scout/Fast | http://vasp-03:8081/v1 | Qwen3-Coder-Next-UD Q4_K_XL (80B/3B MoE) | V100S 32GB (expert-offload) | TBD |
 | Coder | http://vasp-01:8081/v1 | Qwen3.5-122B-A10B MoE | V100S 32GB (expert-offload) | ~5-8 tok/s |
 | Reasoning | http://vasp-02:8081/v1 | Qwen3.5-122B-A10B MoE | V100S 32GB (expert-offload) | ~5-8 tok/s |
 | Cloud | http://localhost:8317/v1 | claude-opus-4-6 (CLIAPIProxy) | ai-proxy | N/A |
 
-**27B-Opus-Distilled**: Distilled from Claude 4.6 Opus reasoning trajectories. Solves the "Turn-Based Trap" where workers analyze but fail to call tools. VRAM-resident on a single V100S.
+**Qwen3-Coder-Next**: 80B/3B MoE (Mixture of Experts). Expert FFN layers offloaded to CPU RAM, attention on GPU. Replaces the 27B-Opus-Distilled as the fast tier model.
 
 **122B-A10B MoE**: Mixture-of-Experts with ~10B active parameters. Expert FFN layers offloaded to CPU RAM (~225GB), attention on GPU. Each vasp node runs an independent instance.
 
@@ -135,7 +135,7 @@ Heterogeneous local cluster — each node runs a different model tier. See `docs
 **Start inference:**
 
 ```bash
-ssh root@10.0.0.22 "bash /tmp/start-qwen35-mmq.sh"   # vasp-03 (27B-Opus-Distilled)
+ssh root@10.0.0.22 "bash /tmp/start-qwen35-mmq.sh"   # vasp-03 (Qwen3-Coder-Next)
 ssh root@10.0.0.20 "bash /tmp/start-qwen35-mmq.sh"   # vasp-01 (122B-A10B coder)
 ssh root@10.0.0.21 "bash /tmp/start-qwen35-mmq.sh"   # vasp-02 (122B-A10B reasoning)
 ```
@@ -155,7 +155,7 @@ Heterogeneous model setup: 27B on vasp-03, 122B on vasp-01/02.
 | Variable | Default |
 |----------|---------|
 | `SWARM_FAST_URL` | `http://vasp-03:8081/v1` |
-| `SWARM_FAST_MODEL` | `Qwen3.5-27B-Opus-Distilled` |
+| `SWARM_FAST_MODEL` | `Qwen3-Coder-Next` |
 | `SWARM_CODER_URL` | `http://vasp-01:8081/v1` |
 | `SWARM_CODER_MODEL` | `Qwen3.5-122B-A10B` |
 | `SWARM_REASONING_URL` | `http://vasp-02:8081/v1` |
@@ -297,7 +297,7 @@ tail -f ~/code/beefcake-swarm/logs/dogfood/run-N-<issue>-*.log
 grep -o 'gen_ai.tool.name[^"]*"[^"]*"' logs/dogfood/run-*.log | sort | uniq -c | sort -rn
 
 # Check endpoint health
-curl -s http://vasp-03:8081/health  # Scout (27B-Opus-Distilled)
+curl -s http://vasp-03:8081/health  # Scout (Qwen3-Coder-Next)
 curl -s http://vasp-01:8081/health  # Coder (122B-A10B MoE)
 curl -s http://vasp-02:8081/health  # Reasoning (122B-A10B MoE)
 ```
@@ -378,7 +378,7 @@ nlm source add "<ID>" --file "doc.md"
 - slurm-ctl: `ssh root@10.0.0.5` (controller, NFS server — VM 500 on pve1)
 - vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, Qwen3.5-122B-A10B MoE — VM 600 on pve1)
 - vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, Qwen3.5-122B-A10B MoE — VM 601 on pve2)
-- vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM, Qwen3.5-27B-Opus-Distilled — VM 602 on pve3)
+- vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM, Qwen3-Coder-Next 80B/3B MoE — VM 602 on pve3)
 - pve1: `ssh root@10.0.0.1` (Proxmox host, cluster gateway — DO NOT reboot)
 - pve2: `ssh root@10.0.0.2` (Proxmox host)
 - pve3: `ssh root@10.0.0.3` (Proxmox host)

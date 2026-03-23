@@ -1,7 +1,7 @@
 //! Agent builders for the Manager-Worker swarm.
 //!
 //! Specialized ensemble topology:
-//!   vasp-03:8081 — Scout/Reviewer (Qwen3.5-27B-Distilled, 100% VRAM-resident, 192K context)
+//!   vasp-03:8081 — Scout/Reviewer (Qwen3-Coder-Next, 80B/3B MoE expert-offload, 65K context)
 //!   vasp-01:8081 — Integrator/RPC head (Qwen3.5-122B-A10B MoE, layer-split with vasp-02, 128K context)
 //!   vasp-02     — RPC worker shard for vasp-01 (NO independent HTTP endpoint)
 //!
