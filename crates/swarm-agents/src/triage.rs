@@ -15,7 +15,7 @@ use rig::providers::openai;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
-use crate::config::{CloudEndpoint, CloudModelCatalog, CloudModelEntry};
+use crate::config::{CloudModelCatalog, CloudModelEntry};
 
 /// Complexity classification for an issue.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -236,13 +236,17 @@ impl PhaseModelSelector {
 pub async fn triage_issue(
     title: &str,
     description: Option<&str>,
-    cloud: Option<&CloudEndpoint>,
     catalog: &CloudModelCatalog,
     cloud_client: Option<&openai::CompletionsClient>,
+    skip_triage: bool,
 ) -> TriageResult {
-    // Skip LLM triage if cloud is unavailable.
-    let Some(cloud) = cloud else {
-        debug!("No cloud endpoint — using keyword triage");
+    // Skip LLM triage if explicitly disabled or no client available.
+    if skip_triage {
+        debug!("skip_triage=true — using keyword triage");
+        return keyword_triage(title, description);
+    }
+    let Some(client) = cloud_client else {
+        debug!("No cloud client — using keyword triage");
         return keyword_triage(title, description);
     };
 
@@ -251,15 +255,6 @@ pub async fn triage_issue(
         warn!("No triage-capable model in catalog — using keyword triage");
         return keyword_triage(title, description);
     };
-
-    // Skip LLM triage if explicitly disabled.
-    if std::env::var("SWARM_SKIP_TRIAGE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-    {
-        debug!("SWARM_SKIP_TRIAGE=1 — using keyword triage");
-        return keyword_triage(title, description);
-    }
 
     let desc_snippet = description
         .unwrap_or("")
@@ -285,17 +280,11 @@ Guidelines:
 - suggested_models: leave empty (system will fill based on complexity)"#
     );
 
-    // Prefer the pre-built Rig client (participates in OTel tracing + retry middleware).
-    // Fall back to the raw reqwest path when the client isn't available.
-    let call_result: Result<String> = if let Some(client) = cloud_client {
-        let agent = client.agent(&triage_model.model).build();
-        agent
-            .prompt(prompt_text.as_str())
-            .await
-            .map_err(|e| anyhow::anyhow!("{e}"))
-    } else {
-        call_triage_model(cloud, &triage_model.model, &prompt_text).await
-    };
+    let agent = client.agent(&triage_model.model).build();
+    let call_result: Result<String> = agent
+        .prompt(prompt_text.as_str())
+        .await
+        .map_err(|e| anyhow::anyhow!("{e}"));
 
     match call_result {
         Ok(response) => match parse_triage_response(&response) {
@@ -322,46 +311,6 @@ Guidelines:
     }
 }
 
-/// Call the triage model via the cloud endpoint (CLIAPIProxy).
-async fn call_triage_model(
-    cloud: &CloudEndpoint,
-    model: &str,
-    prompt: &str,
-) -> Result<String> {
-    let client = reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()?;
-
-    let url = format!("{}/chat/completions", cloud.url.trim_end_matches('/'));
-
-    let body = serde_json::json!({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "max_tokens": 256,
-        "temperature": 0.0,
-    });
-
-    let mut request = client.post(&url).json(&body);
-    // CLIAPIProxy uses x-api-key header.
-    request = request.header("x-api-key", &cloud.api_key);
-
-    let response = request.send().await.context("triage HTTP request failed")?;
-
-    if !response.status().is_success() {
-        anyhow::bail!(
-            "triage model returned HTTP {}",
-            response.status()
-        );
-    }
-
-    let json: serde_json::Value = response.json().await?;
-    let content = json["choices"][0]["message"]["content"]
-        .as_str()
-        .unwrap_or("")
-        .to_string();
-
-    Ok(content)
-}
 
 /// Parse the JSON response from the triage model.
 fn parse_triage_response(response: &str) -> Result<TriageResult> {

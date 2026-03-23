@@ -464,10 +464,12 @@ pub struct SwarmConfig {
     /// Set to 0.0 to disable cost budgeting (default).
     /// Populated from `SWARM_MAX_COST_PER_ISSUE` env var.
     pub max_cost_per_issue: f64,
-    /// Pre-parsed reject patterns from `SWARM_REJECT_PATTERNS` env var.
-    /// Issues matching any pattern are rejected before worktree creation.
-    /// Parsed once at config init to avoid per-issue `String::leak()`.
+    /// Pre-parsed, lowercased reject patterns from `SWARM_REJECT_PATTERNS` env var.
+    /// Issues matching any pattern (substring match) are rejected before worktree creation.
     pub reject_patterns: Vec<String>,
+    /// Skip LLM-based triage, use keyword heuristics only.
+    /// Populated from `SWARM_SKIP_TRIAGE` env var.
+    pub skip_triage: bool,
     /// Number of iterations after which task prompts are pruned to save context.
     /// After this many iterations, only the system prompt, last 2 iteration results,
     /// and the latest verifier output are included in the prompt.
@@ -589,6 +591,9 @@ impl Default for SwarmConfig {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.split(',').map(|p| p.trim().to_lowercase()).collect())
                 .unwrap_or_default(),
+            skip_triage: std::env::var("SWARM_SKIP_TRIAGE")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
             prune_after_iteration: std::env::var("SWARM_PRUNE_AFTER_ITERATION")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -879,6 +884,7 @@ impl SwarmConfig {
             min_objective_len: 10,
             max_cost_per_issue: 0.0,
             reject_patterns: Vec::new(),
+            skip_triage: false,
             prune_after_iteration: 3,
             parallel_issues: 1,
             concurrent_subtasks: true,

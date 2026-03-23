@@ -52,6 +52,10 @@ use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 /// this is a ~16 min budget before the write-deadline terminates the agent.
 const WORKER_MAX_TURNS_WITHOUT_WRITE: usize = 8;
 
+/// Sentinel response when an agent exceeds its wall-clock timeout.
+const TIMEOUT_RESPONSE: &str =
+    "[TIMEOUT] agent exceeded deadline — no response received, checking disk state";
+
 /// Error message produced when cooperative cancellation fires inside the main loop.
 ///
 /// Checked in `main.rs` fan-in logic to distinguish graceful shutdown from genuine
@@ -318,9 +322,9 @@ async fn process_issue_core(
     let triage_result = triage::triage_issue(
         &issue.title,
         issue.description.as_deref(),
-        config.cloud_endpoint.as_ref(),
         &config.cloud_model_catalog,
         factory.clients.cloud.as_ref(),
+        config.skip_triage,
     )
     .await;
     info!(
@@ -1447,7 +1451,7 @@ async fn process_issue_core(
                                     timeout_secs = worker_timeout.as_secs(),
                                     "rust_coder exceeded timeout — proceeding with changes on disk"
                                 );
-                                Ok("[TIMEOUT] agent exceeded deadline — no response received, checking disk state"
+                                Ok(TIMEOUT_RESPONSE
                                     .to_string())
                             }
                         };
@@ -1482,7 +1486,7 @@ async fn process_issue_core(
                                     timeout_secs = worker_timeout.as_secs(),
                                     "general_coder exceeded timeout — proceeding with changes on disk"
                                 );
-                                Ok("[TIMEOUT] agent exceeded deadline — no response received, checking disk state"
+                                Ok(TIMEOUT_RESPONSE
                                     .to_string())
                             }
                         };
@@ -1552,7 +1556,7 @@ async fn process_issue_core(
                         );
                         // Return a synthetic "timed out" response so the verifier still runs.
                         // Any file changes the manager made are already on disk.
-                        Ok("[TIMEOUT] agent exceeded deadline — no response received, checking disk state".to_string())
+                        Ok(TIMEOUT_RESPONSE.to_string())
                     }
                 };
 
