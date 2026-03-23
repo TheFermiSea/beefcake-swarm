@@ -114,7 +114,7 @@ impl EscalationEngine {
         let error_count = report.gates.iter().map(|g| g.error_count).sum::<usize>();
 
         // Record this iteration in state
-        state.record_iteration(error_categories, error_count, report.all_green);
+        state.record_iteration(error_categories, error_count, report.all_green, report.reward_score);
 
         // Check: All green → success path
         if report.all_green {
@@ -684,7 +684,7 @@ mod tests {
 
         // Manually exhaust Worker budget (4 iterations)
         for _ in 0..4 {
-            state.record_iteration(vec![ErrorCategory::Other], 1, false);
+            state.record_iteration(vec![ErrorCategory::Other], 1, false, 0.0);
         }
         state.record_escalation(
             SwarmTier::Council,
@@ -695,7 +695,7 @@ mod tests {
 
         // Exhaust Council budget (6 iterations)
         for _ in 0..6 {
-            state.record_iteration(vec![ErrorCategory::Other], 1, false);
+            state.record_iteration(vec![ErrorCategory::Other], 1, false, 0.0);
         }
 
         // Now decide — should be stuck

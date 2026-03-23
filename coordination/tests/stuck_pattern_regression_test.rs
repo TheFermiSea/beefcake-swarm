@@ -77,7 +77,7 @@ fn test_council_no_change_stuck_escalates_to_human() {
         ErrorCategory::ImportResolution,
     ];
     for cat in &cats {
-        state.record_iteration(vec![*cat], 1, false);
+        state.record_iteration(vec![*cat], 1, false, 0.0);
     }
     state.record_escalation(
         SwarmTier::Council,
@@ -110,8 +110,8 @@ fn test_no_change_reset_prevents_stuck() {
 fn test_oscillation_detected_as_friction() {
     let mut state = EscalationState::new("osc-1");
     for _ in 0..2 {
-        state.record_iteration(vec![ErrorCategory::Lifetime], 2, false);
-        state.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false);
+        state.record_iteration(vec![ErrorCategory::Lifetime], 2, false, 0.0);
+        state.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false, 0.0);
     }
     let signals = FrictionDetector::detect(&state, &empty_report());
     assert!(
@@ -127,7 +127,7 @@ fn test_oscillation_detected_as_friction() {
 fn test_plateau_detected_as_friction() {
     let mut state = EscalationState::new("plat-1");
     for _ in 0..4 {
-        state.record_iteration(vec![ErrorCategory::BorrowChecker], 5, false);
+        state.record_iteration(vec![ErrorCategory::BorrowChecker], 5, false, 0.0);
     }
     let signals = FrictionDetector::detect(&state, &empty_report());
     assert!(
@@ -156,7 +156,7 @@ fn test_worker_budget_then_council_budget_stuck() {
         ErrorCategory::ImportResolution,
     ];
     for cat in &worker_cats {
-        state.record_iteration(vec![*cat], 1, false);
+        state.record_iteration(vec![*cat], 1, false, 0.0);
     }
     state.record_escalation(
         SwarmTier::Council,
@@ -165,7 +165,7 @@ fn test_worker_budget_then_council_budget_stuck() {
         },
     );
     for _ in 0..6 {
-        state.record_iteration(vec![ErrorCategory::Other], 1, false);
+        state.record_iteration(vec![ErrorCategory::Other], 1, false, 0.0);
     }
     let d = engine.decide(&mut state, &failing_report(vec![ErrorCategory::Other]));
     assert!(d.stuck, "Should be stuck after exhausting both budgets");
@@ -184,8 +184,8 @@ fn test_oscillation_triggers_engine_escalation() {
     // 4 iterations: alternating categories with flat error count → oscillation
     // detected. Error count stays at 2 so the progress guard doesn't suppress.
     for _ in 0..2 {
-        state.record_iteration(vec![ErrorCategory::Lifetime], 2, false);
-        state.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false);
+        state.record_iteration(vec![ErrorCategory::Lifetime], 2, false, 0.0);
+        state.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false, 0.0);
     }
     // Report with 2 errors to keep count flat (2→2, not 2→1).
     let report = failing_report(vec![ErrorCategory::Lifetime, ErrorCategory::Lifetime]);

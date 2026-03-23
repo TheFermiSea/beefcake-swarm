@@ -149,6 +149,78 @@ impl MutationArchive {
         records
     }
 
+    /// Query the archive for resolved records similar to the current issue.
+    ///
+    /// Similarity is scored by overlap in error categories AND file paths.
+    /// Returns the top `limit` records sorted by similarity score (descending).
+    ///
+    /// Inspired by Robin (Future House): downstream results actively reshape
+    /// upstream proposals. This transforms the passive archive into an active
+    /// feedback loop — successful fix patterns are injected into prompts.
+    pub fn query_similar(
+        &self,
+        error_categories: &[String],
+        files_changed: &[String],
+        limit: usize,
+    ) -> Vec<MutationRecord> {
+        if error_categories.is_empty() && files_changed.is_empty() {
+            return Vec::new();
+        }
+
+        let mut scored: Vec<(f64, MutationRecord)> = self
+            .load_all()
+            .into_iter()
+            .filter(|r| r.resolved) // Only learn from successes
+            .map(|r| {
+                // Score: error category overlap + file path overlap
+                let cat_overlap = error_categories
+                    .iter()
+                    .filter(|c| r.error_categories.contains(c))
+                    .count() as f64;
+                let file_overlap = files_changed
+                    .iter()
+                    .filter(|f| r.files_changed.iter().any(|rf| rf.contains(f.as_str()) || f.contains(rf.as_str())))
+                    .count() as f64;
+                let score = cat_overlap * 2.0 + file_overlap; // Weight categories higher
+                (score, r)
+            })
+            .filter(|(score, _)| *score > 0.0)
+            .collect();
+
+        scored.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+        scored.truncate(limit);
+        scored.into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// Query for anti-patterns: records with matching error categories that FAILED.
+    ///
+    /// Returns failure reasons to inject as "do not try" blocklist in prompts.
+    pub fn query_anti_patterns(
+        &self,
+        error_categories: &[String],
+        limit: usize,
+    ) -> Vec<String> {
+        self.load_all()
+            .into_iter()
+            .filter(|r| !r.resolved && r.failure_reason.is_some())
+            .filter(|r| {
+                error_categories
+                    .iter()
+                    .any(|c| r.error_categories.contains(c))
+            })
+            .rev() // Most recent first
+            .take(limit)
+            .filter_map(|r| {
+                r.failure_reason.map(|reason| {
+                    format!(
+                        "{} (issue {}, {} iterations): {}",
+                        r.issue_title, r.issue_id, r.iterations, reason
+                    )
+                })
+            })
+            .collect()
+    }
+
     /// Compute success rate for a given model across all recorded attempts.
     ///
     /// Returns `(success_count, total_count, rate)`. Used for UCB model selection.
@@ -189,6 +261,48 @@ impl MutationArchive {
         let exploration = (2.0 * (total_attempts as f64).ln() / model_attempts as f64).sqrt();
 
         success_rate + exploration
+    }
+
+    /// Format similar past fixes and anti-patterns as a prompt context section.
+    ///
+    /// Returns empty string if no relevant history exists.
+    pub fn format_feedback_context(
+        &self,
+        error_categories: &[String],
+        files_changed: &[String],
+    ) -> String {
+        let successes = self.query_similar(error_categories, files_changed, 3);
+        let anti_patterns = self.query_anti_patterns(error_categories, 2);
+
+        if successes.is_empty() && anti_patterns.is_empty() {
+            return String::new();
+        }
+
+        let mut ctx = String::from("## Feedback from Past Issues (Robin pattern)\n\n");
+
+        if !successes.is_empty() {
+            ctx.push_str("**Successful patterns** (similar issues that were resolved):\n");
+            for r in &successes {
+                ctx.push_str(&format!(
+                    "- `{}` ({} iters, {}): changed {}\n",
+                    r.issue_title,
+                    r.iterations,
+                    r.tier,
+                    r.files_changed.join(", "),
+                ));
+            }
+            ctx.push('\n');
+        }
+
+        if !anti_patterns.is_empty() {
+            ctx.push_str("**Anti-patterns** (approaches that FAILED on similar errors — do NOT repeat):\n");
+            for ap in &anti_patterns {
+                ctx.push_str(&format!("- {ap}\n"));
+            }
+            ctx.push('\n');
+        }
+
+        ctx
     }
 
     /// Get a summary of archive statistics.

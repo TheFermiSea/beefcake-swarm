@@ -194,13 +194,14 @@ mod tests {
             error_count: if green { 0 } else { cats.len() },
             all_green: green,
             progress_made: false,
+            reward_score: if green { 1.0 } else { 0.0 },
         }
     }
 
     fn state_with_history(issue_id: &str, records: Vec<IterationRecord>) -> EscalationState {
         let mut state = EscalationState::new(issue_id.to_string());
         for r in &records {
-            state.record_iteration(r.error_categories.clone(), r.error_count, r.all_green);
+            state.record_iteration(r.error_categories.clone(), r.error_count, r.all_green, 0.0);
         }
         state
     }

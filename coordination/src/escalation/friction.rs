@@ -230,8 +230,8 @@ mod tests {
     fn test_oscillation() {
         let mut s = EscalationState::new("t");
         for _ in 0..2 {
-            s.record_iteration(vec![ErrorCategory::Lifetime], 2, false);
-            s.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false);
+            s.record_iteration(vec![ErrorCategory::Lifetime], 2, false, 0.0);
+            s.record_iteration(vec![ErrorCategory::TypeMismatch], 2, false, 0.0);
         }
         assert!(has(&FrictionDetector::detect(&s, &rep()), |k| matches!(
             k,
@@ -243,7 +243,7 @@ mod tests {
     fn test_plateau() {
         let mut s = EscalationState::new("t");
         for _ in 0..4 {
-            s.record_iteration(vec![ErrorCategory::BorrowChecker], 5, false);
+            s.record_iteration(vec![ErrorCategory::BorrowChecker], 5, false, 0.0);
         }
         assert!(has(&FrictionDetector::detect(&s, &rep()), |k| matches!(
             k,
@@ -251,7 +251,7 @@ mod tests {
         )));
         let mut s2 = EscalationState::new("t");
         for i in (1..=4).rev() {
-            s2.record_iteration(vec![ErrorCategory::BorrowChecker], i, false);
+            s2.record_iteration(vec![ErrorCategory::BorrowChecker], i, false, 0.0);
         }
         assert!(!has(&FrictionDetector::detect(&s2, &rep()), |k| matches!(
             k,
@@ -268,7 +268,7 @@ mod tests {
             ErrorCategory::TypeMismatch,
             ErrorCategory::BorrowChecker,
         ] {
-            s.record_iteration(vec![cat], 1, false);
+            s.record_iteration(vec![cat], 1, false, 0.0);
         }
         assert!(has(&FrictionDetector::detect(&s, &rep()), |k| matches!(
             k,
@@ -291,7 +291,7 @@ mod tests {
     #[test]
     fn test_rapid_escalation() {
         let mut s = EscalationState::new("t");
-        s.record_iteration(vec![ErrorCategory::Lifetime], 3, false);
+        s.record_iteration(vec![ErrorCategory::Lifetime], 3, false, 0.0);
         s.record_escalation(
             SwarmTier::Council,
             EscalationReason::RepeatedErrorCategory {
@@ -303,7 +303,7 @@ mod tests {
             k,
             FrictionKind::RapidEscalation { .. }
         )));
-        s.record_iteration(vec![ErrorCategory::Lifetime], 3, false);
+        s.record_iteration(vec![ErrorCategory::Lifetime], 3, false, 0.0);
         s.record_escalation(
             SwarmTier::Human,
             EscalationReason::BudgetExhausted {

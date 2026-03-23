@@ -192,6 +192,18 @@ pub struct VerifierReport {
     /// Diff risk profile (populated when adaptive mode is enabled)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub risk_profile: Option<super::risk_profile::DiffRiskProfile>,
+    /// Dense reward score (0.0–1.0) for granular feedback beyond binary pass/fail.
+    ///
+    /// Inspired by Aviary (Future House): environments return granular reward components
+    /// that enable learning. Components:
+    /// - Gate pass ratio (gates_passed / gates_total)
+    /// - Error severity weighting (warnings count less than errors)
+    /// - Bonus for all_green (+0.1)
+    ///
+    /// Used by: telemetry (experiment tracking), escalation (progress delta),
+    /// and future RL training data collection.
+    #[serde(default)]
+    pub reward_score: f64,
 }
 
 impl VerifierReport {
@@ -213,6 +225,7 @@ impl VerifierReport {
             commit: None,
             safety_warnings: Vec::new(),
             risk_profile: None,
+            reward_score: 0.0,
         }
     }
 
@@ -255,6 +268,53 @@ impl VerifierReport {
                 );
             }
         }
+
+        // Compute dense reward score (Aviary pattern: granular feedback beyond pass/fail)
+        self.reward_score = self.compute_reward();
+    }
+
+    /// Compute a dense reward score (0.0–1.0) from gate results.
+    ///
+    /// Components:
+    /// - **Gate pass ratio** (70% weight): gates_passed / gates_total
+    /// - **Warning vs error severity** (20% weight): warnings are partial credit
+    /// - **All-green bonus** (10% weight): clean build gets full marks
+    ///
+    /// This provides gradient-like feedback so workers know "how close" they were.
+    /// A report with 3/4 gates passing and reduced warnings scores ~0.7 instead
+    /// of binary 0.0 — enabling smarter escalation decisions based on progress delta.
+    fn compute_reward(&self) -> f64 {
+        if self.gates_total == 0 {
+            return 0.0;
+        }
+
+        // Component 1: gate pass ratio (0.0 – 1.0)
+        let gate_ratio = self.gates_passed as f64 / self.gates_total as f64;
+
+        // Component 2: severity weighting — warnings count as 0.5, failures as 0.0
+        let severity_score = if self.gates_total > 0 {
+            self.gates
+                .iter()
+                .map(|g| match g.outcome {
+                    GateOutcome::Passed => 1.0,
+                    GateOutcome::Warning => 0.75,
+                    GateOutcome::Skipped => 0.5, // skipped = earlier gate failed, partial credit
+                    GateOutcome::Failed => 0.0,
+                })
+                .sum::<f64>()
+                / self.gates_total as f64
+        } else {
+            0.0
+        };
+
+        // Component 3: all-green bonus
+        let green_bonus = if self.all_green { 1.0 } else { 0.0 };
+
+        // Weighted combination
+        let reward = 0.7 * gate_ratio + 0.2 * severity_score + 0.1 * green_bonus;
+
+        // Clamp to [0.0, 1.0]
+        reward.clamp(0.0, 1.0)
     }
 
     /// Get a compact summary for logging

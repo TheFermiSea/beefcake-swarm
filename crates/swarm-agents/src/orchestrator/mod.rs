@@ -273,6 +273,50 @@ async fn process_issue_core(
         return Ok(false);
     }
 
+    // --- Issue quality pre-filter (AI-Researcher pattern) ---
+    // Reject issues the swarm can't handle: epics, benchmark-execution tasks,
+    // deferred status, and configurable reject patterns. Prevents wasting
+    // iterations on unactionable work.
+    let reject_patterns: Vec<&str> = std::env::var("SWARM_REJECT_PATTERNS")
+        .ok()
+        .map(|s| s.leak() as &str)
+        .into_iter()
+        .flat_map(|s| s.split(','))
+        .filter(|s| !s.is_empty())
+        .collect();
+    let title_lower = title_trimmed.to_lowercase();
+    let desc_lower = issue
+        .description
+        .as_deref()
+        .unwrap_or("")
+        .to_lowercase();
+    let combined = format!("{} {}", title_lower, desc_lower);
+
+    let is_epic = title_lower.contains("[epic]") || title_lower.starts_with("epic:");
+    let is_benchmark_exec = combined.contains("run benchmark")
+        || combined.contains("run.*suite")
+        || combined.contains("execute benchmark")
+        || combined.contains("record performance metrics");
+    let matches_reject = reject_patterns
+        .iter()
+        .any(|pat| combined.contains(&pat.to_lowercase()));
+
+    if is_epic || is_benchmark_exec || matches_reject {
+        let reason = if is_epic {
+            "epic (not a code task)"
+        } else if is_benchmark_exec {
+            "benchmark execution (requires manual run)"
+        } else {
+            "matches SWARM_REJECT_PATTERNS"
+        };
+        warn!(
+            id = %issue.id,
+            reason,
+            "Pre-filter: rejecting issue the swarm cannot handle"
+        );
+        return Ok(false);
+    }
+
     // --- Claim issue ---
     beads.update_status(&issue.id, "in_progress")?;
     info!(id = %issue.id, "Claimed issue");
@@ -1246,6 +1290,29 @@ async fn process_issue_core(
             }
         }
 
+        // --- Active feedback injection (Robin pattern — adoption #2) ---
+        // Query mutation archive for similar past fixes (by error category + files)
+        // and inject as prompt context. Also injects anti-patterns (failed approaches).
+        // This closes the learning loop: successful patterns seed future attempts.
+        {
+            let error_cats: Vec<String> = packet
+                .failure_signals
+                .iter()
+                .map(|s| format!("{}", s.category))
+                .collect();
+            let files: Vec<String> = packet
+                .file_contexts
+                .iter()
+                .map(|f| f.file.clone())
+                .collect();
+            if !error_cats.is_empty() || !files.is_empty() {
+                let feedback = archive.format_feedback_context(&error_cats, &files);
+                if !feedback.is_empty() {
+                    task_prompt.push_str(&feedback);
+                }
+            }
+        }
+
         debug!(
             iteration,
             prompt_len = task_prompt.len(),
@@ -2176,6 +2243,7 @@ async fn process_issue_core(
         info!(
             iteration,
             all_green = report.all_green,
+            reward_score = format!("{:.3}", report.reward_score),
             summary = %report.summary(),
             "Verifier report"
         );
@@ -2236,7 +2304,7 @@ async fn process_issue_core(
                 );
 
                 // Record as successful iteration for escalation engine
-                escalation.record_iteration(error_cats.clone(), 0, true);
+                escalation.record_iteration(error_cats.clone(), 0, true, 1.0);
                 best_error_count = Some(0);
 
                 // Log experiment TSV
@@ -2403,7 +2471,7 @@ async fn process_issue_core(
                             ),
                         );
                         // Record this as a failed iteration and continue
-                        escalation.record_iteration(error_cats.clone(), 0, false);
+                        escalation.record_iteration(error_cats.clone(), 0, false, 0.0);
                         last_report = Some(report);
                         metrics.finish_iteration();
                         continue;
@@ -2463,7 +2531,7 @@ async fn process_issue_core(
                                 feedback_count = last_validator_feedback.len(),
                                 "Local validation rejected — looping with feedback"
                             );
-                            escalation.record_iteration(error_cats, error_count, false);
+                            escalation.record_iteration(error_cats, error_count, false, report.reward_score);
                             last_report = Some(report);
                             metrics.finish_iteration();
                             continue;
@@ -2478,7 +2546,7 @@ async fn process_issue_core(
                 iteration,
                 "Verifier passed (all gates green) — checking acceptance"
             );
-            escalation.record_iteration(error_cats, error_count, true);
+            escalation.record_iteration(error_cats, error_count, true, report.reward_score);
             best_error_count = Some(0);
 
             // Log experiment TSV: success
