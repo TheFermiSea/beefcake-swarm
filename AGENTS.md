@@ -5,11 +5,11 @@ This project uses **bd** (beads) for issue tracking. See [CLAUDE.md](CLAUDE.md) 
 ## Quick Reference
 
 ```bash
-bdh ready              # Find available work
-bdh show <id>          # View issue details
-bdh update <id> --status in_progress  # Claim work
-bdh close <id>         # Complete work
-bdh sync               # Sync with git
+bd ready               # Find available work
+bd show <id>           # View issue details
+bd update <id> --status in_progress  # Claim work
+bd close <id>          # Complete work
+bd dolt push           # Sync to remote
 ```
 
 ## Landing the Plane (Session Completion)
@@ -24,7 +24,7 @@ bdh sync               # Sync with git
 4. **PUSH TO REMOTE** - This is MANDATORY:
    ```bash
    git pull --rebase
-   bdh sync
+   bd dolt push
    git push
    git status  # MUST show "up to date with origin"
    ```
@@ -198,27 +198,27 @@ Or the full reference at https://docs.rig.rs
 **Check for ready work:**
 
 ```bash
-bdh ready --json
+bd ready --json
 ```
 
 **Create new issues:**
 
 ```bash
-bdh create "Issue title" --description="Detailed context" -t bug|feature|task -p 0-4 --json
-bdh create "Issue title" --description="What this issue is about" -p 1 --deps discovered-from:bd-123 --json
+bd create --title="Issue title" --description="Detailed context" --type=bug|feature|task --priority=2 --json
+bd create --title="Issue title" --description="What this issue is about" --priority=1 --json
 ```
 
 **Claim and update:**
 
 ```bash
-bdh update <id> --claim --json
-bdh update bd-42 --priority 1 --json
+bd update <id> --status=in_progress --json
+bd update <id> --priority=1 --json
 ```
 
 **Complete work:**
 
 ```bash
-bdh close bd-42 --reason "Completed" --json
+bd close <id> --reason="Completed" --json
 ```
 
 ### Issue Types
@@ -239,19 +239,20 @@ bdh close bd-42 --reason "Completed" --json
 
 ### Workflow for AI Agents
 
-1. **Check ready work**: `bdh ready` shows unblocked issues
-2. **Claim your task atomically**: `bdh update <id> --claim`
+1. **Check ready work**: `bd ready` shows unblocked issues
+2. **Claim your task**: `bd update <id> --status=in_progress`
 3. **Work on it**: Implement, test, document
 4. **Discover new work?** Create linked issue:
-   - `bdh create "Found bug" --description="Details about what was found" -p 1 --deps discovered-from:<parent-id>`
-5. **Complete**: `bdh close <id> --reason "Done"`
+   - `bd create --title="Found bug" --description="Details" --type=bug --priority=1`
+   - `bd dep add <new-id> <current-id> --type discovered-from`
+5. **Complete**: `bd close <id> --reason="Done"`
 
 ### Auto-Sync
 
 bd automatically syncs via Dolt:
 
 - Each write auto-commits to Dolt history
-- Use `bdh dolt push`/`bdh dolt pull` for remote sync
+- Use `bd dolt push`/`bd dolt pull` for remote sync
 - No manual export/import needed!
 
 ### Important Rules
@@ -259,7 +260,7 @@ bd automatically syncs via Dolt:
 - ✅ Use bd for ALL task tracking
 - ✅ Always use `--json` flag for programmatic use
 - ✅ Link discovered work with `discovered-from` dependencies
-- ✅ Check `bdh ready` before asking "what should I work on?"
+- ✅ Check `bd ready` before asking "what should I work on?"
 - ❌ Do NOT create markdown TODO lists
 - ❌ Do NOT use external issue trackers
 - ❌ Do NOT duplicate tracking systems
