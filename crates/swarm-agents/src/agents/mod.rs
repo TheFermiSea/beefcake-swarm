@@ -70,12 +70,6 @@ pub struct AgentFactory {
 impl AgentFactory {
     pub fn new(config: &SwarmConfig) -> Result<Self> {
         let clients = ClientSet::from_config(config)?;
-        // Worker pool: only coder + reasoning (both 122B).
-        // Excludes the 27B scout which is not tuned for code generation tool calling.
-        // Use all 3 nodes in the worker pool. All nodes now run the same
-        // model (Qwen3.5-397B-A17B), so the old exclusion of the "27B scout"
-        // node is obsolete. This increases worker pool capacity from 2 to 3
-        // and prevents vasp-03 from sitting idle during dogfood runs.
         let endpoint_pool = EndpointPool::new(&clients, config);
         Ok(Self {
             clients,

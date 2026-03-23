@@ -145,19 +145,18 @@ impl PhaseModelSelector {
 
         let candidate = match phase {
             WorkflowPhase::Triage => self.catalog.cheapest_for(&capability),
-            WorkflowPhase::Explore => self.catalog.strongest_for(&capability),
-            WorkflowPhase::Plan => self.catalog.strongest_for(&capability),
+            WorkflowPhase::Explore | WorkflowPhase::Plan => {
+                self.catalog.strongest_for(&capability)
+            }
             WorkflowPhase::Implement => {
                 // Use triage suggestion if available; otherwise strongest implementer.
                 if let Some(triage) = triage {
-                    if !triage.suggested_models.is_empty() {
-                        // Find the first suggested model that exists in the catalog.
-                        let found = triage.suggested_models.iter().find_map(|id| {
-                            self.catalog.models.iter().find(|m| m.model == *id)
-                        });
-                        if found.is_some() {
-                            return found;
-                        }
+                    // Try triage-suggested models first (bypasses budget check).
+                    let suggested = triage.suggested_models.iter().find_map(|id| {
+                        self.catalog.models.iter().find(|m| m.model == *id)
+                    });
+                    if suggested.is_some() {
+                        return suggested;
                     }
                     // Cost-aware fallback: simple tasks use cheaper models.
                     match triage.complexity {
@@ -170,39 +169,34 @@ impl PhaseModelSelector {
             }
             WorkflowPhase::Review => {
                 // Must differ from the implementer model for diversity.
-                let candidates = self.catalog.with_capability(&capability);
-                candidates
+                self.catalog
+                    .with_capability(&capability)
                     .into_iter()
-                    .filter(|m| {
-                        implementer_model.is_none_or(|imp| m.model != imp)
-                    })
+                    .filter(|m| implementer_model.is_none_or(|imp| m.model != imp))
                     .max_by_key(|m| m.capability_score)
             }
         };
 
         // Budget check: reject if estimated cost exceeds remaining budget.
         // Conservative estimate: 50K input tokens + 4K output tokens per phase call.
-        if let Some(candidate) = candidate {
-            let bits = self.cost_budget_bits.load(Ordering::Relaxed);
-            if bits != u64::MAX {
-                let remaining = f64::from_bits(bits);
-                let estimated_cost =
-                    (50_000.0 * candidate.cost_input_per_m + 4_000.0 * candidate.cost_output_per_m)
-                        / 1_000_000.0;
-                if estimated_cost > remaining {
-                    info!(
-                        model = %candidate.model,
-                        estimated_cost,
-                        remaining,
-                        "Budget exceeded for phase {phase} — falling back to local"
-                    );
-                    return None;
-                }
+        let candidate = candidate?;
+        let bits = self.cost_budget_bits.load(Ordering::Relaxed);
+        if bits != u64::MAX {
+            let remaining = f64::from_bits(bits);
+            let estimated_cost =
+                (50_000.0 * candidate.cost_input_per_m + 4_000.0 * candidate.cost_output_per_m)
+                    / 1_000_000.0;
+            if estimated_cost > remaining {
+                info!(
+                    model = %candidate.model,
+                    estimated_cost,
+                    remaining,
+                    "Budget exceeded for phase {phase} — falling back to local"
+                );
+                return None;
             }
-            return Some(candidate);
         }
-
-        candidate
+        Some(candidate)
     }
 
     /// Record cost spent, reducing the remaining budget.
