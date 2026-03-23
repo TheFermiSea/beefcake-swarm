@@ -79,29 +79,28 @@ if [[ -n "$TARGET_REPO" ]]; then
   _LOCK_SUFFIX="-$(basename "$TARGET_REPO")"
 fi
 LOCKFILE="/tmp/dogfood-loop${_LOCK_SUFFIX}.lock"
-exec 200>"$LOCKFILE"
+# Read existing PID BEFORE opening fd 200 (which truncates the file).
+_EXISTING_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "")
+# Open fd 200 for flock. O_WRONLY|O_CREAT but NOT O_TRUNC — use >> to append.
+# This preserves existing content so other instances can still read the PID.
+exec 200>>"$LOCKFILE"
 if ! flock -n 200; then
-    EXISTING_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "unknown")
     # Stale lock check: if the PID in the lockfile is dead, the lock is stale.
-    # This happens when the previous loop was kill -9'd but children kept the
-    # fd open briefly. Truncate the lockfile (same inode!) to clear it, then retry.
-    if [[ "$EXISTING_PID" =~ ^[0-9]+$ ]] && ! kill -0 "$EXISTING_PID" 2>/dev/null; then
-        echo "WARNING: Stale lock (pid=$EXISTING_PID is dead). Reclaiming lock." >&2
-        # Truncate (not delete!) to preserve the inode for flock
-        : > "$LOCKFILE"
-        # Release the stale lock by closing and reopening the fd on the SAME inode
+    if [[ "$_EXISTING_PID" =~ ^[0-9]+$ ]] && ! kill -0 "$_EXISTING_PID" 2>/dev/null; then
+        echo "WARNING: Stale lock (pid=$_EXISTING_PID is dead). Reclaiming lock." >&2
         exec 200>&-
-        exec 200>"$LOCKFILE"
+        exec 200>>"$LOCKFILE"
         if ! flock -n 200; then
             echo "ERROR: Could not reclaim stale lock. Another instance may have started." >&2
             exit 1
         fi
     else
-        echo "ERROR: Another dogfood-loop is already running (pid=$EXISTING_PID)." >&2
-        echo "Kill it first: kill $EXISTING_PID" >&2
+        echo "ERROR: Another dogfood-loop is already running (pid=$_EXISTING_PID)." >&2
+        echo "Kill it first: kill $_EXISTING_PID" >&2
         exit 1
     fi
 fi
+# Write our PID to the lockfile (truncate first to remove stale content).
 echo $$ > "$LOCKFILE"
 
 # Process group cleanup is set up later (after CHILD_PIDS is defined).
