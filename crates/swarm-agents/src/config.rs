@@ -87,6 +87,153 @@ pub struct CloudEndpoint {
     pub model: String,
 }
 
+/// A cloud model entry with cost and capability metadata.
+///
+/// Used by the phase-based model selector and learning router to choose
+/// the best model for each workflow phase. Part of the Ensemble Swarm architecture.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CloudModelEntry {
+    /// Model ID as sent to CLIAPIProxy/OpenRouter (e.g., "claude-haiku-4-5-20251001").
+    pub model: String,
+    /// Human-readable label for logging.
+    pub label: String,
+    /// Cost per million input tokens (USD). Used for cost-aware routing.
+    pub cost_input_per_m: f64,
+    /// Cost per million output tokens (USD).
+    pub cost_output_per_m: f64,
+    /// Maximum context window (tokens).
+    pub context_window: usize,
+    /// Capability tags for phase-based selection.
+    pub capabilities: Vec<String>,
+    /// Provider: "cliapi" (CLIAPIProxy) or "openrouter".
+    pub provider: String,
+}
+
+/// Catalog of all available cloud models.
+///
+/// Built from env vars or defaults. The phase-based model selector and learning
+/// router query this catalog to find the best model for each workflow phase.
+#[derive(Debug, Clone)]
+pub struct CloudModelCatalog {
+    pub models: Vec<CloudModelEntry>,
+}
+
+impl CloudModelCatalog {
+    /// Build the default catalog from CLIAPIProxy + optional OpenRouter.
+    ///
+    /// All models available via CLIAPIProxy are included with approximate costs.
+    /// OpenRouter models are added when `SWARM_OPENROUTER_URL` is set.
+    pub fn default_catalog() -> Self {
+        let mut models = vec![
+            // --- Anthropic (via CLIAPIProxy) ---
+            CloudModelEntry {
+                model: "claude-opus-4-6".into(),
+                label: "Opus 4.6".into(),
+                cost_input_per_m: 15.0,
+                cost_output_per_m: 75.0,
+                context_window: 200_000,
+                capabilities: vec!["plan".into(), "architect".into(), "review".into(), "reason".into()],
+                provider: "cliapi".into(),
+            },
+            CloudModelEntry {
+                model: "claude-sonnet-4-6".into(),
+                label: "Sonnet 4.6".into(),
+                cost_input_per_m: 3.0,
+                cost_output_per_m: 15.0,
+                context_window: 200_000,
+                capabilities: vec!["plan".into(), "implement".into(), "review".into()],
+                provider: "cliapi".into(),
+            },
+            CloudModelEntry {
+                model: "claude-haiku-4-5-20251001".into(),
+                label: "Haiku 4.5".into(),
+                cost_input_per_m: 0.80,
+                cost_output_per_m: 4.0,
+                context_window: 200_000,
+                capabilities: vec!["triage".into(), "review".into(), "scout".into()],
+                provider: "cliapi".into(),
+            },
+            // --- Antigravity / Google (via CLIAPIProxy) ---
+            CloudModelEntry {
+                model: "gemini-3.1-pro-high".into(),
+                label: "Gemini 3.1 Pro".into(),
+                cost_input_per_m: 1.25,
+                cost_output_per_m: 10.0,
+                context_window: 2_000_000,
+                capabilities: vec!["explore".into(), "plan".into(), "review".into(), "architect".into()],
+                provider: "cliapi".into(),
+            },
+            CloudModelEntry {
+                model: "gemini-3-flash-preview".into(),
+                label: "Gemini 3 Flash".into(),
+                cost_input_per_m: 0.10,
+                cost_output_per_m: 0.40,
+                context_window: 1_000_000,
+                capabilities: vec!["triage".into(), "explore".into(), "scout".into()],
+                provider: "cliapi".into(),
+            },
+            CloudModelEntry {
+                model: "gemini-2.5-flash".into(),
+                label: "Gemini 2.5 Flash".into(),
+                cost_input_per_m: 0.15,
+                cost_output_per_m: 0.60,
+                context_window: 1_000_000,
+                capabilities: vec!["triage".into(), "scout".into()],
+                provider: "cliapi".into(),
+            },
+        ];
+
+        // --- OpenRouter models (when configured) ---
+        if std::env::var("SWARM_OPENROUTER_URL")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .is_some()
+        {
+            models.push(CloudModelEntry {
+                model: "minimax/minimax-m2.7".into(),
+                label: "MiniMax M2.7".into(),
+                cost_input_per_m: 0.30,
+                cost_output_per_m: 1.20,
+                context_window: 204_800,
+                capabilities: vec!["implement".into(), "review".into(), "plan".into()],
+                provider: "openrouter".into(),
+            });
+        }
+
+        Self { models }
+    }
+
+    /// Find models with a specific capability.
+    pub fn with_capability(&self, capability: &str) -> Vec<&CloudModelEntry> {
+        self.models
+            .iter()
+            .filter(|m| m.capabilities.iter().any(|c| c == capability))
+            .collect()
+    }
+
+    /// Find the cheapest model with a given capability.
+    pub fn cheapest_for(&self, capability: &str) -> Option<&CloudModelEntry> {
+        self.with_capability(capability)
+            .into_iter()
+            .min_by(|a, b| {
+                a.cost_input_per_m
+                    .partial_cmp(&b.cost_input_per_m)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+
+    /// Find the most capable model (highest cost as proxy for capability).
+    pub fn strongest_for(&self, capability: &str) -> Option<&CloudModelEntry> {
+        self.with_capability(capability)
+            .into_iter()
+            .max_by(|a, b| {
+                a.cost_input_per_m
+                    .partial_cmp(&b.cost_input_per_m)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            })
+    }
+}
+
 /// Build a [`HeaderMap`] with the `x-api-key` header for CLIAPIProxy authentication.
 ///
 /// CLIAPIProxy v6.8+ requires `x-api-key` instead of `Authorization: Bearer` for
@@ -352,6 +499,16 @@ pub struct SwarmConfig {
     /// Cache TTL for TZ insights (seconds). Default: 1800 (30 min).
     /// Populated from `SWARM_TZ_INSIGHTS_TTL_SECS` env var.
     pub tz_insights_ttl_secs: u64,
+    /// OpenRouter API endpoint for external models (e.g., MiniMax M2.7).
+    /// When set, the cloud model catalog includes OpenRouter models.
+    /// Populated from `SWARM_OPENROUTER_URL` env var.
+    pub openrouter_url: Option<String>,
+    /// OpenRouter API key.
+    /// Populated from `SWARM_OPENROUTER_API_KEY` env var.
+    pub openrouter_api_key: Option<String>,
+    /// Cloud model catalog with all available models and their capabilities/costs.
+    /// Built automatically from CLIAPIProxy + OpenRouter configuration.
+    pub cloud_model_catalog: CloudModelCatalog,
 }
 
 impl Default for SwarmConfig {
@@ -455,6 +612,13 @@ impl Default for SwarmConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(1800),
+            openrouter_url: std::env::var("SWARM_OPENROUTER_URL")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
+            openrouter_api_key: std::env::var("SWARM_OPENROUTER_API_KEY")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
+            cloud_model_catalog: CloudModelCatalog::default_catalog(),
         }
     }
 }
@@ -709,6 +873,13 @@ impl SwarmConfig {
             tensorzero_url: None,
             tensorzero_pg_url: None,
             tz_insights_ttl_secs: 1800,
+            openrouter_url: std::env::var("SWARM_OPENROUTER_URL")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
+            openrouter_api_key: std::env::var("SWARM_OPENROUTER_API_KEY")
+                .ok()
+                .filter(|s| !s.trim().is_empty()),
+            cloud_model_catalog: CloudModelCatalog::default_catalog(),
         }
     }
 }
