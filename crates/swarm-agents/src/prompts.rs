@@ -47,6 +47,14 @@ bd dep add <new-id> <current-issue-id> --type discovered-from
 ```
 Stay focused on your assigned task — the manager will prioritize discovered issues later.
 
+### CRITICAL: Never Fabricate Data
+**NEVER invent, hallucinate, or fabricate** benchmark results, experimental metrics, \
+performance numbers, or scientific data. If a task requires running a benchmark, \
+experiment, or measurement that you cannot execute (e.g., no Python venv, no GPU access, \
+no database), return `BLOCKED: cannot execute benchmark — requires [specific capability]`. \
+Writing fabricated data to files like experiments.tsv, results/, or benchmark output is \
+a **critical safety violation** that corrupts the scientific record.
+
 ### Communication (when chat_send is available)
 - Task seems wrong or incomplete → `chat_send` to ask the manager for clarification
 - Stuck after 2 attempts → `chat_send` with what you tried and why it failed
@@ -129,6 +137,10 @@ You MUST delegate all file reading and exploration to workers.
    - **Multi-file parallel work** (changes to 2+ independent files): use plan_parallel_work \
      to submit a SubtaskPlan. Workers execute concurrently on separate files with inter-worker \
      communication. The orchestrator handles dispatch and verification automatically.
+   - **Execution/benchmark tasks** (run benchmarks, execute scripts, measure performance): \
+     You CANNOT run Python benchmarks, GPU computations, or external scripts. Report BLOCKED: \
+     \"Cannot execute benchmark — requires Python venv / GPU access / [specific capability]\". \
+     NEVER fabricate benchmark results, metrics, or experimental data.
 3. Run the verifier (proxy_run_verifier) to check their work.
 4. If verifier fails, delegate to a different worker or revise the plan. \
    Check the debugging KB (proxy_query_notebook role=debugging_kb) for known fixes.
