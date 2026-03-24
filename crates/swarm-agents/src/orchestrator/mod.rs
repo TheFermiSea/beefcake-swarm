@@ -2075,6 +2075,7 @@ async fn process_issue_core(
                     );
 
                     merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved (no-op): codebase already satisfies requirements")?;
+                    info!(id = %issue.id, "No-op issue closed successfully");
                     clear_resume_file(worktree_bridge.repo_root());
                     return Ok(true);
                 } else {
