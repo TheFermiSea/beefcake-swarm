@@ -860,13 +860,7 @@ async fn process_issue_core(
                         );
 
                         // Try to merge and close.
-                        if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
-                            error!(id = %issue.id, "Merge failed: {e}");
-                            let _ = worktree_bridge.cleanup(&issue.id);
-                            let _ = beads.update_status(&issue.id, "open");
-                            return Err(e);
-                        }
-                        beads.close(&issue.id, Some("Resolved by concurrent subtask dispatch"))?;
+                        merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by concurrent subtask dispatch")?;
                         clear_resume_file(worktree_bridge.repo_root());
                         return Ok(true);
                     }
@@ -924,16 +918,7 @@ async fn process_issue_core(
                                     "Issue resolved — merging worktree"
                                 );
 
-                                if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
-                                    error!(id = %issue.id, "Merge failed: {e}");
-                                    let _ = worktree_bridge.cleanup(&issue.id);
-                                    let _ = beads.update_status(&issue.id, "open");
-                                    return Err(e);
-                                }
-                                beads.close(
-                                    &issue.id,
-                                    Some("Resolved by concurrent dispatch + fixer post-pass"),
-                                )?;
+                                merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by concurrent dispatch + fixer post-pass")?;
                                 clear_resume_file(worktree_bridge.repo_root());
                                 return Ok(true);
                             }
@@ -1811,16 +1796,7 @@ async fn process_issue_core(
                             "Issue resolved — merging worktree"
                         );
 
-                        if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
-                            error!(id = %issue.id, "Merge failed: {e}");
-                            let _ = worktree_bridge.cleanup(&issue.id);
-                            let _ = beads.update_status(&issue.id, "open");
-                            return Err(e);
-                        }
-                        beads.close(
-                            &issue.id,
-                            Some("Resolved by manager-guided parallel dispatch"),
-                        )?;
+                        merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by manager-guided parallel dispatch")?;
                         clear_resume_file(worktree_bridge.repo_root());
                         return Ok(true);
                     }
@@ -2098,16 +2074,7 @@ async fn process_issue_core(
                         "No-op resolution — merging worktree"
                     );
 
-                    if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
-                        error!(id = %issue.id, "Merge failed: {e}");
-                        let _ = worktree_bridge.cleanup(&issue.id);
-                        let _ = beads.update_status(&issue.id, "open");
-                        return Err(e);
-                    }
-                    beads.close(
-                        &issue.id,
-                        Some("Resolved (no-op): codebase already satisfies requirements"),
-                    )?;
+                    merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved (no-op): codebase already satisfies requirements")?;
                     clear_resume_file(worktree_bridge.repo_root());
                     return Ok(true);
                 } else {
@@ -2964,16 +2931,7 @@ async fn process_issue_core(
             "Issue resolved — merging worktree"
         );
 
-        if let Err(e) = worktree_bridge.merge_and_remove(&issue.id) {
-            error!(id = %issue.id, "Merge failed: {e} — resetting issue to open");
-            // Cleanup the worktree to prevent leaks
-            if let Err(cleanup_err) = worktree_bridge.cleanup(&issue.id) {
-                warn!(id = %issue.id, "Cleanup failed: {cleanup_err}");
-            }
-            let _ = beads.update_status(&issue.id, "open");
-            return Err(e);
-        }
-        beads.close(&issue.id, Some("Resolved by swarm orchestrator"))?;
+        merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by swarm orchestrator")?;
         clear_resume_file(worktree_bridge.repo_root());
 
         // --- Self-improvement: post-merge quality scan ---
@@ -3458,6 +3416,49 @@ async fn process_issue_core(
 
 /// Compile-time guard: `process_issue_core`'s future must be `Send` so it
 /// can be dispatched via `tokio::spawn` / `JoinSet` in Phase 2 (Thread Weaving).
+/// Merge worktree and close issue, tolerating worktree cleanup failures.
+///
+/// If `merge_and_remove` fails but the merge itself succeeded (the issue ID
+/// appears in the latest commit), close the issue anyway. Only reopens the
+/// issue when the git merge itself failed.
+fn merge_close_or_reopen(
+    worktree_bridge: &WorktreeBridge,
+    beads: &dyn IssueTracker,
+    issue_id: &str,
+    close_reason: &str,
+) -> Result<()> {
+    match worktree_bridge.merge_and_remove(issue_id) {
+        Ok(()) => {
+            beads.close(issue_id, Some(close_reason))?;
+        }
+        Err(e) => {
+            // Check if the merge itself succeeded
+            let merged = std::process::Command::new("git")
+                .args(["log", "--oneline", "-1"])
+                .current_dir(worktree_bridge.repo_root())
+                .output()
+                .map(|o| String::from_utf8_lossy(&o.stdout).contains(issue_id))
+                .unwrap_or(false);
+
+            if merged {
+                warn!(
+                    id = %issue_id,
+                    error = %e,
+                    "Worktree cleanup failed but merge succeeded — closing issue"
+                );
+                let _ = worktree_bridge.cleanup(issue_id);
+                beads.close(issue_id, Some(close_reason))?;
+            } else {
+                error!(id = %issue_id, "Merge failed: {e}");
+                let _ = worktree_bridge.cleanup(issue_id);
+                let _ = beads.update_status(issue_id, "open");
+                return Err(e);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// If someone re-introduces a `Span::enter()` guard held across an `.await`,
 /// this function will fail to compile.
 #[cfg(test)]
