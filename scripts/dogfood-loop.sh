@@ -527,35 +527,89 @@ else
       BATCH_SIZE=$REMAINING
     fi
 
-    log "=== Batch starting: ${BATCH_SIZE} issues (${IDX}..$(( IDX + BATCH_SIZE - 1 )) of ${#ISSUES[@]}) ==="
+    # --- Streaming pool: fill slots as they complete (no batch-wait-all) ---
+    # Launch initial batch to fill the pool
+    log "=== Pool starting: ${BATCH_SIZE} slots, ${#ISSUES[@]} issues queued ==="
 
-    CHILD_PIDS=()
-    BATCH_ISSUES=()
-    for (( i=0; i<BATCH_SIZE; i++ )); do
-      ISSUE_IDX=$((IDX + i))
-      ISSUE_ID="${ISSUES[$ISSUE_IDX]}"
+    declare -A POOL_PIDS  # pid → issue_id
+
+    # Fill pool to capacity
+    for (( i=0; i<BATCH_SIZE && IDX < ${#ISSUES[@]}; i++ )); do
+      ISSUE_ID="${ISSUES[$IDX]}"
       RUN_COUNT=$((RUN_COUNT + 1))
-      BATCH_ISSUES+=("$ISSUE_ID")
       run_issue "$RUN_COUNT" "$ISSUE_ID" &
-      CHILD_PIDS+=($!)
+      POOL_PIDS[$!]="$ISSUE_ID"
+      log "  [slot $((i+1))] Started issue=$ISSUE_ID"
+      IDX=$((IDX + 1))
     done
 
-    # Wait for all in this batch
-    for (( i=0; i<${#CHILD_PIDS[@]}; i++ )); do
-      pid="${CHILD_PIDS[$i]}"
-      issue="${BATCH_ISSUES[$i]}"
-      if wait "$pid" 2>/dev/null; then
-        SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+    # Process completions and backfill slots
+    while [[ ${#POOL_PIDS[@]} -gt 0 ]]; do
+      # Wait for any child to exit (bash 4.3+)
+      if wait -n 2>/dev/null; then
+        # A child exited successfully — find which one
+        for pid in "${!POOL_PIDS[@]}"; do
+          if ! kill -0 "$pid" 2>/dev/null; then
+            # This pid exited — check if success or failure via wait
+            if wait "$pid" 2>/dev/null; then
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+              log "  [pool] SUCCESS issue=${POOL_PIDS[$pid]}"
+            else
+              FAIL_COUNT=$((FAIL_COUNT + 1))
+              log "  [pool] FAILED  issue=${POOL_PIDS[$pid]}"
+            fi
+            unset "POOL_PIDS[$pid]"
+
+            # Backfill: launch next issue if queue has more
+            if [[ $IDX -lt ${#ISSUES[@]} ]]; then
+              ISSUE_ID="${ISSUES[$IDX]}"
+              RUN_COUNT=$((RUN_COUNT + 1))
+              run_issue "$RUN_COUNT" "$ISSUE_ID" &
+              POOL_PIDS[$!]="$ISSUE_ID"
+              log "  [pool] Backfill started issue=$ISSUE_ID (${#POOL_PIDS[@]} active)"
+              IDX=$((IDX + 1))
+            elif [[ "$DISCOVER" -eq 1 && ${#POOL_PIDS[@]} -lt $PARALLEL ]]; then
+              # Discover new issues to keep pool full
+              mapfile -t NEW_ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+              if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
+                ISSUES+=("${NEW_ISSUES[@]}")
+                log "  [pool] Discovered ${#NEW_ISSUES[@]} new issues"
+                ISSUE_ID="${ISSUES[$IDX]}"
+                RUN_COUNT=$((RUN_COUNT + 1))
+                run_issue "$RUN_COUNT" "$ISSUE_ID" &
+                POOL_PIDS[$!]="$ISSUE_ID"
+                log "  [pool] Backfill started issue=$ISSUE_ID (${#POOL_PIDS[@]} active)"
+                IDX=$((IDX + 1))
+              fi
+            fi
+            break
+          fi
+        done
       else
-        FAIL_COUNT=$((FAIL_COUNT + 1))
+        # wait -n returned non-zero — a child failed
+        for pid in "${!POOL_PIDS[@]}"; do
+          if ! kill -0 "$pid" 2>/dev/null; then
+            FAIL_COUNT=$((FAIL_COUNT + 1))
+            log "  [pool] FAILED  issue=${POOL_PIDS[$pid]}"
+            unset "POOL_PIDS[$pid]"
+
+            # Backfill on failure too
+            if [[ $IDX -lt ${#ISSUES[@]} ]]; then
+              ISSUE_ID="${ISSUES[$IDX]}"
+              RUN_COUNT=$((RUN_COUNT + 1))
+              run_issue "$RUN_COUNT" "$ISSUE_ID" &
+              POOL_PIDS[$!]="$ISSUE_ID"
+              log "  [pool] Backfill started issue=$ISSUE_ID (${#POOL_PIDS[@]} active)"
+              IDX=$((IDX + 1))
+            fi
+            break
+          fi
+        done
       fi
     done
-    CHILD_PIDS=()
 
-    IDX=$((IDX + BATCH_SIZE))
-
-    # Cooldown between batches
-    log "  Batch complete. Cooling down ${COOLDOWN}s..."
+    # Pool drained — cooldown before next discover cycle
+    log "  Pool drained. Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
 
   done
