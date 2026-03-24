@@ -313,11 +313,16 @@ with open('$jsonl_path') as f:
     log "  [run $run_num] SUCCESS issue=$issue_id (${elapsed}s)"
     SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
 
-    # Self-improvement: after successful merge, scan for new issues.
-    # The fix may have unmasked new lint/type violations or created
-    # opportunities for further improvement.
-    if [[ -n "$TARGET_REPO" && -x "$REPO_ROOT/scripts/generate-issues.sh" ]]; then
-      log "  [run $run_num] Post-merge: scanning for new issues..."
+    # Post-merge lint janitor: auto-fix trivial lint/format/type issues
+    # WITHOUT creating beads issues. Only truly non-auto-fixable findings
+    # get promoted to issues (with dedup). Replaces generate-issues.sh
+    # which was creating duplicate issues and wasting swarm cycles.
+    if [[ -n "$TARGET_REPO" && -x "$REPO_ROOT/scripts/lint-janitor.sh" ]]; then
+      log "  [run $run_num] Post-merge: running lint janitor..."
+      MAX_ISSUES=3 bash "$REPO_ROOT/scripts/lint-janitor.sh" "$BD_RUN_DIR" >> "$run_log" 2>&1 || true
+    elif [[ -n "$TARGET_REPO" && -x "$REPO_ROOT/scripts/generate-issues.sh" ]]; then
+      # Fallback to generate-issues.sh if lint-janitor not available
+      log "  [run $run_num] Post-merge: scanning for new issues (legacy)..."
       MAX_ISSUES=5 bash "$REPO_ROOT/scripts/generate-issues.sh" "$BD_RUN_DIR" >> "$run_log" 2>&1 || true
     fi
 
