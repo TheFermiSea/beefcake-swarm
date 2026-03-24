@@ -299,10 +299,13 @@ async fn main() -> Result<()> {
                 }
             }
         };
-        let tracker = NoOpTracker;
-        info!(id = %issue.id, title = %issue.title, mode = ?args.mode, "Beads-free mode: processing CLI issue");
+        // Use real BeadsBridge when --repo-root is provided (dogfood mode),
+        // fall back to NoOpTracker for truly beads-free single-issue runs.
+        let tracker: Box<dyn IssueTracker> = new_tracker(args.repo_root.as_deref());
+        let tracker_mode = if args.repo_root.is_some() { "beads" } else { "beads-free" };
+        info!(id = %issue.id, title = %issue.title, mode = ?args.mode, tracker = tracker_mode, "Processing CLI issue");
         tokio::select! {
-            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
+            result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, tracker.as_ref(), kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
                     error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
