@@ -1057,6 +1057,11 @@ async fn process_issue_core(
         }
     }
 
+    // --- Skill library: loaded once before the loop, refreshed after skill creation ---
+    let skills_path = worktree_bridge.repo_root().join(".swarm/skills.json");
+    let skill_library = coordination::analytics::skills::SkillLibrary::load(&skills_path)
+        .unwrap_or_default();
+
     // --- Main loop: implement → verify → review → escalate ---
     loop {
         let iteration = match session.next_iteration() {
@@ -1256,12 +1261,8 @@ async fn process_issue_core(
         }
 
         // --- Skill library injection (Hyperagents pattern) ---
-        // Load learned skills from past successful mutations and inject as hints
-        // into the work packet so the prompt formatters can surface them to agents.
+        // Use pre-loaded skill library (loaded once before loop, refreshed after skill creation).
         {
-            let skills_path = worktree_bridge.repo_root().join(".swarm/skills.json");
-            let skill_library = coordination::analytics::skills::SkillLibrary::load(&skills_path)
-                .unwrap_or_default();
             if !skill_library.is_empty() {
                 let typed_cats: Vec<coordination::feedback::ErrorCategory> = packet
                     .failure_signals
@@ -1466,6 +1467,36 @@ async fn process_issue_core(
                     .last()
                     .cloned()
                     .unwrap_or_default();
+
+                // --- Hyperagents: adaptive model routing ---
+                // Use UCB1 bandit learning to override static routing when sufficient data exists.
+                if config.adaptive_routing {
+                    let error_cats: Vec<String> = escalation
+                        .recent_error_categories
+                        .last()
+                        .cloned()
+                        .unwrap_or_default()
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect();
+                    if !error_cats.is_empty() {
+                        let candidates = vec![
+                            config.fast_endpoint.model.clone(),
+                            config.coder_endpoint.model.clone(),
+                            config.reasoning_endpoint.model.clone(),
+                        ];
+                        if let Some(recommended) = archive.recommend_model(&error_cats, &candidates, 5) {
+                            info!(
+                                iteration,
+                                recommended = %recommended,
+                                "Hyperagents: UCB1 recommends model override"
+                            );
+                            // Log the recommendation but don't override yet — this is advisory
+                            // until we have confidence in the routing. The telemetry trace captures
+                            // the recommendation for future analysis.
+                        }
+                    }
+                }
 
                 match route_to_coder(&recent_cats) {
                     CoderRoute::RustCoder => {
@@ -3299,7 +3330,6 @@ async fn process_issue_core(
         // future tasks with similar error categories receive targeted hints.
         if success {
             if let Some(candidate) = crate::mutation_archive::MutationArchive::extract_skill_candidate(&record) {
-                let skills_path = worktree_bridge.repo_root().join(".swarm/skills.json");
                 if let Ok(mut lib) = coordination::analytics::skills::SkillLibrary::load(&skills_path) {
                     let triggers: Vec<coordination::feedback::ErrorCategory> = candidate
                         .error_categories

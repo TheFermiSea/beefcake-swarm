@@ -520,6 +520,11 @@ pub struct SwarmConfig {
     /// Cloud model catalog with all available models and their capabilities/costs.
     /// Built automatically from CLIAPIProxy + OpenRouter configuration.
     pub cloud_model_catalog: CloudModelCatalog,
+    /// Enable UCB1 bandit-based adaptive model routing.
+    /// When true, `mutation_archive.recommend_model()` is consulted before each
+    /// worker dispatch and the recommendation is logged for analysis.
+    /// Populated from `SWARM_ADAPTIVE_ROUTING` env var (default: false).
+    pub adaptive_routing: bool,
 }
 
 impl Default for SwarmConfig {
@@ -638,6 +643,9 @@ impl Default for SwarmConfig {
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
             cloud_model_catalog: CloudModelCatalog::default_catalog(),
+            adaptive_routing: std::env::var("SWARM_ADAPTIVE_ROUTING")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
         }
     }
 }
@@ -901,6 +909,7 @@ impl SwarmConfig {
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
             cloud_model_catalog: CloudModelCatalog::default_catalog(),
+            adaptive_routing: false,
         }
     }
 }

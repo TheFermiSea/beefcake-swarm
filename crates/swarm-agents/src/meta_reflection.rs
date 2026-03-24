@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::mutation_archive::{MutationArchive, MutationRecord};
 
@@ -87,41 +87,15 @@ impl MetaReflector {
         if insights.is_empty() {
             return;
         }
-        if let Some(parent) = self.insights_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let mut file = match std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.insights_path)
-        {
-            Ok(f) => f,
-            Err(e) => {
-                warn!(error = %e, "Failed to open meta-insights file");
-                return;
-            }
-        };
-        use std::io::Write;
         for insight in insights {
-            if let Ok(json) = serde_json::to_string(insight) {
-                let _ = writeln!(file, "{}", json);
-            }
+            crate::jsonl::append(&self.insights_path, insight);
         }
         info!(count = insights.len(), "Saved meta-insights");
     }
 
     /// Load the most recent N insights.
     pub fn load_recent_insights(&self, limit: usize) -> Vec<MetaInsight> {
-        let content = match std::fs::read_to_string(&self.insights_path) {
-            Ok(c) => c,
-            Err(_) => return vec![],
-        };
-        content
-            .lines()
-            .rev()
-            .take(limit)
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect()
+        crate::jsonl::load_tail(&self.insights_path, limit)
     }
 
     /// Which models underperform on which error categories?

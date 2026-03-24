@@ -20,9 +20,8 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
-use tracing::{info, warn};
+use tracing::info;
 
 /// A single mutation outcome record.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -84,54 +83,18 @@ impl MutationArchive {
 
     /// Append a record to the archive.
     pub fn record(&self, record: &MutationRecord) {
-        // Ensure .swarm/ exists
-        if let Some(parent) = self.path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-
-        match serde_json::to_string(record) {
-            Ok(json) => {
-                match std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&self.path)
-                {
-                    Ok(mut file) => {
-                        if let Err(e) = writeln!(file, "{json}") {
-                            warn!(error = %e, "Failed to write mutation record");
-                        } else {
-                            info!(
-                                issue = %record.issue_id,
-                                resolved = record.resolved,
-                                iterations = record.iterations,
-                                "Mutation archive: recorded outcome"
-                            );
-                        }
-                    }
-                    Err(e) => {
-                        warn!(
-                            error = %e,
-                            path = %self.path.display(),
-                            "Failed to open mutation archive"
-                        );
-                    }
-                }
-            }
-            Err(e) => {
-                warn!(error = %e, "Failed to serialize mutation record");
-            }
-        }
+        crate::jsonl::append(&self.path, record);
+        info!(
+            issue = %record.issue_id,
+            resolved = record.resolved,
+            iterations = record.iterations,
+            "Mutation archive: recorded outcome"
+        );
     }
 
     /// Load all records from the archive.
     pub fn load_all(&self) -> Vec<MutationRecord> {
-        match std::fs::read_to_string(&self.path) {
-            Ok(content) => content
-                .lines()
-                .filter_map(|line| serde_json::from_str(line).ok())
-                .collect(),
-            Err(_) => Vec::new(),
-        }
+        crate::jsonl::load_all(&self.path)
     }
 
     /// Query the archive for records matching an error category.

@@ -832,6 +832,81 @@ pub fn load_prompt(role: &str, worktree_path: &Path, default: &str) -> String {
     }
 }
 
+/// Load the best-performing prompt variant for a role (Hyperagents prompt coevolution).
+///
+/// Scans `.swarm/prompts/{role}.v{N}.md` files, queries the mutation archive for
+/// success rates per prompt version, and returns the version with the highest rate
+/// (minimum 5 samples). Falls back to the default prompt if no versioned files exist
+/// or no version has enough samples.
+pub fn load_best_prompt(
+    role: &str,
+    repo_root: &Path,
+    default: &str,
+    archive: &crate::mutation_archive::MutationArchive,
+) -> String {
+    let prompts_dir = repo_root.join(".swarm/prompts");
+
+    // List versioned prompt files matching {role}.v{N}.md
+    let pattern = format!("{role}.v");
+    let versions: Vec<(String, String)> = match std::fs::read_dir(&prompts_dir) {
+        Ok(entries) => entries
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name().to_string_lossy().starts_with(&pattern)
+                    && e.file_name().to_string_lossy().ends_with(".md")
+            })
+            .filter_map(|e| {
+                let name = e.file_name().to_string_lossy().to_string();
+                let content = std::fs::read_to_string(e.path()).ok()?;
+                // Extract version identifier (e.g., "worker.v3.md" → "v3")
+                let version = name.strip_prefix(role)?.strip_prefix('.')?.strip_suffix(".md")?;
+                Some((version.to_string(), content))
+            })
+            .collect(),
+        Err(_) => return default.to_string(),
+    };
+
+    if versions.is_empty() {
+        return default.to_string();
+    }
+
+    // Query archive for success rates per prompt version
+    let rates = archive.success_rate_by_prompt_version();
+
+    // Find the version with the highest success rate (min 5 samples)
+    let best = versions
+        .iter()
+        .filter_map(|(version, content)| {
+            let (_, total, rate) = rates.get(version)?;
+            if *total >= 5 {
+                Some((version, content, *rate))
+            } else {
+                None
+            }
+        })
+        .max_by(|(_, _, a), (_, _, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+
+    match best {
+        Some((version, content, rate)) => {
+            tracing::info!(
+                role,
+                version = %version,
+                rate = format!("{:.0}%", rate * 100.0),
+                "Prompt coevolution: selected best-performing variant"
+            );
+            content.clone()
+        }
+        None => {
+            // No version has enough samples — use the latest by version number
+            let latest = versions.last();
+            match latest {
+                Some((_, content)) => content.clone(),
+                None => default.to_string(),
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod prompt_loader_tests {
     use super::*;
@@ -862,5 +937,12 @@ mod prompt_loader_tests {
 
         let result = load_prompt("manager", dir.path(), "default text");
         assert_eq!(result, "default text");
+    }
+
+    #[test]
+    fn test_load_best_prompt_returns_default_when_no_versions() {
+        let archive = crate::mutation_archive::MutationArchive::new(Path::new("/tmp/nonexistent"));
+        let result = load_best_prompt("worker", Path::new("/tmp/nonexistent"), "default prompt", &archive);
+        assert_eq!(result, "default prompt");
     }
 }
