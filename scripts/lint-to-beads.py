@@ -10,6 +10,7 @@ Usage:
 """
 
 import json
+import re
 import subprocess
 import sys
 from argparse import ArgumentParser
@@ -24,6 +25,43 @@ def parse_args():
     p.add_argument("--bd", default="bd", help="Beads CLI binary name")
     p.add_argument("--dry-run", action="store_true", help="Print issues without creating")
     return p.parse_args()
+
+
+def get_existing_issue_titles(bd: str) -> set[str]:
+    """Fetch titles of all open/in_progress issues to prevent duplicates."""
+    titles: set[str] = set()
+    for status in ("open", "in_progress"):
+        try:
+            result = subprocess.run(
+                [bd, "list", f"--status={status}", "--limit", "0"],
+                capture_output=True, text=True, timeout=30,
+            )
+            for line in result.stdout.splitlines():
+                m = re.search(r"P\d\s+(?:\[.*?\]\s*)?(.+)$", line)
+                if m:
+                    titles.add(m.group(1).strip().lower())
+        except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+            pass
+    return titles
+
+
+def title_already_exists(title: str, tool: str, existing: set[str]) -> bool:
+    """Check if a substantially similar title already exists."""
+    normalized = title.lower().strip()
+    if normalized in existing:
+        return True
+    # Extract core signature: tool code in file
+    core_match = re.match(
+        rf"fix {re.escape(tool)}\s+(\S+):.*in\s+(\S+)", normalized
+    )
+    if core_match:
+        code, filename = core_match.group(1), core_match.group(2)
+        pattern = f"fix {tool} {code}:"
+        file_pattern = f"in {filename}"
+        for existing_title in existing:
+            if pattern in existing_title and file_pattern in existing_title:
+                return True
+    return False
 
 
 def main():
@@ -46,7 +84,11 @@ def main():
         code = v.get("code", "unknown")
         groups[(filename, code)].append(v)
 
+    # Fetch existing issue titles ONCE to deduplicate
+    existing_titles = set() if args.dry_run else get_existing_issue_titles(args.bd)
+
     created = 0
+    skipped = 0
     for (filename, code), items in sorted(groups.items()):
         if created >= args.max_issues:
             break
@@ -61,6 +103,12 @@ def main():
         # Truncate title to 120 chars
         if len(title) > 120:
             title = title[:117] + "..."
+
+        # Skip if a matching issue already exists
+        if title_already_exists(title, args.tool, existing_titles):
+            skipped += 1
+            print(f"Skipped (duplicate): {title}", file=sys.stderr)
+            continue
 
         description = (
             f"{args.tool} reports {code} ({message}) at {filename} "
@@ -87,11 +135,16 @@ def main():
                 text=True,
             )
             created += 1
+            existing_titles.add(title.lower().strip())
         except subprocess.CalledProcessError as e:
             print(f"Failed to create issue: {e.stderr}", file=sys.stderr)
 
     if not args.dry_run:
-        print(f"Created {created} issues from {args.tool} output", file=sys.stderr)
+        print(
+            f"Created {created} issues from {args.tool} output "
+            f"({skipped} duplicates skipped)",
+            file=sys.stderr,
+        )
 
 
 if __name__ == "__main__":
