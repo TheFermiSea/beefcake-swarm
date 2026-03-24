@@ -251,6 +251,14 @@ run_issue() {
   local issue_title issue_args=()
   local run_start run_end elapsed exit_code
 
+  # Early check: skip if issue already closed (prevents re-processing resolved issues)
+  local issue_status
+  issue_status=$(bd_cmd show "$issue_id" --json 2>/dev/null | parse_bdh_json field status 50 2>/dev/null || echo "")
+  if [[ "$issue_status" == "closed" ]]; then
+    log "  [run $run_num] SKIP issue=$issue_id (already closed)"
+    return 0
+  fi
+
   # Fetch title + description from beads for the objective.
   # Including the description gives find_target_files_by_grep more identifiers
   # to search for (e.g., "edit_file", "verifier") beyond just the title.
@@ -406,8 +414,15 @@ if [[ "$PARALLEL" -le 1 ]]; then
           log "Issue list exhausted — discovering new issues from bdh ready..."
           mapfile -t NEW_ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
           if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
-            ISSUES+=("${NEW_ISSUES[@]}")
-            log "  Discovered ${#NEW_ISSUES[@]} new issues: ${NEW_ISSUES[*]}"
+            # Dedup: only add issues not already in the ISSUES array
+            for _new_id in "${NEW_ISSUES[@]}"; do
+              _already_in=0
+              for _existing_id in "${ISSUES[@]}"; do
+                if [[ "$_new_id" == "$_existing_id" ]]; then _already_in=1; break; fi
+              done
+              if [[ $_already_in -eq 0 ]]; then ISSUES+=("$_new_id"); fi
+            done
+            log "  Discovered ${#NEW_ISSUES[@]} new issues (after dedup: ${#ISSUES[@]} total): ${NEW_ISSUES[*]}"
             ISSUE_ID="${ISSUES[$IDX]}"
           else
             log "  No new ready issues. Waiting ${COOLDOWN}s before retry..."
@@ -518,8 +533,15 @@ else
       log "Issue list exhausted — discovering new issues from bdh ready..."
       mapfile -t NEW_ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
       if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
-        ISSUES+=("${NEW_ISSUES[@]}")
-        log "  Discovered ${#NEW_ISSUES[@]} new issues: ${NEW_ISSUES[*]}"
+        # Dedup: only add issues not already in the ISSUES array
+        for _new_id in "${NEW_ISSUES[@]}"; do
+          _already_in=0
+          for _existing_id in "${ISSUES[@]}"; do
+            if [[ "$_new_id" == "$_existing_id" ]]; then _already_in=1; break; fi
+          done
+          if [[ $_already_in -eq 0 ]]; then ISSUES+=("$_new_id"); fi
+        done
+        log "  Discovered ${#NEW_ISSUES[@]} new issues (after dedup: ${#ISSUES[@]} total): ${NEW_ISSUES[*]}"
       else
         log "  No new ready issues. Waiting ${COOLDOWN}s..."
         sleep "$COOLDOWN"
@@ -577,8 +599,15 @@ else
               # Discover new issues to keep pool full
               mapfile -t NEW_ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
               if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
-                ISSUES+=("${NEW_ISSUES[@]}")
-                log "  [pool] Discovered ${#NEW_ISSUES[@]} new issues"
+                # Dedup: only add issues not already in the ISSUES array
+                for _new_id in "${NEW_ISSUES[@]}"; do
+                  _already_in=0
+                  for _existing_id in "${ISSUES[@]}"; do
+                    if [[ "$_new_id" == "$_existing_id" ]]; then _already_in=1; break; fi
+                  done
+                  if [[ $_already_in -eq 0 ]]; then ISSUES+=("$_new_id"); fi
+                done
+                log "  [pool] Discovered ${#NEW_ISSUES[@]} new issues (after dedup: ${#ISSUES[@]} total)"
                 ISSUE_ID="${ISSUES[$IDX]}"
                 RUN_COUNT=$((RUN_COUNT + 1))
                 run_issue "$RUN_COUNT" "$ISSUE_ID" &

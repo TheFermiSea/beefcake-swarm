@@ -862,6 +862,19 @@ async fn process_issue_core(
                         // Try to merge and close.
                         merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by concurrent subtask dispatch")?;
                         clear_resume_file(worktree_bridge.repo_root());
+                        // Record successful resolution in the mutation archive.
+                        // Must happen before returning so early-exit paths are tracked.
+                        let record = crate::mutation_archive::build_record(
+                            &issue.id,
+                            &issue.title,
+                            &archive_language,
+                            true,
+                            session.iteration(),
+                            &format!("{:?}", escalation.current_tier),
+                            &config.resolve_role_model(SwarmRole::Planner),
+                            process_start.elapsed().as_secs(),
+                        );
+                        archive.record(&record);
                         return Ok(true);
                     }
 
@@ -920,6 +933,18 @@ async fn process_issue_core(
 
                                 merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by concurrent dispatch + fixer post-pass")?;
                                 clear_resume_file(worktree_bridge.repo_root());
+                                // Record successful resolution in the mutation archive.
+                                let record = crate::mutation_archive::build_record(
+                                    &issue.id,
+                                    &issue.title,
+                                    &archive_language,
+                                    true,
+                                    session.iteration(),
+                                    &format!("{:?}", escalation.current_tier),
+                                    &config.resolve_role_model(SwarmRole::Planner),
+                                    process_start.elapsed().as_secs(),
+                                );
+                                archive.record(&record);
                                 return Ok(true);
                             }
 
@@ -1798,6 +1823,18 @@ async fn process_issue_core(
 
                         merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by manager-guided parallel dispatch")?;
                         clear_resume_file(worktree_bridge.repo_root());
+                        // Record successful resolution in the mutation archive.
+                        let record = crate::mutation_archive::build_record(
+                            &issue.id,
+                            &issue.title,
+                            &archive_language,
+                            true,
+                            session.iteration(),
+                            &format!("{:?}", escalation.current_tier),
+                            &config.resolve_role_model(SwarmRole::Planner),
+                            process_start.elapsed().as_secs(),
+                        );
+                        archive.record(&record);
                         return Ok(true);
                     }
 
@@ -2077,6 +2114,18 @@ async fn process_issue_core(
                     merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved (no-op): codebase already satisfies requirements")?;
                     info!(id = %issue.id, "No-op issue closed successfully");
                     clear_resume_file(worktree_bridge.repo_root());
+                    // Record successful resolution in the mutation archive.
+                    let record = crate::mutation_archive::build_record(
+                        &issue.id,
+                        &issue.title,
+                        &archive_language,
+                        true,
+                        session.iteration(),
+                        &format!("{:?}", escalation.current_tier),
+                        &config.resolve_role_model(SwarmRole::Planner),
+                        process_start.elapsed().as_secs(),
+                    );
+                    archive.record(&record);
                     return Ok(true);
                 } else {
                     info!(

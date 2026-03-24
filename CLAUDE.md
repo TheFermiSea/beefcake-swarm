@@ -92,7 +92,7 @@ Cloud Manager (Claude Opus 4.6 via CLIAPIProxy, max 10 iterations)
         vasp-02:8081 — Qwen3.5-122B-A10B MoE (planner, reasoning worker)
     → optional: Qwen3.5-397B-A17B strategist (advisor, non-writing arbitration)
     → runs verifier after each worker completes
-    → circuit breaker: SWARM_MAX_NO_CHANGE (default: 2) stuck iterations → abort
+    → circuit breaker: SWARM_MAX_NO_CHANGE (default: 3) stuck iterations → abort
     ↓ all budgets exhausted
 Human Intervention (blocking beads issue)
 ```
@@ -181,9 +181,9 @@ Heterogeneous model setup: 27B on vasp-03, 122B on vasp-01/02.
 
 | Variable | Default | Notes |
 |----------|---------|-------|
-| `SWARM_MAX_RETRIES` | `10` | Max iterations per issue |
+| `SWARM_MAX_RETRIES` | `6` | Max iterations per issue |
 | `SWARM_CLOUD_MAX_RETRIES` | `3` | Cloud-specific retry limit |
-| `SWARM_MAX_NO_CHANGE` | `2` | Circuit breaker: abort after N consecutive no-change iterations |
+| `SWARM_MAX_NO_CHANGE` | `3` | Circuit breaker: abort after N consecutive no-change iterations |
 | `SWARM_CLOUD_ONLY` | `false` | Route all work through cloud (skip local) |
 | `SWARM_VERIFIER_PACKAGES` | *(empty)* | Comma-separated; empty = entire workspace |
 | `SWARM_MIN_OBJECTIVE_LEN` | `10` | Minimum issue title length |

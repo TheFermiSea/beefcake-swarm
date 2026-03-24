@@ -562,7 +562,7 @@ impl Default for SwarmConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .filter(|v| *v > 0)
-                .unwrap_or(10),
+                .unwrap_or(6),
             worktree_base: None,
             notebook_registry_path: Some(PathBuf::from("./notebook_registry.toml")),
             verifier_packages: std::env::var("SWARM_VERIFIER_PACKAGES")
@@ -582,7 +582,7 @@ impl Default for SwarmConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .filter(|v| *v > 0)
-                .unwrap_or(2),
+                .unwrap_or(3),
             min_objective_len: std::env::var("SWARM_MIN_OBJECTIVE_LEN")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -888,7 +888,7 @@ impl SwarmConfig {
             cloud_max_retries: 3,
             cloud_only: false,
             cloud_fallback_matrix: CloudFallbackMatrix::default_matrix(),
-            max_consecutive_no_change: 2,
+            max_consecutive_no_change: 3,
             min_objective_len: 10,
             max_cost_per_issue: 0.0,
             reject_patterns: Vec::new(),
@@ -1189,7 +1189,7 @@ mod tests {
             std::env::remove_var(var);
         }
         let config = SwarmConfig::default();
-        assert_eq!(config.max_retries, 10);
+        assert_eq!(config.max_retries, 6);
         assert!(config.fast_endpoint.url.contains("vasp-03"));
         assert!(config.coder_endpoint.url.contains("vasp-01"));
         assert!(config.reasoning_endpoint.url.contains("vasp-02"));
