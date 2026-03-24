@@ -135,10 +135,12 @@ Heterogeneous local cluster — each node runs a different model tier. See `docs
 **Start inference:**
 
 ```bash
-ssh root@10.0.0.22 "bash /tmp/start-qwen35-mmq.sh"   # vasp-03 (Qwen3-Coder-Next)
-ssh root@10.0.0.20 "bash /tmp/start-qwen35-mmq.sh"   # vasp-01 (122B-A10B coder)
-ssh root@10.0.0.21 "bash /tmp/start-qwen35-mmq.sh"   # vasp-02 (122B-A10B reasoning)
+ssh root@10.0.0.22 "bash /tmp/start-inference.sh"   # vasp-03 (Qwen3-Coder-Next)
+ssh root@10.0.0.20 "bash /tmp/start-inference.sh"   # vasp-01 (122B-A10B coder)
+ssh root@10.0.0.21 "bash /tmp/start-inference.sh"   # vasp-02 (122B-A10B reasoning)
 ```
+
+Scripts are version-controlled at `inference/start-inference-*.sh` and deployed to `/tmp/start-inference.sh` on each node. vasp-01/02 use HPC SDK CUDA paths; vasp-03 uses cuda-unified.
 
 **Cloud proxy:** CLIAPIProxy runs on ai-proxy (localhost:8317). Uses `x-api-key` header (not Bearer). API key set via `SWARM_CLOUD_API_KEY` env var.
 
