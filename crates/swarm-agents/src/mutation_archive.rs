@@ -339,13 +339,30 @@ impl MutationArchive {
             return None;
         }
 
-        // Compute aggregate UCB score for each candidate across all relevant error categories
+        // Compute aggregate UCB score for each candidate using the pre-loaded records.
+        // Inline the UCB1 formula to avoid N×M load_all() calls via ucb_score_for_lineage.
+        let total_all = records.len() as f64;
         candidate_models
             .iter()
             .map(|model| {
                 let avg_ucb: f64 = error_categories
                     .iter()
-                    .map(|cat| self.ucb_score_for_lineage(model, cat))
+                    .map(|cat| {
+                        let lineage_count = records
+                            .iter()
+                            .filter(|r| r.model == *model && r.error_categories.iter().any(|c| c == cat.as_str()))
+                            .count() as f64;
+                        if lineage_count == 0.0 {
+                            return f64::MAX;
+                        }
+                        let successes = records
+                            .iter()
+                            .filter(|r| r.model == *model && r.resolved && r.error_categories.iter().any(|c| c == cat.as_str()))
+                            .count() as f64;
+                        let mean_reward = successes / lineage_count;
+                        let exploration = (2.0 * total_all.ln() / lineage_count).sqrt();
+                        mean_reward + exploration
+                    })
                     .sum::<f64>()
                     / error_categories.len() as f64;
                 (model.clone(), avg_ucb)

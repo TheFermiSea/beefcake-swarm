@@ -1171,7 +1171,7 @@ async fn process_issue_core(
                 let error_cats: Vec<String> = report
                     .unique_error_categories()
                     .iter()
-                    .map(|c| format!("{c:?}"))
+                    .map(|c| c.to_string())
                     .collect();
                 if let Some(context) = archive.context_for_issue(&error_cats) {
                     full_objective.push_str("\n\n");
@@ -1241,7 +1241,7 @@ async fn process_issue_core(
         // --- Meta-insight injection (Hyperagents pattern) ---
         // Load recent meta-insights from the reflection loop and inject as heuristics.
         {
-            let reflector = crate::meta_reflection::MetaReflector::new(&wt_path);
+            let reflector = crate::meta_reflection::MetaReflector::new(worktree_bridge.repo_root());
             let insights = reflector.load_recent_insights(5);
             for insight in &insights {
                 packet.relevant_heuristics.push(format!(
@@ -1259,7 +1259,7 @@ async fn process_issue_core(
         // Load learned skills from past successful mutations and inject as hints
         // into the work packet so the prompt formatters can surface them to agents.
         {
-            let skills_path = wt_path.join(".swarm/skills.json");
+            let skills_path = worktree_bridge.repo_root().join(".swarm/skills.json");
             let skill_library = coordination::analytics::skills::SkillLibrary::load(&skills_path)
                 .unwrap_or_default();
             if !skill_library.is_empty() {
@@ -2362,7 +2362,7 @@ async fn process_issue_core(
 
         let error_cats = report.unique_error_categories();
         let error_count = report.failure_signals.len();
-        let cat_names: Vec<String> = error_cats.iter().map(|c| format!("{c:?}")).collect();
+        let cat_names: Vec<String> = error_cats.iter().map(|c| c.to_string()).collect();
         metrics.record_verifier_results(error_count, cat_names);
 
         // Emit OpenTelemetry-compatible loop metrics event
@@ -2730,7 +2730,7 @@ async fn process_issue_core(
             let error_cats: Vec<String> = report
                 .unique_error_categories()
                 .iter()
-                .map(|c| format!("{c:?}"))
+                .map(|c| c.to_string())
                 .collect();
             if !error_cats.is_empty() {
                 let question = format!("Known fix for Rust errors: {}", error_cats.join(", "));
@@ -2806,7 +2806,7 @@ async fn process_issue_core(
                     .recent_error_categories
                     .iter()
                     .flatten()
-                    .map(|c| format!("{c:?}"))
+                    .map(|c| c.to_string())
                     .collect();
                 let _ = knowledge_sync::capture_error_pattern(
                     kb,
@@ -3041,7 +3041,7 @@ async fn process_issue_core(
             .map(|r| {
                 r.unique_error_categories()
                     .iter()
-                    .map(|c| format!("{c:?}"))
+                    .map(|c| c.to_string())
                     .collect()
             })
             .unwrap_or_default();
@@ -3262,7 +3262,7 @@ async fn process_issue_core(
             record.error_categories = report
                 .unique_error_categories()
                 .iter()
-                .map(|c| format!("{c:?}"))
+                .map(|c| c.to_string())
                 .collect();
             record.first_failure_gate = report.first_failure.clone();
         }
@@ -3299,25 +3299,12 @@ async fn process_issue_core(
         // future tasks with similar error categories receive targeted hints.
         if success {
             if let Some(candidate) = crate::mutation_archive::MutationArchive::extract_skill_candidate(&record) {
-                let skills_path = wt_path.join(".swarm/skills.json");
+                let skills_path = worktree_bridge.repo_root().join(".swarm/skills.json");
                 if let Ok(mut lib) = coordination::analytics::skills::SkillLibrary::load(&skills_path) {
-                    // record.error_categories are stored in Debug format ("BorrowChecker"),
-                    // but ErrorCategory::FromStr expects Display format ("borrow_checker").
-                    // Convert by lowercasing and inserting underscores before each uppercase letter.
-                    let normalize = |s: &str| -> String {
-                        let mut out = String::new();
-                        for (i, ch) in s.chars().enumerate() {
-                            if ch.is_uppercase() && i > 0 {
-                                out.push('_');
-                            }
-                            out.push(ch.to_ascii_lowercase());
-                        }
-                        out
-                    };
                     let triggers: Vec<coordination::feedback::ErrorCategory> = candidate
                         .error_categories
                         .iter()
-                        .filter_map(|s| normalize(s).parse().ok())
+                        .filter_map(|s| s.parse().ok())
                         .collect();
                     if !triggers.is_empty() {
                         let trigger = coordination::analytics::skills::SkillTrigger {
@@ -3344,19 +3331,13 @@ async fn process_issue_core(
     // Every 10 completed issues, analyze recent outcomes for patterns.
     // Runs synchronously but is fast (purely local computation, no LLM calls).
     {
-        let reflector = crate::meta_reflection::MetaReflector::new(&wt_path);
-        let archive_size = crate::mutation_archive::MutationArchive::new(&wt_path)
-            .load_all()
-            .len();
+        let archive_size = archive.load_all().len();
         if archive_size > 0 && archive_size.is_multiple_of(10) {
             info!(archive_size, "Hyperagents: triggering meta-reflection");
+            let reflector = crate::meta_reflection::MetaReflector::new(worktree_bridge.repo_root());
             let insights = reflector.reflect(20);
             if !insights.is_empty() {
-                info!(
-                    count = insights.len(),
-                    "Hyperagents: generated {} meta-insight(s)",
-                    insights.len()
-                );
+                info!(count = insights.len(), "Hyperagents: generated meta-insights");
                 reflector.save_insights(&insights);
             }
         }
