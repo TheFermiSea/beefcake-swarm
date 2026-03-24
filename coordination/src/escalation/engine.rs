@@ -249,6 +249,27 @@ impl EscalationEngine {
             };
         }
 
+        // Trigger T_LC: Low confidence — worker self-reported low confidence >= 2 times.
+        // Escalate early to Council rather than burning iterations on likely-futile attempts.
+        // Threshold of 2 avoids false positives from a single uncertain response.
+        let low_confidence_threshold = 2u32;
+        if state.low_confidence_count >= low_confidence_threshold {
+            let reason = EscalationReason::LowConfidence {
+                count: state.low_confidence_count,
+                threshold: low_confidence_threshold,
+            };
+            state.record_escalation(SwarmTier::Council, reason.clone());
+            return EscalationDecision {
+                target_tier: SwarmTier::Council,
+                escalated: true,
+                reason: format!("Escalating: {}", reason),
+                resolved: false,
+                stuck: false,
+                needs_review: false,
+                action: SuggestedAction::RepairPlan,
+            };
+        }
+
         // Friction detection: catch oscillating/plateauing errors that bypass T1's
         // consecutive-repeat requirement.
         // Guards: (1) require >= 4 iterations for reliable pattern detection,

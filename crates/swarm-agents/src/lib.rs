@@ -4,6 +4,7 @@ pub mod agents;
 pub mod auto_fix;
 pub mod beads_bridge;
 pub mod cluster_health;
+pub mod confidence;
 pub mod config;
 pub mod contracts;
 pub mod dashboard;

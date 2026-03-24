@@ -175,6 +175,8 @@ pub enum EscalationReason {
     ConsecutiveNoChange { count: u32, threshold: u32 },
     /// Friction detector triggered (oscillation, plateau, churn)
     FrictionDetected { description: String },
+    /// Worker self-reported low confidence >= threshold times
+    LowConfidence { count: u32, threshold: u32 },
 }
 
 impl std::fmt::Display for EscalationReason {
@@ -205,6 +207,13 @@ impl std::fmt::Display for EscalationReason {
             }
             Self::FrictionDetected { description } => {
                 write!(f, "friction: {}", description)
+            }
+            Self::LowConfidence { count, threshold } => {
+                write!(
+                    f,
+                    "{} low-confidence signals (threshold: {})",
+                    count, threshold
+                )
             }
         }
     }
@@ -252,6 +261,11 @@ pub struct EscalationState {
     /// `MAX_ESCALATION_DEPTH` the engine forces a Human transition regardless
     /// of remaining tier budgets, preventing unforeseen escalation cycles.
     pub escalation_depth: u32,
+    /// Count of low-confidence signals recorded from worker self-reports.
+    ///
+    /// Incremented by `record_low_confidence`. When >= 2 the escalation engine
+    /// recommends early escalation to Council (uncertainty-aware LLM pattern).
+    pub low_confidence_count: u32,
     /// Timestamp of last activity
     pub last_activity: DateTime<Utc>,
 }
@@ -278,6 +292,7 @@ impl EscalationState {
             stuck: false,
             consecutive_no_change: 0,
             escalation_depth: 0,
+            low_confidence_count: 0,
             last_activity: Utc::now(),
         }
     }
@@ -306,6 +321,19 @@ impl EscalationState {
     /// Reset the no-change counter (agent produced file edits).
     pub fn reset_no_change(&mut self) {
         self.consecutive_no_change = 0;
+    }
+
+    /// Record a low-confidence signal from a worker's self-reported score.
+    ///
+    /// When `low_confidence_count` reaches 2 the escalation engine will
+    /// recommend early escalation to Council (uncertainty-aware LLM pattern).
+    pub fn record_low_confidence(&mut self, score: f64) {
+        self.low_confidence_count += 1;
+        tracing::info!(
+            score,
+            count = self.low_confidence_count,
+            "Escalation: recorded low confidence signal"
+        );
     }
 
     /// Compute the reward delta between the last two iterations.

@@ -1894,6 +1894,29 @@ async fn process_issue_core(
                     response_preview = %preview,
                     "Agent responded"
                 );
+                // --- Uncertainty-aware confidence check ---
+                // If the worker self-reports low confidence, flag for escalation
+                // rather than waiting for compile failures to trigger it.
+                if tier == SwarmTier::Worker {
+                    if let Some(confidence) = crate::confidence::extract_confidence(&r) {
+                        info!(
+                            iteration,
+                            confidence = confidence.score,
+                            explicit = confidence.explicit,
+                            "Agent self-reported confidence"
+                        );
+                        if confidence.score < crate::confidence::DEFAULT_CONFIDENCE_THRESHOLD {
+                            warn!(
+                                iteration,
+                                confidence = confidence.score,
+                                threshold = crate::confidence::DEFAULT_CONFIDENCE_THRESHOLD,
+                                "Low confidence detected — recommending escalation to Council"
+                            );
+                            // Record the low-confidence signal for the escalation engine
+                            escalation.record_low_confidence(confidence.score);
+                        }
+                    }
+                }
                 r
             }
             Err(e) => {
@@ -2343,6 +2366,63 @@ async fn process_issue_core(
 
         // Reset no-change counter on any iteration that produces changes
         escalation.reset_no_change();
+
+        // --- Self-evaluation gate (uncertainty-aware pattern) ---
+        // For complex/critical issues, ask the reviewer to critique changes
+        // before running the deterministic verifier.
+        if matches!(
+            triage_result.complexity,
+            crate::triage::Complexity::Complex | crate::triage::Complexity::Critical
+        ) && agent_has_written_prev
+            && tier == SwarmTier::Worker
+        {
+            let critiques: Vec<coordination::debate::critique::CritiqueItem> =
+                self_evaluate_changes(&reviewer, &wt_path, &issue.title, iteration as u32).await;
+
+            let blocking_count = critiques
+                .iter()
+                .filter(|c| c.severity.is_blocking())
+                .count();
+            if blocking_count > 0 {
+                warn!(
+                    iteration,
+                    blocking = blocking_count,
+                    total = critiques.len(),
+                    "Self-evaluation found {} blocking issue(s) — flagging for review",
+                    blocking_count
+                );
+                // Inject critiques as validator feedback for the next iteration's prompt
+                for critique in &critiques {
+                    use coordination::verifier::ValidatorIssueType;
+                    let issue_type = match critique.category {
+                        coordination::debate::critique::CritiqueCategory::Correctness => {
+                            ValidatorIssueType::LogicError
+                        }
+                        coordination::debate::critique::CritiqueCategory::Security => {
+                            ValidatorIssueType::MissingSafetyCheck
+                        }
+                        coordination::debate::critique::CritiqueCategory::ErrorHandling => {
+                            ValidatorIssueType::MissingSafetyCheck
+                        }
+                        _ => ValidatorIssueType::Other,
+                    };
+                    last_validator_feedback.push(ValidatorFeedback {
+                        file: critique.file.clone(),
+                        line_range: critique.line_range.map(|(s, e)| (s as usize, e as usize)),
+                        issue_type,
+                        description: critique.description.clone(),
+                        suggested_fix: critique.suggested_fix.clone(),
+                        source_model: Some("self_evaluation".to_string()),
+                    });
+                }
+            } else if !critiques.is_empty() {
+                info!(
+                    iteration,
+                    warnings = critiques.len(),
+                    "Self-evaluation found warnings only — proceeding to verifier"
+                );
+            }
+        }
 
         // --- Verifier: run deterministic quality gates ---
         let verifier_start = std::time::Instant::now();
@@ -3534,6 +3614,110 @@ pub(crate) async fn prompt_with_hook_and_retry(
         }
     }
     Err(last_err.unwrap())
+}
+
+/// Self-evaluation gate for complex/critical issues (uncertainty-aware LLM pattern).
+///
+/// After the worker produces code, asks the reviewer model to critique the changes
+/// before running the deterministic verifier. This catches logic errors that compile
+/// successfully but are semantically wrong.
+///
+/// Only activated for Complex/Critical triage results to avoid overhead on simple fixes.
+async fn self_evaluate_changes(
+    reviewer: &crate::agents::coder::OaiAgent,
+    wt_path: &Path,
+    issue_title: &str,
+    iteration: u32,
+) -> Vec<coordination::debate::critique::CritiqueItem> {
+    use coordination::debate::critique::{CritiqueCategory, CritiqueItem, CritiqueSeverity};
+
+    // Get the diff of what was changed
+    let diff_output = tokio::process::Command::new("git")
+        .args(["diff", "--stat"])
+        .current_dir(wt_path)
+        .output()
+        .await;
+
+    let diff_stat = match diff_output {
+        Ok(out) => String::from_utf8_lossy(&out.stdout).to_string(),
+        Err(_) => return vec![],
+    };
+
+    if diff_stat.trim().is_empty() {
+        return vec![]; // No changes to evaluate
+    }
+
+    let prompt = format!(
+        "You are a code reviewer. The following changes were made for issue: \"{issue_title}\"\n\n\
+         Changed files:\n{diff_stat}\n\n\
+         Review these changes for correctness issues. Respond with ONLY a JSON array of issues found, \
+         or an empty array [] if the changes look correct.\n\
+         Format: [{{\"severity\": \"blocking\"|\"warning\", \"category\": \"correctness\"|\"security\"|\"error_handling\", \"description\": \"...\"}}]"
+    );
+
+    let review_result = tokio::time::timeout(
+        std::time::Duration::from_secs(60),
+        rig::completion::Prompt::prompt(reviewer, &prompt),
+    )
+    .await;
+
+    match review_result {
+        Ok(Ok(response)) => {
+            // Parse the JSON response
+            let cleaned = response
+                .trim()
+                .strip_prefix("```json")
+                .or_else(|| response.trim().strip_prefix("```"))
+                .unwrap_or(response.trim());
+            let cleaned = cleaned.strip_suffix("```").unwrap_or(cleaned).trim();
+
+            #[derive(serde::Deserialize)]
+            struct RawCritique {
+                severity: String,
+                category: String,
+                description: String,
+            }
+
+            match serde_json::from_str::<Vec<RawCritique>>(cleaned) {
+                Ok(items) => items
+                    .into_iter()
+                    .map(|raw| {
+                        let severity = if raw.severity == "blocking" {
+                            CritiqueSeverity::Blocking
+                        } else {
+                            CritiqueSeverity::Warning
+                        };
+                        let category = match raw.category.as_str() {
+                            "correctness" => CritiqueCategory::Correctness,
+                            "security" => CritiqueCategory::Security,
+                            "error_handling" => CritiqueCategory::ErrorHandling,
+                            _ => CritiqueCategory::Other,
+                        };
+                        CritiqueItem {
+                            severity,
+                            category,
+                            file: None,
+                            line_range: None,
+                            description: raw.description,
+                            suggested_fix: None,
+                        }
+                    })
+                    .collect(),
+                Err(e) => {
+                    tracing::debug!(iteration, error = %e, "Self-evaluation: failed to parse critique JSON");
+                    vec![]
+                }
+            }
+        }
+        Ok(Err(e)) => {
+            tracing::debug!(iteration, error = %e, "Self-evaluation: reviewer call failed");
+            vec![]
+        }
+        Err(_) => {
+            tracing::debug!(iteration, "Self-evaluation: reviewer timed out");
+            vec![]
+        }
+    }
 }
 
 #[cfg(test)]
