@@ -348,8 +348,17 @@ impl IssueTracker for BeadsBridge {
             reason_arg = format!("--reason={r}");
             args.push(&reason_arg);
         }
-        self.run_bd_ok(&args)?;
-        Ok(())
+        tracing::info!(id = %id, wt_path = ?self.wt_path, "BeadsBridge: calling bd close");
+        match self.run_bd_ok(&args) {
+            Ok(stdout) => {
+                tracing::info!(id = %id, stdout = %stdout.trim(), "BeadsBridge: bd close succeeded");
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!(id = %id, error = %e, "BeadsBridge: bd close FAILED");
+                Err(e)
+            }
+        }
     }
 
     /// Claim an issue using `bd update --claim`.
