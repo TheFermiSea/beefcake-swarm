@@ -1238,6 +1238,52 @@ async fn process_issue_core(
             }
         }
 
+        // --- Meta-insight injection (Hyperagents pattern) ---
+        // Load recent meta-insights from the reflection loop and inject as heuristics.
+        {
+            let reflector = crate::meta_reflection::MetaReflector::new(&wt_path);
+            let insights = reflector.load_recent_insights(5);
+            for insight in &insights {
+                packet.relevant_heuristics.push(format!(
+                    "[{}] {}",
+                    insight.insight_type_label(),
+                    insight.recommendation,
+                ));
+            }
+            if !insights.is_empty() {
+                info!(count = insights.len(), iteration, "Injected meta-insights into packet");
+            }
+        }
+
+        // --- Skill library injection (Hyperagents pattern) ---
+        // Load learned skills from past successful mutations and inject as hints
+        // into the work packet so the prompt formatters can surface them to agents.
+        {
+            let skills_path = wt_path.join(".swarm/skills.json");
+            let skill_library = coordination::analytics::skills::SkillLibrary::load(&skills_path)
+                .unwrap_or_default();
+            if !skill_library.is_empty() {
+                let typed_cats: Vec<coordination::feedback::ErrorCategory> = packet
+                    .failure_signals
+                    .iter()
+                    .map(|s| s.category)
+                    .collect();
+                let skill_context = coordination::analytics::skills::TaskContext {
+                    error_categories: typed_cats,
+                    files_involved: packet.file_contexts.iter().map(|f| f.file.clone()).collect(),
+                    task_type: None,
+                };
+                let hints = skill_library.find_matching(&skill_context);
+                if !hints.is_empty() {
+                    info!(
+                        hint_count = hints.len(),
+                        "Hyperagents: injecting skill hints into work packet"
+                    );
+                    packet.skill_hints = hints;
+                }
+            }
+        }
+
         info!(
             tokens = packet.estimated_tokens(),
             files = packet.file_contexts.len(),
@@ -3247,6 +3293,73 @@ async fn process_issue_core(
             }
         }
         archive.record(&record);
+
+        // --- Hyperagents: extract skills from successful mutations ---
+        // Promote quick resolutions (≤3 iterations) into the skill library so
+        // future tasks with similar error categories receive targeted hints.
+        if success {
+            if let Some(candidate) = crate::mutation_archive::MutationArchive::extract_skill_candidate(&record) {
+                let skills_path = wt_path.join(".swarm/skills.json");
+                if let Ok(mut lib) = coordination::analytics::skills::SkillLibrary::load(&skills_path) {
+                    // record.error_categories are stored in Debug format ("BorrowChecker"),
+                    // but ErrorCategory::FromStr expects Display format ("borrow_checker").
+                    // Convert by lowercasing and inserting underscores before each uppercase letter.
+                    let normalize = |s: &str| -> String {
+                        let mut out = String::new();
+                        for (i, ch) in s.chars().enumerate() {
+                            if ch.is_uppercase() && i > 0 {
+                                out.push('_');
+                            }
+                            out.push(ch.to_ascii_lowercase());
+                        }
+                        out
+                    };
+                    let triggers: Vec<coordination::feedback::ErrorCategory> = candidate
+                        .error_categories
+                        .iter()
+                        .filter_map(|s| normalize(s).parse().ok())
+                        .collect();
+                    if !triggers.is_empty() {
+                        let trigger = coordination::analytics::skills::SkillTrigger {
+                            error_categories: triggers,
+                            file_patterns: vec![],
+                            task_type: None,
+                        };
+                        lib.create_skill(&candidate.approach_summary, trigger, &candidate.approach_summary);
+                        if let Err(e) = lib.save(&skills_path) {
+                            warn!(error = %e, "Hyperagents: failed to save skill library");
+                        } else {
+                            info!(
+                                skill = %candidate.approach_summary,
+                                "Hyperagents: extracted skill from successful mutation"
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Hyperagents: periodic meta-reflection ---
+    // Every 10 completed issues, analyze recent outcomes for patterns.
+    // Runs synchronously but is fast (purely local computation, no LLM calls).
+    {
+        let reflector = crate::meta_reflection::MetaReflector::new(&wt_path);
+        let archive_size = crate::mutation_archive::MutationArchive::new(&wt_path)
+            .load_all()
+            .len();
+        if archive_size > 0 && archive_size.is_multiple_of(10) {
+            info!(archive_size, "Hyperagents: triggering meta-reflection");
+            let insights = reflector.reflect(20);
+            if !insights.is_empty() {
+                info!(
+                    count = insights.len(),
+                    "Hyperagents: generated {} meta-insight(s)",
+                    insights.len()
+                );
+                reflector.save_insights(&insights);
+            }
+        }
     }
 
     Ok(success)

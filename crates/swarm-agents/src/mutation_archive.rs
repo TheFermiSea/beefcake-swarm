@@ -19,6 +19,7 @@
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use tracing::{info, warn};
@@ -263,6 +264,96 @@ impl MutationArchive {
         success_rate + exploration
     }
 
+    /// Success rate grouped by prompt version (Hyperagents prompt coevolution).
+    pub fn success_rate_by_prompt_version(&self) -> HashMap<String, (usize, usize, f64)> {
+        let records = self.load_all();
+        let mut stats: HashMap<String, (usize, usize)> = HashMap::new();
+        for r in &records {
+            let entry = stats.entry(r.prompt_version.clone()).or_insert((0, 0));
+            entry.1 += 1;
+            if r.resolved {
+                entry.0 += 1;
+            }
+        }
+        stats
+            .into_iter()
+            .map(|(version, (successes, total))| {
+                let rate = if total > 0 { successes as f64 / total as f64 } else { 0.0 };
+                (version, (successes, total, rate))
+            })
+            .collect()
+    }
+
+    /// UCB1 score for a specific model+error_category lineage (Hyperagents generational selection).
+    pub fn ucb_score_for_lineage(&self, model: &str, error_category: &str) -> f64 {
+        let records = self.load_all();
+        let total_all = records.len() as f64;
+        if total_all == 0.0 {
+            return f64::MAX; // Encourage exploration
+        }
+
+        let lineage: Vec<&MutationRecord> = records
+            .iter()
+            .filter(|r| r.model == model && r.error_categories.iter().any(|c| c == error_category))
+            .collect();
+
+        let n = lineage.len() as f64;
+        if n == 0.0 {
+            return f64::MAX; // Never tried → explore
+        }
+
+        let successes = lineage.iter().filter(|r| r.resolved).count() as f64;
+        let mean_reward = successes / n;
+        let exploration = (2.0 * total_all.ln() / n).sqrt();
+        mean_reward + exploration
+    }
+
+    /// Recommend the best model for a given set of error categories using UCB1 (Hyperagents).
+    ///
+    /// Returns `None` if insufficient data (< `min_samples` per candidate).
+    pub fn recommend_model(
+        &self,
+        error_categories: &[String],
+        candidate_models: &[String],
+        min_samples: usize,
+    ) -> Option<String> {
+        if error_categories.is_empty() || candidate_models.is_empty() {
+            return None;
+        }
+
+        let records = self.load_all();
+
+        // Check that at least one candidate has enough samples
+        let has_sufficient_data = candidate_models.iter().any(|model| {
+            let count = records
+                .iter()
+                .filter(|r| {
+                    r.model == *model
+                        && r.error_categories.iter().any(|c| error_categories.contains(c))
+                })
+                .count();
+            count >= min_samples
+        });
+
+        if !has_sufficient_data {
+            return None;
+        }
+
+        // Compute aggregate UCB score for each candidate across all relevant error categories
+        candidate_models
+            .iter()
+            .map(|model| {
+                let avg_ucb: f64 = error_categories
+                    .iter()
+                    .map(|cat| self.ucb_score_for_lineage(model, cat))
+                    .sum::<f64>()
+                    / error_categories.len() as f64;
+                (model.clone(), avg_ucb)
+            })
+            .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(model, _)| model)
+    }
+
     /// Format similar past fixes and anti-patterns as a prompt context section.
     ///
     /// Returns empty string if no relevant history exists.
@@ -323,8 +414,7 @@ impl MutationArchive {
         };
 
         // Model breakdown
-        let mut model_stats: std::collections::HashMap<String, (usize, usize)> =
-            std::collections::HashMap::new();
+        let mut model_stats: HashMap<String, (usize, usize)> = HashMap::new();
         for r in &records {
             let entry = model_stats.entry(r.model.clone()).or_insert((0, 0));
             entry.1 += 1; // total
@@ -442,7 +532,7 @@ pub struct ArchiveSummary {
     pub auto_fix_only: usize,
     pub avg_iterations_to_resolve: f64,
     /// Model → (successes, total_attempts)
-    pub model_stats: std::collections::HashMap<String, (usize, usize)>,
+    pub model_stats: HashMap<String, (usize, usize)>,
 }
 
 impl std::fmt::Display for ArchiveSummary {
@@ -460,6 +550,39 @@ impl std::fmt::Display for ArchiveSummary {
             self.auto_fix_only,
             self.avg_iterations_to_resolve,
         )
+    }
+}
+
+/// A candidate for promotion to the skill library (Hyperagents pattern).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillCandidate {
+    pub error_categories: Vec<String>,
+    pub files_changed: Vec<String>,
+    pub approach_summary: String,
+    pub model_used: String,
+    pub iterations: u32,
+}
+
+impl MutationArchive {
+    /// Extract a skill candidate from a successful mutation record.
+    /// Only promotes records that resolved quickly (≤3 iterations) with known error categories.
+    pub fn extract_skill_candidate(record: &MutationRecord) -> Option<SkillCandidate> {
+        if !record.resolved || record.iterations > 3 {
+            return None;
+        }
+        if record.error_categories.is_empty() {
+            return None;
+        }
+        Some(SkillCandidate {
+            error_categories: record.error_categories.clone(),
+            files_changed: record.files_changed.clone(),
+            approach_summary: format!(
+                "Resolved '{}' in {} iteration(s) using {}",
+                record.issue_title, record.iterations, record.model
+            ),
+            model_used: record.model.clone(),
+            iterations: record.iterations,
+        })
     }
 }
 
@@ -612,5 +735,117 @@ mod tests {
         let archive = MutationArchive::new(dir.path());
         assert!(archive.load_all().is_empty());
         assert_eq!(archive.summary().total_attempts, 0);
+    }
+
+    #[test]
+    fn test_success_rate_by_prompt_version() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = MutationArchive::new(dir.path());
+
+        // v1: 2 successes, 1 failure → 66.7% success rate
+        for resolved in [true, true, false] {
+            let mut r = build_record("id", "title", "rust", resolved, 1, "W", "model-a", 60);
+            r.prompt_version = "v1".into();
+            archive.record(&r);
+        }
+
+        // v2: 1 success, 0 failures → 100% success rate
+        let mut r = build_record("id", "title", "rust", true, 1, "W", "model-a", 60);
+        r.prompt_version = "v2".into();
+        archive.record(&r);
+
+        let rates = archive.success_rate_by_prompt_version();
+
+        let (successes, total, rate) = rates["v1"];
+        assert_eq!(successes, 2);
+        assert_eq!(total, 3);
+        assert!((rate - 2.0 / 3.0).abs() < 0.01);
+
+        let (successes, total, rate) = rates["v2"];
+        assert_eq!(successes, 1);
+        assert_eq!(total, 1);
+        assert!((rate - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_ucb_score_for_lineage() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = MutationArchive::new(dir.path());
+
+        // Add one record for model-a with category "borrow_checker"
+        let mut r = build_record("id1", "title", "rust", true, 1, "W", "model-a", 60);
+        r.error_categories = vec!["borrow_checker".into()];
+        archive.record(&r);
+
+        // model-a with borrow_checker should have a finite UCB score
+        let score_a = archive.ucb_score_for_lineage("model-a", "borrow_checker");
+        assert!(score_a.is_finite());
+
+        // model-b (never tried for borrow_checker) should get MAX (exploration)
+        let score_b = archive.ucb_score_for_lineage("model-b", "borrow_checker");
+        assert_eq!(score_b, f64::MAX);
+
+        // model-a with a different category should also get MAX
+        let score_a_other = archive.ucb_score_for_lineage("model-a", "type_mismatch");
+        assert_eq!(score_a_other, f64::MAX);
+    }
+
+    #[test]
+    fn test_recommend_model_picks_best() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = MutationArchive::new(dir.path());
+
+        let cats = vec!["borrow_checker".to_string()];
+
+        // model-a: 3 successes out of 3 (100% success rate)
+        for _ in 0..3 {
+            let mut r = build_record("id", "title", "rust", true, 1, "W", "model-a", 60);
+            r.error_categories = cats.clone();
+            archive.record(&r);
+        }
+
+        // model-b: 0 successes out of 3 (0% success rate)
+        for _ in 0..3 {
+            let mut r = build_record("id", "title", "rust", false, 5, "W", "model-b", 300);
+            r.error_categories = cats.clone();
+            archive.record(&r);
+        }
+
+        let candidates = vec!["model-a".to_string(), "model-b".to_string()];
+        let recommended = archive.recommend_model(&cats, &candidates, 1);
+        assert_eq!(recommended.as_deref(), Some("model-a"));
+    }
+
+    #[test]
+    fn test_recommend_model_returns_none_insufficient_data() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = MutationArchive::new(dir.path());
+
+        let cats = vec!["type_mismatch".to_string()];
+
+        // Only 1 sample for model-a, but min_samples = 5
+        let mut r = build_record("id", "title", "rust", true, 1, "W", "model-a", 60);
+        r.error_categories = cats.clone();
+        archive.record(&r);
+
+        let candidates = vec!["model-a".to_string(), "model-b".to_string()];
+        let recommended = archive.recommend_model(&cats, &candidates, 5);
+        assert!(recommended.is_none());
+    }
+
+    #[test]
+    fn test_recommend_model_empty_inputs() {
+        let dir = tempfile::tempdir().unwrap();
+        let archive = MutationArchive::new(dir.path());
+
+        // Empty error_categories → None
+        assert!(archive
+            .recommend_model(&[], &["model-a".to_string()], 1)
+            .is_none());
+
+        // Empty candidates → None
+        assert!(archive
+            .recommend_model(&["borrow_checker".to_string()], &[], 1)
+            .is_none());
     }
 }

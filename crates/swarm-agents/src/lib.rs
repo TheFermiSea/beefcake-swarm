@@ -13,6 +13,7 @@ pub mod file_targeting;
 pub mod git_ops;
 pub mod kb_refresh;
 pub mod knowledge_sync;
+pub mod meta_reflection;
 pub mod modes;
 pub mod mutation_archive;
 pub mod notebook_bridge;

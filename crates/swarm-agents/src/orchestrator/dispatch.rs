@@ -207,6 +207,20 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
         prompt.push('\n');
     }
 
+    // --- Skill hints from past successful resolutions (Hyperagents pattern) ---
+    if !packet.skill_hints.is_empty() {
+        prompt.push_str("\n## Recommended Approaches (from past successes)\n\n");
+        for hint in &packet.skill_hints {
+            prompt.push_str(&format!(
+                "- [confidence: {:.0}%] {}: {}\n",
+                hint.confidence * 100.0,
+                hint.label,
+                hint.approach,
+            ));
+        }
+        prompt.push('\n');
+    }
+
     prompt.push_str(&format!(
         "**Max patch size:** {} LOC\n\n",
         packet.max_patch_loc
@@ -385,6 +399,15 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
             prompt.push_str(&format!("- [{}] {}\n", fb.issue_type, fb.description));
         }
         prompt.push('\n');
+    }
+
+    // --- Skill hints (compact) ---
+    if !packet.skill_hints.is_empty() {
+        prompt.push_str("\n<skill_hints>\n");
+        for hint in &packet.skill_hints {
+            prompt.push_str(&format!("- {}: {}\n", hint.label, hint.approach));
+        }
+        prompt.push_str("</skill_hints>\n");
     }
 
     // Inline the first (most relevant) target file content to save read_file turns.

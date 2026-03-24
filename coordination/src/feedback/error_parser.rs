@@ -100,6 +100,23 @@ impl std::fmt::Display for ErrorCategory {
     }
 }
 
+impl std::str::FromStr for ErrorCategory {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "type_mismatch" => Ok(Self::TypeMismatch),
+            "borrow_checker" => Ok(Self::BorrowChecker),
+            "lifetime" => Ok(Self::Lifetime),
+            "trait_bound" => Ok(Self::TraitBound),
+            "async" => Ok(Self::Async),
+            "macro" => Ok(Self::Macro),
+            "import_resolution" | "import" => Ok(Self::ImportResolution),
+            "syntax" => Ok(Self::Syntax),
+            _ => Ok(Self::Other),
+        }
+    }
+}
+
 /// Parsed and classified error
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedError {
@@ -416,5 +433,40 @@ mod tests {
         assert!(summary.has_borrow_errors);
         assert!(!summary.has_lifetime_errors);
         assert_eq!(summary.recommended_tier(), "specialized");
+    }
+
+    #[test]
+    fn test_error_category_from_str() {
+        use std::str::FromStr;
+
+        assert_eq!(ErrorCategory::from_str("type_mismatch").unwrap(), ErrorCategory::TypeMismatch);
+        assert_eq!(ErrorCategory::from_str("borrow_checker").unwrap(), ErrorCategory::BorrowChecker);
+        assert_eq!(ErrorCategory::from_str("lifetime").unwrap(), ErrorCategory::Lifetime);
+        assert_eq!(ErrorCategory::from_str("trait_bound").unwrap(), ErrorCategory::TraitBound);
+        assert_eq!(ErrorCategory::from_str("async").unwrap(), ErrorCategory::Async);
+        assert_eq!(ErrorCategory::from_str("macro").unwrap(), ErrorCategory::Macro);
+        assert_eq!(ErrorCategory::from_str("import_resolution").unwrap(), ErrorCategory::ImportResolution);
+        assert_eq!(ErrorCategory::from_str("import").unwrap(), ErrorCategory::ImportResolution);
+        assert_eq!(ErrorCategory::from_str("syntax").unwrap(), ErrorCategory::Syntax);
+        assert_eq!(ErrorCategory::from_str("other").unwrap(), ErrorCategory::Other);
+        assert_eq!(ErrorCategory::from_str("unknown_value").unwrap(), ErrorCategory::Other);
+
+        // Round-trip: Display then FromStr should recover the original variant
+        let cats = [
+            ErrorCategory::TypeMismatch,
+            ErrorCategory::BorrowChecker,
+            ErrorCategory::Lifetime,
+            ErrorCategory::TraitBound,
+            ErrorCategory::Async,
+            ErrorCategory::Macro,
+            ErrorCategory::ImportResolution,
+            ErrorCategory::Syntax,
+            ErrorCategory::Other,
+        ];
+        for cat in &cats {
+            let s = cat.to_string();
+            let parsed = ErrorCategory::from_str(&s).unwrap();
+            assert_eq!(parsed, *cat, "round-trip failed for {s}");
+        }
     }
 }
