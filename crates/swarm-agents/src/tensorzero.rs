@@ -8,6 +8,8 @@
 //! TensorZero uses this feedback to optimize prompt selection via its GEPA
 //! (Generative Engineering with Production Analytics) pipeline.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 use tracing::{info, warn};
 
@@ -20,6 +22,52 @@ struct FeedbackRequest {
     episode_id: String,
     /// The feedback value (type depends on the metric: boolean or float).
     value: serde_json::Value,
+    /// Optional segmentation tags stored in the `tags jsonb` column.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tags: Option<HashMap<String, String>>,
+}
+
+/// Segmentation tags attached to TensorZero feedback for slice-based analysis.
+///
+/// All fields are optional so callers can fill in what they know. `None`
+/// values are omitted from the serialised `tags` map.
+#[derive(Debug, Default, Clone)]
+pub struct FeedbackTags {
+    /// Beads issue ID (e.g. `beefcake-grg4`).
+    pub issue_id: Option<String>,
+    /// Primary language of the target repo (e.g. `rust`, `python`).
+    pub language: Option<String>,
+    /// Triage complexity bucket: `simple`, `medium`, `complex`, or `critical`.
+    pub triage_complexity: Option<String>,
+    /// Primary model used for this run (e.g. `claude-opus-4-6`).
+    pub model: Option<String>,
+}
+
+impl FeedbackTags {
+    /// Convert to a `HashMap` suitable for JSON serialisation.
+    /// Only entries that are `Some` are included.
+    pub fn into_map(self) -> HashMap<String, String> {
+        let mut map = HashMap::new();
+        if let Some(v) = self.issue_id {
+            map.insert("issue_id".to_string(), v);
+        }
+        if let Some(v) = self.language {
+            map.insert("language".to_string(), v);
+        }
+        if let Some(v) = self.triage_complexity {
+            map.insert("triage_complexity".to_string(), v);
+        }
+        if let Some(v) = self.model {
+            map.insert("model".to_string(), v);
+        }
+        map
+    }
+
+    /// Returns `None` when all fields are empty (so the tags key is omitted).
+    pub fn into_option_map(self) -> Option<HashMap<String, String>> {
+        let map = self.into_map();
+        if map.is_empty() { None } else { Some(map) }
+    }
 }
 
 /// Post feedback to a TensorZero gateway instance.
@@ -32,9 +80,14 @@ pub async fn post_episode_feedback(
     success: bool,
     iterations: u32,
     wall_time_secs: f64,
+    tags: Option<FeedbackTags>,
 ) {
     let client = reqwest::Client::new();
     let feedback_url = format!("{gateway_url}/feedback");
+
+    // Convert tags once; clone the resulting map for each metric.
+    let tags_map: Option<HashMap<String, String>> =
+        tags.and_then(|t| t.into_option_map());
 
     // task_resolved: boolean — did the issue get resolved?
     let feedbacks = vec![
@@ -42,16 +95,19 @@ pub async fn post_episode_feedback(
             metric_name: "task_resolved".to_string(),
             episode_id: episode_id.to_string(),
             value: serde_json::Value::Bool(success),
+            tags: tags_map.clone(),
         },
         FeedbackRequest {
             metric_name: "iterations_used".to_string(),
             episode_id: episode_id.to_string(),
             value: serde_json::json!(iterations as f64),
+            tags: tags_map.clone(),
         },
         FeedbackRequest {
             metric_name: "wall_time_seconds".to_string(),
             episode_id: episode_id.to_string(),
             value: serde_json::json!(wall_time_secs),
+            tags: tags_map,
         },
     ];
 
@@ -203,14 +259,30 @@ pub async fn post_resolved_feedback(
     success: bool,
     iterations: u32,
     wall_time_secs: f64,
+    tags: Option<FeedbackTags>,
 ) {
     let episode_ids = resolve_episode_ids(pg_url, session_start_secs).await;
     if episode_ids.is_empty() {
         return;
     }
 
+    // Pre-materialise the tags map so we can clone it cheaply per episode.
+    let tags_map: Option<HashMap<String, String>> =
+        tags.and_then(|t| t.into_option_map());
+
     for ep_id in &episode_ids {
-        post_episode_feedback(gateway_url, ep_id, success, iterations, wall_time_secs).await;
+        // Reconstruct a FeedbackTags-compatible value from the pre-built map.
+        // We pass None here and supply the map directly via a one-off helper
+        // to avoid re-serialising every iteration.
+        let per_ep_tags = tags_map.as_ref().map(|m| {
+            let mut ft = FeedbackTags::default();
+            ft.issue_id = m.get("issue_id").cloned();
+            ft.language = m.get("language").cloned();
+            ft.triage_complexity = m.get("triage_complexity").cloned();
+            ft.model = m.get("model").cloned();
+            ft
+        });
+        post_episode_feedback(gateway_url, ep_id, success, iterations, wall_time_secs, per_ep_tags).await;
     }
     info!(
         episodes = episode_ids.len(),

@@ -145,9 +145,11 @@ impl PhaseModelSelector {
 
         let candidate = match phase {
             WorkflowPhase::Triage => self.catalog.cheapest_for(&capability),
-            WorkflowPhase::Explore | WorkflowPhase::Plan => {
-                self.catalog.strongest_for(&capability)
-            }
+            WorkflowPhase::Explore => self.catalog.strongest_for(&capability),
+            // Plan: use cheapest capable model — TZ data shows Sonnet and Opus have
+            // identical p50 latency (~4s) and success rates (~27%), but Opus costs 3.3x
+            // more ($0.046/call vs $0.014/call).  Route to cheapest to save cost.
+            WorkflowPhase::Plan => self.catalog.cheapest_for(&capability),
             WorkflowPhase::Implement => {
                 // Use triage suggestion if available; otherwise strongest implementer.
                 if let Some(triage) = triage {
@@ -486,14 +488,19 @@ mod tests {
     }
 
     #[test]
-    fn phase_selector_strongest_for_plan() {
+    fn phase_selector_cheapest_for_plan() {
         let catalog = CloudModelCatalog::default_catalog();
         let selector = PhaseModelSelector::new(catalog, 0.0);
         let model = selector.select_for_phase(WorkflowPhase::Plan, None, None);
         assert!(model.is_some());
-        // Should pick the most expensive plan-capable model (Opus at $15/M).
+        // Should pick the cheapest plan-capable model.
+        // gemini-3.1-pro-high has the "plan" capability at $1.25/M input —
+        // cheaper than Sonnet ($3/M) and far cheaper than Opus ($15/M).
+        // TZ analysis: Sonnet and Opus have identical p50 latency (~4s) and success
+        // rates (~27%), but Opus costs 3.3x more ($0.046/call vs $0.014/call).
         let m = model.unwrap();
-        assert_eq!(m.model, "claude-opus-4-6");
+        assert!(m.cost_input_per_m < 3.0, "Expected cheap plan model, got {} at ${}/M", m.model, m.cost_input_per_m);
+        assert_ne!(m.model, "claude-opus-4-6", "Plan should not use Opus (too expensive)");
     }
 
     #[test]

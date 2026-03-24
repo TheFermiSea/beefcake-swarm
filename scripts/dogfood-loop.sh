@@ -304,6 +304,11 @@ with open('$jsonl_path') as f:
   fi
   issue_args=(--issue "$issue_id" --objective "$issue_objective" "${EXTRA_SWARM_ARGS[@]}")
 
+  # Quality gate: issues with very short titles tend to fail (r=0.545 correlation)
+  if [[ ${#issue_title} -lt 100 ]]; then
+    log "  [run $run_num] WARN: short title (${#issue_title} chars) — may have low success rate"
+  fi
+
   log "  [run $run_num] Starting issue=$issue_id log=$run_log"
 
   run_start=$(date +%s)

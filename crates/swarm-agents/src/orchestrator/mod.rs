@@ -3235,6 +3235,15 @@ async fn process_issue_core(
     // Falls back to the original self-generated episode_id if PG is unavailable.
     if let Some(ref tz_url) = config.tensorzero_url {
         let wall_secs = session_metrics.elapsed_ms as f64 / 1000.0;
+
+        // Build segmentation tags for slice-based analysis in TZ.
+        let tz_tags = crate::tensorzero::FeedbackTags {
+            issue_id: Some(issue.id.clone()),
+            language: Some(triage_result.language.to_string()),
+            triage_complexity: Some(triage_result.complexity.to_string()),
+            model: config.cloud_endpoint.as_ref().map(|e| e.model.clone()),
+        };
+
         if let Some(ref pg_url) = config.tensorzero_pg_url {
             crate::tensorzero::post_resolved_feedback(
                 tz_url,
@@ -3243,6 +3252,7 @@ async fn process_issue_core(
                 success,
                 session_metrics.total_iterations,
                 wall_secs,
+                Some(tz_tags),
             )
             .await;
         } else if let Some(ref ep_id) = tensorzero_episode_id {
@@ -3254,6 +3264,7 @@ async fn process_issue_core(
                 success,
                 session_metrics.total_iterations,
                 wall_secs,
+                Some(tz_tags),
             )
             .await;
         }
