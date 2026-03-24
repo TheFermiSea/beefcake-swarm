@@ -3427,35 +3427,37 @@ fn merge_close_or_reopen(
     issue_id: &str,
     close_reason: &str,
 ) -> Result<()> {
-    match worktree_bridge.merge_and_remove(issue_id) {
-        Ok(()) => {
-            beads.close(issue_id, Some(close_reason))?;
-        }
-        Err(e) => {
-            // Check if the merge itself succeeded
-            let merged = std::process::Command::new("git")
-                .args(["log", "--oneline", "-1"])
-                .current_dir(worktree_bridge.repo_root())
-                .output()
-                .map(|o| String::from_utf8_lossy(&o.stdout).contains(issue_id))
-                .unwrap_or(false);
+    let merge_err = worktree_bridge.merge_and_remove(issue_id).err();
 
-            if merged {
-                warn!(
-                    id = %issue_id,
-                    error = %e,
-                    "Worktree cleanup failed but merge succeeded — closing issue"
-                );
-                let _ = worktree_bridge.cleanup(issue_id);
-                beads.close(issue_id, Some(close_reason))?;
-            } else {
-                error!(id = %issue_id, "Merge failed: {e}");
-                let _ = worktree_bridge.cleanup(issue_id);
-                let _ = beads.update_status(issue_id, "open");
-                return Err(e);
-            }
+    if let Some(ref e) = merge_err {
+        // merge_and_remove failed. Check if it's a real merge failure
+        // (conflict, uncommitted changes) vs just a cleanup failure
+        // (worktree remove, branch delete). The error message distinguishes:
+        // merge failures mention "conflict" or "uncommitted changes",
+        // cleanup failures mention "worktree remove" or "branch".
+        let err_msg = e.to_string().to_lowercase();
+        let is_merge_failure = err_msg.contains("conflict")
+            || err_msg.contains("uncommitted change")
+            || err_msg.contains("merge failed");
+
+        if is_merge_failure {
+            error!(id = %issue_id, "Merge failed: {e}");
+            let _ = worktree_bridge.cleanup(issue_id);
+            let _ = beads.update_status(issue_id, "open");
+            return Err(anyhow::anyhow!("Merge failed for {issue_id}: {e}"));
         }
+
+        // Cleanup failure only — the merge itself succeeded.
+        warn!(
+            id = %issue_id,
+            error = %e,
+            "Worktree cleanup failed after merge — closing issue anyway"
+        );
+        let _ = worktree_bridge.cleanup(issue_id);
     }
+
+    // Close the issue (merge succeeded or was a no-op)
+    beads.close(issue_id, Some(close_reason))?;
     Ok(())
 }
 
