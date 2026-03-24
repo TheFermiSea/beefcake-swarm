@@ -603,28 +603,33 @@ impl WorktreeBridge {
             bail!("Merge failed for {issue_id} (possible conflict): {stderr}");
         }
 
-        // Remove the worktree
+        // Remove the worktree (--force: untracked .swarm-* artifacts are expected)
         let remove = Command::new("git")
-            .args(["worktree", "remove", &wt_path.display().to_string()])
+            .args(["worktree", "remove", "--force", &wt_path.display().to_string()])
             .current_dir(&self.repo_root)
             .output()
             .context("Failed to remove worktree")?;
 
         if !remove.status.success() {
             let stderr = String::from_utf8_lossy(&remove.stderr);
-            tracing::warn!(stderr = %stderr.trim(), "git worktree remove warning");
+            tracing::warn!(stderr = %stderr.trim(), "git worktree remove --force warning");
+            // Fallback: force-delete the directory
+            if wt_path.exists() {
+                let _ = std::fs::remove_dir_all(&wt_path);
+            }
         }
 
-        // Delete the branch
+        // Delete the branch (-D: force delete even if not fully merged,
+        // since the merge already succeeded above)
         let del = Command::new("git")
-            .args(["branch", "-d", &branch])
+            .args(["branch", "-D", &branch])
             .current_dir(&self.repo_root)
             .output()
             .context("Failed to delete branch")?;
 
         if !del.status.success() {
             let stderr = String::from_utf8_lossy(&del.stderr);
-            tracing::warn!(stderr = %stderr.trim(), "git branch -d warning");
+            tracing::warn!(stderr = %stderr.trim(), "git branch -D warning");
         }
 
         Ok(())
