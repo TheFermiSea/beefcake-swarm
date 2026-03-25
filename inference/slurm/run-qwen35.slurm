@@ -24,6 +24,15 @@
 # Throughput: ~8-10 tok/s gen, ~21-40 tok/s prompt (varies by backend/quant)
 # Context: up to 256K tokens native (no YaRN needed)
 #
+# Speculative Decoding (optional):
+#   Draft model: Qwen3-1.5B-Instruct Q4_K_M (~1GB)
+#   Path: /scratch/ai/models/Qwen3-1.5B-Q4_K_M.gguf
+#   Flags: -md <path> --draft-max 8
+#   If the draft model is absent the script continues without it.
+#   Download: huggingface-cli download Qwen/Qwen3-1.5B-GGUF \
+#             Qwen3-1.5B-Q4_K_M.gguf \
+#             --local-dir /scratch/ai/models
+#
 # Supports two backends:
 #   mainline: Standard llama.cpp — MoE experts on CPU via -ot flag
 #   ik:       ik_llama.cpp fork — proper hybrid CPU/GPU MoE via --cpu-moe flag
@@ -100,6 +109,11 @@ N_GPU_LAYERS="${N_GPU_LAYERS:-99}"
 # Default: PORT + 100 (e.g., 8180 for PORT=8080, 8181 for PORT=8081).
 PROXY_PORT="${PROXY_PORT:-$((PORT + 100))}"
 PROXY_SCRIPT="${PROXY_SCRIPT:-/cluster/shared/scripts/llama-cpp/chat-proxy/proxy.py}"
+# Speculative decoding draft model (optional).
+# Set DRAFT_MODEL=off to disable even if the file exists.
+# DRAFT_MAX controls the maximum number of draft tokens per step (default 8).
+DRAFT_MODEL="${DRAFT_MODEL:-/scratch/ai/models/Qwen3-1.5B-Q4_K_M.gguf}"
+DRAFT_MAX="${DRAFT_MAX:-8}"
 
 # Ensure log directory exists
 mkdir -p /scratch/ai/logs
@@ -170,6 +184,40 @@ if [[ ! -f "$MODEL" ]]; then
     exit 1
 fi
 echo "  $(hostname -s): OK"
+
+###############################################################################
+# Draft Model (Speculative Decoding)
+###############################################################################
+
+# Attempt to download the draft model if it is missing and DRAFT_MODEL is not
+# explicitly disabled.  The download is best-effort: if it fails the server
+# still starts without speculative decoding.
+if [[ "$DRAFT_MODEL" != "off" && ! -f "$DRAFT_MODEL" ]]; then
+    echo "[$(date)] Draft model not found at $DRAFT_MODEL — attempting download..."
+    DRAFT_DIR="$(dirname "$DRAFT_MODEL")"
+    mkdir -p "$DRAFT_DIR"
+    if command -v huggingface-cli &>/dev/null; then
+        huggingface-cli download Qwen/Qwen3-1.5B-GGUF \
+            Qwen3-1.5B-Q4_K_M.gguf \
+            --local-dir "$DRAFT_DIR" && \
+        mv -f "$DRAFT_DIR/Qwen3-1.5B-Q4_K_M.gguf" "$DRAFT_MODEL" 2>/dev/null || true
+    elif command -v wget &>/dev/null; then
+        wget -q -O "$DRAFT_MODEL" \
+            "https://huggingface.co/Qwen/Qwen3-1.5B-GGUF/resolve/main/Qwen3-1.5B-Q4_K_M.gguf" || \
+            rm -f "$DRAFT_MODEL"
+    else
+        echo "[$(date)] WARNING: Neither huggingface-cli nor wget available — cannot download draft model"
+    fi
+    if [[ -f "$DRAFT_MODEL" ]]; then
+        echo "[$(date)] Draft model downloaded successfully: $DRAFT_MODEL"
+    else
+        echo "[$(date)] WARNING: Draft model download failed — speculative decoding will be disabled"
+    fi
+elif [[ "$DRAFT_MODEL" == "off" ]]; then
+    echo "[$(date)] Speculative decoding disabled (DRAFT_MODEL=off)"
+elif [[ -f "$DRAFT_MODEL" ]]; then
+    echo "[$(date)] Draft model found: $DRAFT_MODEL (draft-max=${DRAFT_MAX})"
+fi
 
 # Prefetch model to page cache
 # NOTE: No --mlock — model is ~214GB, too large to lock. vmtouch prefetch is sufficient.
@@ -280,6 +328,20 @@ SERVER_ARGS=(
     # Timeout for large context operations
     --timeout 900
 )
+
+# Speculative decoding: add draft model flags if the file is present and not
+# explicitly disabled.  Speculative decoding is transparent to clients — it
+# only affects throughput (typically +20-40% on CPU-bound MoE workloads).
+if [[ "$DRAFT_MODEL" != "off" && -f "$DRAFT_MODEL" ]]; then
+    SERVER_ARGS+=(
+        # Draft model for speculative decoding (Qwen3-1.5B-Instruct Q4_K_M)
+        -md "$DRAFT_MODEL"
+        --draft-max "$DRAFT_MAX"
+    )
+    echo "[$(date)] Speculative decoding ENABLED: draft=$DRAFT_MODEL draft-max=${DRAFT_MAX}"
+else
+    echo "[$(date)] Speculative decoding DISABLED (draft model not available or DRAFT_MODEL=off)"
+fi
 
 # GPU-dependent options (differ by backend)
 if [[ "$N_GPU_LAYERS" -gt 0 ]]; then
