@@ -6,6 +6,8 @@ use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
 
+use crate::triage::PhaseModelSelector;
+
 /// Named stack-profile system for the swarm.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -533,10 +535,20 @@ pub struct SwarmConfig {
     /// worker dispatch and the recommendation is logged for analysis.
     /// Populated from `SWARM_ADAPTIVE_ROUTING` env var (default: false).
     pub adaptive_routing: bool,
+    /// Phase-based model selector for cost-aware per-phase cloud routing.
+    /// Derived from `cloud_model_catalog` and `max_cost_per_issue` at construction time.
+    /// Selects the best-fit cloud model for each workflow phase (Triage/Explore/Plan/Implement/Review).
+    pub phase_selector: PhaseModelSelector,
 }
 
 impl Default for SwarmConfig {
     fn default() -> Self {
+        let cloud_model_catalog = CloudModelCatalog::default_catalog();
+        let max_cost_per_issue = std::env::var("SWARM_MAX_COST_PER_ISSUE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.0_f64);
+        let phase_selector = PhaseModelSelector::new(cloud_model_catalog.clone(), max_cost_per_issue);
         Self {
             fast_endpoint: Endpoint {
                 url: std::env::var("SWARM_FAST_URL")
@@ -595,10 +607,7 @@ impl Default for SwarmConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(10),
-            max_cost_per_issue: std::env::var("SWARM_MAX_COST_PER_ISSUE")
-                .ok()
-                .and_then(|s| s.parse().ok())
-                .unwrap_or(0.0),
+            max_cost_per_issue,
             reject_patterns: std::env::var("SWARM_REJECT_PATTERNS")
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -650,10 +659,11 @@ impl Default for SwarmConfig {
             openrouter_api_key: std::env::var("SWARM_OPENROUTER_API_KEY")
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
-            cloud_model_catalog: CloudModelCatalog::default_catalog(),
+            cloud_model_catalog,
             adaptive_routing: std::env::var("SWARM_ADAPTIVE_ROUTING")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            phase_selector,
         }
     }
 }
@@ -918,6 +928,7 @@ impl SwarmConfig {
                 .filter(|s| !s.trim().is_empty()),
             cloud_model_catalog: CloudModelCatalog::default_catalog(),
             adaptive_routing: false,
+            phase_selector: PhaseModelSelector::new(CloudModelCatalog::default_catalog(), 0.0),
         }
     }
 }

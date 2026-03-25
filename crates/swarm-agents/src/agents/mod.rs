@@ -26,6 +26,7 @@ use rig::providers::openai;
 use tracing::info;
 
 use crate::config::{ClientSet, SwarmConfig, SwarmRole};
+use crate::triage::{TriageResult, WorkflowPhase};
 use crate::endpoint_pool::EndpointPool;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::tools::plan_parallel_tool::PlanSlot;
@@ -65,6 +66,9 @@ pub struct AgentFactory {
     /// Set via [`AgentFactory::with_work_plan_slot`] before building the manager.
     /// Enables the ClawTeam-style plan-before-execute gate.
     pub work_plan_slot: Option<crate::tools::submit_plan_tool::WorkPlanSlot>,
+    /// Triage result for the current issue, used by phase-based model selection.
+    /// When set, `resolve_phase_endpoint` uses it to pick cost-appropriate cloud models.
+    pub triage: Option<TriageResult>,
 }
 
 impl AgentFactory {
@@ -79,6 +83,7 @@ impl AgentFactory {
             endpoint_pool,
             plan_slot: None,
             work_plan_slot: None,
+            triage: None,
         })
     }
 
@@ -163,6 +168,44 @@ impl AgentFactory {
         self
     }
 
+    /// Attach a triage result for cost-aware per-phase cloud model selection.
+    ///
+    /// When set, [`resolve_phase_endpoint`] uses the triage complexity and
+    /// suggested models to pick the most cost-appropriate cloud model for
+    /// each workflow phase.
+    pub fn with_triage(mut self, triage: TriageResult) -> Self {
+        self.triage = Some(triage);
+        self
+    }
+
+    /// Resolve client and model for a workflow phase using the phase-based selector.
+    ///
+    /// Tries `PhaseModelSelector` first: if a cloud model is available for the
+    /// requested phase (within budget), returns the cloud client + that model.
+    /// Falls back to [`resolve_role_endpoint`] with the given local `role` when
+    /// cloud is unconfigured, budget is exhausted, or no matching model exists.
+    pub fn resolve_phase_endpoint(
+        &self,
+        phase: WorkflowPhase,
+        role: SwarmRole,
+    ) -> (openai::CompletionsClient, String) {
+        if let Some(ref cloud_client) = self.clients.cloud {
+            if let Some(entry) = self
+                .config
+                .phase_selector
+                .select_for_phase(phase, self.triage.as_ref(), None)
+            {
+                info!(
+                    phase = %phase,
+                    model = %entry.model,
+                    "Phase-based model selected"
+                );
+                return (cloud_client.clone(), entry.model.clone());
+            }
+        }
+        self.resolve_role_endpoint(role)
+    }
+
     /// Resolve the appropriate client and model for a given swarm role.
     ///
     /// Respects the active [`SwarmStackProfile`] and utilizes the [`EndpointPool`]
@@ -224,7 +267,7 @@ impl AgentFactory {
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
     pub fn build_rust_coder(&self, wt_path: &Path) -> OaiAgent {
-        let (client, model) = self.resolve_role_endpoint(SwarmRole::RustWorker);
+        let (client, model) = self.resolve_phase_endpoint(WorkflowPhase::Implement, SwarmRole::RustWorker);
         coder::build_rust_coder_named(
             &client,
             &model,
@@ -239,7 +282,7 @@ impl AgentFactory {
     /// In `cloud_only` mode, registers proxy-prefixed tools since all clients
     /// route through CLIAPIProxy which mangles tool names.
     pub fn build_general_coder(&self, wt_path: &Path) -> OaiAgent {
-        let (client, model) = self.resolve_role_endpoint(SwarmRole::GeneralWorker);
+        let (client, model) = self.resolve_phase_endpoint(WorkflowPhase::Implement, SwarmRole::GeneralWorker);
         coder::build_general_coder_named(
             &client,
             &model,
@@ -266,7 +309,7 @@ impl AgentFactory {
     /// Used as a worker tool by the cloud manager.
     /// In `cloud_only` mode, registers proxy-prefixed tools.
     pub fn build_reasoning_worker(&self, wt_path: &Path) -> OaiAgent {
-        let (client, model) = self.resolve_role_endpoint(SwarmRole::ReasoningWorker);
+        let (client, model) = self.resolve_phase_endpoint(WorkflowPhase::Plan, SwarmRole::ReasoningWorker);
         coder::build_reasoning_worker_named(
             &client,
             &model,
@@ -278,7 +321,7 @@ impl AgentFactory {
 
     /// Build the blind reviewer (Qwen3.5-27B-Distilled on vasp-03).
     pub fn build_reviewer(&self) -> OaiAgent {
-        let (client, model) = self.resolve_role_endpoint(SwarmRole::Reviewer);
+        let (client, model) = self.resolve_phase_endpoint(WorkflowPhase::Review, SwarmRole::Reviewer);
         reviewer::build_reviewer(&client, &model)
     }
 
@@ -298,7 +341,7 @@ impl AgentFactory {
     ///
     /// Read-only tools for analysis. Produces structured JSON repair plans.
     pub fn build_planner(&self, wt_path: &Path) -> OaiAgent {
-        let (client, model) = self.resolve_role_endpoint(SwarmRole::Planner);
+        let (client, model) = self.resolve_phase_endpoint(WorkflowPhase::Plan, SwarmRole::Planner);
         specialists::build_planner_named(
             &client,
             &model,
@@ -312,7 +355,7 @@ impl AgentFactory {
     ///
     /// Full editing tools. Takes a plan and implements it step by step.
     pub fn build_fixer(&self, wt_path: &Path) -> OaiAgent {
-        let (client, model) = self.resolve_role_endpoint(SwarmRole::Fixer);
+        let (client, model) = self.resolve_phase_endpoint(WorkflowPhase::Implement, SwarmRole::Fixer);
         specialists::build_fixer_named(&client, &model, wt_path, "fixer", self.config.cloud_only)
     }
 
