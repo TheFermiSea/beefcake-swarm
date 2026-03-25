@@ -189,18 +189,24 @@ impl AgentFactory {
         phase: WorkflowPhase,
         role: SwarmRole,
     ) -> (openai::CompletionsClient, String) {
-        if let Some(ref cloud_client) = self.clients.cloud {
-            if let Some(entry) = self
-                .config
-                .phase_selector
-                .select_for_phase(phase, self.triage.as_ref(), None)
-            {
-                info!(
-                    phase = %phase,
-                    model = %entry.model,
-                    "Phase-based model selected"
-                );
-                return (cloud_client.clone(), entry.model.clone());
+        // Phase-based cloud routing only applies in cloud-only mode.
+        // In hybrid mode (local workers + cloud manager), local workers stay local —
+        // the phase selector's value is in cloud-only deployments where it prevents
+        // always routing to Opus regardless of task complexity.
+        if self.config.cloud_only {
+            if let Some(ref cloud_client) = self.clients.cloud {
+                if let Some(entry) = self
+                    .config
+                    .phase_selector
+                    .select_for_phase(phase, self.triage.as_ref(), None)
+                {
+                    info!(
+                        phase = %phase,
+                        model = %entry.model,
+                        "Phase-based model selected"
+                    );
+                    return (cloud_client.clone(), entry.model.clone());
+                }
             }
         }
         self.resolve_role_endpoint(role)
