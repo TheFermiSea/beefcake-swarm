@@ -1448,8 +1448,15 @@ const DATA_FILE_EXTENSIONS: &[&str] = &[
 ];
 
 const DATA_FILE_PATTERNS: &[&str] = &[
-    "experiments", "results", "benchmark", "metrics", "output",
-    "quality-trend", "summary", "scores", "measurements",
+    "experiments",
+    "results",
+    "benchmark",
+    "metrics",
+    "output",
+    "quality-trend",
+    "summary",
+    "scores",
+    "measurements",
 ];
 
 /// Check if a path looks like a data/results file rather than source code.
@@ -1476,9 +1483,24 @@ pub fn is_data_file(path: &str) -> bool {
 pub fn looks_like_fabricated_data(content: &str) -> bool {
     // Must have metric-like keywords
     let metric_keywords = [
-        "F1", "RMSE", "MAE", "precision", "recall", "accuracy", "latency",
-        "wall_time", "throughput", "Jaccard", "Aitchison", "score",
-        "baseline", "benchmark", "elapsed", "tok/s", "PASS", "FAIL",
+        "F1",
+        "RMSE",
+        "MAE",
+        "precision",
+        "recall",
+        "accuracy",
+        "latency",
+        "wall_time",
+        "throughput",
+        "Jaccard",
+        "Aitchison",
+        "score",
+        "baseline",
+        "benchmark",
+        "elapsed",
+        "tok/s",
+        "PASS",
+        "FAIL",
     ];
     let keyword_count = metric_keywords
         .iter()
@@ -1497,11 +1519,10 @@ pub fn looks_like_fabricated_data(content: &str) -> bool {
         .iter()
         .filter(|line| {
             // Line contains at least one float-like pattern (e.g., 0.847, 2.34)
-            line.split_whitespace()
-                .any(|word| {
-                    let cleaned = word.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
-                    cleaned.contains('.') && cleaned.parse::<f64>().is_ok()
-                })
+            line.split_whitespace().any(|word| {
+                let cleaned = word.trim_matches(|c: char| !c.is_ascii_digit() && c != '.');
+                cleaned.contains('.') && cleaned.parse::<f64>().is_ok()
+            })
         })
         .count();
 

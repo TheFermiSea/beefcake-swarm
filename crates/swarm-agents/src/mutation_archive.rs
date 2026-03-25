@@ -143,7 +143,11 @@ impl MutationArchive {
                     .count() as f64;
                 let file_overlap = files_changed
                     .iter()
-                    .filter(|f| r.files_changed.iter().any(|rf| rf.contains(f.as_str()) || f.contains(rf.as_str())))
+                    .filter(|f| {
+                        r.files_changed
+                            .iter()
+                            .any(|rf| rf.contains(f.as_str()) || f.contains(rf.as_str()))
+                    })
                     .count() as f64;
                 let score = cat_overlap * 2.0 + file_overlap; // Weight categories higher
                 (score, r)
@@ -159,11 +163,7 @@ impl MutationArchive {
     /// Query for anti-patterns: records with matching error categories that FAILED.
     ///
     /// Returns failure reasons to inject as "do not try" blocklist in prompts.
-    pub fn query_anti_patterns(
-        &self,
-        error_categories: &[String],
-        limit: usize,
-    ) -> Vec<String> {
+    pub fn query_anti_patterns(&self, error_categories: &[String], limit: usize) -> Vec<String> {
         self.load_all()
             .into_iter()
             .filter(|r| !r.resolved && r.failure_reason.is_some())
@@ -241,7 +241,11 @@ impl MutationArchive {
         stats
             .into_iter()
             .map(|(version, (successes, total))| {
-                let rate = if total > 0 { successes as f64 / total as f64 } else { 0.0 };
+                let rate = if total > 0 {
+                    successes as f64 / total as f64
+                } else {
+                    0.0
+                };
                 (version, (successes, total, rate))
             })
             .collect()
@@ -292,7 +296,9 @@ impl MutationArchive {
                 .iter()
                 .filter(|r| {
                     r.model == *model
-                        && r.error_categories.iter().any(|c| error_categories.contains(c))
+                        && r.error_categories
+                            .iter()
+                            .any(|c| error_categories.contains(c))
                 })
                 .count();
             count >= min_samples
@@ -313,14 +319,21 @@ impl MutationArchive {
                     .map(|cat| {
                         let lineage_count = records
                             .iter()
-                            .filter(|r| r.model == *model && r.error_categories.iter().any(|c| c == cat.as_str()))
+                            .filter(|r| {
+                                r.model == *model
+                                    && r.error_categories.iter().any(|c| c == cat.as_str())
+                            })
                             .count() as f64;
                         if lineage_count == 0.0 {
                             return f64::MAX;
                         }
                         let successes = records
                             .iter()
-                            .filter(|r| r.model == *model && r.resolved && r.error_categories.iter().any(|c| c == cat.as_str()))
+                            .filter(|r| {
+                                r.model == *model
+                                    && r.resolved
+                                    && r.error_categories.iter().any(|c| c == cat.as_str())
+                            })
                             .count() as f64;
                         let mean_reward = successes / lineage_count;
                         let exploration = (2.0 * total_all.ln() / lineage_count).sqrt();
@@ -366,7 +379,9 @@ impl MutationArchive {
         }
 
         if !anti_patterns.is_empty() {
-            ctx.push_str("**Anti-patterns** (approaches that FAILED on similar errors — do NOT repeat):\n");
+            ctx.push_str(
+                "**Anti-patterns** (approaches that FAILED on similar errors — do NOT repeat):\n",
+            );
             for ap in &anti_patterns {
                 ctx.push_str(&format!("- {ap}\n"));
             }

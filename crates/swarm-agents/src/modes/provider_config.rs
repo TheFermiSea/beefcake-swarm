@@ -20,6 +20,14 @@
 //! | worker     | Deepthink phase 2      | Qwen3.5-122B-A10B on vasp-01:8081 |
 //! | judge      | Deepthink phase 3      | Qwen3.5-122B-A10B on vasp-01:8081 |
 //! | compactor  | Memory manager         | Qwen3.5-122B-A10B on vasp-01:8081 |
+//!
+//! ## Server-side configuration
+//!
+//! This module only handles **client-side** configuration (API URLs, model names,
+//! API keys). Server launch arguments such as `--cache-prompt` are configured
+//! in the SLURM scripts (e.g., `inference/start-inference-122b.sh`). The
+//! `--cache-prompt` flag is enabled server-side to optimize prompt caching
+//! for repeated inference requests.
 
 use std::env;
 

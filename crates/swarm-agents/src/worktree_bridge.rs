@@ -605,7 +605,12 @@ impl WorktreeBridge {
 
         // Remove the worktree (--force: untracked .swarm-* artifacts are expected)
         let remove = Command::new("git")
-            .args(["worktree", "remove", "--force", &wt_path.display().to_string()])
+            .args([
+                "worktree",
+                "remove",
+                "--force",
+                &wt_path.display().to_string(),
+            ])
             .current_dir(&self.repo_root)
             .output()
             .context("Failed to remove worktree")?;

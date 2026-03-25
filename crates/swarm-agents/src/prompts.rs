@@ -859,7 +859,10 @@ pub fn load_best_prompt(
                 let name = e.file_name().to_string_lossy().to_string();
                 let content = std::fs::read_to_string(e.path()).ok()?;
                 // Extract version identifier (e.g., "worker.v3.md" → "v3")
-                let version = name.strip_prefix(role)?.strip_prefix('.')?.strip_suffix(".md")?;
+                let version = name
+                    .strip_prefix(role)?
+                    .strip_prefix('.')?
+                    .strip_suffix(".md")?;
                 Some((version.to_string(), content))
             })
             .collect(),
@@ -942,7 +945,12 @@ mod prompt_loader_tests {
     #[test]
     fn test_load_best_prompt_returns_default_when_no_versions() {
         let archive = crate::mutation_archive::MutationArchive::new(Path::new("/tmp/nonexistent"));
-        let result = load_best_prompt("worker", Path::new("/tmp/nonexistent"), "default prompt", &archive);
+        let result = load_best_prompt(
+            "worker",
+            Path::new("/tmp/nonexistent"),
+            "default prompt",
+            &archive,
+        );
         assert_eq!(result, "default prompt");
     }
 }

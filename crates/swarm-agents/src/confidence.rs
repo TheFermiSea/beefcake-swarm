@@ -81,8 +81,7 @@ pub fn extract_confidence(response: &str) -> Option<AgentConfidence> {
     if uncertainty_count > 0 && uncertainty_count > certainty_count {
         debug!(
             uncertainty_count,
-            certainty_count,
-            "Inferred low confidence from verbal uncertainty signals"
+            certainty_count, "Inferred low confidence from verbal uncertainty signals"
         );
         return Some(AgentConfidence {
             score: 0.3, // Low confidence from verbal signals
