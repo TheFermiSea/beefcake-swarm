@@ -721,7 +721,7 @@ async fn process_issue_core(
                 // Dispatch workers concurrently, bounded by endpoint pool capacity
                 // (number of inference nodes, not parallel_issues which is a separate concern).
                 let max_concurrent = factory.endpoint_pool.capacity();
-                let timeout = timeout_from_env("SWARM_LOCAL_HTTP_TIMEOUT_SECS", 900).as_secs();
+                let timeout = timeout_from_env("SWARM_SUBTASK_TIMEOUT_SECS", 3600).as_secs();
                 let outcome = crate::subtask::dispatch_subtasks(
                     &plan,
                     &factory.endpoint_pool,
@@ -1769,7 +1769,7 @@ async fn process_issue_core(
                     crate::subtask::create_molecule_for_plan(&manager_plan, &issue.id, &wt_path);
 
                 let max_concurrent = factory.endpoint_pool.capacity();
-                let timeout = timeout_from_env("SWARM_LOCAL_HTTP_TIMEOUT_SECS", 900).as_secs();
+                let timeout = timeout_from_env("SWARM_SUBTASK_TIMEOUT_SECS", 3600).as_secs();
                 let outcome = crate::subtask::dispatch_subtasks(
                     &manager_plan,
                     &factory.endpoint_pool,

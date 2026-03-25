@@ -189,6 +189,7 @@ Heterogeneous model setup: 27B on vasp-03, 122B on vasp-01/02.
 | `SWARM_MIN_OBJECTIVE_LEN` | `10` | Minimum issue title length |
 | `SWARM_CLOUD_HTTP_TIMEOUT_SECS` | `300` | Per-request HTTP timeout for cloud API calls (5 min) |
 | `SWARM_LOCAL_HTTP_TIMEOUT_SECS` | `2700` | Per-request HTTP timeout for local LLM calls (45 min) |
+| `SWARM_SUBTASK_TIMEOUT_SECS` | `3600` | Wall-clock deadline per subtask worker (1 hour). Distinct from HTTP timeout — governs total worker session length, not per-request duration. |
 | `SWARM_BEADS_BIN` | `bd` | Beads CLI binary name |
 | `SWARM_OTEL_ENDPOINT` | *(empty)* | OTLP endpoint for beads metrics (e.g., `http://victoriametrics:4318`) |
 | `RUST_LOG` | `info` | Log level (see Debug & Monitoring) |
