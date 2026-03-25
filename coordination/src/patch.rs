@@ -3,8 +3,31 @@
 //! Addresses repeated failures in autonomous patching where whitespace
 //! differences between the LLM-generated patch and the actual file content
 //! cause match failures. Provides fuzzy matching with configurable tolerance.
+//!
+//! # Permission Metadata
+//!
+//! Patch operations are write-level mutations and require the **Coder** role.
+//! The permission category is `file_mutation` and access level is `Allowed` only
+//! for `AgentRole::Coder`. See [`TOOL_CATEGORY`] and [`PERMISSION_LEVEL`].
 
 use serde::{Deserialize, Serialize};
+
+/// Permission category for patch operations.
+///
+/// Patch operations modify files and are classified as `file_mutation`.
+/// This category is only permitted for the Coder role in the capability matrix.
+pub const TOOL_CATEGORY: &str = "file_mutation";
+
+/// Permission level for patch operations.
+///
+/// Returns "allowed" for Coder role, "denied" for all other roles.
+/// This constant is used by the routing table to enforce role-based access.
+pub const PERMISSION_LEVEL: &str = "write";
+
+/// Role requirement for patch operations.
+///
+/// Only the Coder role is permitted to execute patch operations.
+pub const REQUIRED_ROLE: &str = "coder";
 
 /// Configuration for patch matching behavior.
 #[derive(Debug, Clone, Serialize, Deserialize)]
