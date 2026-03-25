@@ -13,9 +13,9 @@ nohup numactl --interleave=all /usr/local/bin/llama-server-mmq \
   --host 0.0.0.0 --port 8081 \
   --ctx-size 65536 --n-gpu-layers 99 \
   -ot ".ffn_.*_exps.=CPU" \
-  --threads 32 --batch-size 512 --ubatch-size 512 \
+  --threads 32 --batch-size 4096 --ubatch-size 4096 \
   --cache-type-k q4_0 --cache-type-v q4_0 \
-  --cache-prompt -fa on --parallel 2 --mlock --cont-batching --metrics --jinja \
+  --cache-prompt -fa on --parallel 4 --mlock --cont-batching --metrics --jinja \
   > /tmp/llama-inference.log 2>&1 &
 
 echo "Started Qwen3.5-122B-A10B PID=$!"
