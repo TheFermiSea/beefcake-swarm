@@ -51,6 +51,7 @@ pub mod benchmark;
 pub mod context_packer;
 pub mod escalation;
 pub mod feedback;
+pub mod fim;
 pub mod harness;
 pub mod otel;
 pub mod rollout;
