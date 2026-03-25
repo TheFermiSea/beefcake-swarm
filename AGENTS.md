@@ -164,6 +164,8 @@ curl -s http://vasp-02:8081/health  # Reasoning (122B-A10B MoE, 65K ctx)
 | Gotcha | Solution |
 |--------|----------|
 | CLIAPIProxy reports `owned_by=antigravity` | run-swarm.sh now accepts "antigravity" — no workaround needed |
+| Cloud proxy down or models missing | Use `/cloud-proxy` skill for diagnostics; restart: `ssh root@100.105.113.58 'pkill -f cli-proxy-api; sleep 2; nohup /opt/cli-proxy-api/cli-proxy-api -config /opt/cli-proxy-api/config.yaml > /tmp/cliproxyapi.log 2>&1 &'` |
+| Stale cloud credential | Check `curl -s -H "Authorization: Bearer rust-daq-proxy-key" http://100.105.113.58:8317/v0/management/auth-files`; re-auth via SSH if modtime >24h |
 | `run-swarm.sh` eats CLI args | Fixed in PR #21 — `--` separator added |
 | Stale worktree blocks new run | `rm -rf /tmp/beefcake-wt/<id> && git worktree prune` |
 | `SWARM_CLOUD_URL` wrong on ai-proxy | Use `http://localhost:8317/v1`, not `http://10.0.0.5:8317/v1` |
