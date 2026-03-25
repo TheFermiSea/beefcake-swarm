@@ -5,7 +5,7 @@ Autonomous coding swarm: local LLM agents on an HPC cluster (3x V100S GPUs) coor
 ## Architecture
 
 ```
-Rig agents → Gastown worktrees → Beads tracking → SLURM dispatch
+Rig agents → git worktree isolation → Beads tracking → SLURM dispatch
 ```
 
 ### Escalation Ladder
@@ -78,7 +78,8 @@ Supports multi-repo targeting (`--repo-root <path>`), per-issue circuit breakers
 ## External Tools
 
 - [`bd` (beads)](https://github.com/steveyegge/beads) -- Issue tracker CLI
-- [`gastown`](https://github.com/steveyegge/gastown) -- Git worktree isolation per agent task
+- [`gastown`](https://github.com/steveyegge/gastown) -- Multi-agent workspace manager (evaluated, not adopted; swarm uses raw `git worktree`)
+- [`stringer`](https://github.com/davetashner/stringer) -- Codebase archaeology scanner, outputs beads JSONL
 - [`nlm` (notebooklm-mcp-cli)](https://pypi.org/project/notebooklm-mcp-cli/) -- NotebookLM CLI for knowledge base queries
 
 ## Key Environment Variables

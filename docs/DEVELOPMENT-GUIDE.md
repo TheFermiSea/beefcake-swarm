@@ -51,14 +51,15 @@ bd close <id> --reason="Done"
 
 The `beads_bridge.rs` module wraps these CLI calls.
 
-### Gastown (Workspace Isolation)
+### Git Worktree Isolation
 
-Creates git worktrees per agent task on NFS, preventing file conflicts when multiple agents work in parallel.
+Creates git worktrees per agent task, preventing file conflicts when multiple agents work in parallel. Uses raw `git worktree` commands via `worktree_bridge.rs` (Gastown evaluated but not adopted — runtime model mismatch with HTTP-to-GPU inference).
 
 ```bash
-gastown create <issue_id>   # Create isolated worktree
+# Handled by worktree_bridge.rs — not called directly
+git worktree add /tmp/beefcake-wt/<issue-id> -b swarm/<issue-id>
 # ... agent works in worktree ...
-gastown merge               # Merge back to main
+git worktree remove /tmp/beefcake-wt/<issue-id>
 ```
 
 ### Coordination Crate (Deterministic Logic)
@@ -95,13 +96,13 @@ Forked from `Dicklesworthstone/agentic_coding_flywheel_setup`. Adapting for SLUR
                 └──────┬──────┘ └─────┬──────────┘
                        │              │
                 ┌──────▼──────────────▼────────────┐
-                │        Gastown Worktree           │
+                │        Git Worktree               │
                 │  /tmp/beefcake-wt/<issue_id>      │
                 └──────────────────────────────────┘
 ```
 
 1. **Orchestrator**: Pick highest-priority beads issue (or CLI `--issue`)
-2. **Environment**: Create Gastown worktree in `/tmp/beefcake-wt/<issue-id>`
+2. **Environment**: Create git worktree in `/tmp/beefcake-wt/<issue-id>`
 3. **Cloud Manager**: claude-opus-4-6 plans and delegates via CLIAPIProxy
 4. **Workers**: Local LLMs (27B-Opus-Distilled on vasp-03, 122B on vasp-01 + vasp-02) execute code changes
 5. **Verifier**: `cargo fmt && cargo clippy && cargo check && cargo test` (deterministic)
@@ -138,8 +139,7 @@ sbatch --dependency=afterok:$JOB_ID agent-task.slurm
 ├── ai/endpoints/         # Service discovery JSON
 ├── ai/logs/              # Shared logs
 └── (future)
-    ├── gastown-town/     # Gastown workspace root
-    ├── worktrees/        # Agent worktrees
+    ├── worktrees/        # Agent worktrees (currently at /tmp/beefcake-wt/)
     └── beads-db/         # Shared beads database
 ```
 

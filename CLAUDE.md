@@ -30,7 +30,7 @@ cargo clippy --workspace -- -D warnings    # Lint
 
 Autonomous coding swarm: local LLM agents on an HPC cluster (3x V100S GPUs) coordinated through deterministic quality gates.
 
-**Core flow:** `Rig agents → Gastown worktrees → Beads tracking → SLURM dispatch`
+**Core flow:** `Rig agents → git worktree isolation → Beads tracking → SLURM dispatch`
 
 ### Workspace Crates
 
@@ -63,7 +63,7 @@ Key modules:
 
 **`crates/swarm-agents/`** — Rig-based orchestrator (cloud manager + local workers). The active loop:
 1. Pick highest-priority beads issue (or CLI `--issue`); up to `SWARM_PARALLEL_ISSUES` (default: 3) concurrently
-2. Create Gastown worktree in `/tmp/beefcake-wt/<issue-id>`
+2. Create git worktree in `/tmp/beefcake-wt/<issue-id>`
 3. Cloud manager (Claude Opus 4.6 via CLIAPIProxy) plans and delegates
 4. Local workers (27B on vasp-03, 122B on vasp-01/02) execute code changes
 5. Verifier (deterministic quality gates) after each iteration — multi-language (Rust, Python, TypeScript, Go)
@@ -316,7 +316,8 @@ INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed wor
 
 - `bd` (beads): `curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash` — Go binary, issue tracker CLI. Invoked via subprocess (see `beads_bridge.rs`). Humans may also use `bdh` wrapper for convenience.
 - `bv` (beads_viewer): `go install github.com/Dicklesworthstone/beads_viewer@latest`
-- `gastown`: `go install github.com/steveyegge/gastown@latest` — Git worktree isolation per agent task.
+- `gastown`: `go install github.com/steveyegge/gastown@latest` — Multi-agent workspace manager (evaluated, not adopted — swarm uses raw `git worktree` via `worktree_bridge.rs`).
+- `stringer`: `go install github.com/davetashner/stringer/cmd/stringer@latest` — Codebase archaeology scanner. Outputs beads JSONL for auto-populating backlog.
 - `nlm` (notebooklm-mcp-cli): `uv tool install notebooklm-mcp-cli` — NotebookLM CLI for knowledge base queries. Auth: `nlm login`.
 
 ## NotebookLM Knowledge Base
