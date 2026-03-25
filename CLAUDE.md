@@ -142,7 +142,7 @@ ssh root@10.0.0.21 "bash /tmp/start-inference.sh"   # vasp-02 (122B-A10B reasoni
 
 Scripts are version-controlled at `inference/start-inference-*.sh` and deployed to `/tmp/start-inference.sh` on each node. vasp-01/02 use HPC SDK CUDA paths; vasp-03 uses cuda-unified.
 
-**Cloud proxy:** CLIAPIProxy runs on ai-proxy (localhost:8317). Uses `x-api-key` header (not Bearer). API key set via `SWARM_CLOUD_API_KEY` env var.
+**Cloud proxy:** CLIAPIProxy (Router-for-Me v6.8.54) runs on ai-proxy (localhost:8317). Binary at `/opt/cli-proxy-api/cli-proxy-api`, config at `/opt/cli-proxy-api/config.yaml`, credentials in `/root/.cli-proxy-api/`. Uses `x-api-key` header for inference, `Authorization: Bearer` for management API. API key: `rust-daq-proxy-key` (same for both, set via `SWARM_CLOUD_API_KEY` env var). Remote management enabled — accessible from any Tailnet host at `http://100.105.113.58:8317`. Use `/cloud-proxy` skill for diagnostics and management commands. Docs: https://help.router-for.me/management/api
 
 **llama.cpp build:** v8231 (c024d8590), native on vasp-03 (Rocky 8.8/GCC 13/CUDA 12.6). Binary: `/usr/local/bin/llama-server-mmq` (compiled with `GGML_CUDA_FORCE_MMQ=ON` for V100), deployed to all 3 nodes. Includes autoparser refactor for Qwen3-Coder XML tool call parsing. NFS backup: `/cluster/shared/llama-cpp/bin/autoparser-build/`. Rollback: `/usr/local/bin/llama-server-mmq.b8179`.
 
