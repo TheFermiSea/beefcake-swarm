@@ -43,15 +43,6 @@ use crate::file_targeting::detect_changed_packages;
 use crate::modes::errors::OrchestrationError;
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 
-/// Worker write deadline budget. Allows enough read turns to gather context
-/// before forcing an edit_file/write_file action.
-///
-/// The compact prompt inlines the target file content, so the worker should
-/// need at most 2-3 reads before editing. 8 turns gives headroom for complex
-/// tasks that need to read multiple files. On the 122B model (~2 min/turn),
-/// this is a ~16 min budget before the write-deadline terminates the agent.
-const WORKER_MAX_TURNS_WITHOUT_WRITE: usize = 8;
-
 /// Sentinel response when an agent exceeds its wall-clock timeout.
 const TIMEOUT_RESPONSE: &str =
     "[TIMEOUT] agent exceeded deadline — no response received, checking disk state";
@@ -1534,8 +1525,8 @@ async fn process_issue_core(
                         let adapter = RuntimeAdapter::new(AdapterConfig {
                             agent_name: "Qwen3.5-RustCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
-                            max_tool_calls: Some(15),
-                            max_turns_without_write: Some(WORKER_MAX_TURNS_WITHOUT_WRITE),
+                            max_tool_calls: Some(config.max_worker_tool_calls),
+                            max_turns_without_write: Some(config.max_turns_without_write),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1568,8 +1559,8 @@ async fn process_issue_core(
                         let adapter = RuntimeAdapter::new(AdapterConfig {
                             agent_name: "Qwen3.5-GeneralCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
-                            max_tool_calls: Some(15),
-                            max_turns_without_write: Some(WORKER_MAX_TURNS_WITHOUT_WRITE),
+                            max_tool_calls: Some(config.max_worker_tool_calls),
+                            max_turns_without_write: Some(config.max_turns_without_write),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -2283,7 +2274,7 @@ async fn process_issue_core(
                     EscalationReason::Explicit {
                         reason: format!(
                             "write deadline: worker exhausted {} turns without edit_file/write_file",
-                            WORKER_MAX_TURNS_WITHOUT_WRITE
+                            config.max_turns_without_write
                         ),
                     },
                 );

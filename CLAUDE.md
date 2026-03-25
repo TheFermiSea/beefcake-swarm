@@ -207,6 +207,8 @@ Heterogeneous model setup: 27B on vasp-03, 122B on vasp-01/02.
 |----------|---------|-------|
 | `SWARM_MAX_COST_PER_ISSUE` | `0.0` | Max USD per issue (0 = disabled). Cloud ~$15/M input + $75/M output |
 | `SWARM_PRUNE_AFTER_ITERATION` | `3` | After N iterations, prune prompt to last 2 results + verifier output |
+| `SWARM_MAX_TURNS_WITHOUT_WRITE` | `8` | Worker turns before write-deadline fires (raise for large Python/Go files) |
+| `SWARM_MAX_WORKER_TOOL_CALLS` | `15` | Max tool calls per sequential worker session (raise for complex multi-file edits) |
 
 ### Stack Profiles & Model Routing
 

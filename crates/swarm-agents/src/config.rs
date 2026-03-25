@@ -535,6 +535,16 @@ pub struct SwarmConfig {
     /// worker dispatch and the recommendation is logged for analysis.
     /// Populated from `SWARM_ADAPTIVE_ROUTING` env var (default: false).
     pub adaptive_routing: bool,
+    /// Maximum LLM turns a worker may take before making any file edit.
+    /// Fires a PromptCancelled termination and escalates to Council if exceeded.
+    /// Calibrated for Rust tasks (8); raise for large Python/Go files.
+    /// Populated from `SWARM_MAX_TURNS_WITHOUT_WRITE` env var (default: 8).
+    pub max_turns_without_write: usize,
+    /// Maximum total tool calls a worker agent may make per invocation.
+    /// Applies to the sequential orchestrator loop (not subtask dispatch,
+    /// which scales dynamically). Populated from `SWARM_MAX_WORKER_TOOL_CALLS`
+    /// env var (default: 15).
+    pub max_worker_tool_calls: usize,
     /// Phase-based model selector for cost-aware per-phase cloud routing.
     /// Derived from `cloud_model_catalog` and `max_cost_per_issue` at construction time.
     /// Selects the best-fit cloud model for each workflow phase (Triage/Explore/Plan/Implement/Review).
@@ -664,6 +674,16 @@ impl Default for SwarmConfig {
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
             phase_selector,
+            max_turns_without_write: std::env::var("SWARM_MAX_TURNS_WITHOUT_WRITE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|v: &usize| *v > 0)
+                .unwrap_or(8),
+            max_worker_tool_calls: std::env::var("SWARM_MAX_WORKER_TOOL_CALLS")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|v: &usize| *v > 0)
+                .unwrap_or(15),
         }
     }
 }
@@ -929,6 +949,8 @@ impl SwarmConfig {
             cloud_model_catalog: CloudModelCatalog::default_catalog(),
             adaptive_routing: false,
             phase_selector: PhaseModelSelector::new(CloudModelCatalog::default_catalog(), 0.0),
+            max_turns_without_write: 8,
+            max_worker_tool_calls: 15,
         }
     }
 }
