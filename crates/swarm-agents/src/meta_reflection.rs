@@ -127,7 +127,10 @@ impl MetaReflector {
                     insight_type: InsightType::ModelPerformance,
                     description: format!(
                         "Model '{}' has {:.0}% success rate ({}/{} issues)",
-                        model, rate * 100.0, successes, total
+                        model,
+                        rate * 100.0,
+                        successes,
+                        total
                     ),
                     recommendation: format!(
                         "Consider routing away from '{}' for these task types",
@@ -166,7 +169,10 @@ impl MetaReflector {
                     insight_type: InsightType::ErrorPattern,
                     description: format!(
                         "Error category '{}' has {:.0}% resolution rate ({}/{})",
-                        cat, rate * 100.0, successes, total
+                        cat,
+                        rate * 100.0,
+                        successes,
+                        total
                     ),
                     recommendation: format!(
                         "Issues with '{}' errors may need specialized handling or escalation",
@@ -184,7 +190,9 @@ impl MetaReflector {
     fn analyze_prompt_performance(&self, records: &[&MutationRecord]) -> Vec<MetaInsight> {
         let mut version_stats: HashMap<&str, (usize, usize)> = HashMap::new();
         for r in records {
-            let entry = version_stats.entry(r.prompt_version.as_str()).or_insert((0, 0));
+            let entry = version_stats
+                .entry(r.prompt_version.as_str())
+                .or_insert((0, 0));
             entry.1 += 1;
             if r.resolved {
                 entry.0 += 1;
@@ -213,7 +221,10 @@ impl MetaReflector {
                 insight_type: InsightType::PromptPerformance,
                 description: format!(
                     "Prompt version '{}' has the highest success rate: {:.0}% ({}/{})",
-                    version, rate * 100.0, successes, total
+                    version,
+                    rate * 100.0,
+                    successes,
+                    total
                 ),
                 recommendation: format!("Prefer prompt version '{}'", version),
                 confidence: rate,
@@ -229,7 +240,12 @@ impl MetaReflector {
 mod tests {
     use super::*;
 
-    fn make_record(model: &str, resolved: bool, iterations: u32, error_cats: Vec<&str>) -> MutationRecord {
+    fn make_record(
+        model: &str,
+        resolved: bool,
+        iterations: u32,
+        error_cats: Vec<&str>,
+    ) -> MutationRecord {
         MutationRecord {
             timestamp: Utc::now(),
             issue_id: format!("test-{}", rand_id()),
@@ -253,7 +269,13 @@ mod tests {
 
     fn rand_id() -> String {
         use std::time::SystemTime;
-        format!("{:x}", SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().subsec_nanos())
+        format!(
+            "{:x}",
+            SystemTime::now()
+                .duration_since(SystemTime::UNIX_EPOCH)
+                .unwrap()
+                .subsec_nanos()
+        )
     }
 
     #[test]

@@ -405,7 +405,12 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
     if !packet.skill_hints.is_empty() {
         prompt.push_str("\n<skill_hints>\n");
         for hint in &packet.skill_hints {
-            prompt.push_str(&format!("- [{:.0}%] {}: {}\n", hint.confidence * 100.0, hint.label, hint.approach));
+            prompt.push_str(&format!(
+                "- [{:.0}%] {}: {}\n",
+                hint.confidence * 100.0,
+                hint.label,
+                hint.approach
+            ));
         }
         prompt.push_str("</skill_hints>\n");
     }

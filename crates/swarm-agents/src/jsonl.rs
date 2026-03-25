@@ -3,8 +3,8 @@
 //! Used by mutation_archive, meta_reflection, telemetry, and reformulation
 //! for append-only structured logging.
 
+use serde::{de::DeserializeOwned, Serialize};
 use std::path::Path;
-use serde::{Serialize, de::DeserializeOwned};
 use tracing::warn;
 
 /// Append a single record as a JSON line to a file. Creates the file and parent dirs if needed.

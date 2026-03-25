@@ -66,7 +66,11 @@ impl FeedbackTags {
     /// Returns `None` when all fields are empty (so the tags key is omitted).
     pub fn into_option_map(self) -> Option<HashMap<String, String>> {
         let map = self.into_map();
-        if map.is_empty() { None } else { Some(map) }
+        if map.is_empty() {
+            None
+        } else {
+            Some(map)
+        }
     }
 }
 
@@ -86,8 +90,7 @@ pub async fn post_episode_feedback(
     let feedback_url = format!("{gateway_url}/feedback");
 
     // Convert tags once; clone the resulting map for each metric.
-    let tags_map: Option<HashMap<String, String>> =
-        tags.and_then(|t| t.into_option_map());
+    let tags_map: Option<HashMap<String, String>> = tags.and_then(|t| t.into_option_map());
 
     // task_resolved: boolean — did the issue get resolved?
     let feedbacks = vec![
@@ -267,22 +270,27 @@ pub async fn post_resolved_feedback(
     }
 
     // Pre-materialise the tags map so we can clone it cheaply per episode.
-    let tags_map: Option<HashMap<String, String>> =
-        tags.and_then(|t| t.into_option_map());
+    let tags_map: Option<HashMap<String, String>> = tags.and_then(|t| t.into_option_map());
 
     for ep_id in &episode_ids {
         // Reconstruct a FeedbackTags-compatible value from the pre-built map.
         // We pass None here and supply the map directly via a one-off helper
         // to avoid re-serialising every iteration.
-        let per_ep_tags = tags_map.as_ref().map(|m| {
-            let mut ft = FeedbackTags::default();
-            ft.issue_id = m.get("issue_id").cloned();
-            ft.language = m.get("language").cloned();
-            ft.triage_complexity = m.get("triage_complexity").cloned();
-            ft.model = m.get("model").cloned();
-            ft
+        let per_ep_tags = tags_map.as_ref().map(|m| FeedbackTags {
+            issue_id: m.get("issue_id").cloned(),
+            language: m.get("language").cloned(),
+            triage_complexity: m.get("triage_complexity").cloned(),
+            model: m.get("model").cloned(),
         });
-        post_episode_feedback(gateway_url, ep_id, success, iterations, wall_time_secs, per_ep_tags).await;
+        post_episode_feedback(
+            gateway_url,
+            ep_id,
+            success,
+            iterations,
+            wall_time_secs,
+            per_ep_tags,
+        )
+        .await;
     }
     info!(
         episodes = episode_ids.len(),

@@ -439,17 +439,50 @@ mod tests {
     fn test_error_category_from_str() {
         use std::str::FromStr;
 
-        assert_eq!(ErrorCategory::from_str("type_mismatch").unwrap(), ErrorCategory::TypeMismatch);
-        assert_eq!(ErrorCategory::from_str("borrow_checker").unwrap(), ErrorCategory::BorrowChecker);
-        assert_eq!(ErrorCategory::from_str("lifetime").unwrap(), ErrorCategory::Lifetime);
-        assert_eq!(ErrorCategory::from_str("trait_bound").unwrap(), ErrorCategory::TraitBound);
-        assert_eq!(ErrorCategory::from_str("async").unwrap(), ErrorCategory::Async);
-        assert_eq!(ErrorCategory::from_str("macro").unwrap(), ErrorCategory::Macro);
-        assert_eq!(ErrorCategory::from_str("import_resolution").unwrap(), ErrorCategory::ImportResolution);
-        assert_eq!(ErrorCategory::from_str("import").unwrap(), ErrorCategory::ImportResolution);
-        assert_eq!(ErrorCategory::from_str("syntax").unwrap(), ErrorCategory::Syntax);
-        assert_eq!(ErrorCategory::from_str("other").unwrap(), ErrorCategory::Other);
-        assert_eq!(ErrorCategory::from_str("unknown_value").unwrap(), ErrorCategory::Other);
+        assert_eq!(
+            ErrorCategory::from_str("type_mismatch").unwrap(),
+            ErrorCategory::TypeMismatch
+        );
+        assert_eq!(
+            ErrorCategory::from_str("borrow_checker").unwrap(),
+            ErrorCategory::BorrowChecker
+        );
+        assert_eq!(
+            ErrorCategory::from_str("lifetime").unwrap(),
+            ErrorCategory::Lifetime
+        );
+        assert_eq!(
+            ErrorCategory::from_str("trait_bound").unwrap(),
+            ErrorCategory::TraitBound
+        );
+        assert_eq!(
+            ErrorCategory::from_str("async").unwrap(),
+            ErrorCategory::Async
+        );
+        assert_eq!(
+            ErrorCategory::from_str("macro").unwrap(),
+            ErrorCategory::Macro
+        );
+        assert_eq!(
+            ErrorCategory::from_str("import_resolution").unwrap(),
+            ErrorCategory::ImportResolution
+        );
+        assert_eq!(
+            ErrorCategory::from_str("import").unwrap(),
+            ErrorCategory::ImportResolution
+        );
+        assert_eq!(
+            ErrorCategory::from_str("syntax").unwrap(),
+            ErrorCategory::Syntax
+        );
+        assert_eq!(
+            ErrorCategory::from_str("other").unwrap(),
+            ErrorCategory::Other
+        );
+        assert_eq!(
+            ErrorCategory::from_str("unknown_value").unwrap(),
+            ErrorCategory::Other
+        );
 
         // Round-trip: Display then FromStr should recover the original variant
         let cats = [

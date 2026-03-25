@@ -127,8 +127,15 @@ impl Clone for PhaseModelSelector {
 
 impl PhaseModelSelector {
     pub fn new(catalog: CloudModelCatalog, max_cost: f64) -> Self {
-        let bits = if max_cost > 0.0 { max_cost.to_bits() } else { u64::MAX };
-        Self { catalog, cost_budget_bits: AtomicU64::new(bits) }
+        let bits = if max_cost > 0.0 {
+            max_cost.to_bits()
+        } else {
+            u64::MAX
+        };
+        Self {
+            catalog,
+            cost_budget_bits: AtomicU64::new(bits),
+        }
     }
 
     /// Select the best cloud model for a given workflow phase.
@@ -154,9 +161,10 @@ impl PhaseModelSelector {
                 // Use triage suggestion if available; otherwise strongest implementer.
                 if let Some(triage) = triage {
                     // Try triage-suggested models first (bypasses budget check).
-                    let suggested = triage.suggested_models.iter().find_map(|id| {
-                        self.catalog.models.iter().find(|m| m.model == *id)
-                    });
+                    let suggested = triage
+                        .suggested_models
+                        .iter()
+                        .find_map(|id| self.catalog.models.iter().find(|m| m.model == *id));
                     if suggested.is_some() {
                         return suggested;
                     }
@@ -185,9 +193,9 @@ impl PhaseModelSelector {
         let bits = self.cost_budget_bits.load(Ordering::Relaxed);
         if bits != u64::MAX {
             let remaining = f64::from_bits(bits);
-            let estimated_cost =
-                (50_000.0 * candidate.cost_input_per_m + 4_000.0 * candidate.cost_output_per_m)
-                    / 1_000_000.0;
+            let estimated_cost = (50_000.0 * candidate.cost_input_per_m
+                + 4_000.0 * candidate.cost_output_per_m)
+                / 1_000_000.0;
             if estimated_cost > remaining {
                 info!(
                     model = %candidate.model,
@@ -205,18 +213,16 @@ impl PhaseModelSelector {
     ///
     /// Uses an atomic compare-exchange loop so concurrent callers don't race.
     pub fn record_cost(&self, cost_usd: f64) {
-        let _ = self.cost_budget_bits.fetch_update(
-            Ordering::Relaxed,
-            Ordering::Relaxed,
-            |bits| {
+        let _ = self
+            .cost_budget_bits
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
                 if bits == u64::MAX {
                     None // Unlimited — nothing to update.
                 } else {
                     let remaining = f64::from_bits(bits);
                     Some((remaining - cost_usd).max(0.0).to_bits())
                 }
-            },
-        );
+            });
     }
 
     /// Check if any budget remains (or if budgeting is disabled).
@@ -313,7 +319,6 @@ Guidelines:
     }
 }
 
-
 /// Parse the JSON response from the triage model.
 fn parse_triage_response(response: &str) -> Result<TriageResult> {
     // Strip markdown code fences if present.
@@ -322,10 +327,7 @@ fn parse_triage_response(response: &str) -> Result<TriageResult> {
         .strip_prefix("```json")
         .or_else(|| response.trim().strip_prefix("```"))
         .unwrap_or(response.trim());
-    let cleaned = cleaned
-        .strip_suffix("```")
-        .unwrap_or(cleaned)
-        .trim();
+    let cleaned = cleaned.strip_suffix("```").unwrap_or(cleaned).trim();
 
     #[derive(Deserialize)]
     struct RawTriage {
@@ -337,8 +339,7 @@ fn parse_triage_response(response: &str) -> Result<TriageResult> {
         reasoning: String,
     }
 
-    let raw: RawTriage = serde_json::from_str(cleaned)
-        .context("failed to parse triage JSON")?;
+    let raw: RawTriage = serde_json::from_str(cleaned).context("failed to parse triage JSON")?;
 
     let complexity = match raw.complexity.as_str() {
         "simple" => Complexity::Simple,
@@ -401,21 +402,52 @@ fn keyword_triage(title: &str, description: Option<&str>) -> TriageResult {
 
     // Complexity detection.
     let simple_keywords = [
-        "lint", "format", "clippy", "import", "typo", "rename", "doc comment",
-        "unused", "dead_code", "allow(", "warn(", "derive(",
+        "lint",
+        "format",
+        "clippy",
+        "import",
+        "typo",
+        "rename",
+        "doc comment",
+        "unused",
+        "dead_code",
+        "allow(",
+        "warn(",
+        "derive(",
     ];
     let complex_keywords = [
-        "refactor", "architecture", "async", "migration", "breaking",
-        "redesign", "multi-file", "cross-module", "new feature",
+        "refactor",
+        "architecture",
+        "async",
+        "migration",
+        "breaking",
+        "redesign",
+        "multi-file",
+        "cross-module",
+        "new feature",
     ];
     let critical_keywords = [
-        "security", "vulnerability", "injection", "auth", "breaking api",
-        "data loss", "corruption",
+        "security",
+        "vulnerability",
+        "injection",
+        "auth",
+        "breaking api",
+        "data loss",
+        "corruption",
     ];
 
-    let simple_hits = simple_keywords.iter().filter(|k| combined.contains(*k)).count();
-    let complex_hits = complex_keywords.iter().filter(|k| combined.contains(*k)).count();
-    let critical_hits = critical_keywords.iter().filter(|k| combined.contains(*k)).count();
+    let simple_hits = simple_keywords
+        .iter()
+        .filter(|k| combined.contains(*k))
+        .count();
+    let complex_hits = complex_keywords
+        .iter()
+        .filter(|k| combined.contains(*k))
+        .count();
+    let critical_hits = critical_keywords
+        .iter()
+        .filter(|k| combined.contains(*k))
+        .count();
 
     let complexity = if critical_hits > 0 {
         Complexity::Critical
@@ -484,7 +516,11 @@ mod tests {
         assert!(model.is_some());
         // Should pick the cheapest triage model (Gemini Flash at $0.10/M).
         let m = model.unwrap();
-        assert!(m.cost_input_per_m <= 0.15, "Expected cheap triage model, got {}", m.model);
+        assert!(
+            m.cost_input_per_m <= 0.15,
+            "Expected cheap triage model, got {}",
+            m.model
+        );
     }
 
     #[test]
@@ -499,19 +535,23 @@ mod tests {
         // TZ analysis: Sonnet and Opus have identical p50 latency (~4s) and success
         // rates (~27%), but Opus costs 3.3x more ($0.046/call vs $0.014/call).
         let m = model.unwrap();
-        assert!(m.cost_input_per_m < 3.0, "Expected cheap plan model, got {} at ${}/M", m.model, m.cost_input_per_m);
-        assert_ne!(m.model, "claude-opus-4-6", "Plan should not use Opus (too expensive)");
+        assert!(
+            m.cost_input_per_m < 3.0,
+            "Expected cheap plan model, got {} at ${}/M",
+            m.model,
+            m.cost_input_per_m
+        );
+        assert_ne!(
+            m.model, "claude-opus-4-6",
+            "Plan should not use Opus (too expensive)"
+        );
     }
 
     #[test]
     fn phase_selector_review_differs_from_implementer() {
         let catalog = CloudModelCatalog::default_catalog();
         let selector = PhaseModelSelector::new(catalog, 0.0);
-        let model = selector.select_for_phase(
-            WorkflowPhase::Review,
-            None,
-            Some("claude-opus-4-6"),
-        );
+        let model = selector.select_for_phase(WorkflowPhase::Review, None, Some("claude-opus-4-6"));
         assert!(model.is_some());
         assert_ne!(model.unwrap().model, "claude-opus-4-6");
     }

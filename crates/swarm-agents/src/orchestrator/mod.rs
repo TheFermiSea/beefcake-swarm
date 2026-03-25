@@ -69,9 +69,9 @@ use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::config::{SwarmConfig, SwarmRole};
 use crate::knowledge_sync;
-use crate::triage::{self, PhaseModelSelector, WorkflowPhase};
 use crate::notebook_bridge::KnowledgeBase;
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
+use crate::triage::{self, PhaseModelSelector, WorkflowPhase};
 use crate::worktree_bridge::WorktreeBridge;
 use coordination::benchmark::slo::{self, AlertSeverity};
 use coordination::benchmark::OrchestrationMetrics;
@@ -283,11 +283,7 @@ async fn process_issue_core(
     // deferred status, and configurable reject patterns. Prevents wasting
     // iterations on unactionable work.
     let title_lower = title_trimmed.to_lowercase();
-    let desc_lower = issue
-        .description
-        .as_deref()
-        .unwrap_or("")
-        .to_lowercase();
+    let desc_lower = issue.description.as_deref().unwrap_or("").to_lowercase();
     let combined = format!("{} {}", title_lower, desc_lower);
 
     let is_epic = title_lower.contains("[epic]") || title_lower.starts_with("epic:");
@@ -295,7 +291,8 @@ async fn process_issue_core(
         || combined.contains("run.*suite")
         || combined.contains("execute benchmark")
         || combined.contains("record performance metrics");
-    let matches_reject = config.reject_patterns
+    let matches_reject = config
+        .reject_patterns
         .iter()
         .any(|pat| combined.contains(pat.as_str()));
 
@@ -657,7 +654,12 @@ async fn process_issue_core(
         let (plan_client, plan_model) = if let Some(ref cloud_model) = phase_plan_model {
             info!(model = %cloud_model, "Phase selector: using cloud model for Plan phase");
             (
-                factory.clients.cloud.as_ref().unwrap_or(&factory.clients.reasoning).clone(),
+                factory
+                    .clients
+                    .cloud
+                    .as_ref()
+                    .unwrap_or(&factory.clients.reasoning)
+                    .clone(),
                 cloud_model.clone(),
             )
         } else {
@@ -860,7 +862,12 @@ async fn process_issue_core(
                         );
 
                         // Try to merge and close.
-                        merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by concurrent subtask dispatch")?;
+                        merge_close_or_reopen(
+                            worktree_bridge,
+                            beads,
+                            &issue.id,
+                            "Resolved by concurrent subtask dispatch",
+                        )?;
                         clear_resume_file(worktree_bridge.repo_root());
                         // Record successful resolution in the mutation archive.
                         // Must happen before returning so early-exit paths are tracked.
@@ -931,7 +938,12 @@ async fn process_issue_core(
                                     "Issue resolved — merging worktree"
                                 );
 
-                                merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by concurrent dispatch + fixer post-pass")?;
+                                merge_close_or_reopen(
+                                    worktree_bridge,
+                                    beads,
+                                    &issue.id,
+                                    "Resolved by concurrent dispatch + fixer post-pass",
+                                )?;
                                 clear_resume_file(worktree_bridge.repo_root());
                                 // Record successful resolution in the mutation archive.
                                 let record = crate::mutation_archive::build_record(
@@ -1069,8 +1081,8 @@ async fn process_issue_core(
 
     // --- Skill library: loaded once before the loop, refreshed after skill creation ---
     let skills_path = worktree_bridge.repo_root().join(".swarm/skills.json");
-    let skill_library = coordination::analytics::skills::SkillLibrary::load(&skills_path)
-        .unwrap_or_default();
+    let skill_library =
+        coordination::analytics::skills::SkillLibrary::load(&skills_path).unwrap_or_default();
 
     // --- Main loop: implement → verify → review → escalate ---
     loop {
@@ -1266,7 +1278,10 @@ async fn process_issue_core(
                 ));
             }
             if !insights.is_empty() {
-                info!(count = insights.len(), iteration, "Injected meta-insights into packet");
+                info!(
+                    count = insights.len(),
+                    iteration, "Injected meta-insights into packet"
+                );
             }
         }
 
@@ -1274,14 +1289,15 @@ async fn process_issue_core(
         // Use pre-loaded skill library (loaded once before loop, refreshed after skill creation).
         {
             if !skill_library.is_empty() {
-                let typed_cats: Vec<coordination::feedback::ErrorCategory> = packet
-                    .failure_signals
-                    .iter()
-                    .map(|s| s.category)
-                    .collect();
+                let typed_cats: Vec<coordination::feedback::ErrorCategory> =
+                    packet.failure_signals.iter().map(|s| s.category).collect();
                 let skill_context = coordination::analytics::skills::TaskContext {
                     error_categories: typed_cats,
-                    files_involved: packet.file_contexts.iter().map(|f| f.file.clone()).collect(),
+                    files_involved: packet
+                        .file_contexts
+                        .iter()
+                        .map(|f| f.file.clone())
+                        .collect(),
                     task_type: None,
                 };
                 let hints = skill_library.find_matching(&skill_context);
@@ -1495,7 +1511,9 @@ async fn process_issue_core(
                             config.coder_endpoint.model.clone(),
                             config.reasoning_endpoint.model.clone(),
                         ];
-                        if let Some(recommended) = archive.recommend_model(&error_cats, &candidates, 5) {
+                        if let Some(recommended) =
+                            archive.recommend_model(&error_cats, &candidates, 5)
+                        {
                             info!(
                                 iteration,
                                 recommended = %recommended,
@@ -1538,8 +1556,7 @@ async fn process_issue_core(
                                     timeout_secs = worker_timeout.as_secs(),
                                     "rust_coder exceeded timeout — proceeding with changes on disk"
                                 );
-                                Ok(TIMEOUT_RESPONSE
-                                    .to_string())
+                                Ok(TIMEOUT_RESPONSE.to_string())
                             }
                         };
                         (result, adapter)
@@ -1573,8 +1590,7 @@ async fn process_issue_core(
                                     timeout_secs = worker_timeout.as_secs(),
                                     "general_coder exceeded timeout — proceeding with changes on disk"
                                 );
-                                Ok(TIMEOUT_RESPONSE
-                                    .to_string())
+                                Ok(TIMEOUT_RESPONSE.to_string())
                             }
                         };
                         (result, adapter)
@@ -1821,7 +1837,12 @@ async fn process_issue_core(
                             "Issue resolved — merging worktree"
                         );
 
-                        merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by manager-guided parallel dispatch")?;
+                        merge_close_or_reopen(
+                            worktree_bridge,
+                            beads,
+                            &issue.id,
+                            "Resolved by manager-guided parallel dispatch",
+                        )?;
                         clear_resume_file(worktree_bridge.repo_root());
                         // Record successful resolution in the mutation archive.
                         let record = crate::mutation_archive::build_record(
@@ -2111,7 +2132,12 @@ async fn process_issue_core(
                         "No-op resolution — merging worktree"
                     );
 
-                    merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved (no-op): codebase already satisfies requirements")?;
+                    merge_close_or_reopen(
+                        worktree_bridge,
+                        beads,
+                        &issue.id,
+                        "Resolved (no-op): codebase already satisfies requirements",
+                    )?;
                     info!(id = %issue.id, "No-op issue closed successfully");
                     clear_resume_file(worktree_bridge.repo_root());
                     // Record successful resolution in the mutation archive.
@@ -2753,7 +2779,12 @@ async fn process_issue_core(
                                 feedback_count = last_validator_feedback.len(),
                                 "Local validation rejected — looping with feedback"
                             );
-                            escalation.record_iteration(error_cats, error_count, false, report.reward_score);
+                            escalation.record_iteration(
+                                error_cats,
+                                error_count,
+                                false,
+                                report.reward_score,
+                            );
                             last_report = Some(report);
                             metrics.finish_iteration();
                             continue;
@@ -2981,7 +3012,12 @@ async fn process_issue_core(
             "Issue resolved — merging worktree"
         );
 
-        merge_close_or_reopen(worktree_bridge, beads, &issue.id, "Resolved by swarm orchestrator")?;
+        merge_close_or_reopen(
+            worktree_bridge,
+            beads,
+            &issue.id,
+            "Resolved by swarm orchestrator",
+        )?;
         clear_resume_file(worktree_bridge.repo_root());
 
         // --- Self-improvement: post-merge quality scan ---
@@ -3428,8 +3464,12 @@ async fn process_issue_core(
         // Promote quick resolutions (≤3 iterations) into the skill library so
         // future tasks with similar error categories receive targeted hints.
         if success {
-            if let Some(candidate) = crate::mutation_archive::MutationArchive::extract_skill_candidate(&record) {
-                if let Ok(mut lib) = coordination::analytics::skills::SkillLibrary::load(&skills_path) {
+            if let Some(candidate) =
+                crate::mutation_archive::MutationArchive::extract_skill_candidate(&record)
+            {
+                if let Ok(mut lib) =
+                    coordination::analytics::skills::SkillLibrary::load(&skills_path)
+                {
                     let triggers: Vec<coordination::feedback::ErrorCategory> = candidate
                         .error_categories
                         .iter()
@@ -3441,7 +3481,11 @@ async fn process_issue_core(
                             file_patterns: vec![],
                             task_type: None,
                         };
-                        lib.create_skill(&candidate.approach_summary, trigger, &candidate.approach_summary);
+                        lib.create_skill(
+                            &candidate.approach_summary,
+                            trigger,
+                            &candidate.approach_summary,
+                        );
                         if let Err(e) = lib.save(&skills_path) {
                             warn!(error = %e, "Hyperagents: failed to save skill library");
                         } else {
@@ -3466,7 +3510,10 @@ async fn process_issue_core(
             let reflector = crate::meta_reflection::MetaReflector::new(worktree_bridge.repo_root());
             let insights = reflector.reflect(20);
             if !insights.is_empty() {
-                info!(count = insights.len(), "Hyperagents: generated meta-insights");
+                info!(
+                    count = insights.len(),
+                    "Hyperagents: generated meta-insights"
+                );
                 reflector.save_insights(&insights);
             }
         }

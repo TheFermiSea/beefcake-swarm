@@ -134,7 +134,12 @@ impl CloudModelCatalog {
                 cost_input_per_m: 15.0,
                 cost_output_per_m: 75.0,
                 context_window: 200_000,
-                capabilities: vec!["plan".into(), "architect".into(), "review".into(), "reason".into()],
+                capabilities: vec![
+                    "plan".into(),
+                    "architect".into(),
+                    "review".into(),
+                    "reason".into(),
+                ],
                 provider: "cliapi".into(),
                 capability_score: 100,
             },
@@ -165,7 +170,12 @@ impl CloudModelCatalog {
                 cost_input_per_m: 1.25,
                 cost_output_per_m: 10.0,
                 context_window: 2_000_000,
-                capabilities: vec!["explore".into(), "plan".into(), "review".into(), "architect".into()],
+                capabilities: vec![
+                    "explore".into(),
+                    "plan".into(),
+                    "review".into(),
+                    "architect".into(),
+                ],
                 provider: "cliapi".into(),
                 capability_score: 85,
             },
@@ -222,13 +232,11 @@ impl CloudModelCatalog {
 
     /// Find the cheapest model with a given capability.
     pub fn cheapest_for(&self, capability: &str) -> Option<&CloudModelEntry> {
-        self.with_capability(capability)
-            .into_iter()
-            .min_by(|a, b| {
-                a.cost_input_per_m
-                    .partial_cmp(&b.cost_input_per_m)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+        self.with_capability(capability).into_iter().min_by(|a, b| {
+            a.cost_input_per_m
+                .partial_cmp(&b.cost_input_per_m)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
     }
 
     /// Find the most capable model (highest capability_score).
