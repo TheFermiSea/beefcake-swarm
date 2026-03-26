@@ -55,6 +55,17 @@ pub(crate) fn tier_from_env(var: &str, default: SwarmTier) -> SwarmTier {
     }
 }
 
+pub(crate) fn default_initial_tier(
+    worker_first_enabled: bool,
+    worker_first_tier: SwarmTier,
+) -> SwarmTier {
+    if worker_first_enabled {
+        worker_first_tier
+    } else {
+        SwarmTier::Council
+    }
+}
+
 // ── Knowledge base ──────────────────────────────────────────────────
 
 /// Query the knowledge base with graceful degradation on failure.
@@ -417,6 +428,22 @@ mod tests {
         let kb = SucceedingKb;
         let result = query_kb_with_failsafe(&kb, "project_brain", "What is the architecture?");
         assert_eq!(result, "The architecture uses a 4-tier escalation ladder.");
+    }
+
+    #[test]
+    fn test_default_initial_tier_uses_worker_first_only_when_enabled() {
+        assert_eq!(
+            default_initial_tier(true, SwarmTier::Worker),
+            SwarmTier::Worker
+        );
+        assert_eq!(
+            default_initial_tier(true, SwarmTier::Council),
+            SwarmTier::Council
+        );
+        assert_eq!(
+            default_initial_tier(false, SwarmTier::Worker),
+            SwarmTier::Council
+        );
     }
 
     #[test]

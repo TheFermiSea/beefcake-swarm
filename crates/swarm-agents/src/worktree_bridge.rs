@@ -78,6 +78,29 @@ fn clean_git_locks(repo_root: &Path) {
     }
 }
 
+fn tracked_changes(repo_root: &Path) -> Result<Vec<String>> {
+    let output = Command::new("git")
+        .args(["status", "--porcelain", "--untracked-files=no"])
+        .current_dir(repo_root)
+        .output()
+        .context("Failed to inspect repository status")?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git status failed while inspecting repo_root: {stderr}");
+    }
+
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .filter_map(|line| line.get(3..))
+        .filter(|path| {
+            !path.starts_with(".beads")
+                && !path.starts_with(".swarm-")
+                && !path.starts_with(".beadhub")
+        })
+        .map(|path| path.to_string())
+        .collect())
+}
+
 /// Manages git worktrees for swarm agent tasks.
 pub struct WorktreeBridge {
     base_dir: PathBuf,
@@ -587,6 +610,20 @@ impl WorktreeBridge {
                     );
                 }
             }
+        }
+
+        let repo_root_changes = tracked_changes(&self.repo_root)?;
+        if !repo_root_changes.is_empty() {
+            let sample = repo_root_changes
+                .iter()
+                .take(5)
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(", ");
+            bail!(
+                "Target repo has tracked local changes and is unsafe for landing merges: {sample}. \
+                 Use a clean integration worktree or commit/stash those files first"
+            );
         }
 
         // Merge the branch into the main repo
@@ -1277,6 +1314,73 @@ mod tests {
         bridge
             .cleanup("conflict-test")
             .expect("cleanup after conflict");
+    }
+
+    #[test]
+    fn test_merge_and_remove_rejects_dirty_target_repo() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let wt_base = tempfile::tempdir().unwrap();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(repo_dir.path().join("README.md"), "hello").unwrap();
+        std::fs::write(repo_dir.path().join("config.toml"), "value = 1\n").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
+            .expect("bridge creation");
+        let wt_path = bridge.create("dirty-target").expect("create worktree");
+
+        std::fs::write(wt_path.join("README.md"), "worktree change").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "worktree change"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+
+        std::fs::write(repo_dir.path().join("config.toml"), "value = 2\n").unwrap();
+
+        let result = bridge.merge_and_remove("dirty-target");
+        assert!(
+            result.is_err(),
+            "merge_and_remove should fail on dirty repo_root"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Target repo has tracked local changes"),
+            "error should explain dirty target repo, got: {err_msg}"
+        );
+
+        bridge
+            .cleanup("dirty-target")
+            .expect("cleanup dirty-target");
     }
 
     #[test]

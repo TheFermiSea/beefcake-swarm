@@ -27,6 +27,27 @@ elif [[ -z "$SWARM_CLOUD_URL" ]]; then
   unset SWARM_CLOUD_URL
 fi
 
+probe_cloud_model() {
+  local model="$1"
+  local probe_req probe_resp
+  probe_req="$(mktemp)"
+  probe_resp="${probe_req}.out"
+  printf '{"model":"%s","messages":[{"role":"user","content":"Reply OK"}],"max_tokens":8}\n' \
+    "$model" > "$probe_req"
+  PROBE_HTTP="$(curl -sS -o "$probe_resp" -w "%{http_code}" \
+    "${_PROXY_AUTH[@]}" \
+    -H "Content-Type: application/json" \
+    "${SWARM_CLOUD_URL%/}/chat/completions" \
+    -d @"$probe_req" || echo "000")"
+  PROBE_BODY="$(cat "$probe_resp" 2>/dev/null || true)"
+  rm -f "$probe_req" "$probe_resp"
+
+  if [[ "$PROBE_HTTP" != "200" ]] || grep -qiE 'auth_unavailable|quota_exhausted|resource_exhausted|exhausted your capacity|quota will reset' <<<"$PROBE_BODY"; then
+    return 1
+  fi
+  return 0
+}
+
 if [[ -n "${SWARM_CLOUD_URL:-}" ]]; then
   # Cloud mode: require API key and run preflight checks
   : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
@@ -56,20 +77,15 @@ PY
     rm -f "$models_resp"
   fi
   if [[ "${SWARM_CLOUD_PREFLIGHT:-1}" == "1" ]]; then
-    probe_req="$(mktemp)"
-    probe_resp="${probe_req}.out"
-    printf '{"model":"%s","messages":[{"role":"user","content":"Reply OK"}],"max_tokens":8}\n' \
-      "$SWARM_CLOUD_MODEL" > "$probe_req"
-    probe_http="$(curl -sS -o "$probe_resp" -w "%{http_code}" \
-      "${_PROXY_AUTH[@]}" \
-      -H "Content-Type: application/json" \
-      "${SWARM_CLOUD_URL%/}/chat/completions" \
-      -d @"$probe_req" || echo "000")"
-    if [[ "$probe_http" != "200" ]] || grep -qiE 'auth_unavailable|quota_exhausted|resource_exhausted|exhausted your capacity|quota will reset' "$probe_resp"; then
-      echo "Cloud model ${SWARM_CLOUD_MODEL} unavailable (http=${probe_http}); falling back to ${SWARM_CLOUD_FALLBACK_MODEL}"
+    if ! probe_cloud_model "$SWARM_CLOUD_MODEL"; then
+      echo "Cloud model ${SWARM_CLOUD_MODEL} unavailable (http=${PROBE_HTTP}); probing fallback ${SWARM_CLOUD_FALLBACK_MODEL}"
       export SWARM_CLOUD_MODEL="$SWARM_CLOUD_FALLBACK_MODEL"
+      if ! probe_cloud_model "$SWARM_CLOUD_MODEL"; then
+        echo "Cloud fallback ${SWARM_CLOUD_MODEL} also unavailable (http=${PROBE_HTTP}); switching to worker-first local mode"
+        unset SWARM_CLOUD_URL
+        export SWARM_WORKER_FIRST_ENABLED="${SWARM_WORKER_FIRST_ENABLED:-1}"
+      fi
     fi
-    rm -f "$probe_req" "$probe_resp"
   fi
 else
   echo "Worker-first mode: SWARM_CLOUD_URL not set, using local models only"

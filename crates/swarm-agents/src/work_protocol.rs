@@ -286,10 +286,16 @@ pub struct FailedApproach {
 }
 
 impl FailedApproach {
-    pub fn new(iteration: usize, summary: impl Into<String>, error_output: impl Into<String>) -> Self {
+    pub fn new(
+        iteration: usize,
+        summary: impl Into<String>,
+        error_output: impl Into<String>,
+    ) -> Self {
         let summary = summary.into();
         let error = error_output.into();
-        let digest = blake3::hash(format!("{summary}{error}").as_bytes()).to_hex().to_string();
+        let digest = blake3::hash(format!("{summary}{error}").as_bytes())
+            .to_hex()
+            .to_string();
         Self {
             iteration,
             summary,

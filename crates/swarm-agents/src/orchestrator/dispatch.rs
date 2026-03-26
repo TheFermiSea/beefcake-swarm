@@ -8,8 +8,8 @@ use std::path::Path;
 use tracing::debug;
 
 use crate::file_targeting::find_target_files_by_grep;
-use coordination::WorkPacket;
 use coordination::feedback::ErrorCategory;
+use coordination::WorkPacket;
 
 /// Coder routing decision with confidence level.
 #[derive(Debug, PartialEq, Eq)]

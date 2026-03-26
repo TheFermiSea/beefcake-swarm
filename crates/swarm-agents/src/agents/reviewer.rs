@@ -188,13 +188,15 @@ fn detect_leniency_flags(passed: bool, scores: Option<&CriteriaScores>) -> Vec<S
         // Verdict says pass but scored criteria say fail
         if passed && !s.all_passing() {
             let failing = s.failing_criteria();
-            flags.push(format!(
-                "verdict=pass but criteria score <2: {:?}",
-                failing
-            ));
+            flags.push(format!("verdict=pass but criteria score <2: {:?}", failing));
         }
         // Perfect scores with no explanation is suspicious for complex diffs
-        if passed && s.correctness == 3 && s.completeness == 3 && s.robustness == 3 && s.conventions == 3 {
+        if passed
+            && s.correctness == 3
+            && s.completeness == 3
+            && s.robustness == 3
+            && s.conventions == 3
+        {
             flags.push("all scores=3 (maximum) — verify evaluator was not over-generous".into());
         }
     }
@@ -273,7 +275,10 @@ mod tests {
         );
         // completeness < 2 but verdict is pass — should flag leniency
         assert!(result.passed);
-        assert!(!result.leniency_flags.is_empty(), "should have leniency flag");
+        assert!(
+            !result.leniency_flags.is_empty(),
+            "should have leniency flag"
+        );
         assert!(result.leniency_flags[0].contains("completeness"));
     }
 

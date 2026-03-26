@@ -12,8 +12,8 @@ use anyhow::Result;
 use tracing::{debug, error, info, warn};
 
 use crate::acceptance::{self, AcceptancePolicy};
-use crate::agents::AgentFactory;
 use crate::agents::coder::OaiAgent;
+use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::cluster_health::ClusterHealth;
 use crate::config::{SwarmConfig, SwarmRole};
@@ -21,19 +21,18 @@ use crate::file_targeting::detect_changed_packages;
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::orchestrator::{
-    self, CoderRoute, SwarmResumeFile, bool_from_env, cloud_validate, collect_artifacts_from_diff,
-    count_diff_lines, create_stuck_intervention, extract_local_validator_feedback,
-    extract_validator_feedback, format_compact_task_prompt, format_task_prompt, git_commit_changes,
-    local_validate, prompt_with_hook_and_retry, query_kb_with_failsafe, route_to_coder,
-    should_reject_auto_fix, try_auto_fix, try_scaffold_fallback,
+    self, bool_from_env, cloud_validate, collect_artifacts_from_diff, count_diff_lines,
+    create_stuck_intervention, extract_local_validator_feedback, extract_validator_feedback,
+    format_compact_task_prompt, format_task_prompt, git_commit_changes, local_validate,
+    prompt_with_hook_and_retry, query_kb_with_failsafe, route_to_coder, should_reject_auto_fix,
+    try_auto_fix, try_scaffold_fallback, CoderRoute, SwarmResumeFile,
 };
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 use crate::state_machine::{BudgetTracker, OrchestratorState, StateMachine};
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
 use crate::worktree_bridge::WorktreeBridge;
-use coordination::TieredCorrectionLoop;
-use coordination::benchmark::OrchestrationMetrics;
 use coordination::benchmark::slo::{self, AlertSeverity};
+use coordination::benchmark::OrchestrationMetrics;
 use coordination::escalation::state::EscalationReason;
 use coordination::escalation::worker_first::classify_initial_tier;
 use coordination::feedback::ErrorCategory;
@@ -41,6 +40,7 @@ use coordination::otel::{self, SpanSummary};
 use coordination::rollout::FeatureFlags;
 use coordination::router::task_classifier::{DynamicRouter, ModelTier};
 use coordination::save_session_state;
+use coordination::TieredCorrectionLoop;
 use coordination::{
     ContextPacker, EscalationEngine, EscalationState, GitManager, ProgressTracker, SessionManager,
     SwarmTier, TierBudget, TurnPolicy, ValidatorFeedback, Verifier, VerifierConfig, VerifierReport,
@@ -165,12 +165,13 @@ impl<'a> OrchestratorContext<'a> {
         let state_machine = StateMachine::new();
         let budget_tracker = BudgetTracker::with_defaults();
 
-        // Determine initial tier
+        // Determine initial tier.
         let council_budget_iterations =
             orchestrator::u32_from_env("SWARM_COUNCIL_MAX_ITERATIONS", 6);
         let council_budget_consultations =
             orchestrator::u32_from_env("SWARM_COUNCIL_MAX_CONSULTATIONS", 6);
-        // Always classify — simple tasks go to Worker, complex to Council.
+        // When worker_first is enabled, classify the task. Otherwise default
+        // to Council from the beginning.
         let recommendation = classify_initial_tier(&issue.title, &[]);
         info!(
             tier = ?recommendation.tier,
@@ -179,7 +180,12 @@ impl<'a> OrchestratorContext<'a> {
             reason = %recommendation.reason,
             "Task classification (state driver)"
         );
-        let initial_tier = orchestrator::tier_from_env("SWARM_INITIAL_TIER", recommendation.tier);
+        let worker_first_tier = recommendation.tier;
+        let default_tier = orchestrator::default_initial_tier(
+            feature_flags.worker_first_enabled,
+            worker_first_tier,
+        );
+        let initial_tier = orchestrator::tier_from_env("SWARM_INITIAL_TIER", default_tier);
         let initial_tier = if initial_tier == SwarmTier::Council
             && config.cloud_endpoint.is_none()
             && std::env::var("SWARM_INITIAL_TIER").is_err()
@@ -189,6 +195,13 @@ impl<'a> OrchestratorContext<'a> {
         } else {
             initial_tier
         };
+        info!(
+            ?initial_tier,
+            worker_first_tier = ?worker_first_tier,
+            cloud_available = config.cloud_endpoint.is_some(),
+            worker_first = feature_flags.worker_first_enabled,
+            "Initial tier selected (state driver)"
+        );
 
         let escalation = EscalationState::new(&issue.id)
             .with_initial_tier(initial_tier)

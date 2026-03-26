@@ -17,11 +17,12 @@ pub mod validation;
 // orchestrator.rs are re-exported here so downstream code (driver.rs, etc.)
 // continues to compile without changes.
 
-pub use dispatch::{CoderRoute, format_compact_task_prompt, format_task_prompt, route_to_coder};
+pub use dispatch::{format_compact_task_prompt, format_task_prompt, route_to_coder, CoderRoute};
 pub use helpers::try_scaffold_fallback;
 pub(crate) use helpers::{
-    bool_from_env, create_stuck_intervention, detect_failure_patterns, load_directives,
-    query_kb_with_failsafe, save_directives, tier_from_env, timeout_from_env, u32_from_env,
+    bool_from_env, create_stuck_intervention, default_initial_tier, detect_failure_patterns,
+    load_directives, query_kb_with_failsafe, save_directives, tier_from_env, timeout_from_env,
+    u32_from_env,
 };
 pub(crate) use validation::{
     cloud_validate, extract_local_validator_feedback, extract_validator_feedback, local_validate,
@@ -30,13 +31,13 @@ pub(crate) use validation::{
 // ── Remaining lifecycle imports ─────────────────────────────────────
 
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rig::completion::Prompt;
-use tracing::{Instrument, debug, error, info, warn};
+use tracing::{debug, error, info, warn, Instrument};
 
 use crate::cluster_health::ClusterHealth;
 use crate::file_targeting::detect_changed_packages;
@@ -64,8 +65,8 @@ use crate::notebook_bridge::KnowledgeBase;
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
 use crate::triage::{self, PhaseModelSelector, WorkflowPhase};
 use crate::worktree_bridge::WorktreeBridge;
-use coordination::benchmark::OrchestrationMetrics;
 use coordination::benchmark::slo::{self, AlertSeverity};
+use coordination::benchmark::OrchestrationMetrics;
 use coordination::escalation::state::EscalationReason;
 use coordination::escalation::worker_first::classify_initial_tier;
 use coordination::feedback::ErrorCategory;
@@ -591,9 +592,9 @@ async fn process_issue_core(
 
     let council_budget_iterations = u32_from_env("SWARM_COUNCIL_MAX_ITERATIONS", 6);
     let council_budget_consultations = u32_from_env("SWARM_COUNCIL_MAX_CONSULTATIONS", 6);
-    // Determine starting tier using both keyword classifier and triage result.
-    // The triage result (from LLM or keyword fallback) provides a richer signal
-    // than the legacy keyword-only classifier.
+    // Determine the worker-first starting tier using both keyword classifier
+    // and triage for observability, but only honor it when the feature flag is
+    // enabled. Otherwise default to Council from the beginning.
     let recommendation = classify_initial_tier(&issue.title, &[]);
     // Override tier based on triage complexity when triage provides higher confidence.
     let triage_tier = match triage_result.complexity {
@@ -616,8 +617,11 @@ async fn process_issue_core(
         reason = %recommendation.reason,
         "Task classification (triage-enhanced)"
     );
-    // Allow explicit env override, otherwise use triage-enhanced recommendation.
-    let initial_tier = tier_from_env("SWARM_INITIAL_TIER", effective_tier);
+    let worker_first_tier = recommendation.tier;
+    let default_tier = default_initial_tier(feature_flags.worker_first_enabled, worker_first_tier);
+    // Allow explicit env override, otherwise use the worker-first default
+    // only when the feature flag is enabled.
+    let initial_tier = tier_from_env("SWARM_INITIAL_TIER", default_tier);
     // Clamp: Council requires cloud endpoint. Without cloud, the local manager
     // can't delegate to workers effectively. Honor explicit env override.
     let initial_tier = if initial_tier == SwarmTier::Council
@@ -631,6 +635,8 @@ async fn process_issue_core(
     };
     info!(
         ?initial_tier,
+        worker_first_tier = ?worker_first_tier,
+        triage_recommended_tier = ?effective_tier,
         cloud_available = config.cloud_endpoint.is_some(),
         worker_first = feature_flags.worker_first_enabled,
         "Initial tier selected"
@@ -654,8 +660,8 @@ async fn process_issue_core(
     // Tracks whether the previous iteration's agent called edit_file/write_file.
     // Used to inject an edit nudge into the next iteration's task prompt.
     let mut agent_has_written_prev = true; // assume true for first iteration
-    // Hill-climbing: track the best (lowest) error count seen across all iterations.
-    // Changes are only kept when they improve on the best — otherwise rolled back.
+                                           // Hill-climbing: track the best (lowest) error count seen across all iterations.
+                                           // Changes are only kept when they improve on the best — otherwise rolled back.
     let mut best_error_count: Option<usize> = None;
     // Minimum error reduction required to keep changes (env: SWARM_MIN_ERROR_DELTA).
     let min_error_delta: usize = std::env::var("SWARM_MIN_ERROR_DELTA")
@@ -4314,8 +4320,8 @@ mod tests {
 
     #[test]
     fn test_slo_evaluation_from_session_metrics() {
-        use coordination::benchmark::OrchestrationMetrics;
         use coordination::benchmark::slo;
+        use coordination::benchmark::OrchestrationMetrics;
         use std::time::Duration;
 
         // Simulate a successful single-iteration session

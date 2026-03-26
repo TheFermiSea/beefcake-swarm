@@ -711,25 +711,38 @@ pub fn stage_acceptance_criteria(mut ctx: PreflightContext) -> PreflightContext 
     // richer, negotiated criteria.
     let lower = objective.to_lowercase();
 
-    if lower.contains("rust") || lower.contains("cargo") || lower.contains("crate") || lower.contains("fn ") {
+    if lower.contains("rust")
+        || lower.contains("cargo")
+        || lower.contains("crate")
+        || lower.contains("fn ")
+    {
         functional.push("cargo test -p swarm-agents passes with no new failures".to_string());
     } else {
         functional.push("all existing tests pass after the change".to_string());
     }
 
-    if lower.contains("fix") || lower.contains("bug") || lower.contains("broken") || lower.contains("panic") {
+    if lower.contains("fix")
+        || lower.contains("bug")
+        || lower.contains("broken")
+        || lower.contains("panic")
+    {
+        functional
+            .push("the described issue no longer reproduces on the relevant input".to_string());
+    }
+
+    if lower.contains("add")
+        || lower.contains("implement")
+        || lower.contains("create")
+        || lower.contains("support")
+    {
         functional.push(
-            "the described issue no longer reproduces on the relevant input".to_string(),
+            "the new functionality is reachable from at least one code path (no dead code)"
+                .to_string(),
         );
     }
 
-    if lower.contains("add") || lower.contains("implement") || lower.contains("create") || lower.contains("support") {
-        functional.push(
-            "the new functionality is reachable from at least one code path (no dead code)".to_string(),
-        );
-    }
-
-    non_functional.push("no new clippy warnings introduced (cargo clippy -- -D warnings)".to_string());
+    non_functional
+        .push("no new clippy warnings introduced (cargo clippy -- -D warnings)".to_string());
     non_functional.push("no bare unwrap() calls added in non-test code".to_string());
     non_functional.push("no stub bodies (todo!(), unimplemented!(), empty return)".to_string());
 

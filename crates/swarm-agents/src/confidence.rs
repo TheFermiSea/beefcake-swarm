@@ -199,8 +199,7 @@ pub fn detect_context_anxiety(response: &str) -> bool {
     if anxiety_count > 0 && anxiety_count > completion_count {
         debug!(
             anxiety_count,
-            completion_count,
-            "Context anxiety detected in agent response"
+            completion_count, "Context anxiety detected in agent response"
         );
         return true;
     }

@@ -21,6 +21,8 @@
 #   DOGFOOD_ISSUE_LIST     Space-separated issue IDs to work in order
 #   DOGFOOD_PARALLEL       Concurrent issue limit (default: 1)
 #   DOGFOOD_STRINGER_INTERVAL  Seconds between stringer backlog refreshes (default: 86400)
+#   DOGFOOD_WORKER_FIRST   Prefer worker-first routing for dogfood runs (default: 1)
+#   DOGFOOD_ALLOW_DIRTY_TARGET  Allow tracked changes in --repo-root target (default: 0)
 #
 set -euo pipefail
 
@@ -38,6 +40,8 @@ DISCOVER=0                              # --discover: auto-fetch new issues when
 TARGET_REPO=""                          # --repo-root: target an external repo (default: self)
 MAX_ISSUE_FAILURES="${DOGFOOD_MAX_ISSUE_FAILURES:-3}"  # defer after N consecutive failures
 STRINGER_INTERVAL="${DOGFOOD_STRINGER_INTERVAL:-86400}"
+DOGFOOD_WORKER_FIRST="${DOGFOOD_WORKER_FIRST:-1}"
+ALLOW_DIRTY_TARGET="${DOGFOOD_ALLOW_DIRTY_TARGET:-0}"
 
 # CLI overrides
 while [[ $# -gt 0 ]]; do
@@ -62,6 +66,19 @@ if [[ -n "$TARGET_REPO" ]]; then
   TARGET_REPO="$(cd "$TARGET_REPO" && pwd)"  # absolutize
   BD_RUN_DIR="$TARGET_REPO"
   EXTRA_SWARM_ARGS+=("--repo-root" "$TARGET_REPO")
+
+  if [[ "$ALLOW_DIRTY_TARGET" != "1" ]]; then
+    mapfile -t _tracked_target_changes < <(
+      git -C "$TARGET_REPO" status --porcelain --untracked-files=no 2>/dev/null |
+        sed -E 's/^...//'
+    )
+    if [[ ${#_tracked_target_changes[@]} -gt 0 ]]; then
+      echo "ERROR: Target repo has tracked local changes and is unsafe for landing merges:" >&2
+      printf '  %s\n' "${_tracked_target_changes[@]}" >&2
+      echo "Use a clean integration worktree as --repo-root, or set DOGFOOD_ALLOW_DIRTY_TARGET=1 to override." >&2
+      exit 1
+    fi
+  fi
 fi
 
 mkdir -p "$LOG_DIR"
@@ -214,6 +231,7 @@ log "  Parallel: $PARALLEL"
 log "  Max runs: $([ "$MAX_RUNS" -eq 0 ] && echo 'unlimited' || echo "$MAX_RUNS")"
 log "  Discover: $([ "$DISCOVER" -eq 1 ] && echo 'ON (auto-fetch new issues)' || echo 'OFF')"
 log "  Stringer refresh: ${STRINGER_INTERVAL}s"
+log "  Worker-first: ${DOGFOOD_WORKER_FIRST}"
 
 if [[ -n "$ISSUE_LIST" ]]; then
   read -ra ISSUES <<< "$ISSUE_LIST"
@@ -347,7 +365,8 @@ with open('$jsonl_path') as f:
   set +e
   (
     cd "$REPO_ROOT"
-    bash scripts/run-swarm.sh "${issue_args[@]}" 2>&1
+    SWARM_WORKER_FIRST_ENABLED="${SWARM_WORKER_FIRST_ENABLED:-$DOGFOOD_WORKER_FIRST}" \
+      bash scripts/run-swarm.sh "${issue_args[@]}" 2>&1
   ) > "$run_log" 2>&1
   exit_code=$?
   set -e
