@@ -5,6 +5,7 @@
 
 pub mod apply_plan_tool;
 pub mod astgrep_tool;
+pub mod batch;
 pub mod bundles;
 pub mod cargo_metadata_tool;
 pub mod colgrep_tool;
