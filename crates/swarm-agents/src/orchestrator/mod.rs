@@ -862,7 +862,7 @@ async fn process_issue_core(
                         clear_resume_file(worktree_bridge.repo_root());
                         // Record successful resolution in the mutation archive.
                         // Must happen before returning so early-exit paths are tracked.
-                        let record = crate::mutation_archive::build_record(
+                        let mut record = crate::mutation_archive::build_record(
                             &issue.id,
                             &issue.title,
                             &archive_language,
@@ -872,6 +872,7 @@ async fn process_issue_core(
                             &config.resolve_role_model(SwarmRole::Planner),
                             process_start.elapsed().as_secs(),
                         );
+                        record.files_changed = helpers::list_changed_files(&wt_path);
                         archive.record(&record);
                         return Ok(true);
                     }
@@ -937,7 +938,7 @@ async fn process_issue_core(
                                 )?;
                                 clear_resume_file(worktree_bridge.repo_root());
                                 // Record successful resolution in the mutation archive.
-                                let record = crate::mutation_archive::build_record(
+                                let mut record = crate::mutation_archive::build_record(
                                     &issue.id,
                                     &issue.title,
                                     &archive_language,
@@ -947,6 +948,7 @@ async fn process_issue_core(
                                     &config.resolve_role_model(SwarmRole::Planner),
                                     process_start.elapsed().as_secs(),
                                 );
+                                record.files_changed = helpers::list_changed_files(&wt_path);
                                 archive.record(&record);
                                 return Ok(true);
                             }
@@ -1199,6 +1201,19 @@ async fn process_issue_core(
                 // No errors yet (first iteration) — inject general archive stats
                 full_objective.push_str("\n\n");
                 full_objective.push_str(&context);
+                // Also inject title-similar issue history so agent calibrates effort
+                // before errors exist (beefcake-1nw2: session-start meta-context).
+                let title_similar = archive.query_by_keywords(&issue.title, 3);
+                if !title_similar.is_empty() {
+                    full_objective.push_str("\n**Issues with similar titles** (archive reference):\n");
+                    for r in &title_similar {
+                        full_objective.push_str(&format!(
+                            "- `{}` resolved in {} iter(s) via {} tier\n",
+                            r.issue_title, r.iterations, r.tier,
+                        ));
+                    }
+                    full_objective.push('\n');
+                }
             }
         }
 
@@ -1486,8 +1501,9 @@ async fn process_issue_core(
                     .unwrap_or_default();
 
                 // --- Hyperagents: adaptive model routing ---
-                // Use UCB1 bandit learning to override static routing when sufficient data exists.
-                if config.adaptive_routing {
+                // UCB1 bandit: use role strings as candidates so coder vs reasoning node is
+                // distinguishable (both nodes run "Qwen3.5-122B-A10B" — model names collide).
+                let ucb_coder_route: Option<CoderRoute> = if config.adaptive_routing {
                     let error_cats: Vec<String> = escalation
                         .recent_error_categories
                         .last()
@@ -1497,27 +1513,37 @@ async fn process_issue_core(
                         .map(|c| c.to_string())
                         .collect();
                     if !error_cats.is_empty() {
-                        let candidates = vec![
-                            config.fast_endpoint.model.clone(),
-                            config.coder_endpoint.model.clone(),
-                            config.reasoning_endpoint.model.clone(),
-                        ];
-                        if let Some(recommended) =
-                            archive.recommend_model(&error_cats, &candidates, 5)
-                        {
-                            info!(
-                                iteration,
-                                recommended = %recommended,
-                                "Hyperagents: UCB1 recommends model override"
-                            );
-                            // Log the recommendation but don't override yet — this is advisory
-                            // until we have confidence in the routing. The telemetry trace captures
-                            // the recommendation for future analysis.
-                        }
+                        let candidates =
+                            vec!["RustCoder".to_string(), "GeneralCoder".to_string()];
+                        archive
+                            .recommend_model(&error_cats, &candidates, 5)
+                            .and_then(|rec| match rec.as_str() {
+                                "RustCoder" => {
+                                    info!(
+                                        iteration,
+                                        recommended = %rec,
+                                        "UCB1 adaptive routing → RustCoder override"
+                                    );
+                                    Some(CoderRoute::RustCoder)
+                                }
+                                "GeneralCoder" => {
+                                    info!(
+                                        iteration,
+                                        recommended = %rec,
+                                        "UCB1 adaptive routing → GeneralCoder override"
+                                    );
+                                    Some(CoderRoute::GeneralCoder)
+                                }
+                                _ => None,
+                            })
+                    } else {
+                        None
                     }
-                }
+                } else {
+                    None
+                };
 
-                match route_to_coder(&recent_cats) {
+                match ucb_coder_route.unwrap_or_else(|| route_to_coder(&recent_cats)) {
                     CoderRoute::RustCoder => {
                         info!(iteration, "Routing to rust_coder (Qwen3.5-Implementer)");
                         metrics.record_coder_route("RustCoder");
@@ -1836,7 +1862,7 @@ async fn process_issue_core(
                         )?;
                         clear_resume_file(worktree_bridge.repo_root());
                         // Record successful resolution in the mutation archive.
-                        let record = crate::mutation_archive::build_record(
+                        let mut record = crate::mutation_archive::build_record(
                             &issue.id,
                             &issue.title,
                             &archive_language,
@@ -1846,6 +1872,7 @@ async fn process_issue_core(
                             &config.resolve_role_model(SwarmRole::Planner),
                             process_start.elapsed().as_secs(),
                         );
+                        record.files_changed = helpers::list_changed_files(&wt_path);
                         archive.record(&record);
                         return Ok(true);
                     }
@@ -3426,6 +3453,8 @@ async fn process_issue_core(
         if !success {
             record.failure_reason = Some(escalation.summary());
         }
+        // Populate files changed so archive queries (query_similar, UCB) have file signal.
+        record.files_changed = helpers::list_changed_files(&wt_path);
         // Count changed lines from git diff
         if let Ok(output) = std::process::Command::new("git")
             .args(["diff", "--stat", "main"])

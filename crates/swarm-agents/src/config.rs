@@ -672,7 +672,7 @@ impl Default for SwarmConfig {
             cloud_model_catalog,
             adaptive_routing: std::env::var("SWARM_ADAPTIVE_ROUTING")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-                .unwrap_or(false),
+                .unwrap_or(true),
             phase_selector,
             max_turns_without_write: std::env::var("SWARM_MAX_TURNS_WITHOUT_WRITE")
                 .ok()
@@ -947,7 +947,7 @@ impl SwarmConfig {
                 .ok()
                 .filter(|s| !s.trim().is_empty()),
             cloud_model_catalog: CloudModelCatalog::default_catalog(),
-            adaptive_routing: false,
+            adaptive_routing: true,
             phase_selector: PhaseModelSelector::new(CloudModelCatalog::default_catalog(), 0.0),
             max_turns_without_write: 8,
             max_worker_tool_calls: 15,

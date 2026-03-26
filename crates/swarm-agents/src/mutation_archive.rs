@@ -516,6 +516,39 @@ impl MutationArchive {
             ))
         }
     }
+
+    /// Query resolved records whose title shares keywords with `query`.
+    ///
+    /// Used at session start (before any errors exist) to inject iteration-count
+    /// estimates based on similar past issues. Returns up to `limit` records
+    /// sorted by keyword overlap score (descending).
+    pub fn query_by_keywords(&self, query: &str, limit: usize) -> Vec<MutationRecord> {
+        let keywords: Vec<String> = query
+            .split_whitespace()
+            .filter(|w| w.len() > 3)
+            .map(|w| w.to_lowercase())
+            .collect();
+        if keywords.is_empty() {
+            return Vec::new();
+        }
+        let mut scored: Vec<(usize, MutationRecord)> = self
+            .load_all()
+            .into_iter()
+            .filter(|r| r.resolved)
+            .map(|r| {
+                let title_lower = r.issue_title.to_lowercase();
+                let score = keywords
+                    .iter()
+                    .filter(|kw| title_lower.contains(kw.as_str()))
+                    .count();
+                (score, r)
+            })
+            .filter(|(score, _)| *score > 0)
+            .collect();
+        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.truncate(limit);
+        scored.into_iter().map(|(_, r)| r).collect()
+    }
 }
 
 /// Summary statistics from the mutation archive.
