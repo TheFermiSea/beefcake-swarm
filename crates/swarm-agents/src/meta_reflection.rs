@@ -264,6 +264,7 @@ mod tests {
             duration_secs: 60,
             first_failure_gate: None,
             failure_reason: None,
+            pivot_decisions: Vec::new(),
         }
     }
 

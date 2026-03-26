@@ -93,7 +93,7 @@ N_PREDICT="${N_PREDICT:--1}"             # -1 = unlimited (reasoning models need
 THREADS="${THREADS:-28}"                 # Decode threads (fewer than max reduces memory bandwidth contention)
 THREADS_BATCH="${THREADS_BATCH:-36}"     # Batch/prompt threads (use all cores for prefill)
 BATCH_SIZE="${BATCH_SIZE:-2048}"
-UBATCH_SIZE="${UBATCH_SIZE:-512}"
+UBATCH_SIZE="${UBATCH_SIZE:-2048}"
 ENDPOINT_SUFFIX="${ENDPOINT_SUFFIX:-qwen35}"
 TIER_NAME="${TIER_NAME:-manager-local}"
 # Enable/disable --jinja template processing. Set JINJA_MODE=off to disable.
@@ -346,17 +346,18 @@ fi
 # GPU-dependent options (differ by backend)
 if [[ "$N_GPU_LAYERS" -gt 0 ]]; then
     SERVER_ARGS+=(
-        # V100 (SM70) lacks Flash Attention 2 tensor-core support — must be off.
-        --flash-attn off
+        # V100S (SM70) supports native Flash Attention in llama.cpp (GGML kernels).
+        # This significantly improves prompt processing (PP) and reduces memory.
+        --flash-attn
     )
     if [[ "$LLAMA_BACKEND" == "ik" ]]; then
         # ik_llama.cpp: --cpu-moe keeps MoE expert weights on CPU, attention on GPU
         SERVER_ARGS+=( --cpu-moe )
-        echo "[$(date)] GPU layers: $N_GPU_LAYERS (ik_llama.cpp --cpu-moe, flash-attn off)"
+        echo "[$(date)] GPU layers: $N_GPU_LAYERS (ik_llama.cpp --cpu-moe, flash-attn ON)"
     else
         # mainline: -ot flag offloads MoE expert FFN layers to CPU
         SERVER_ARGS+=( -ot ".ffn_.*_exps.=CPU" )
-        echo "[$(date)] GPU layers: $N_GPU_LAYERS (mainline, MoE experts offloaded to CPU, flash-attn off)"
+        echo "[$(date)] GPU layers: $N_GPU_LAYERS (mainline, MoE experts offloaded to CPU, flash-attn ON)"
     fi
 else
     echo "[$(date)] CPU-only mode (N_GPU_LAYERS=0) — all computation on CPU"

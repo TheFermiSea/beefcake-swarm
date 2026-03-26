@@ -133,7 +133,7 @@ tail -f ~/code/beefcake-swarm/logs/dogfood/run-N-<issue>-*.log
 grep -o 'gen_ai.tool.name[^"]*"[^"]*"' logs/dogfood/run-*.log | sort | uniq -c | sort -rn
 
 # Check endpoint health
-curl -s http://vasp-03:8081/health  # Scout (27B-Opus-Distilled, 65K ctx)
+curl -s http://vasp-03:8081/health  # Scout (Qwen3-Coder-Next, 65K ctx)
 curl -s http://vasp-01:8081/health  # Coder (122B-A10B MoE, 65K ctx)
 curl -s http://vasp-02:8081/health  # Reasoning (122B-A10B MoE, 65K ctx)
 ```

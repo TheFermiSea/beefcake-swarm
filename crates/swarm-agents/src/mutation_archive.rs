@@ -64,6 +64,30 @@ pub struct MutationRecord {
     /// Reason for failure (if not resolved).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub failure_reason: Option<String>,
+    /// Pivot decisions made during the session (strategy changes between iterations).
+    ///
+    /// Each entry records when the manager decided to change approach mid-session
+    /// rather than refining the current approach. Non-empty means the session
+    /// was adaptive rather than linear.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub pivot_decisions: Vec<PivotDecision>,
+}
+
+/// A record of an explicit pivot decision made by the manager.
+///
+/// Created when the manager judges that the current approach has a fundamental
+/// flaw (not just a fixable bug) and chooses a different strategy. The pivot
+/// is recorded so meta-reflection can analyze which pivot strategies succeed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PivotDecision {
+    /// Iteration number when the pivot was decided.
+    pub iteration: usize,
+    /// Why the current approach was judged unworkable.
+    pub rationale: String,
+    /// The new strategy description.
+    pub pivot_strategy: String,
+    /// Confidence in the new strategy (0.0–1.0 as reported by the manager).
+    pub strategy_confidence: f32,
 }
 
 /// Append-only mutation archive stored as JSONL.
@@ -647,6 +671,7 @@ pub fn build_record(
         duration_secs,
         first_failure_gate: None,
         failure_reason: None,
+        pivot_decisions: Vec::new(),
     }
 }
 

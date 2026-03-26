@@ -32,7 +32,7 @@ From: nvidia/cuda:12.2.0-devel-ubuntu22.04
         && rm -rf /var/lib/apt/lists/*
 
     echo "=== Cloning llama.cpp ==="
-    git clone https://github.com/ggerganov/llama.cpp /opt/llama.cpp
+    git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp
     cd /opt/llama.cpp
 
     # Checkout specific version if not HEAD

@@ -125,7 +125,11 @@ apptainer run --nv \
     --ctx-size "$CTX_SIZE" \
     --n-gpu-layers 99 \
     --threads "$THREADS" \
-    --flash-attn auto \
+    --flash-attn \
+    --batch-size 2048 \
+    --ubatch-size 2048 \
+    --cache-type-k q8_0 \
+    --cache-type-v q8_0 \
     --temp 0.7 \
     --top-p 0.9 \
     --min-p 0.01 \

@@ -68,6 +68,13 @@ pub struct WorkOrder {
     /// Current iteration number (0-based). Enables retry-aware behavior.
     #[serde(default)]
     pub iteration: usize,
+    /// Optional sprint contract agreed with the evaluator before implementation.
+    ///
+    /// When present, both the coder prompt and reviewer receive the contract
+    /// as a shared "done criteria" reference, aligning expectations before
+    /// any code is written.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sprint_contract: Option<SprintContract>,
 }
 
 impl WorkOrder {
@@ -89,6 +96,7 @@ impl WorkOrder {
             context: WorkContext::default(),
             worker_tier: None,
             iteration: 0,
+            sprint_contract: None,
         }
     }
 
@@ -139,6 +147,105 @@ impl WorkOrder {
         self.iteration = iter;
         self
     }
+
+    /// Attach a sprint contract to this work order.
+    pub fn sprint_contract(mut self, contract: SprintContract) -> Self {
+        self.sprint_contract = Some(contract);
+        self
+    }
+}
+
+/// A sprint contract negotiated before the first implementation iteration.
+///
+/// Before any code is written, the manager proposes what will be built and how
+/// it will be verified. The evaluator (reviewer) validates the contract is
+/// testable and specific. The agreed contract is then embedded in all
+/// `WorkOrder` instances for the issue, aligning both the coder and reviewer on
+/// shared expectations — a key pattern from Anthropic's harness design article.
+///
+/// The contract is stored at `.swarm/sprint-contracts.jsonl` in the worktree.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SprintContract {
+    /// Issue ID this contract applies to.
+    pub issue_id: String,
+    /// What will be built (scope statement).
+    pub scope: String,
+    /// Observable, verifiable conditions that must be true for the sprint to be
+    /// considered done. Each entry should be independently verifiable.
+    pub done_criteria: Vec<String>,
+    /// Work explicitly excluded from this sprint to avoid scope creep.
+    pub out_of_scope: Vec<String>,
+    /// Specific `cargo test` expectations (e.g., "test_parser_handles_eof passes").
+    pub test_expectations: Vec<String>,
+    /// Whether the evaluator agent has agreed to the contract terms.
+    pub agreed: bool,
+    /// How many negotiation rounds were needed to reach agreement.
+    pub negotiation_rounds: u8,
+}
+
+impl SprintContract {
+    pub fn new(issue_id: impl Into<String>, scope: impl Into<String>) -> Self {
+        Self {
+            issue_id: issue_id.into(),
+            scope: scope.into(),
+            done_criteria: Vec::new(),
+            out_of_scope: Vec::new(),
+            test_expectations: Vec::new(),
+            agreed: false,
+            negotiation_rounds: 0,
+        }
+    }
+
+    /// Add a done criterion.
+    pub fn with_criterion(mut self, criterion: impl Into<String>) -> Self {
+        self.done_criteria.push(criterion.into());
+        self
+    }
+
+    /// Mark out-of-scope to prevent scope creep.
+    pub fn exclude(mut self, item: impl Into<String>) -> Self {
+        self.out_of_scope.push(item.into());
+        self
+    }
+
+    /// Mark the contract as agreed.
+    pub fn agree(mut self) -> Self {
+        self.agreed = true;
+        self
+    }
+
+    /// Render the contract as a prompt section injected into both
+    /// coder and reviewer preambles.
+    pub fn to_prompt_section(&self) -> String {
+        let mut out = String::from("## Sprint Contract\n");
+        out.push_str(&format!("**Scope:** {}\n\n", self.scope));
+
+        if !self.done_criteria.is_empty() {
+            out.push_str("**Done when:**\n");
+            for c in &self.done_criteria {
+                out.push_str(&format!("- {c}\n"));
+            }
+            out.push('\n');
+        }
+
+        if !self.out_of_scope.is_empty() {
+            out.push_str("**Out of scope:**\n");
+            for item in &self.out_of_scope {
+                out.push_str(&format!("- {item}\n"));
+            }
+            out.push('\n');
+        }
+
+        if !self.test_expectations.is_empty() {
+            out.push_str("**Test expectations:**\n");
+            for t in &self.test_expectations {
+                out.push_str(&format!("- `{t}`\n"));
+            }
+            out.push('\n');
+        }
+
+        out
+    }
 }
 
 /// What "done" means — the verification contract.
@@ -156,6 +263,40 @@ pub enum DoneCriteria {
     PatternRemoved { pattern: String },
     /// Custom verification command succeeds (exit code 0).
     Custom { command: String },
+}
+
+/// A structured record of an approach that was tried and failed within the
+/// current session.
+///
+/// Populated by the orchestrator after each failed iteration and injected
+/// into the next worker prompt as a "What We've Tried" section. This
+/// prevents workers from re-attempting approaches that are already known
+/// to fail — a key pattern from Anthropic's harness design article.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FailedApproach {
+    /// Iteration number (1-indexed) when this approach was attempted.
+    pub iteration: usize,
+    /// Short description of what was attempted (1–2 sentences).
+    pub summary: String,
+    /// The concrete error or reviewer feedback explaining why it failed.
+    pub error_output: String,
+    /// Blake3 digest of the diff content; used to detect if the agent
+    /// is about to repeat an identical approach without noticing.
+    pub approach_digest: String,
+}
+
+impl FailedApproach {
+    pub fn new(iteration: usize, summary: impl Into<String>, error_output: impl Into<String>) -> Self {
+        let summary = summary.into();
+        let error = error_output.into();
+        let digest = blake3::hash(format!("{summary}{error}").as_bytes()).to_hex().to_string();
+        Self {
+            iteration,
+            summary,
+            error_output: error,
+            approach_digest: digest,
+        }
+    }
 }
 
 /// Contextual information to help the worker understand the task.
@@ -176,6 +317,13 @@ pub struct WorkContext {
     /// Summary of previous attempts (what was tried and why it failed).
     #[serde(default)]
     pub previous_attempts: Vec<String>,
+    /// Structured records of failed approaches within this session.
+    ///
+    /// These are injected into the worker prompt as a "What We've Tried"
+    /// section. The digest field lets the orchestrator detect identical
+    /// re-attempts before they are dispatched.
+    #[serde(default)]
+    pub failed_approaches: Vec<FailedApproach>,
     /// Reviewer/validator feedback from previous iterations (TextGrad).
     #[serde(default)]
     pub reviewer_feedback: Vec<String>,

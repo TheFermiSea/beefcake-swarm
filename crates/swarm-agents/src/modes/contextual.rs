@@ -40,6 +40,7 @@ use rig::completion::{Chat, Message};
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use crate::confidence::detect_context_anxiety;
 use crate::modes::{
     errors::OrchestrationError,
     provider_config::ModeRunnerConfig,
@@ -200,6 +201,21 @@ impl ContextualRunner {
 
         self.push_history(Message::user(task_prompt.clone()));
         self.push_history(Message::assistant(response.clone()));
+
+        // Detect context anxiety — premature wrap-up before the task is done.
+        // If detected, trigger early compaction so the next draft starts fresh
+        // rather than letting the agent produce incomplete work.
+        if detect_context_anxiety(&response) {
+            warn!(
+                iteration,
+                "Context anxiety detected — triggering proactive compaction"
+            );
+            return Ok(ContextualState::Condensing {
+                resume_task_prompt: task_prompt,
+                resume_iteration: iteration + 1,
+                compression_reason: "context anxiety detected in generator response".to_string(),
+            });
+        }
 
         let artifact = Artifact::new(response)
             .with_language("rust")

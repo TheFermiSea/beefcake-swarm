@@ -398,14 +398,15 @@ SERVER_ARGS=(
     --tensor-split 1,1
     --n-gpu-layers 80
     --threads "$THREADS"
+    --flash-attn
     --cont-batching
     --metrics
     # Quantized KV cache (q4_0) - fits in VRAM with model across 64GB total
     --cache-type-k q4_0
     --cache-type-v q4_0
-    # Batch sizes optimized for network round-trip efficiency
-    --batch-size 512
-    --ubatch-size 512
+    # Batch sizes optimized for V100S with Flash Attention
+    --batch-size 2048
+    --ubatch-size 2048
     # Lock model in memory to prevent swapping during long inference
     --mlock
     # Single slot for maximum context per request

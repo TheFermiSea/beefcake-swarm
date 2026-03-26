@@ -14,7 +14,7 @@ Rig agents → git worktree isolation → Beads tracking → SLURM dispatch
 Cloud Manager (Opus 4.6 via CLIAPIProxy)
     → cloud fallback: Opus 4.6 → Gemini 3.1 Pro → Sonnet 4.6 → Flash Lite
     → delegates to local workers:
-        - Scout (Qwen3.5-27B-Opus-Distilled, 65K ctx on vasp-03)
+        - Scout (Qwen3-Coder-Next, 65K ctx on vasp-03)
         - Coder (Qwen3.5-122B-A10B MoE, 65K ctx on vasp-01)
         - Reasoning (Qwen3.5-122B-A10B MoE, 65K ctx on vasp-02)
     → runs verifier after each worker completes (multi-language)

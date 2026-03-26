@@ -80,29 +80,29 @@ if [[ "$BUILD_LOCAL" == "true" ]]; then
     do_build "$BUILD_DIR"
     OUTPUT="${BUILD_DIR}/${CONTAINER_NAME}"
 else
-    # Build on slurm-ctl
-    echo "Building on slurm-ctl..."
+    # Build on vasp-01
+    echo "Building on vasp-01..."
 
-    # Copy definition file to slurm-ctl
-    ssh slurm-ctl "mkdir -p /tmp/llama-build"
-    scp "${DEF_FILE}" slurm-ctl:/tmp/llama-build/
+    # Copy definition file to vasp-01
+    ssh vasp-01 "mkdir -p /tmp/llama-build"
+    scp "${DEF_FILE}" vasp-01:/tmp/llama-build/
 
-    # Run build on slurm-ctl
-    ssh slurm-ctl "cd /tmp/llama-build && apptainer build --fakeroot ${CONTAINER_NAME} llama-server.def"
+    # Run build on vasp-01
+    ssh vasp-01 "cd /tmp/llama-build && apptainer build ${CONTAINER_NAME} llama-server.def"
 
     # Copy result back or directly to shared
     if [[ "$PUSH" == "true" ]]; then
         echo "Moving container to ${CONTAINER_PATH}..."
-        ssh slurm-ctl "mv /tmp/llama-build/${CONTAINER_NAME} ${CONTAINER_PATH}"
+        ssh vasp-01 "mv /tmp/llama-build/${CONTAINER_NAME} ${CONTAINER_PATH}"
         OUTPUT="${CONTAINER_PATH}"
     else
         echo "Copying container back..."
-        scp slurm-ctl:/tmp/llama-build/${CONTAINER_NAME} "${SCRIPT_DIR}/"
+        scp vasp-01:/tmp/llama-build/${CONTAINER_NAME} "${SCRIPT_DIR}/"
         OUTPUT="${SCRIPT_DIR}/${CONTAINER_NAME}"
     fi
 
     # Cleanup
-    ssh slurm-ctl "rm -rf /tmp/llama-build"
+    ssh vasp-01 "rm -rf /tmp/llama-build"
 fi
 
 # Push if requested and not already pushed

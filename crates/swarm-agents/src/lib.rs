@@ -12,6 +12,7 @@ pub mod driver;
 pub mod endpoint_pool;
 pub mod file_targeting;
 pub mod git_ops;
+pub mod handoff;
 pub mod jsonl;
 pub mod kb_refresh;
 pub mod knowledge_sync;

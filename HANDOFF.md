@@ -82,10 +82,10 @@ if plan.subtasks.len() == 1 && config.cloud_available() {
 
 ### Infrastructure
 - **Inference Endpoints**: ✅ Online (as of 2026-03-12 ~11:30)
-  - Scout/Fast (Qwen3.5-27B-Opus-Distilled Q4_K_M): vasp-03:8081
+  - Scout/Fast (Qwen3-Coder-Next): vasp-03:8081
   - Coder (Qwen3.5-122B-A10B MoE): vasp-01:8081
   - Reasoning (Qwen3.5-122B-A10B MoE): vasp-02:8081
-  - Both responding to health checks: `curl -s http://10.0.0.22:8081/health` → `{"status":"ok"}`
+  - All responding to health checks: `curl -s http://10.0.0.22:8081/health` → `{"status":"ok"}`
 
 - **Cloud Proxy**: ✅ Running on ai-proxy (localhost:8317), CLIAPIProxy relay active
 

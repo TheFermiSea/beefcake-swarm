@@ -238,6 +238,47 @@ pub struct SessionMetrics {
     /// Format: `{issue_id}_{session_short_id}`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tensorzero_episode_id: Option<String>,
+    /// Per-session harness component trace for load-bearing audit.
+    ///
+    /// Which components fired and whether they caught real issues.
+    /// Use this over many sessions to identify components that are never
+    /// load-bearing and can be simplified away.
+    #[serde(default)]
+    pub harness_trace: HarnessComponentTrace,
+}
+
+/// Per-session record of which harness components fired and whether they
+/// contributed to quality.
+///
+/// Over many sessions this reveals which components are genuinely load-bearing
+/// (see Anthropic's harness-design article: "periodically audit each assumption").
+/// A component showing `fired: true, caught_issue: false` over N sessions is
+/// a candidate for removal or reformulation.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct HarnessComponentTrace {
+    /// Whether the blind reviewer ran on this session.
+    pub reviewer_fired: bool,
+    /// Reviewer said FAIL where verifier said PASS — i.e., reviewer caught
+    /// a quality issue the verifier missed.
+    pub reviewer_caught_issue: bool,
+    /// Whether the adversary red-team agent ran.
+    pub adversary_fired: bool,
+    /// Adversary found an issue (generated a failing test case or security concern).
+    pub adversary_caught_issue: bool,
+    /// Whether the planner ran an acceptance-criteria generation step.
+    pub planner_fired: bool,
+    /// Whether a sprint contract was negotiated and used.
+    pub sprint_contract_used: bool,
+    /// Whether a pivot (strategy change) was triggered mid-session.
+    pub pivot_triggered: bool,
+    /// Whether a context reset (clean-slate handoff) was triggered.
+    pub context_reset_triggered: bool,
+    /// How many intra-session dead-end records were injected into prompts.
+    pub dead_end_injection_count: u32,
+    /// Whether context anxiety was detected (proactive reset signal).
+    pub context_anxiety_detected: bool,
+    /// Reviewer leniency flags raised (non-zero = reviewer may have been too lenient).
+    pub reviewer_leniency_flag_count: u32,
 }
 
 /// Result of a single cloud validation call.
@@ -265,6 +306,7 @@ pub struct MetricsCollector {
     adapter_id: Option<String>,
     role_map_version: String,
     tensorzero_episode_id: Option<String>,
+    harness_trace: HarnessComponentTrace,
 }
 
 /// In-flight state for the current iteration.
@@ -314,6 +356,7 @@ impl MetricsCollector {
             adapter_id,
             role_map_version: role_map_version.to_string(),
             tensorzero_episode_id: None,
+            harness_trace: HarnessComponentTrace::default(),
         }
     }
 
@@ -329,6 +372,53 @@ impl MetricsCollector {
     /// Get the TensorZero episode ID, if set.
     pub fn episode_id(&self) -> Option<&str> {
         self.tensorzero_episode_id.as_deref()
+    }
+
+    /// Record a harness component event.
+    ///
+    /// Call these at the point the component fires. The trace is accumulated
+    /// throughout the session and written into `SessionMetrics.harness_trace`
+    /// on `finalize()`.
+    pub fn record_reviewer_fired(&mut self, caught_issue: bool) {
+        self.harness_trace.reviewer_fired = true;
+        if caught_issue {
+            self.harness_trace.reviewer_caught_issue = true;
+        }
+    }
+
+    pub fn record_adversary_fired(&mut self, caught_issue: bool) {
+        self.harness_trace.adversary_fired = true;
+        if caught_issue {
+            self.harness_trace.adversary_caught_issue = true;
+        }
+    }
+
+    pub fn record_planner_fired(&mut self) {
+        self.harness_trace.planner_fired = true;
+    }
+
+    pub fn record_sprint_contract_used(&mut self) {
+        self.harness_trace.sprint_contract_used = true;
+    }
+
+    pub fn record_pivot_triggered(&mut self) {
+        self.harness_trace.pivot_triggered = true;
+    }
+
+    pub fn record_context_reset(&mut self) {
+        self.harness_trace.context_reset_triggered = true;
+    }
+
+    pub fn record_context_anxiety(&mut self) {
+        self.harness_trace.context_anxiety_detected = true;
+    }
+
+    pub fn record_dead_end_injected(&mut self) {
+        self.harness_trace.dead_end_injection_count += 1;
+    }
+
+    pub fn record_reviewer_leniency_flags(&mut self, count: u32) {
+        self.harness_trace.reviewer_leniency_flag_count += count;
     }
 
     /// Begin tracking a new iteration.
@@ -596,6 +686,7 @@ impl MetricsCollector {
             write_by_turn_2,
             role_map_version: self.role_map_version,
             tensorzero_episode_id: self.tensorzero_episode_id,
+            harness_trace: self.harness_trace,
         }
     }
 }
@@ -1716,6 +1807,7 @@ mod tests {
             write_by_turn_2: false,
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
+            harness_trace: HarnessComponentTrace::default(),
         };
 
         write_session_metrics(&metrics, dir.path());
@@ -1754,6 +1846,7 @@ mod tests {
             write_by_turn_2: false,
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
+            harness_trace: HarnessComponentTrace::default(),
         };
         let metrics2 = SessionMetrics {
             session_id: "sess-2".into(),
@@ -1776,6 +1869,7 @@ mod tests {
             write_by_turn_2: false,
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
+            harness_trace: HarnessComponentTrace::default(),
         };
 
         append_telemetry(&metrics1, dir.path());
@@ -1820,6 +1914,7 @@ mod tests {
             write_by_turn_2: false,
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
+            harness_trace: HarnessComponentTrace::default(),
         };
         metrics1.iterations.push(IterationMetrics {
             iteration: 1,
@@ -1885,6 +1980,7 @@ mod tests {
             write_by_turn_2: false,
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
+            harness_trace: HarnessComponentTrace::default(),
         };
         metrics2.iterations.push(IterationMetrics {
             iteration: 1,
@@ -2068,6 +2164,7 @@ mod tests {
             write_by_turn_2: false,
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
+            harness_trace: HarnessComponentTrace::default(),
         }
     }
 
@@ -2473,6 +2570,7 @@ mod tests {
             write_by_turn_2: false,
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
+            harness_trace: HarnessComponentTrace::default(),
         };
 
         write_execution_artifacts(&metrics, dir.path(), None);

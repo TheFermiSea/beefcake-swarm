@@ -19,12 +19,14 @@
 //! model-specific implementation without changing the manager.
 
 use std::collections::VecDeque;
+use std::path::PathBuf;
 
 use async_trait::async_trait;
 use rig::client::CompletionClient;
 use rig::completion::{Message, Prompt};
 use tracing::{debug, info};
 
+use crate::handoff::{write_handoff, SessionHandoff};
 use crate::modes::{
     errors::OrchestrationError,
     provider_config::{CompactionConfig, ModeRunnerConfig},
@@ -114,6 +116,10 @@ pub struct MemoryManager {
     compaction_count: u32,
     /// Number of tail messages to keep after compaction.
     tail_keep: usize,
+    /// Issue ID for structured handoff artifacts; may be absent in unit tests.
+    pub issue_id: Option<String>,
+    /// Worktree root path for writing handoff files; may be absent in unit tests.
+    pub wt_path: Option<PathBuf>,
 }
 
 impl MemoryManager {
@@ -128,6 +134,8 @@ impl MemoryManager {
             total_compacted: 0,
             compaction_count: 0,
             tail_keep: 4,
+            issue_id: None,
+            wt_path: None,
         }
     }
 
@@ -146,12 +154,25 @@ impl MemoryManager {
             total_compacted: 0,
             compaction_count: 0,
             tail_keep: 4,
+            issue_id: None,
+            wt_path: None,
         }
     }
 
     /// Set how many tail messages are preserved intact during compaction.
     pub fn with_tail_keep(mut self, n: usize) -> Self {
         self.tail_keep = n;
+        self
+    }
+
+    /// Associate an issue ID and worktree path for structured handoff generation.
+    ///
+    /// When set, each compaction also writes a `SessionHandoff` to
+    /// `.swarm/session-handoff.{json,md}` in the worktree so a fresh
+    /// agent context can recover state without re-reading the full history.
+    pub fn with_issue_context(mut self, issue_id: impl Into<String>, wt_path: PathBuf) -> Self {
+        self.issue_id = Some(issue_id.into());
+        self.wt_path = Some(wt_path);
         self
     }
 
@@ -252,6 +273,22 @@ impl MemoryManager {
             ratio = format!("{:.2}", summary.compression_ratio()),
             "compaction complete"
         );
+
+        // Write structured session handoff artifact when context is available.
+        // This allows a fresh agent (after a full context reset) to recover state
+        // from `.swarm/session-handoff.md` rather than re-reading raw history.
+        if let (Some(ref issue_id), Some(ref wt_path)) = (&self.issue_id, &self.wt_path) {
+            let handoff = SessionHandoff::new(issue_id)
+                .with_state(&summary.summary)
+                .with_next_step("Resume from the summary above — continue the implementation")
+                .with_reset_number(self.compaction_count);
+
+            write_handoff(&handoff, wt_path);
+            info!(
+                reset = self.compaction_count,
+                "Session handoff written to .swarm/"
+            );
+        }
 
         Ok(summary)
     }

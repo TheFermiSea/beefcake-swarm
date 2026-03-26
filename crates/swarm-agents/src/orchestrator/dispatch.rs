@@ -101,7 +101,8 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
     }
 
     if !packet.previous_attempts.is_empty() {
-        prompt.push_str("## Previous Attempts (avoid repeating these)\n");
+        prompt.push_str("## What We've Already Tried (do NOT repeat these)\n");
+        prompt.push_str("These approaches were attempted and failed. Do not repeat them:\n");
         for attempt in &packet.previous_attempts {
             prompt.push_str(&format!("- {attempt}\n"));
         }

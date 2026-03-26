@@ -78,27 +78,30 @@ This project uses **bd** (beads) for issues.
 ---
 
 ## Inference Endpoints
-Computational tasks MUST go through SLURM. Do not run workloads directly on compute nodes.
+Computational tasks MUST go through SLURM or established independent instances. Do not run workloads directly on compute nodes.
 
 | Tier | Endpoint | Model | Role |
 |------|----------|-------|------|
-| **Fast (14B)** | `http://vasp-02:8080` | `strand-rust-coder-14b` | Mechanic: Fast Rust-specific fixes |
-| **Coder (80B)** | `http://vasp-02:8080` | `Qwen3-Coder-Next` | Implementer: Multi-file changes |
-| **Reasoning (72B)** | `http://vasp-01:8081` | `or1-behemoth` | Architect: Complex reasoning |
+| **Fast (Scout)** | `http://vasp-03:8081` | `Qwen3-Coder-Next` | Scout, Reviewer, Fixer (Fast Rust-specific fixes) |
+| **Coder** | `http://vasp-01:8081` | `Qwen3.5-122B-A10B` | Implementer: Multi-file changes |
+| **Reasoning** | `http://vasp-02:8081` | `Qwen3.5-122B-A10B` | Architect: Complex reasoning, planning |
 
 ---
 
 ## Cluster Access
-- **slurm-ctl (10.0.0.5):** Controller, NFS server.
-- **vasp-01 (10.0.0.20):** GPU node (72B head).
-- **vasp-02 (10.0.0.21):** GPU node (14B fast).
-- **vasp-03 (10.0.0.22):** GPU node (72B RPC worker).
-- **ai-proxy (100.105.113.58):** External gateway.
+- **slurm-ctl (10.0.0.5):** Controller, NFS server (VM 500 on pve1).
+- **vasp-01 (10.0.0.20):** GPU node (122B Coder).
+- **vasp-02 (10.0.0.21):** GPU node (122B Reasoning).
+- **vasp-03 (10.0.0.22):** GPU node (Fast/Scout).
+- **ai-proxy (100.105.113.58):** External gateway, Swarm Orchestrator host.
+  - User `brian` for code work and running the swarm.
+  - `CLIAPIProxy` on port 8317.
+  - `TensorZero` on port 3000.
 
 ---
 
 ## Known Issues & Notes
-- **Claude Code as Root:** The Claude Code CLI (`claude -p`) enforces security restrictions and will refuse to run with the `--dangerously-skip-permissions` flag when executed as the `root` user or with `sudo`. To run automated tasks, use a non-root user (e.g., `squires` created on `ai-proxy`).
+- **Claude Code as Root:** The Claude Code CLI (`claude -p`) enforces security restrictions and will refuse to run with the `--dangerously-skip-permissions` flag when executed as the `root` user or with `sudo`. To run automated tasks, use a non-root user (e.g., `brian` on `ai-proxy`).
 - **Test Imports:** Some integration tests in `coordination/tests/` have unresolved crate imports (referencing `rust_cluster_mcp` instead of `coordination`).
 - **Dead Code:** `crates/swarm-agents/` contains structs/methods for Phase 2 that are not yet wired up.
 - **NFS Layout:** Shared binaries, scripts, and endpoints are located in `/cluster/shared/`.

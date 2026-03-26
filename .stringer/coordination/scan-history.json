@@ -244,6 +244,43 @@
         "unused-function": 9,
         "vulnerable-dependency": 11
       }
+    },
+    {
+      "timestamp": "2026-03-26T13:10:19.984578Z",
+      "git_head": "665564b5978ef0d2354eba411061f648c9a87e99",
+      "total_signals": 847,
+      "collector_counts": {
+        "apidrift": 0,
+        "complexity": 104,
+        "configdrift": 0,
+        "coupling": 4,
+        "deadcode": 181,
+        "dephealth": 0,
+        "docstale": 0,
+        "duplication": 200,
+        "github": 0,
+        "githygiene": 0,
+        "gitlog": 66,
+        "lotteryrisk": 0,
+        "patterns": 19,
+        "todos": 3,
+        "vuln": 1
+      },
+      "kind_counts": {
+        "churn": 132,
+        "circular-dependency": 3,
+        "code-clone": 127,
+        "complex-function": 117,
+        "high-coupling": 2,
+        "large-file": 9,
+        "low-test-ratio": 20,
+        "missing-tests": 28,
+        "near-clone": 258,
+        "todo": 3,
+        "unused-function": 136,
+        "unused-type": 1,
+        "vulnerable-dependency": 11
+      }
     }
   ]
 }

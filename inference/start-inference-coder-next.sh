@@ -7,6 +7,7 @@ export HOME=/tmp CUDA_CACHE_PATH=/tmp/cuda-cache GGML_CUDA_DISABLE_FUSION=1
 pkill -9 llama-server-mmq 2>/dev/null || true
 sleep 2
 
+# Start server with Flash Attention (native support on V100S/Volta via llama.cpp GGML kernels)
 nohup numactl --interleave=all /usr/local/bin/llama-server-mmq \
   --model /scratch/ai/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf \
   --alias Qwen3-Coder-Next \

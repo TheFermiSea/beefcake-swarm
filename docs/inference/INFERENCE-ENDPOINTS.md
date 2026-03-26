@@ -28,7 +28,7 @@ curl -sf http://vasp-02:8081/v1/chat/completions ...
 
 | Tier | Endpoint | Hardware | Model | Throughput |
 |------|----------|----------|-------|------------|
-| **Scout / Fast** | `http://vasp-03:8081` | V100S 32GB (VRAM-resident) | Qwen3.5-27B-Opus-Distilled Q4_K_M | ~34 tok/s |
+| **Scout / Fast** | `http://vasp-03:8081` | V100S 32GB (expert-offload) | Qwen3-Coder-Next | TBD |
 | **Coder** | `http://vasp-01:8081` | V100S 32GB (expert-offload) | Qwen3.5-122B-A10B MoE | ~5-8 tok/s |
 | **Reasoning** | `http://vasp-02:8081` | V100S 32GB (expert-offload) | Qwen3.5-122B-A10B MoE | ~5-8 tok/s |
 
@@ -36,11 +36,10 @@ curl -sf http://vasp-02:8081/v1/chat/completions ...
 
 ### Scout / Fast Tier (Specialized Reliability)
 
-- **Model**: `Qwen3.5-27B-Opus-Distilled` (Q4_K_M quantization)
-- **Rationale**: Distilled from Claude 4.6 Opus reasoning, this model solves the "Turn-Based Trap" where workers provide analysis but fail to call tools.
-- **Capacity**: VRAM-resident on a single V100S (32GB).
+- **Model**: `Qwen3-Coder-Next` (80B/3B MoE)
+- **Rationale**: Replaces the 27B-Opus-Distilled. Optimized for tool-calling and fast Rust repairs.
+- **Capacity**: Expert-offload (FFN on CPU, attention on GPU) on vasp-03.
 - **Context**: 65K tokens.
-- **Throughput**: ~34 tok/s.
 
 ### Coder Tier (Multi-File Integration)
 
