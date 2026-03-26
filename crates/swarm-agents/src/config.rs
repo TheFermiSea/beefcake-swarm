@@ -558,7 +558,8 @@ impl Default for SwarmConfig {
             .ok()
             .and_then(|s| s.parse().ok())
             .unwrap_or(0.0_f64);
-        let phase_selector = PhaseModelSelector::new(cloud_model_catalog.clone(), max_cost_per_issue);
+        let phase_selector =
+            PhaseModelSelector::new(cloud_model_catalog.clone(), max_cost_per_issue);
         Self {
             fast_endpoint: Endpoint {
                 url: std::env::var("SWARM_FAST_URL")
