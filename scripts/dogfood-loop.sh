@@ -647,7 +647,14 @@ else
       fi
     done
 
-    # Pool drained — cooldown before next discover cycle
+    # Pool drained — seed new stringer issues then cooldown before next discover cycle
+    if [[ "$DISCOVER" -eq 1 ]]; then
+      STRINGER_SCRIPT="$SCRIPT_DIR/stringer-to-beads.sh"
+      if [[ -x "$STRINGER_SCRIPT" ]]; then
+        log "  [discover] Running stringer-to-beads.sh to seed backlog..."
+        bash "$STRINGER_SCRIPT" --max-new 30 2>&1 | grep -E '^\[stringer|Created|WARN' | sed 's/^/    /' || true
+      fi
+    fi
     log "  Pool drained. Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
 
