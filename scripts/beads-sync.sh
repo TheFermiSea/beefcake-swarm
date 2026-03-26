@@ -1,26 +1,32 @@
 #!/usr/bin/env bash
-# beads-sync.sh — Sync local beads dolt DB to ai-proxy
+# beads-sync.sh — Sync the active beads Dolt store to ai-proxy
 #
 # Usage:
 #   scripts/beads-sync.sh          # push local → ai-proxy
 #   scripts/beads-sync.sh pull     # pull ai-proxy → local
 #
-# The dolt server on the target machine must be stopped before rsync
-# overwrites the database files. bd's idle-monitor auto-stops the server
-# after inactivity, so this usually works. If it doesn't, the script
-# kills the idle-monitor first.
+# In shared-server mode, the authoritative Dolt data lives under
+# ~/.beads/shared-server/dolt on each machine, not under .beads/dolt in the repo.
+# Stop the shared server cleanly before rsync so it reloads the new files on restart.
 #
-# This script exists because bd and bdh use separate datastores:
-#   - bd: reads/writes local .beads/dolt/<database>/ (dolt SQL)
-#   - bdh: reads/writes BeadHub server (PostgreSQL)
-# The swarm binary (BeadsBridge) shells out to bd, so issues must
-# exist in the local dolt DB on ai-proxy for the swarm to find them.
+# This script exists because the swarm shells out to `bd`, and the shared-server
+# Dolt state must be present on ai-proxy for the swarm to see local issues.
 
 set -euo pipefail
 
 REMOTE_HOST="${BEADS_SYNC_HOST:-brian@100.105.113.58}"
-REMOTE_DIR="${BEADS_SYNC_DIR:-~/code/beefcake-swarm/.beads/dolt/}"
-LOCAL_DIR=".beads/dolt/"
+REMOTE_REPO_ROOT="${BEADS_SYNC_REPO_ROOT:-~/code/beefcake-swarm}"
+LOCAL_REPO_ROOT="$(pwd)"
+
+if grep -Eq '^dolt\.shared-server:\s*true$' .beads/config.yaml 2>/dev/null; then
+    LOCAL_DIR="${BEADS_SYNC_LOCAL_DIR:-$HOME/.beads/shared-server/dolt/}"
+    REMOTE_DIR="${BEADS_SYNC_DIR:-~/.beads/shared-server/dolt/}"
+    MODE_LABEL="shared-server"
+else
+    LOCAL_DIR="${BEADS_SYNC_LOCAL_DIR:-.beads/dolt/}"
+    REMOTE_DIR="${BEADS_SYNC_DIR:-$REMOTE_REPO_ROOT/.beads/dolt/}"
+    MODE_LABEL="embedded"
+fi
 
 if [[ ! -d "$LOCAL_DIR" ]]; then
     echo "Error: $LOCAL_DIR not found. Run from project root." >&2
@@ -31,18 +37,21 @@ direction="${1:-push}"
 
 case "$direction" in
     push)
-        echo "Syncing local dolt DB → $REMOTE_HOST"
-        # Stop dolt server on remote so it picks up new files on next start
-        ssh "$REMOTE_HOST" 'pkill -f "bd dolt idle-monitor" 2>/dev/null; pkill -f "dolt sql-server" 2>/dev/null; sleep 1' || true
+        echo "Syncing local Dolt store ($MODE_LABEL) → $REMOTE_HOST:$REMOTE_DIR"
+        if [[ "$MODE_LABEL" == "shared-server" ]]; then
+            ssh "$REMOTE_HOST" "cd $REMOTE_REPO_ROOT && bd dolt stop" || true
+        fi
         rsync -avz --delete "$LOCAL_DIR" "$REMOTE_HOST:$REMOTE_DIR" | tail -5
         echo "Done. Run 'bd show <id>' on ai-proxy to verify."
         ;;
     pull)
-        echo "Pulling dolt DB from $REMOTE_HOST → local"
-        # Stop local dolt server
-        pkill -f "bd dolt idle-monitor" 2>/dev/null || true
-        pkill -f "dolt sql-server" 2>/dev/null || true
-        sleep 1
+        echo "Pulling Dolt store ($MODE_LABEL) from $REMOTE_HOST:$REMOTE_DIR → $LOCAL_DIR"
+        if [[ "$MODE_LABEL" == "shared-server" ]]; then
+            (
+                cd "$LOCAL_REPO_ROOT"
+                bd dolt stop
+            ) || true
+        fi
         rsync -avz --delete "$REMOTE_HOST:$REMOTE_DIR" "$LOCAL_DIR" | tail -5
         echo "Done. Run 'bd show <id>' locally to verify."
         ;;
