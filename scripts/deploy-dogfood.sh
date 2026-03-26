@@ -20,6 +20,7 @@ set -euo pipefail
 
 PROXY_HOST="brian@100.105.113.58"
 REPO_DIR="~/code/beefcake-swarm"
+SHARED_TARGET_DIR="/tmp/beefcake-shared-target"
 DEFAULT_ISSUES="beefcake-s9pz beefcake-rt4g beefcake-8do8 beefcake-jljc beefcake-lf7s beefcake-uv3z beefcake-4ony"
 COOLDOWN=120
 STOP_ONLY=false
@@ -68,11 +69,13 @@ if $STOP_ONLY; then
 fi
 
 # ── Step 2: Pull + rebuild ──
-log "Pulling latest code and rebuilding..."
+# run-swarm.sh prefers the shared release binary, so deploy that exact artifact.
+log "Pulling latest code and rebuilding shared release binary..."
 ssh "$PROXY_HOST" "
   cd $REPO_DIR && \
   git pull --ff-only && \
-  cargo build -p swarm-agents 2>&1 | tail -3
+  CARGO_TARGET_DIR=$SHARED_TARGET_DIR cargo build -p swarm-agents --release && \
+  stat --format='release binary: %y %n' $SHARED_TARGET_DIR/release/swarm-agents
 "
 
 # ── Step 3: Start dogfood loop ──
