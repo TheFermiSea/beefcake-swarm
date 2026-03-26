@@ -34,6 +34,14 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEFAULT_STATE="$REPO_ROOT/docs/stringer/.imported-ids"
 
+# ── Exclusive lock — prevent concurrent imports corrupting the state file ──────
+LOCK_FILE="${TMPDIR:-/tmp}/stringer-to-beads.lock"
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  echo "[stringer-to-beads] Another instance is running (lock: $LOCK_FILE). Exiting." >&2
+  exit 0
+fi
+
 SCAN_FILE=""
 MAX_PRIORITY=3
 MAX_NEW=30
