@@ -266,10 +266,6 @@ mod tests {
         let results: Vec<BatchCallResult> = serde_json::from_str(&raw).unwrap();
 
         assert!(results[0].error.is_some());
-        assert!(results[0]
-            .error
-            .as_ref()
-            .unwrap()
-            .contains("unknown tool"));
+        assert!(results[0].error.as_ref().unwrap().contains("unknown tool"));
     }
 }

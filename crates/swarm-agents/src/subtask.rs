@@ -266,7 +266,8 @@ CRITICAL RULES:
 3. If the task fundamentally cannot be parallelized (e.g., all changes are in one
    file), return a plan with exactly 1 subtask.
 4. Keep subtask objectives specific and actionable — include exact file paths,
-   function names, and what to change.
+   function names, and what to change. Keep each objective under 500 words;
+   workers have read_file to explore details. Do NOT paste code into objectives.
 5. Use `context_files` for files a worker needs to READ but not modify.
 6. INTEGRATION FILES (package manifests like Cargo.toml/pyproject.toml, module
    init files like mod.rs/__init__.py, and entry points like main.rs/main.py)
@@ -736,9 +737,32 @@ async fn run_subtask_worker(
     );
 
     // Build task prompt.
+    // Cap the objective to avoid context overflow on local models (n_ctx=16384).
+    // Tool definitions (~3500 tok) + system prompt (~400 tok) consume ~4000 tokens
+    // before the user message is read, leaving ~12K tokens for the objective.
+    // 6000 chars ≈ 1500 tokens — keeps total well under 16384.
+    const MAX_OBJECTIVE_CHARS: usize = 6000;
+    let objective_str = if subtask.objective.len() > MAX_OBJECTIVE_CHARS {
+        tracing::warn!(
+            subtask_id = %subtask.id,
+            original_len = subtask.objective.len(),
+            cap = MAX_OBJECTIVE_CHARS,
+            "Subtask objective truncated to avoid context overflow"
+        );
+        let mut end = MAX_OBJECTIVE_CHARS;
+        while end > 0 && !subtask.objective.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!(
+            "{}... [truncated — see issue for full context]",
+            &subtask.objective[..end]
+        )
+    } else {
+        subtask.objective.clone()
+    };
     let task_prompt = format!(
         "Issue: {issue_id}\n\nSubtask: {}\n\nObjective: {}",
-        subtask.id, subtask.objective
+        subtask.id, objective_str
     );
 
     // Runtime adapter for budget tracking.
