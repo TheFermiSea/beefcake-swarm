@@ -1,14 +1,24 @@
 #!/bin/bash
-# Start Qwen3-Coder-Next on vasp-03 (80B/3B MoE, expert-offload)
-set -e
-export LD_LIBRARY_PATH=/usr/local/lib:/usr/local/cuda-unified/lib64:/opt/rh/gcc-toolset-13/root/usr/lib64
-export HOME=/tmp CUDA_CACHE_PATH=/tmp/cuda-cache GGML_CUDA_DISABLE_FUSION=1
+# Start Qwen3-Coder-Next from the shared Apptainer image on vasp-03.
+set -euo pipefail
 
-pkill -9 llama-server-mmq 2>/dev/null || true
-sleep 2
+CONTAINER="${CONTAINER:-/cluster/shared/containers/llama-server.sif}"
+LOG_PATH="${LOG_PATH:-/tmp/llama-inference.log}"
 
-# Start server with Flash Attention (native support on V100S/Volta via llama.cpp GGML kernels)
-nohup numactl --interleave=all /usr/local/bin/llama-server-mmq \
+command -v apptainer >/dev/null
+mkdir -p /tmp/cuda-cache
+
+export APPTAINERENV_HOME=/tmp
+export APPTAINERENV_CUDA_CACHE_PATH=/tmp/cuda-cache
+export APPTAINERENV_GGML_CUDA_DISABLE_FUSION=1
+
+existing_pids="$(ps -eo pid=,args= | awk '/(llama-server-mmq|apptainer .*llama-server\.sif|\/usr\/local\/bin\/llama-server)( |$)/ { print $1 }')"
+if [[ -n "${existing_pids}" ]]; then
+  kill ${existing_pids} 2>/dev/null || true
+  sleep 2
+fi
+
+nohup numactl --interleave=all apptainer run --nv --bind /scratch/ai:/scratch/ai:ro "${CONTAINER}" \
   --model /scratch/ai/models/Qwen3-Coder-Next-UD-Q4_K_XL.gguf \
   --alias Qwen3-Coder-Next \
   --host 0.0.0.0 --port 8081 \
@@ -17,6 +27,6 @@ nohup numactl --interleave=all /usr/local/bin/llama-server-mmq \
   --threads 32 --batch-size 4096 --ubatch-size 4096 \
   --cache-type-k q4_0 --cache-type-v q4_0 \
   --cache-prompt -fa on --parallel 4 --mlock --cont-batching --metrics --jinja \
-  > /tmp/llama-inference.log 2>&1 &
+  > "${LOG_PATH}" 2>&1 &
 
-echo "Started Qwen3-Coder-Next PID=$!"
+echo "Started Qwen3-Coder-Next PID=$! container=${CONTAINER}"

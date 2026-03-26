@@ -1,13 +1,24 @@
 #!/bin/bash
-# Start Qwen3.5-122B-A10B on vasp-01 (MoE coder, expert-offload)
-set -e
-export LD_LIBRARY_PATH=/usr/local/lib:/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/REDIST/cuda/12.6/targets/x86_64-linux/lib:/opt/nvidia/hpc_sdk/Linux_x86_64/24.11/REDIST/math_libs/12.6/targets/x86_64-linux/lib:/opt/rh/gcc-toolset-13/root/usr/lib64
-export HOME=/tmp CUDA_CACHE_PATH=/tmp/cuda-cache GGML_CUDA_DISABLE_FUSION=1
+# Start Qwen3.5-122B-A10B from the shared Apptainer image on vasp-01/02.
+set -euo pipefail
 
-pkill -9 llama-server-mmq 2>/dev/null || true
-sleep 2
+CONTAINER="${CONTAINER:-/cluster/shared/containers/llama-server.sif}"
+LOG_PATH="${LOG_PATH:-/tmp/llama-inference.log}"
 
-nohup numactl --interleave=all /usr/local/bin/llama-server-mmq \
+command -v apptainer >/dev/null
+mkdir -p /tmp/cuda-cache
+
+export APPTAINERENV_HOME=/tmp
+export APPTAINERENV_CUDA_CACHE_PATH=/tmp/cuda-cache
+export APPTAINERENV_GGML_CUDA_DISABLE_FUSION=1
+
+existing_pids="$(ps -eo pid=,args= | awk '/(llama-server-mmq|apptainer .*llama-server\.sif|\/usr\/local\/bin\/llama-server)( |$)/ { print $1 }')"
+if [[ -n "${existing_pids}" ]]; then
+  kill ${existing_pids} 2>/dev/null || true
+  sleep 2
+fi
+
+nohup numactl --interleave=all apptainer run --nv --bind /scratch/ai:/scratch/ai:ro "${CONTAINER}" \
   --model /scratch/ai/models/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf \
   --alias Qwen3.5-122B-A10B \
   --host 0.0.0.0 --port 8081 \
@@ -16,6 +27,6 @@ nohup numactl --interleave=all /usr/local/bin/llama-server-mmq \
   --threads 32 --batch-size 4096 --ubatch-size 4096 \
   --cache-type-k q4_0 --cache-type-v q4_0 \
   --cache-prompt -fa on --parallel 4 --mlock --cont-batching --metrics --jinja \
-  > /tmp/llama-inference.log 2>&1 &
+  > "${LOG_PATH}" 2>&1 &
 
-echo "Started Qwen3.5-122B-A10B PID=$!"
+echo "Started Qwen3.5-122B-A10B PID=$! container=${CONTAINER}"
