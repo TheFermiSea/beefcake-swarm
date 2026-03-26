@@ -125,6 +125,55 @@ async fn run_verifier_opts(
     verifier.run_pipeline().await
 }
 
+fn report_has_baseline_regression(baseline: &VerifierReport, current: &VerifierReport) -> bool {
+    use coordination::verifier::report::GateOutcome;
+
+    let baseline_failures: std::collections::HashMap<&str, usize> = baseline
+        .gates
+        .iter()
+        .filter_map(|gate| {
+            if gate.outcome == GateOutcome::Failed {
+                Some((gate.gate.as_str(), gate.error_count))
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    current.gates.iter().any(|gate| {
+        if gate.outcome != GateOutcome::Failed {
+            return false;
+        }
+        match baseline_failures.get(gate.gate.as_str()) {
+            Some(previous_errors) => gate.error_count > *previous_errors,
+            None => true,
+        }
+    })
+}
+
+fn report_improves_on_baseline(
+    baseline: &VerifierReport,
+    current: &VerifierReport,
+    min_error_delta: usize,
+) -> bool {
+    use coordination::verifier::report::GateOutcome;
+
+    let baseline_failed_gates = baseline
+        .gates
+        .iter()
+        .filter(|gate| gate.outcome == GateOutcome::Failed)
+        .count();
+    let current_failed_gates = current
+        .gates
+        .iter()
+        .filter(|gate| gate.outcome == GateOutcome::Failed)
+        .count();
+
+    current.failure_signals.len() + min_error_delta < baseline.failure_signals.len()
+        || current_failed_gates < baseline_failed_gates
+        || current.gates_passed > baseline.gates_passed
+}
+
 /// Process a single issue through the implement → verify → review → escalate loop.
 ///
 /// Integrates coordination's harness for:
@@ -598,6 +647,7 @@ async fn process_issue_core(
         );
     let mut success = false;
     let mut last_report: Option<VerifierReport> = None;
+    let mut baseline_report: Option<VerifierReport> = None;
     let mut last_validator_feedback: Vec<ValidatorFeedback> = Vec::new();
     let mut span_summary = SpanSummary::new();
     let mut consecutive_validator_failures: u32 = 0;
@@ -807,7 +857,6 @@ async fn process_issue_core(
                         id = %issue.id,
                         "All subtasks failed — escalating to Council for sequential retry"
                     );
-                    last_report = None;
                     // Concurrent workers already failed — don't waste iterations retrying
                     // at Worker tier. Force escalation to Council so the cloud manager
                     // can tackle it directly.
@@ -960,7 +1009,6 @@ async fn process_issue_core(
                                 summary = %report2.summary(),
                                 "Fixer post-pass: verifier still FAILED — falling through to retry loop"
                             );
-                            last_report = Some(report2);
                         }
                         Err(e) => {
                             warn!(
@@ -968,7 +1016,6 @@ async fn process_issue_core(
                                 error = %e,
                                 "Serial fixer post-pass failed — falling through to retry loop"
                             );
-                            last_report = Some(report);
                         }
                     }
                 } // end if let Some(report)
@@ -1013,44 +1060,42 @@ async fn process_issue_core(
             check_test: false, // Skip tests — worktree env can cause false failures
             ..verifier_config.clone()
         };
-        let baseline_report =
+        let baseline_result =
             run_verifier_opts(&wt_path, &baseline_config, &language_profile, true).await;
-        let gates_passed = baseline_report
+        let gates_passed = baseline_result
             .gates
             .iter()
             .filter(|g| g.outcome == coordination::verifier::report::GateOutcome::Passed)
             .count();
-        let gates_total = baseline_report.gates.len();
+        let gates_total = baseline_result.gates.len();
 
-        if !baseline_report.all_green {
-            let baseline_summary = baseline_report.summary();
+        if !baseline_result.all_green {
+            let baseline_summary = baseline_result.summary();
             warn!(
                 id = %issue.id,
                 gates_passed,
                 gates_total,
                 summary = %baseline_summary,
-                "Baseline verification FAILED — worktree does not compile/pass tests before agent modifications. \
-                 Skipping issue to avoid wasting iterations on pre-existing failures."
+                "Baseline verification FAILED — proceeding in improvement mode so pre-existing failures \
+                 do not block issue progress."
             );
-            let _ = beads.update_status(&issue.id, "open");
             let _ = progress.log_error(
                 session.session_id(),
                 0,
                 format!("Baseline failed: {baseline_summary}"),
             );
-            // Clean up worktree
-            if let Err(e) = worktree_bridge.cleanup(&issue.id) {
-                warn!(id = %issue.id, error = %e, "Failed to clean up worktree after baseline failure");
-            }
-            return Ok(false);
+        } else {
+            info!(
+                id = %issue.id,
+                gates_passed,
+                gates_total,
+                "Baseline verification PASSED — worktree is clean before agent starts"
+            );
         }
 
-        info!(
-            id = %issue.id,
-            gates_passed,
-            gates_total,
-            "Baseline verification PASSED — worktree is clean before agent starts"
-        );
+        best_error_count.get_or_insert(baseline_result.failure_signals.len());
+        last_report.get_or_insert_with(|| baseline_result.clone());
+        baseline_report.get_or_insert(baseline_result);
     }
 
     // --- Archive-informed context (Phase 4b: UCB model insights) ---
@@ -2599,6 +2644,37 @@ async fn process_issue_core(
             }
         }
 
+        // --- Dirty-baseline acceptance ---
+        // If the repo was already failing before the agent touched it, accept
+        // changes that measurably improve the verifier outcome without
+        // introducing any new failing gates. This lets the swarm make progress
+        // on unrelated issues in a dirty tree.
+        if !report.all_green && agent_has_written_prev {
+            if let Some(baseline) = baseline_report.as_ref().filter(|r| !r.all_green) {
+                let improved = report_improves_on_baseline(baseline, &report, min_error_delta);
+                let regressed = report_has_baseline_regression(baseline, &report);
+                if improved && !regressed {
+                    info!(
+                        iteration,
+                        baseline_errors = baseline.failure_signals.len(),
+                        current_errors = error_count,
+                        baseline_gates_passed = baseline.gates_passed,
+                        current_gates_passed = report.gates_passed,
+                        "Dirty-baseline acceptance: verifier improved without new gate regressions. Accepting."
+                    );
+
+                    escalation.record_iteration(
+                        error_cats.clone(),
+                        error_count,
+                        true,
+                        report.reward_score,
+                    );
+                    best_error_count = Some(error_count);
+                    report.all_green = true;
+                }
+            }
+        }
+
         // --- Hill-climbing: keep changes only when they improve on the best ---
         if !report.all_green {
             // Reset validator failure counter — verifier itself failed, so
@@ -3861,8 +3937,46 @@ async fn self_evaluate_changes(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use coordination::verifier::report::{GateOutcome, GateResult};
     use coordination::{SessionStatus, SwarmTier};
     use std::path::PathBuf;
+
+    fn test_report(gates: &[(&str, GateOutcome, usize)]) -> VerifierReport {
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        for (gate, outcome, error_count) in gates {
+            report.add_gate(GateResult {
+                gate: (*gate).to_string(),
+                outcome: *outcome,
+                duration_ms: 1,
+                exit_code: Some(if *outcome == GateOutcome::Failed {
+                    1
+                } else {
+                    0
+                }),
+                error_count: *error_count,
+                warning_count: 0,
+                errors: Vec::new(),
+                stderr_excerpt: None,
+            });
+        }
+        report.finalize(Duration::from_millis(1));
+        report.failure_signals = vec![
+            coordination::verifier::report::FailureSignal {
+                gate: "synthetic".to_string(),
+                category: coordination::feedback::ErrorCategory::Other,
+                code: None,
+                file: None,
+                line: None,
+                message: "synthetic".to_string(),
+            };
+            gates
+                .iter()
+                .filter(|(_, outcome, _)| *outcome == GateOutcome::Failed)
+                .map(|(_, _, errors)| *errors)
+                .sum()
+        ];
+        report
+    }
 
     /// Initialize a temporary git repo with one commit and return the initial
     /// commit hash. Deduplicates test boilerplate across git-dependent tests.
@@ -4318,5 +4432,38 @@ mod tests {
         // Unknown errors fall through as transient (retriable)
         let err = anyhow::anyhow!("something unexpected");
         assert!(OrchestrationError::classify(err.as_ref()).is_retriable());
+    }
+
+    #[test]
+    fn test_report_has_baseline_regression_detects_new_failed_gate() {
+        let baseline = test_report(&[
+            ("fmt", GateOutcome::Passed, 0),
+            ("clippy", GateOutcome::Failed, 1),
+            ("check", GateOutcome::Skipped, 0),
+        ]);
+        let current = test_report(&[
+            ("fmt", GateOutcome::Failed, 1),
+            ("clippy", GateOutcome::Failed, 1),
+            ("check", GateOutcome::Skipped, 0),
+        ]);
+
+        assert!(report_has_baseline_regression(&baseline, &current));
+    }
+
+    #[test]
+    fn test_report_improves_on_baseline_accepts_cleaner_failure_state() {
+        let baseline = test_report(&[
+            ("fmt", GateOutcome::Passed, 0),
+            ("clippy", GateOutcome::Failed, 3),
+            ("check", GateOutcome::Skipped, 0),
+        ]);
+        let current = test_report(&[
+            ("fmt", GateOutcome::Passed, 0),
+            ("clippy", GateOutcome::Failed, 1),
+            ("check", GateOutcome::Skipped, 0),
+        ]);
+
+        assert!(!report_has_baseline_regression(&baseline, &current));
+        assert!(report_improves_on_baseline(&baseline, &current, 0));
     }
 }

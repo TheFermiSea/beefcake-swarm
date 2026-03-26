@@ -4,7 +4,7 @@
 # Usage:
 #   ./scripts/dogfood-loop.sh                    # Pick from bd ready (default)
 #   ./scripts/dogfood-loop.sh --max-runs 5       # Stop after 5 runs
-#   ./scripts/dogfood-loop.sh --cooldown 120     # 2-minute cooldown between runs
+#   ./scripts/dogfood-loop.sh --cooldown 30      # 30-second cooldown between runs
 #   ./scripts/dogfood-loop.sh --parallel 3       # Run up to 3 issues concurrently
 #   ./scripts/dogfood-loop.sh --issue-list "beefcake-w70b.3.5.1 beefcake-w70b.6.4.2"
 #                                                # Work specific issues in order
@@ -17,9 +17,10 @@
 #   SWARM_CLOUD_API_KEY    Required (passed through to run-swarm.sh)
 #   DOGFOOD_LOG_DIR        Log directory (default: ./logs/dogfood)
 #   DOGFOOD_MAX_RUNS       Max iterations (default: unlimited)
-#   DOGFOOD_COOLDOWN       Seconds between batches (default: 60)
+#   DOGFOOD_COOLDOWN       Seconds between batches (default: 30)
 #   DOGFOOD_ISSUE_LIST     Space-separated issue IDs to work in order
 #   DOGFOOD_PARALLEL       Concurrent issue limit (default: 1)
+#   DOGFOOD_STRINGER_INTERVAL  Seconds between stringer backlog refreshes (default: 86400)
 #
 set -euo pipefail
 
@@ -28,7 +29,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 # --- Configuration ---
 MAX_RUNS="${DOGFOOD_MAX_RUNS:-0}"       # 0 = unlimited
-COOLDOWN="${DOGFOOD_COOLDOWN:-60}"
+COOLDOWN="${DOGFOOD_COOLDOWN:-30}"
 LOG_DIR="${DOGFOOD_LOG_DIR:-${REPO_ROOT}/logs/dogfood}"
 ISSUE_LIST="${DOGFOOD_ISSUE_LIST:-}"
 PARALLEL="${DOGFOOD_PARALLEL:-1}"
@@ -36,6 +37,7 @@ ISSUE_QUERY_BIN="${DOGFOOD_BEADS_BIN:-bd}"
 DISCOVER=0                              # --discover: auto-fetch new issues when list exhausted
 TARGET_REPO=""                          # --repo-root: target an external repo (default: self)
 MAX_ISSUE_FAILURES="${DOGFOOD_MAX_ISSUE_FAILURES:-3}"  # defer after N consecutive failures
+STRINGER_INTERVAL="${DOGFOOD_STRINGER_INTERVAL:-86400}"
 
 # CLI overrides
 while [[ $# -gt 0 ]]; do
@@ -79,6 +81,7 @@ if [[ -n "$TARGET_REPO" ]]; then
   _LOCK_SUFFIX="-$(basename "$TARGET_REPO")"
 fi
 LOCKFILE="/tmp/dogfood-loop${_LOCK_SUFFIX}.lock"
+STRINGER_STAMP_FILE="/tmp/dogfood-loop${_LOCK_SUFFIX}.stringer.last_run"
 # Read existing PID BEFORE opening fd 200 (which truncates the file).
 _EXISTING_PID=$(cat "$LOCKFILE" 2>/dev/null || echo "")
 # Open fd 200 for flock. O_WRONLY|O_CREAT but NOT O_TRUNC — use >> to append.
@@ -129,6 +132,34 @@ record_run() {
   printf '{"run":%d,"issue":"%s","exit_code":%d,"elapsed_s":%d,"timestamp":"%s","log":"%s"}\n' \
     "$run_num" "$issue_id" "$exit_code" "$elapsed" "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$log_file" \
     >> "$SUMMARY_FILE"
+}
+
+maybe_run_stringer() {
+  [[ "$DISCOVER" -eq 1 ]] || return 0
+
+  local stringer_script="$SCRIPT_DIR/stringer-to-beads.sh"
+  [[ -x "$stringer_script" ]] || return 0
+
+  local now last_run elapsed remaining
+  now=$(date +%s)
+  last_run=0
+  if [[ -f "$STRINGER_STAMP_FILE" ]]; then
+    last_run=$(cat "$STRINGER_STAMP_FILE" 2>/dev/null || echo "0")
+  fi
+
+  if [[ "$last_run" =~ ^[0-9]+$ ]]; then
+    elapsed=$((now - last_run))
+    if (( elapsed < STRINGER_INTERVAL )); then
+      remaining=$((STRINGER_INTERVAL - elapsed))
+      log "  [discover] Skipping stringer-to-beads.sh (${remaining}s until next refresh)"
+      return 0
+    fi
+  fi
+
+  log "  [discover] Running stringer-to-beads.sh to seed backlog..."
+  if bash "$stringer_script" --max-new 30 2>&1 | grep -E '^\[stringer|Created|WARN' | sed 's/^/    /'; then
+    printf '%s\n' "$now" > "$STRINGER_STAMP_FILE"
+  fi
 }
 
 # --- Circuit breaker: defer issues that fail too many times ---
@@ -182,6 +213,7 @@ log "  Cooldown: ${COOLDOWN}s"
 log "  Parallel: $PARALLEL"
 log "  Max runs: $([ "$MAX_RUNS" -eq 0 ] && echo 'unlimited' || echo "$MAX_RUNS")"
 log "  Discover: $([ "$DISCOVER" -eq 1 ] && echo 'ON (auto-fetch new issues)' || echo 'OFF')"
+log "  Stringer refresh: ${STRINGER_INTERVAL}s"
 
 if [[ -n "$ISSUE_LIST" ]]; then
   read -ra ISSUES <<< "$ISSUE_LIST"
@@ -647,14 +679,8 @@ else
       fi
     done
 
-    # Pool drained — seed new stringer issues then cooldown before next discover cycle
-    if [[ "$DISCOVER" -eq 1 ]]; then
-      STRINGER_SCRIPT="$SCRIPT_DIR/stringer-to-beads.sh"
-      if [[ -x "$STRINGER_SCRIPT" ]]; then
-        log "  [discover] Running stringer-to-beads.sh to seed backlog..."
-        bash "$STRINGER_SCRIPT" --max-new 30 2>&1 | grep -E '^\[stringer|Created|WARN' | sed 's/^/    /' || true
-      fi
-    fi
+    # Pool drained — refresh backlog on a coarse cadence, then cooldown.
+    maybe_run_stringer || true
     log "  Pool drained. Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
 
