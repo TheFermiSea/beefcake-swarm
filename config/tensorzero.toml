@@ -113,30 +113,20 @@ tools = ["edit_file", "write_file", "proxy_edit_file", "proxy_write_file"]
 # Gateway runs with network_mode: host so it can reach vasp nodes directly
 # by IP and CLIAPIProxy on localhost:8317.
 #
-# Cluster layout (2026-03-18):
-#   vasp-03:8081 — Strand-Rust-Coder-14B (Rust specialist, 4 parallel, 65K ctx)
-#   vasp-03:8082 — Tessa-Rust-T1-7B (fast Rust scout, 4 parallel, 32K ctx)
-#   vasp-01:8081 — Qwen3.5-122B-A10B MoE (coder, 2 parallel, CPU offload)
-#   vasp-02:8081 — Qwen3.5-122B-A10B MoE (reasoning, 2 parallel, CPU offload)
+# Cluster layout (2026-03-26):
+#   vasp-03:8081 — Qwen3-Coder-Next (fast tier, 4 parallel, 65K ctx)
+#   vasp-01:8081 — Qwen3.5-122B-A10B MoE (coder, 4 parallel, CPU offload)
+#   vasp-02:8081 — Qwen3.5-122B-A10B MoE (reasoning, 4 parallel, CPU offload)
 
-# --- Rust-specialized models on vasp-03 ---
+# --- Fast tier on vasp-03 ---
 
-[models.strand_rust_14b]
-routing = ["vasp03_strand"]
+[models.qwen_fast]
+routing = ["vasp03"]
 
-[models.strand_rust_14b.providers.vasp03_strand]
+[models.qwen_fast.providers.vasp03]
 type = "openai"
-model_name = "Strand-Rust-Coder-14B-v1-Q4_K_M.gguf"
+model_name = "Qwen3-Coder-Next"
 api_base = "http://10.0.0.22:8081/v1"
-api_key_location = "none"
-
-[models.tessa_rust_7b]
-routing = ["vasp03_tessa"]
-
-[models.tessa_rust_7b.providers.vasp03_tessa]
-type = "openai"
-model_name = "Tessa-Rust-T1-7B-Q4_K_M.gguf"
-api_base = "http://10.0.0.22:8082/v1"
 api_key_location = "none"
 
 # --- General-purpose MoE models on vasp-01/02 ---
@@ -236,13 +226,11 @@ metric = "task_resolved"
 update_period_s = 300
 
 # --- Editor: applies Architect's SEARCH/REPLACE blocks mechanically ---
-# Pure proxy — Rig sends raw messages. A/B tests Strand-14B vs Tessa-7B vs 122B.
+# Pure proxy — Rig sends raw messages. Kept on the 122B nodes because historical
+# fast-tier models on vasp-03 had tool-call formatting issues under TensorZero.
 [functions.editor_apply]
 type = "chat"
 
-# Strand/Tessa excluded from TZ — Qwen2.5-Coder chat template still returns
-# tool call arguments as objects even on llama-server v50. The v50 fix only
-# covers Qwen3 templates. These models work fine when called directly.
 [functions.editor_apply.variants.qwen_coder]
 type = "chat_completion"
 model = "qwen_coder"
@@ -257,10 +245,13 @@ candidate_variants = ["qwen_coder", "qwen_reasoning"]
 metric = "task_resolved"
 update_period_s = 300
 
-# --- Worker Code Edit: Rust specialist and general coder ---
-# Pure proxy — A/B tests Strand-14B vs 122B MoE for code generation.
+# --- Worker Code Edit: fast tier + 122B A/B test for code generation ---
 [functions.worker_code_edit]
 type = "chat"
+
+[functions.worker_code_edit.variants.qwen_fast]
+type = "chat_completion"
+model = "qwen_fast"
 
 [functions.worker_code_edit.variants.qwen_coder]
 type = "chat_completion"
@@ -270,21 +261,21 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "qwen_reasoning"
 
-# Adaptive: shifts traffic to the higher-resolving 122B node.
+# Adaptive: compare fast-tier throughput against the two 122B nodes.
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
-candidate_variants = ["qwen_coder", "qwen_reasoning"]
+candidate_variants = ["qwen_fast", "qwen_coder", "qwen_reasoning"]
 metric = "task_resolved"
 update_period_s = 300
 
 # --- Code Review: blind reviewer ---
-# Pure proxy — uses Strand-14B (fast Rust analysis)
+# Pure proxy — route reviews to the live fast tier on vasp-03.
 [functions.code_review]
 type = "chat"
 
 [functions.code_review.variants.qwen_reviewer]
 type = "chat_completion"
-model = "qwen_coder"
+model = "qwen_fast"
 
 # --- Deep Reasoning: complex analysis ---
 # Pure proxy — stays on 122B MoE for deep thinking
@@ -296,18 +287,32 @@ type = "chat_completion"
 model = "qwen_reasoning"
 
 # --- Task Planning: structured repair plans ---
-# Pure proxy — 122B for complex planning
+# Pure proxy — compare fast planning on vasp-03 with the main 122B planner.
 [functions.task_planning]
 type = "chat"
+
+[functions.task_planning.variants.qwen_fast_planner]
+type = "chat_completion"
+model = "qwen_fast"
 
 [functions.task_planning.variants.qwen_planner]
 type = "chat_completion"
 model = "qwen_coder"
 
+[functions.task_planning.experimentation]
+type = "adaptive"
+candidate_variants = ["qwen_fast_planner", "qwen_planner"]
+metric = "task_resolved"
+update_period_s = 300
+
 # --- Code Fixing: takes a plan and implements it ---
-# Pure proxy — A/B test Strand-14B vs 122B
+# Pure proxy — compare the fast tier against the two 122B nodes.
 [functions.code_fixing]
 type = "chat"
+
+[functions.code_fixing.variants.qwen_fast_fixer]
+type = "chat_completion"
+model = "qwen_fast"
 
 [functions.code_fixing.variants.qwen_fixer]
 type = "chat_completion"
@@ -319,7 +324,7 @@ model = "qwen_reasoning"
 
 [functions.code_fixing.experimentation]
 type = "adaptive"
-candidate_variants = ["qwen_fixer", "qwen_reasoning_fixer"]
+candidate_variants = ["qwen_fast_fixer", "qwen_fixer", "qwen_reasoning_fixer"]
 metric = "task_resolved"
 update_period_s = 300
 
