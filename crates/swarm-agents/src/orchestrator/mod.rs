@@ -1205,7 +1205,8 @@ async fn process_issue_core(
                 // before errors exist (beefcake-1nw2: session-start meta-context).
                 let title_similar = archive.query_by_keywords(&issue.title, 3);
                 if !title_similar.is_empty() {
-                    full_objective.push_str("\n**Issues with similar titles** (archive reference):\n");
+                    full_objective
+                        .push_str("\n**Issues with similar titles** (archive reference):\n");
                     for r in &title_similar {
                         full_objective.push_str(&format!(
                             "- `{}` resolved in {} iter(s) via {} tier\n",
@@ -1513,8 +1514,7 @@ async fn process_issue_core(
                         .map(|c| c.to_string())
                         .collect();
                     if !error_cats.is_empty() {
-                        let candidates =
-                            vec!["RustCoder".to_string(), "GeneralCoder".to_string()];
+                        let candidates = vec!["RustCoder".to_string(), "GeneralCoder".to_string()];
                         archive
                             .recommend_model(&error_cats, &candidates, 5)
                             .and_then(|rec| match rec.as_str() {
