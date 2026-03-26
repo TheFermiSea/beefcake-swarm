@@ -72,14 +72,6 @@ Copied from `beefcake2/tools/rust-cluster-mcp/`. No LLM calls — pure Rust stat
 - **Council**: Cloud escalation for disputes
 - **SLURM**: Inference endpoint management and health checks
 
-### Flywheel (Bootstrap)
-
-Forked from `Dicklesworthstone/agentic_coding_flywheel_setup`. Adapting for SLURM/NFS:
-
-- **Steal**: Prompts, task decomposition strategies, tool configurations
-- **Discard**: Docker Compose, cloud provider setup, VPS bootstrapping
-- **Adapt**: Replace Docker/cloud assumptions with SLURM/NFS patterns
-
 ## 3. The 2-Agent Loop (MVP)
 
 ```
@@ -152,7 +144,6 @@ ssh root@100.105.113.58
 cd /root
 git clone git@github.com:TheFermiSea/beefcake-swarm.git
 cd beefcake-swarm
-git submodule update --init
 source ~/.cargo/env
 cargo build --workspace
 ```

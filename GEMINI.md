@@ -24,7 +24,6 @@ The project follows a "2-agent loop" architecture (Implementer and Validator) wi
     - **`council/`**: Cloud AI escalation adapter (Gemini, Claude, GPT).
     - **`slurm/`**: SLURM inference job management and health discovery.
 - **`crates/swarm-agents/`**: Rig-based orchestrator for the implementer/validator loop.
-- **`flywheel/`**: TypeScript/Node.js sub-project for prompt mining and task decomposition.
 - **`inference/`**: SLURM job scripts, build/validate scripts for local models.
 - **`infrastructure/`**: Monitoring tools (GPU dashboard, HPC watchdog).
 

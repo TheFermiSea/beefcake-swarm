@@ -4,15 +4,19 @@
 *.db-journal
 *.db-wal
 *.db-shm
+.env
 
 # Daemon runtime files
 daemon.lock
 daemon.log
 daemon.pid
+daemon.*
 bd.sock
 bd.sock.startlock
 sync-state.json
 last-touched
+interactions.jsonl
+.beads-credential-key
 
 # Local version tracking (prevents upgrade notification spam after git ops)
 .local_version
@@ -39,10 +43,14 @@ beads.right.meta.json
 sync_base.jsonl
 export-state/
 dolt-access.lock
+push-state.json
+backup/
+*.lock
+*.corrupt.backup/
 
 # Repo-specific Dolt runtime files.
-# This repo tracks .beads/backup/*, not the local metadata, live JSONL export,
-# or the embedded/server Dolt runtime directory.
+# This repo tracks the durable hook configuration, not the local metadata,
+# live JSONL export, or the embedded/server Dolt runtime directory.
 dolt/
 metadata.json
 issues.jsonl

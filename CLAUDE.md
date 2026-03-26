@@ -108,7 +108,6 @@ Stack profile (`SWARM_STACK_PROFILE`) controls role→model routing: `hybrid_bal
 - `inference/` — SLURM job scripts, systemd daemon, build/validate scripts for llama.cpp.
 - `infrastructure/` — Monitoring: GPU dashboard, HPC watchdog, ai-proxy setup, cloud-proxy.service (socat relay), TensorZero docker-compose, scheduled benchmarking.
 - `indexing/` — Python scripts for code indexing (CocoIndex for semantic search/RAG).
-- `flywheel/` — Forked TypeScript/Node project for prompt mining and task decomposition strategies.
 - `docs/` — Architecture docs, deployment guides, inference endpoint specs, dogfood diagnostics.
 
 ## Inference Endpoints

@@ -7,10 +7,28 @@ This project uses **bd** (beads) for issue tracking. See [CLAUDE.md](CLAUDE.md) 
 ```bash
 bd ready               # Find available work
 bd show <id>           # View issue details
-bd update <id> --status in_progress  # Claim work
+bd update <id> --claim # Atomically claim work
 bd close <id>          # Complete work
 bd dolt push           # Sync to remote
 ```
+
+## Mandatory Beads Contract
+
+**All agents MUST follow this contract for every coding task:**
+
+```bash
+bd ready --json
+bd update <id> --claim --json
+# code + tests
+bd close <id> --reason "Completed" --json
+bd dolt push
+```
+
+**Enforcement rules:**
+- Do not start coding until an issue is claimed.
+- Use `--claim` (not just `--status in_progress`) to avoid assignment races.
+- Do not end a coding session with closed/unpushed bead state; run `bd dolt push` after closing work.
+- If new work is discovered, create a new issue and link it with `discovered-from` before ending the session.
 
 ## Landing the Plane (Session Completion)
 
@@ -242,12 +260,13 @@ bd close <id> --reason="Completed" --json
 ### Workflow for AI Agents
 
 1. **Check ready work**: `bd ready` shows unblocked issues
-2. **Claim your task**: `bd update <id> --status=in_progress`
+2. **Claim your task atomically**: `bd update <id> --claim`
 3. **Work on it**: Implement, test, document
 4. **Discover new work?** Create linked issue:
    - `bd create --title="Found bug" --description="Details" --type=bug --priority=1`
    - `bd dep add <new-id> <current-id> --type discovered-from`
 5. **Complete**: `bd close <id> --reason="Done"`
+6. **Sync immediately**: `bd dolt push`
 
 ### Auto-Sync
 

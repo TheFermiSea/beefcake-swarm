@@ -37,7 +37,6 @@ Human Intervention (blocking beads issue)
 - `inference/` -- SLURM job scripts, systemd daemon, build/validate scripts for llama.cpp inference.
 - `infrastructure/` -- GPU dashboard, HPC watchdog, ai-proxy setup, TensorZero docker-compose.
 - `indexing/` -- Python scripts for code indexing (CocoIndex for semantic search/RAG).
-- `flywheel/` -- Forked TypeScript/Node project for prompt mining and task decomposition.
 - `docs/` -- Architecture docs, deployment guides, inference endpoint specs.
 
 ## Quick Start
