@@ -8,8 +8,8 @@ use std::path::Path;
 use tracing::debug;
 
 use crate::file_targeting::find_target_files_by_grep;
-use coordination::feedback::ErrorCategory;
 use coordination::WorkPacket;
+use coordination::feedback::ErrorCategory;
 
 /// Coder routing decision with confidence level.
 #[derive(Debug, PartialEq, Eq)]
@@ -69,6 +69,21 @@ pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
 /// Format a WorkPacket into a structured prompt for agent consumption.
 pub fn format_task_prompt(packet: &WorkPacket) -> String {
     let mut prompt = String::new();
+    let scoped_files: Vec<&String> = packet
+        .files_touched
+        .iter()
+        .filter(|f| {
+            let path = f.as_str();
+            !(path == ".beads"
+                || path.starts_with(".beads/")
+                || path == ".git"
+                || path.starts_with(".git/")
+                || path == ".claude"
+                || path.starts_with(".claude/")
+                || path == ".dolt"
+                || path.starts_with(".dolt/"))
+        })
+        .collect();
 
     prompt.push_str(&format!("# Task: {}\n\n", packet.objective));
     prompt.push_str(&format!(
@@ -171,10 +186,10 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
     }
 
     // Scope constraints — explicitly tell the worker what it may modify
-    if !packet.files_touched.is_empty() {
+    if !scoped_files.is_empty() {
         prompt.push_str("## Scope Constraints\n");
         prompt.push_str("**IMPORTANT:** Only modify these files:\n");
-        for f in &packet.files_touched {
+        for f in scoped_files {
             prompt.push_str(&format!("- `{f}`\n"));
         }
         prompt.push_str("\nDo NOT modify any other files. Do NOT reformat, refactor, or ");
@@ -533,6 +548,22 @@ mod tests {
             route_to_coder(&[ErrorCategory::Async]),
             CoderRoute::RustCoder
         );
+    }
+
+    #[test]
+    fn test_full_prompt_filters_metadata_scope_paths() {
+        let mut packet = test_packet("Fix issue", "swarm/test", 1);
+        packet.files_touched = vec![
+            ".beads/backup/backup_state.json".into(),
+            ".git/index".into(),
+            "coordination/src/lib.rs".into(),
+        ];
+
+        let prompt = format_task_prompt(&packet);
+
+        assert!(prompt.contains("`coordination/src/lib.rs`"));
+        assert!(!prompt.contains(".beads/backup/backup_state.json"));
+        assert!(!prompt.contains(".git/index"));
     }
 
     #[test]

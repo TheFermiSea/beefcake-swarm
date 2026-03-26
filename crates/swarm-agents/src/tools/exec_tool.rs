@@ -106,9 +106,9 @@ impl Tool for RunCommandTool {
             });
         }
 
-        let has_pipe = args.command.contains('|');
+        let has_shell_ops = args.command.contains('|') || args.command.contains("&&");
 
-        if has_pipe {
+        if has_shell_ops {
             // ── Shell pipeline mode ──
             // LLMs naturally write `cargo clippy 2>&1 | grep pattern | head -20`.
             // We validate every program in the pipeline against the allowlist,
@@ -243,7 +243,8 @@ fn split_pipeline_segments(command: &str) -> Result<Vec<String>, ToolError> {
     let mut quote: Option<char> = None;
     let mut escaped = false;
 
-    for ch in command.chars() {
+    let mut chars = command.chars().peekable();
+    while let Some(ch) = chars.next() {
         if escaped {
             current.push(ch);
             escaped = false;
@@ -264,6 +265,20 @@ fn split_pipeline_segments(command: &str) -> Result<Vec<String>, ToolError> {
                 current.push(ch);
             }
             '|' if quote.is_none() => {
+                if chars.peek() == Some(&'|') {
+                    chars.next();
+                }
+                let segment = current.trim();
+                if segment.is_empty() {
+                    return Err(ToolError::CommandNotAllowed {
+                        command: "empty pipeline segment".to_string(),
+                    });
+                }
+                segments.push(segment.to_string());
+                current.clear();
+            }
+            '&' if quote.is_none() && chars.peek() == Some(&'&') => {
+                chars.next();
                 let segment = current.trim();
                 if segment.is_empty() {
                     return Err(ToolError::CommandNotAllowed {
@@ -352,6 +367,29 @@ mod tests {
         assert!(
             format!("{err:?}").contains("invalid quoting"),
             "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn pipeline_splitter_allows_logical_or_fallbacks() {
+        let command = r#"ls -la .beads/ 2>&1 || echo "missing""#;
+        let segments = split_pipeline_segments(command).expect("split logical or");
+        assert_eq!(
+            segments,
+            vec![
+                "ls -la .beads/ 2>&1".to_string(),
+                r#"echo "missing""#.to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn pipeline_splitter_allows_logical_and_chains() {
+        let command = "cargo fmt && cargo check";
+        let segments = split_pipeline_segments(command).expect("split logical and");
+        assert_eq!(
+            segments,
+            vec!["cargo fmt".to_string(), "cargo check".to_string()]
         );
     }
 }

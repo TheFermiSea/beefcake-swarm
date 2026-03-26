@@ -12,8 +12,8 @@ use anyhow::Result;
 use tracing::{debug, error, info, warn};
 
 use crate::acceptance::{self, AcceptancePolicy};
-use crate::agents::coder::OaiAgent;
 use crate::agents::AgentFactory;
+use crate::agents::coder::OaiAgent;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::cluster_health::ClusterHealth;
 use crate::config::{SwarmConfig, SwarmRole};
@@ -21,18 +21,19 @@ use crate::file_targeting::detect_changed_packages;
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::orchestrator::{
-    self, bool_from_env, cloud_validate, collect_artifacts_from_diff, count_diff_lines,
-    create_stuck_intervention, extract_local_validator_feedback, extract_validator_feedback,
-    format_compact_task_prompt, format_task_prompt, git_commit_changes, local_validate,
-    prompt_with_hook_and_retry, query_kb_with_failsafe, route_to_coder, should_reject_auto_fix,
-    try_auto_fix, try_scaffold_fallback, CoderRoute, SwarmResumeFile,
+    self, CoderRoute, SwarmResumeFile, bool_from_env, cloud_validate, collect_artifacts_from_diff,
+    count_diff_lines, create_stuck_intervention, extract_local_validator_feedback,
+    extract_validator_feedback, format_compact_task_prompt, format_task_prompt, git_commit_changes,
+    local_validate, prompt_with_hook_and_retry, query_kb_with_failsafe, route_to_coder,
+    should_reject_auto_fix, try_auto_fix, try_scaffold_fallback,
 };
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 use crate::state_machine::{BudgetTracker, OrchestratorState, StateMachine};
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
 use crate::worktree_bridge::WorktreeBridge;
-use coordination::benchmark::slo::{self, AlertSeverity};
+use coordination::TieredCorrectionLoop;
 use coordination::benchmark::OrchestrationMetrics;
+use coordination::benchmark::slo::{self, AlertSeverity};
 use coordination::escalation::state::EscalationReason;
 use coordination::escalation::worker_first::classify_initial_tier;
 use coordination::feedback::ErrorCategory;
@@ -40,7 +41,6 @@ use coordination::otel::{self, SpanSummary};
 use coordination::rollout::FeatureFlags;
 use coordination::router::task_classifier::{DynamicRouter, ModelTier};
 use coordination::save_session_state;
-use coordination::TieredCorrectionLoop;
 use coordination::{
     ContextPacker, EscalationEngine, EscalationState, GitManager, ProgressTracker, SessionManager,
     SwarmTier, TierBudget, TurnPolicy, ValidatorFeedback, Verifier, VerifierConfig, VerifierReport,
@@ -757,12 +757,15 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
             let model = ctx.config.resolve_role_model(role);
             ctx.metrics
                 .record_agent_metrics(&format!("manager ({model})"), 0, 0);
-            let adapter = RuntimeAdapter::new(AdapterConfig {
-                agent_name: "manager".into(),
-                deadline: Some(Instant::now() + ctx.manager_timeout),
-                max_reads_without_action: Some(8),
-                ..Default::default()
-            });
+            let adapter = RuntimeAdapter::with_validators(
+                AdapterConfig {
+                    agent_name: "manager".into(),
+                    deadline: Some(Instant::now() + ctx.manager_timeout),
+                    max_reads_without_action: Some(8),
+                    ..Default::default()
+                },
+                crate::action_validator::manager_validators(),
+            );
             let result = match tokio::time::timeout(
                 ctx.manager_timeout,
                 prompt_with_hook_and_retry(

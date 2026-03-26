@@ -17,7 +17,7 @@ pub mod validation;
 // orchestrator.rs are re-exported here so downstream code (driver.rs, etc.)
 // continues to compile without changes.
 
-pub use dispatch::{format_compact_task_prompt, format_task_prompt, route_to_coder, CoderRoute};
+pub use dispatch::{CoderRoute, format_compact_task_prompt, format_task_prompt, route_to_coder};
 pub use helpers::try_scaffold_fallback;
 pub(crate) use helpers::{
     bool_from_env, create_stuck_intervention, detect_failure_patterns, load_directives,
@@ -30,13 +30,13 @@ pub(crate) use validation::{
 // ── Remaining lifecycle imports ─────────────────────────────────────
 
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rig::completion::Prompt;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{Instrument, debug, error, info, warn};
 
 use crate::cluster_health::ClusterHealth;
 use crate::file_targeting::detect_changed_packages;
@@ -64,8 +64,8 @@ use crate::notebook_bridge::KnowledgeBase;
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
 use crate::triage::{self, PhaseModelSelector, WorkflowPhase};
 use crate::worktree_bridge::WorktreeBridge;
-use coordination::benchmark::slo::{self, AlertSeverity};
 use coordination::benchmark::OrchestrationMetrics;
+use coordination::benchmark::slo::{self, AlertSeverity};
 use coordination::escalation::state::EscalationReason;
 use coordination::escalation::worker_first::classify_initial_tier;
 use coordination::feedback::ErrorCategory;
@@ -604,8 +604,8 @@ async fn process_issue_core(
     // Tracks whether the previous iteration's agent called edit_file/write_file.
     // Used to inject an edit nudge into the next iteration's task prompt.
     let mut agent_has_written_prev = true; // assume true for first iteration
-                                           // Hill-climbing: track the best (lowest) error count seen across all iterations.
-                                           // Changes are only kept when they improve on the best — otherwise rolled back.
+    // Hill-climbing: track the best (lowest) error count seen across all iterations.
+    // Changes are only kept when they improve on the best — otherwise rolled back.
     let mut best_error_count: Option<usize> = None;
     // Minimum error reduction required to keep changes (env: SWARM_MIN_ERROR_DELTA).
     let min_error_delta: usize = std::env::var("SWARM_MIN_ERROR_DELTA")
@@ -887,14 +887,14 @@ async fn process_issue_core(
 
                     let fixer = factory.build_fixer(&wt_path);
                     let fixer_prompt = format!(
-                    "The concurrent workers completed their subtasks but the verifier found errors.\n\n\
+                        "The concurrent workers completed their subtasks but the verifier found errors.\n\n\
                      Verifier summary: {}\n\n\
                      Fix the compilation/test errors. Focus on integration files \
                      (Cargo.toml, mod.rs, lib.rs, main.rs) and any cross-file issues \
                      between the workers' changes. Read the error messages carefully and \
                      make targeted fixes.",
-                    report.summary()
-                );
+                        report.summary()
+                    );
 
                     match rig::completion::Prompt::prompt(&fixer, &fixer_prompt).await {
                         Ok(_response) => {
@@ -1647,12 +1647,15 @@ async fn process_issue_core(
                     "Routing to manager (cloud-backed or Qwen3.5-Architect fallback)"
                 );
                 metrics.record_agent_metrics("manager", 0, 0);
-                let adapter = RuntimeAdapter::new(AdapterConfig {
-                    agent_name: "manager".into(),
-                    deadline: Some(Instant::now() + manager_timeout),
-                    max_reads_without_action: Some(8),
-                    ..Default::default()
-                });
+                let adapter = RuntimeAdapter::with_validators(
+                    AdapterConfig {
+                        agent_name: "manager".into(),
+                        deadline: Some(Instant::now() + manager_timeout),
+                        max_reads_without_action: Some(8),
+                        ..Default::default()
+                    },
+                    crate::action_validator::manager_validators(),
+                );
                 // Wrap manager call with timeout to enforce turn limits.
                 // Rig doesn't enforce default_max_turns on the outer .prompt() agent,
                 // so managers can run indefinitely. This hard-caps wall-clock time.
@@ -2342,7 +2345,11 @@ async fn process_issue_core(
                     &format!(
                         "No-change circuit breaker: {} consecutive iterations produced no file changes{}",
                         escalation.consecutive_no_change,
-                        if scaffolded { " (scaffold committed)" } else { "" },
+                        if scaffolded {
+                            " (scaffold committed)"
+                        } else {
+                            ""
+                        },
                     ),
                 );
                 break;
@@ -4193,8 +4200,8 @@ mod tests {
 
     #[test]
     fn test_slo_evaluation_from_session_metrics() {
-        use coordination::benchmark::slo;
         use coordination::benchmark::OrchestrationMetrics;
+        use coordination::benchmark::slo;
         use std::time::Duration;
 
         // Simulate a successful single-iteration session

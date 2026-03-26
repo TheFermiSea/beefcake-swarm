@@ -271,6 +271,92 @@ impl ActionValidator for AnchorFreshnessValidator {
     }
 }
 
+/// Reject manager→worker delegations that stuff too much text into the `prompt` arg.
+pub struct DelegationPromptLengthValidator {
+    max_chars: usize,
+}
+
+impl DelegationPromptLengthValidator {
+    pub fn new(max_chars: usize) -> Self {
+        Self { max_chars }
+    }
+}
+
+impl ActionValidator for DelegationPromptLengthValidator {
+    fn name(&self) -> &str {
+        "delegation_prompt_length"
+    }
+
+    fn validate(
+        &self,
+        tool_name: &str,
+        args_json: &str,
+        _state: &ValidatorState,
+    ) -> Result<(), String> {
+        if !is_delegation_tool(tool_name) {
+            return Ok(());
+        }
+        let Some(prompt) = extract_prompt(args_json) else {
+            return Ok(());
+        };
+        if prompt.chars().count() <= self.max_chars {
+            return Ok(());
+        }
+
+        Err(format!(
+            "Delegation prompt is too long ({} chars > {}). Shorten it to the objective, \
+             target files, and the smallest relevant error excerpts. Do NOT paste repo maps, \
+             full verifier output, or large file dumps into worker prompts.",
+            prompt.chars().count(),
+            self.max_chars
+        ))
+    }
+}
+
+/// Reject delegations that explicitly point workers at volatile runtime metadata.
+pub struct ForbiddenDelegationPathValidator;
+
+impl ActionValidator for ForbiddenDelegationPathValidator {
+    fn name(&self) -> &str {
+        "forbidden_delegation_paths"
+    }
+
+    fn validate(
+        &self,
+        tool_name: &str,
+        args_json: &str,
+        _state: &ValidatorState,
+    ) -> Result<(), String> {
+        if !is_delegation_tool(tool_name) {
+            return Ok(());
+        }
+        let Some(prompt) = extract_prompt(args_json) else {
+            return Ok(());
+        };
+
+        let forbidden_hits: Vec<&str> = [
+            ".beads/backup",
+            ".beads/metadata.json",
+            ".beads/push-state.json",
+            ".git/",
+            ".dolt/",
+        ]
+        .into_iter()
+        .filter(|needle| prompt.contains(needle))
+        .collect();
+
+        if forbidden_hits.is_empty() {
+            return Ok(());
+        }
+
+        Err(format!(
+            "Delegation prompt references volatile runtime metadata ({}) which workers must not \
+             target. Focus the worker on source files or stable config/docs paths instead.",
+            forbidden_hits.join(", ")
+        ))
+    }
+}
+
 /// Create the default set of validators for a worker agent session.
 pub fn default_validators(working_dir: &Path) -> Vec<Box<dyn ActionValidator>> {
     vec![
@@ -279,6 +365,20 @@ pub fn default_validators(working_dir: &Path) -> Vec<Box<dyn ActionValidator>> {
         Box::new(TruncatedJsonValidator),
         Box::new(ConsecutiveReadDetector),
         Box::new(AnchorFreshnessValidator::new(working_dir)),
+    ]
+}
+
+/// Create validators for manager sessions that delegate to worker agents.
+pub fn manager_validators() -> Vec<Box<dyn ActionValidator>> {
+    vec![
+        Box::new(DelegationPromptLengthValidator::new(
+            std::env::var("SWARM_MAX_DELEGATION_PROMPT_CHARS")
+                .ok()
+                .and_then(|v| v.parse::<usize>().ok())
+                .filter(|v| *v > 0)
+                .unwrap_or(12_000),
+        )),
+        Box::new(ForbiddenDelegationPathValidator),
     ]
 }
 
@@ -307,11 +407,30 @@ fn extract_path(json: &str) -> Option<String> {
     extract_field(json, "path")
 }
 
+/// Best-effort extraction of "prompt" field from JSON args.
+fn extract_prompt(json: &str) -> Option<String> {
+    extract_field(json, "prompt")
+}
+
 /// Best-effort extraction of a string field from JSON.
 fn extract_field(json: &str, field: &str) -> Option<String> {
     // Use serde_json for reliable parsing
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
     v.get(field)?.as_str().map(|s| s.to_string())
+}
+
+fn is_delegation_tool(tool_name: &str) -> bool {
+    matches!(
+        tool_name.strip_prefix("proxy_").unwrap_or(tool_name),
+        "rust_coder"
+            | "general_coder"
+            | "reasoning_worker"
+            | "planner"
+            | "fixer"
+            | "reviewer"
+            | "architect"
+            | "editor"
+    )
 }
 
 /// Check if content looks truncated (unmatched delimiters).
@@ -518,5 +637,37 @@ mod tests {
         let args = r#"{"path": "src/main.rs", "old_content": "x\ny\n", "new_content": "z"}"#;
         // proxy_edit_file should be treated the same as edit_file
         assert!(v.validate("proxy_edit_file", args, &state).is_ok());
+    }
+
+    #[test]
+    fn test_delegation_prompt_length_validator_rejects_long_prompt() {
+        let v = DelegationPromptLengthValidator::new(20);
+        let state = ValidatorState::new();
+        let args = r#"{"prompt":"This prompt is definitely longer than twenty characters"}"#;
+        assert!(v.validate("proxy_rust_coder", args, &state).is_err());
+    }
+
+    #[test]
+    fn test_delegation_prompt_length_validator_ignores_non_worker_tools() {
+        let v = DelegationPromptLengthValidator::new(5);
+        let state = ValidatorState::new();
+        let args = r#"{"prompt":"too long"}"#;
+        assert!(v.validate("proxy_run_verifier", args, &state).is_ok());
+    }
+
+    #[test]
+    fn test_forbidden_delegation_path_validator_rejects_runtime_metadata() {
+        let v = ForbiddenDelegationPathValidator;
+        let state = ValidatorState::new();
+        let args = r#"{"prompt":"Only modify these files:\n- `.beads/backup/backup_state.json`"}"#;
+        assert!(v.validate("proxy_general_coder", args, &state).is_err());
+    }
+
+    #[test]
+    fn test_forbidden_delegation_path_validator_allows_stable_beads_docs() {
+        let v = ForbiddenDelegationPathValidator;
+        let state = ValidatorState::new();
+        let args = r#"{"prompt":"Update `.beads/PRIME.md` and `scripts/bd-safe.sh`"}"#;
+        assert!(v.validate("proxy_general_coder", args, &state).is_ok());
     }
 }
