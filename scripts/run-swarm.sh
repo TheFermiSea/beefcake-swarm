@@ -52,8 +52,8 @@ if [[ -n "${SWARM_CLOUD_URL:-}" ]]; then
   # Cloud mode: require API key and run preflight checks
   : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
   export SWARM_CLOUD_API_KEY
-  # Default to antigravity-hosted models (routed via CLIAPIProxy)
-  export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6}"
+  # Default primary cloud model routed via CLIAPIProxy; override SWARM_CLOUD_MODEL to switch.
+  export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-gpt-5.4-mini}"
   export SWARM_CLOUD_FALLBACK_MODEL="${SWARM_CLOUD_FALLBACK_MODEL:-gemini-3.1-pro-high}"
   # CLIAPIProxy v6.8+ uses x-api-key header (not Authorization: Bearer)
   _PROXY_AUTH=(-H "x-api-key: $SWARM_CLOUD_API_KEY")
@@ -69,7 +69,7 @@ entry = next((m for m in doc.get("data", []) if m.get("id") == model), None)
 print((entry or {}).get("owned_by", ""))
 PY
 )"
-      if [[ -n "$model_owner" && "$model_owner" != "anthropic" && "$model_owner" != "antigravity" ]]; then
+      if [[ -n "$model_owner" && "$model_owner" != "anthropic" && "$model_owner" != "antigravity" && "$model_owner" != "openai" ]]; then
         echo "Cloud model ${SWARM_CLOUD_MODEL} is owned_by=${model_owner}; falling back to ${SWARM_CLOUD_FALLBACK_MODEL}"
         export SWARM_CLOUD_MODEL="$SWARM_CLOUD_FALLBACK_MODEL"
       fi

@@ -119,14 +119,14 @@ Heterogeneous local cluster — each node runs a different model tier. See `docs
 | Scout/Fast | http://vasp-03:8081/v1 | Qwen3-Coder-Next-UD Q4_K_XL (80B/3B MoE) | V100S 32GB (expert-offload) | TBD |
 | Coder | http://vasp-01:8081/v1 | Qwen3.5-122B-A10B MoE | V100S 32GB (expert-offload) | ~5-8 tok/s |
 | Reasoning | http://vasp-02:8081/v1 | Qwen3.5-122B-A10B MoE | V100S 32GB (expert-offload) | ~5-8 tok/s |
-| Cloud | http://localhost:8317/v1 | claude-opus-4-6 (CLIAPIProxy) | ai-proxy | N/A |
+| Cloud | http://localhost:8317/v1 | gpt-5.4-mini (CLIAPIProxy) | ai-proxy | N/A |
 
 **Qwen3-Coder-Next**: 80B/3B MoE (Mixture of Experts). Expert FFN layers offloaded to CPU RAM, attention on GPU. Replaces the 27B-Opus-Distilled as the fast tier model.
 
 **122B-A10B MoE**: Mixture-of-Experts with ~10B active parameters. Expert FFN layers offloaded to CPU RAM (~225GB), attention on GPU. Each vasp node runs an independent instance.
 
 **Cloud fallback matrix** (configured in config.rs `CloudFallbackMatrix::default_matrix`):
-1. `claude-opus-4-6` (primary)
+1. `gpt-5.4-mini` (primary)
 2. `gemini-3.1-pro-high` (fallback-1)
 3. `claude-sonnet-4-6` (fallback-2)
 4. `gemini-3.1-flash-lite-preview` (fallback-3)
@@ -170,9 +170,9 @@ Heterogeneous model setup: 27B on vasp-03, 122B on vasp-01/02.
 |----------|---------|-------|
 | `SWARM_CLOUD_URL` | `http://localhost:8317/v1` (script) / *(none)* (config.rs) | Required for cloud manager mode |
 | `SWARM_CLOUD_API_KEY` | *(none)* | Required if cloud URL set |
-| `SWARM_CLOUD_MODEL` | `claude-opus-4-6` | Primary cloud model |
+| `SWARM_CLOUD_MODEL` | `gpt-5.4-mini` | Primary cloud model |
 | `SWARM_CLOUD_FALLBACK_MODEL` (script) | `gemini-3.1-pro-high` | Shell-level fallback when primary model unavailable |
-| `SWARM_CLOUD_FALLBACK_MODELS` (config.rs) | `claude-opus-4-6, gemini-3.1-pro-high, claude-sonnet-4-6, gemini-3.1-flash-lite-preview` | Comma-separated 4-model cascade in Rust |
+| `SWARM_CLOUD_FALLBACK_MODELS` (config.rs) | `gpt-5.4-mini, gemini-3.1-pro-high, claude-sonnet-4-6, gemini-3.1-flash-lite-preview` | Comma-separated 4-model cascade in Rust |
 | `SWARM_REQUIRE_ANTHROPIC_OWNERSHIP` | `1` | run-swarm.sh accepts both "anthropic" and "antigravity" |
 | `SWARM_CLOUD_PREFLIGHT` | `1` | Probe cloud endpoint before starting |
 
@@ -311,7 +311,7 @@ curl -s http://vasp-02:8081/health  # Reasoning (122B-A10B MoE)
 ```text
 INFO swarm_agents: Endpoint health check local_ok=true coder_ok=true reasoning_ok=true
 INFO swarm_agents: Beads-free mode: processing CLI issue id=<issue>
-INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed workers model=claude-opus-4-6
+INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed workers model=gpt-5.4-mini
 ```
 
 ## External Tools (install separately)
