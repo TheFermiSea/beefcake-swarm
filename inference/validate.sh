@@ -165,7 +165,7 @@ if $RUN_CONTAINER; then
     if ssh "${SLURM_CTL}" "apptainer exec ${CONTAINER} which llama-rpc-server" &>/dev/null; then
         pass "llama-rpc-server binary found in container"
     else
-        warn "llama-rpc-server binary not found (distributed inference may not work)"
+        warn "llama-rpc-server binary not found (distributed inference may not work or container was built without RPC)"
     fi
 fi
 

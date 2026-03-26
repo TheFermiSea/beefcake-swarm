@@ -4,19 +4,22 @@
 #
 # Options:
 #   LLAMA_CPP_VERSION - Git ref to build (default: HEAD)
-#   Example: apptainer build --build-arg LLAMA_CPP_VERSION=b4567 llama-server.sif llama-server.def
+#   LLAMA_BUILD_RPC   - ON to build llama-rpc-server/rpc-server, OFF to skip it
+#   Example: apptainer build --build-arg LLAMA_CPP_VERSION=b4567 --build-arg LLAMA_BUILD_RPC=ON llama-server.sif llama-server.def
 
 Bootstrap: docker
-From: nvidia/cuda:12.2.0-devel-ubuntu22.04
+From: nvidia/cuda:12.6.3-devel-ubuntu22.04
 
 %arguments
     LLAMA_CPP_VERSION=HEAD
+    LLAMA_BUILD_RPC=OFF
 
 %labels
     Author beefcake2-cluster
     Version 1.1
     Description llama.cpp inference server for V100S GPUs
     LLAMA_CPP_VERSION {{LLAMA_CPP_VERSION}}
+    LLAMA_BUILD_RPC {{LLAMA_BUILD_RPC}}
 
 %post
     set -eu  # Fail fast on errors (pipefail not available in sh)
@@ -45,27 +48,52 @@ From: nvidia/cuda:12.2.0-devel-ubuntu22.04
     COMMIT_SHA=$(git rev-parse HEAD)
     echo "Building llama.cpp commit: ${COMMIT_SHA}"
     echo "${COMMIT_SHA}" > /opt/llama-cpp-version.txt
+    echo "Building RPC server: {{LLAMA_BUILD_RPC}}"
 
     echo "=== Configuring CMake build ==="
-    # Build with CUDA support for V100 (Compute Capability 7.0)
+    CUDA_STUB_DIR=/usr/local/cuda/lib64/stubs
+    # rpc-server links against libggml-cuda.so, which records a DT_NEEDED on
+    # libcuda.so.1. The CUDA devel image ships only the stub libcuda.so, so
+    # provide the SONAME symlink and feed the stub dir to the linker too.
+    ln -sf "${CUDA_STUB_DIR}/libcuda.so" "${CUDA_STUB_DIR}/libcuda.so.1"
+    export LD_LIBRARY_PATH="${CUDA_STUB_DIR}:${LD_LIBRARY_PATH:-}"
+    export LIBRARY_PATH="${CUDA_STUB_DIR}:${LIBRARY_PATH:-}"
+    export CMAKE_EXE_LINKER_FLAGS="-Wl,-rpath-link,${CUDA_STUB_DIR} -L${CUDA_STUB_DIR}"
+    export CMAKE_SHARED_LINKER_FLAGS="-Wl,-rpath-link,${CUDA_STUB_DIR} -L${CUDA_STUB_DIR}"
+
+    # Build with CUDA support for V100 (Compute Capability 7.0) and the actual
+    # server hardware profile (Xeon Gold 6248, 4 NUMA nodes, V100S 32GB).
     # Key flags:
     #   GGML_CUDA=ON       - Enable CUDA backend
-    #   GGML_RPC=ON        - Enable RPC server for distributed inference
+    #   GGML_RPC={{LLAMA_BUILD_RPC}} - Build RPC server only when explicitly requested
     #   GGML_CUDA_F16=ON   - Use FP16 CUDA kernels (V100 Tensor Cores)
-    #   GGML_NATIVE=OFF    - Don't use host-specific optimizations (for portability)
+    #   GGML_NATIVE=ON     - Build for the target Xeon nodes rather than generic portability
     cmake -B build \
         -DGGML_CUDA=ON \
-        -DGGML_RPC=ON \
+        -DGGML_RPC={{LLAMA_BUILD_RPC}} \
         -DCMAKE_CUDA_ARCHITECTURES=70 \
         -DGGML_CUDA_F16=ON \
-        -DGGML_NATIVE=OFF \
+        -DGGML_NATIVE=ON \
+        -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_TESTS=OFF \
+        -DLLAMA_OPENSSL=OFF \
+        -DCMAKE_EXE_LINKER_FLAGS="${CMAKE_EXE_LINKER_FLAGS}" \
+        -DCMAKE_SHARED_LINKER_FLAGS="${CMAKE_SHARED_LINKER_FLAGS}" \
         -DCMAKE_BUILD_TYPE=Release
 
     echo "=== Building llama.cpp ==="
-    # Build core binaries - target names may vary by version
-    # Primary targets: llama-server, llama-cli
-    # RPC target: rpc-server (older) or llama-rpc-server (newer)
-    cmake --build build --config Release -j "$(nproc)"
+    # Build only the serving binaries and their dependencies instead of the full
+    # upstream tool/example graph.
+    cmake --build build --config Release --target llama-server llama-cli -j "$(nproc)"
+    if [ "{{LLAMA_BUILD_RPC}}" = "ON" ]; then
+        if cmake --build build --target help | grep -qE '(^|[[:space:]])llama-rpc-server([[:space:]]|$)'; then
+            cmake --build build --config Release --target llama-rpc-server -j "$(nproc)"
+        elif cmake --build build --target help | grep -qE '(^|[[:space:]])rpc-server([[:space:]]|$)'; then
+            cmake --build build --config Release --target rpc-server -j "$(nproc)"
+        else
+            echo "WARNING: RPC requested, but no rpc target was exposed by this llama.cpp version"
+        fi
+    fi
 
     echo "=== Installing shared libraries ==="
     # llama.cpp builds shared libraries that binaries depend on
@@ -120,7 +148,7 @@ From: nvidia/cuda:12.2.0-devel-ubuntu22.04
     fi
 
     if [ "$RPC_INSTALLED" = false ]; then
-        echo "WARNING: RPC server binary not found - distributed inference will not work"
+        echo "WARNING: RPC server binary not found - distributed inference disabled or unsupported in this build"
         echo "Available binaries:"
         ls -la build/bin/ || true
     fi
@@ -145,9 +173,15 @@ From: nvidia/cuda:12.2.0-devel-ubuntu22.04
     export PATH=/usr/local/bin:$PATH
     export LD_LIBRARY_PATH=/usr/local/lib:${LD_LIBRARY_PATH:-}
     export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
-    # Optimal settings for V100S
+    export OMP_PROC_BIND=${OMP_PROC_BIND:-spread}
+    export OMP_PLACES=${OMP_PLACES:-cores}
+    export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-ib0}
+    export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-ib0}
+    export UCX_NET_DEVICES=${UCX_NET_DEVICES:-ib0}
+    export UCX_TLS=${UCX_TLS:-tcp,self,cuda_copy,cuda_ipc}
+    # Optimal defaults for V100S servers
     export GGML_CUDA_NO_PINNED=0
-    export GGML_CUDA_FORCE_MMQ=0
+    export GGML_CUDA_FORCE_MMQ=1
 
 %runscript
     exec llama-server "$@"
@@ -180,7 +214,7 @@ From: nvidia/cuda:12.2.0-devel-ubuntu22.04
     if test -x /usr/local/bin/llama-rpc-server; then
         echo "[PASS] llama-rpc-server binary exists"
     else
-        echo "[WARN] llama-rpc-server missing - distributed inference disabled"
+        echo "[WARN] llama-rpc-server missing - expected when built with LLAMA_BUILD_RPC=OFF"
     fi
 
     # Verify version file exists
@@ -200,7 +234,7 @@ From: nvidia/cuda:12.2.0-devel-ubuntu22.04
         --host 0.0.0.0 --port 8080 \
         --ctx-size 8192 --n-gpu-layers 99
 
-      # Distributed inference (RPC worker)
+      # Distributed inference (RPC worker, build with LLAMA_BUILD_RPC=ON)
       apptainer exec --nv llama-server.sif \
         llama-rpc-server --host 0.0.0.0 --port 50052
 

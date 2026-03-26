@@ -92,8 +92,8 @@ CTX_SIZE="${CTX_SIZE:-131072}"           # Per-slot context (128K default)
 N_PREDICT="${N_PREDICT:--1}"             # -1 = unlimited (reasoning models need full CoT)
 THREADS="${THREADS:-28}"                 # Decode threads (fewer than max reduces memory bandwidth contention)
 THREADS_BATCH="${THREADS_BATCH:-36}"     # Batch/prompt threads (use all cores for prefill)
-BATCH_SIZE="${BATCH_SIZE:-2048}"
-UBATCH_SIZE="${UBATCH_SIZE:-2048}"
+BATCH_SIZE="${BATCH_SIZE:-4096}"
+UBATCH_SIZE="${UBATCH_SIZE:-4096}"
 ENDPOINT_SUFFIX="${ENDPOINT_SUFFIX:-qwen35}"
 TIER_NAME="${TIER_NAME:-manager-local}"
 # Enable/disable --jinja template processing. Set JINJA_MODE=off to disable.

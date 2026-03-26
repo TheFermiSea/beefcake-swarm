@@ -3,9 +3,10 @@
 # Build llama.cpp Apptainer container for V100S GPUs
 #
 # Usage:
-#   ./build.sh                    # Build on slurm-ctl
+#   ./build.sh                    # Build on vasp-01 for cluster hardware
 #   ./build.sh --local            # Build locally (requires apptainer)
 #   ./build.sh --push             # Build and push to /cluster/shared/containers
+#   ./build.sh --with-rpc         # Also build llama-rpc-server / rpc-server
 #
 # Prerequisites:
 #   - Apptainer installed (apptainer build command available)
@@ -23,6 +24,7 @@ DEF_FILE="${SCRIPT_DIR}/llama-server.def"
 # Parse arguments
 BUILD_LOCAL=false
 PUSH=false
+BUILD_RPC=OFF
 
 for arg in "$@"; do
     case $arg in
@@ -32,12 +34,20 @@ for arg in "$@"; do
         --push)
             PUSH=true
             ;;
+        --with-rpc)
+            BUILD_RPC=ON
+            ;;
+        --without-rpc)
+            BUILD_RPC=OFF
+            ;;
         --help|-h)
-            echo "Usage: $0 [--local] [--push]"
+            echo "Usage: $0 [--local] [--push] [--with-rpc|--without-rpc]"
             echo ""
             echo "Options:"
-            echo "  --local    Build locally instead of on slurm-ctl"
-            echo "  --push     Push to /cluster/shared/containers after build"
+            echo "  --local       Build locally instead of on vasp-01"
+            echo "  --push        Push to /cluster/shared/containers after build"
+            echo "  --with-rpc    Build llama-rpc-server/rpc-server too (default: off)"
+            echo "  --without-rpc Skip RPC binaries and optimize for single-node serving"
             exit 0
             ;;
     esac
@@ -46,6 +56,7 @@ done
 echo "=========================================="
 echo "Building llama.cpp Apptainer container"
 echo "=========================================="
+echo "RPC build: ${BUILD_RPC}"
 
 # Check for definition file
 if [[ ! -f "$DEF_FILE" ]]; then
@@ -66,7 +77,9 @@ do_build() {
     rm -f "${output}"
 
     # Build with fakeroot (no root required)
-    apptainer build --fakeroot "${output}" "${DEF_FILE}"
+    apptainer build --fakeroot \
+        --build-arg "LLAMA_BUILD_RPC=${BUILD_RPC}" \
+        "${output}" "${DEF_FILE}"
 
     echo ""
     echo "Build complete: ${output}"
@@ -88,7 +101,7 @@ else
     scp "${DEF_FILE}" vasp-01:/tmp/llama-build/
 
     # Run build on vasp-01
-    ssh vasp-01 "cd /tmp/llama-build && apptainer build ${CONTAINER_NAME} llama-server.def"
+    ssh vasp-01 "cd /tmp/llama-build && apptainer build --build-arg LLAMA_BUILD_RPC=${BUILD_RPC} ${CONTAINER_NAME} llama-server.def"
 
     # Copy result back or directly to shared
     if [[ "$PUSH" == "true" ]]; then
