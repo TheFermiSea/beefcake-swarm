@@ -372,9 +372,19 @@ impl Verifier {
             Ok(Ok(output)) => Ok(output),
             Ok(Err(e)) => Err(format!("Failed to execute: {e}")),
             Err(_) => Err(format!(
-                "Gate timed out after {}s",
+                "TIMEOUT: Gate timed out after {}s",
                 self.config.gate_timeout_secs
             )),
+        }
+    }
+
+    /// Determine the correct `GateOutcome` for an `Err` from `run_with_timeout`.
+    /// Returns `Timeout` for timeouts, `Failed` for other errors.
+    fn outcome_for_error(error_msg: &str) -> GateOutcome {
+        if error_msg.starts_with("TIMEOUT:") {
+            GateOutcome::Timeout
+        } else {
+            GateOutcome::Failed
         }
     }
 
@@ -419,7 +429,7 @@ impl Verifier {
             }
             Err(e) => GateResult {
                 gate: "fmt".to_string(),
-                outcome: GateOutcome::Failed,
+                outcome: Self::outcome_for_error(&e),
                 duration_ms: start.elapsed().as_millis() as u64,
                 exit_code: None,
                 error_count: 1,
@@ -450,7 +460,7 @@ impl Verifier {
             }
             Err(e) => GateResult {
                 gate: "clippy".to_string(),
-                outcome: GateOutcome::Failed,
+                outcome: Self::outcome_for_error(&e),
                 duration_ms: start.elapsed().as_millis() as u64,
                 exit_code: None,
                 error_count: 1,
@@ -561,7 +571,7 @@ impl Verifier {
             }
             Err(e) => GateResult {
                 gate: "check".to_string(),
-                outcome: GateOutcome::Failed,
+                outcome: Self::outcome_for_error(&e),
                 duration_ms: start.elapsed().as_millis() as u64,
                 exit_code: None,
                 error_count: 1,
@@ -627,7 +637,7 @@ impl Verifier {
             }
             Err(e) => GateResult {
                 gate: "test".to_string(),
-                outcome: GateOutcome::Failed,
+                outcome: Self::outcome_for_error(&e),
                 duration_ms: start.elapsed().as_millis() as u64,
                 exit_code: None,
                 error_count: 1,
@@ -700,7 +710,7 @@ impl Verifier {
             }
             Err(e) => GateResult {
                 gate: "nextest".to_string(),
-                outcome: GateOutcome::Failed,
+                outcome: Self::outcome_for_error(&e),
                 duration_ms: start.elapsed().as_millis() as u64,
                 exit_code: None,
                 error_count: 1,

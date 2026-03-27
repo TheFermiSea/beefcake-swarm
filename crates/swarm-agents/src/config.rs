@@ -12,7 +12,7 @@ use crate::triage::PhaseModelSelector;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SwarmStackProfile {
-    /// Qwen3-Coder-Next on vasp-03, Qwen3.5-122B-A10B on vasp-01 (coder) + vasp-02 (reasoning)
+    /// OmniCoder-9B on vasp-03, Qwen3.5-27B on vasp-01 (coder) + vasp-02 (reasoning)
     #[default]
     #[serde(rename = "hybrid_balanced_v1")]
     HybridBalancedV1,
@@ -56,11 +56,11 @@ pub enum SwarmRole {
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
 pub enum Tier {
-    /// Qwen3.5-27B-Distilled on vasp-03 — Scout/fast tier (192K context, VRAM-resident)
+    /// OmniCoder-9B on vasp-03 — Scout/fast tier (32K context, dense GPU-resident, ~66 tok/s)
     Fast,
-    /// Qwen3.5-122B-A10B on vasp-01 — Coder/integrator tier (65K context, expert-offload)
+    /// Qwen3.5-27B on vasp-01 — Coder/integrator tier (32K context, dense GPU-resident, ~27 tok/s)
     Coder,
-    /// Qwen3.5-122B-A10B on vasp-02 — Reasoning/integrator tier (65K context, expert-offload)
+    /// Qwen3.5-27B on vasp-02 — Reasoning/integrator tier (32K context, dense GPU-resident, ~27 tok/s)
     Reasoning,
     /// Cloud models via CLIAPIProxy
     Cloud,
@@ -430,11 +430,11 @@ impl CloudFallbackMatrix {
 /// Top-level swarm configuration.
 #[derive(Debug, Clone)]
 pub struct SwarmConfig {
-    /// Qwen3-Coder-Next on vasp-03:8081 (Scout/fast tier, 65K context, expert-offload MoE)
+    /// OmniCoder-9B on vasp-03:8081 (Scout/fast tier, 32K context, dense GPU-resident)
     pub fast_endpoint: Endpoint,
-    /// Qwen3.5-122B-A10B on vasp-01:8081 (Coder/integrator, 65K context, expert-offload)
+    /// Qwen3.5-27B on vasp-01:8081 (Coder tier, 32K context, dense GPU-resident)
     pub coder_endpoint: Endpoint,
-    /// Qwen3.5-122B-A10B on vasp-02:8081 (Reasoning/integrator, 65K context, expert-offload)
+    /// Qwen3.5-27B on vasp-02:8081 (Reasoning tier, 32K context, dense GPU-resident)
     pub reasoning_endpoint: Endpoint,
     /// CLIAPIProxy cloud escalation (optional)
     pub cloud_endpoint: Option<CloudEndpoint>,
@@ -564,8 +564,7 @@ impl Default for SwarmConfig {
             fast_endpoint: Endpoint {
                 url: std::env::var("SWARM_FAST_URL")
                     .unwrap_or_else(|_| "http://vasp-03:8081/v1".into()),
-                model: std::env::var("SWARM_FAST_MODEL")
-                    .unwrap_or_else(|_| "Qwen3-Coder-Next".into()),
+                model: std::env::var("SWARM_FAST_MODEL").unwrap_or_else(|_| "OmniCoder-9B".into()),
                 tier: Tier::Fast,
                 api_key: std::env::var("SWARM_FAST_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
@@ -573,8 +572,7 @@ impl Default for SwarmConfig {
             coder_endpoint: Endpoint {
                 url: std::env::var("SWARM_CODER_URL")
                     .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
-                model: std::env::var("SWARM_CODER_MODEL")
-                    .unwrap_or_else(|_| "Qwen3.5-122B-A10B".into()),
+                model: std::env::var("SWARM_CODER_MODEL").unwrap_or_else(|_| "Qwen3.5-27B".into()),
                 tier: Tier::Coder,
                 api_key: std::env::var("SWARM_CODER_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
@@ -583,7 +581,7 @@ impl Default for SwarmConfig {
                 url: std::env::var("SWARM_REASONING_URL")
                     .unwrap_or_else(|_| "http://vasp-02:8081/v1".into()),
                 model: std::env::var("SWARM_REASONING_MODEL")
-                    .unwrap_or_else(|_| "Qwen3.5-122B-A10B".into()),
+                    .unwrap_or_else(|_| "Qwen3.5-27B".into()),
                 tier: Tier::Reasoning,
                 api_key: std::env::var("SWARM_REASONING_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
@@ -767,7 +765,7 @@ impl SwarmConfig {
 
         // When TZ is configured, map every role to a TZ function name so all
         // inferences are tracked and A/B tested. TZ routes each function to the
-        // configured model variants (Strand-14B, Tessa-7B, HydraCoder, 122B, etc.)
+        // configured model variants (OmniCoder-9B, Qwen3.5-27B, etc.)
         if self.tensorzero_url.is_some() {
             return match role {
                 SwarmRole::Council => "tensorzero::function_name::architect_plan",
@@ -959,16 +957,16 @@ impl SwarmConfig {
 /// Pre-built rig CompletionsClients for the three-node inference cluster.
 ///
 /// Each tier maps to a different node/model:
-/// - `local`     -> vasp-03:8081 (Qwen3.5-27B-Distilled, Scout/fast tier, 192K context)
-/// - `coder`     -> vasp-01:8081 (Qwen3.5-122B-A10B, Integrator/coder tier, 65K context)
-/// - `reasoning` -> vasp-02:8081 (Qwen3.5-122B-A10B, Integrator/reasoning tier, 65K context)
+/// - `local`     -> vasp-03:8081 (OmniCoder-9B, Scout/fast tier, 32K context, ~66 tok/s)
+/// - `coder`     -> vasp-01:8081 (Qwen3.5-27B, Coder tier, 32K context, ~27 tok/s)
+/// - `reasoning` -> vasp-02:8081 (Qwen3.5-27B, Reasoning tier, 32K context, ~27 tok/s)
 #[derive(Clone)]
 pub struct ClientSet {
-    /// Client for vasp-03:8081 (Qwen3.5-27B-Distilled -- scout/fast tier: analysis, routing, review)
+    /// Client for vasp-03:8081 (OmniCoder-9B — scout/fast tier: analysis, routing, review)
     pub local: openai::CompletionsClient,
-    /// Client for vasp-01:8081 (Qwen3.5-122B-A10B -- coder/integrator tier: code generation)
+    /// Client for vasp-01:8081 (Qwen3.5-27B — coder tier: code generation)
     pub coder: openai::CompletionsClient,
-    /// Client for vasp-02:8081 (Qwen3.5-122B-A10B -- reasoning/integrator tier: deep analysis)
+    /// Client for vasp-02:8081 (Qwen3.5-27B — reasoning tier: deep analysis)
     pub reasoning: openai::CompletionsClient,
     /// Client for Qwen3.5-397B-A17B (strategist/advisor tier)
     pub strategist: Option<openai::CompletionsClient>,
@@ -1235,9 +1233,9 @@ mod tests {
         assert!(config.fast_endpoint.url.contains("vasp-03"));
         assert!(config.coder_endpoint.url.contains("vasp-01"));
         assert!(config.reasoning_endpoint.url.contains("vasp-02"));
-        assert_eq!(config.fast_endpoint.model, "Qwen3-Coder-Next");
-        assert_eq!(config.coder_endpoint.model, "Qwen3.5-122B-A10B");
-        assert_eq!(config.reasoning_endpoint.model, "Qwen3.5-122B-A10B");
+        assert_eq!(config.fast_endpoint.model, "OmniCoder-9B");
+        assert_eq!(config.coder_endpoint.model, "Qwen3.5-27B");
+        assert_eq!(config.reasoning_endpoint.model, "Qwen3.5-27B");
         assert_eq!(config.fast_endpoint.api_key, "not-needed");
     }
 

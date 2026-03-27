@@ -192,7 +192,9 @@ impl ContextPacker {
         let mut contexts = Vec::new();
         let mut files_seen = HashSet::new();
         let mut total_chars = 0usize;
-        let char_budget = self.max_context_tokens * 4; // 4 chars per token
+        // 4 chars ≈ 1 token, minus 15% safety buffer for JSON serialization
+        // overhead, line number formatting, and prompt template wrapping.
+        let char_budget = (self.max_context_tokens * 4) * 85 / 100;
 
         // Canonical working_dir for sandbox validation
         let canon_wd = match self.working_dir.canonicalize() {
@@ -845,7 +847,9 @@ impl ContextPacker {
     fn build_file_contexts(&self, files: &[String]) -> Vec<FileContext> {
         let mut contexts = Vec::new();
         let mut total_chars = 0usize;
-        let char_budget = self.max_context_tokens * 4; // 4 chars per token
+        // 4 chars ≈ 1 token, minus 15% safety buffer for JSON serialization
+        // overhead, line number formatting, and prompt template wrapping.
+        let char_budget = (self.max_context_tokens * 4) * 85 / 100;
 
         for file in files {
             if !file.ends_with(".rs") {

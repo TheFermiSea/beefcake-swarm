@@ -15,8 +15,10 @@ use std::time::Duration;
 pub enum GateOutcome {
     /// Gate passed successfully
     Passed,
-    /// Gate failed with errors
+    /// Gate failed with errors (non-zero exit code, compile errors)
     Failed,
+    /// Gate was killed after exceeding its timeout (hung process, not a code error)
+    Timeout,
     /// Gate was skipped (previous gate failed and pipeline is sequential)
     Skipped,
     /// Gate produced warnings but did not block the pipeline
@@ -27,6 +29,11 @@ impl GateOutcome {
     pub fn is_passed(&self) -> bool {
         matches!(self, Self::Passed | Self::Warning)
     }
+
+    /// Whether this outcome represents a timeout rather than a real code error.
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, Self::Timeout)
+    }
 }
 
 impl std::fmt::Display for GateOutcome {
@@ -34,6 +41,7 @@ impl std::fmt::Display for GateOutcome {
         match self {
             Self::Passed => write!(f, "PASS"),
             Self::Failed => write!(f, "FAIL"),
+            Self::Timeout => write!(f, "TIMEOUT"),
             Self::Skipped => write!(f, "SKIP"),
             Self::Warning => write!(f, "WARN"),
         }
@@ -299,6 +307,7 @@ impl VerifierReport {
                     GateOutcome::Passed => 1.0,
                     GateOutcome::Warning => 0.75,
                     GateOutcome::Skipped => 0.5, // skipped = earlier gate failed, partial credit
+                    GateOutcome::Timeout => 0.25, // timeout = hung process, not necessarily a code error
                     GateOutcome::Failed => 0.0,
                 })
                 .sum::<f64>()
