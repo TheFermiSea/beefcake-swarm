@@ -612,19 +612,42 @@ impl WorktreeBridge {
             }
         }
 
+        // Auto-stash dirty tracked files (e.g. Cargo.lock dirtied by builds)
+        // so they don't block the merge. Pop the stash after merging.
         let repo_root_changes = tracked_changes(&self.repo_root)?;
-        if !repo_root_changes.is_empty() {
+        let did_stash = if !repo_root_changes.is_empty() {
             let sample = repo_root_changes
                 .iter()
                 .take(5)
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(", ");
-            bail!(
-                "Target repo has tracked local changes and is unsafe for landing merges: {sample}. \
-                 Use a clean integration worktree or commit/stash those files first"
+            tracing::info!(
+                issue_id = %issue_id,
+                dirty_files = %sample,
+                "Auto-stashing dirty tracked files before merge"
             );
-        }
+            let stash = Command::new("git")
+                .args([
+                    "stash",
+                    "push",
+                    "-m",
+                    &format!("swarm-auto-stash-{issue_id}"),
+                ])
+                .current_dir(&self.repo_root)
+                .output()
+                .context("Failed to auto-stash before merge")?;
+            if !stash.status.success() {
+                let stderr = String::from_utf8_lossy(&stash.stderr);
+                bail!(
+                    "Auto-stash failed for dirty files ({sample}): {stderr}. \
+                     Commit or stash those files manually before retrying."
+                );
+            }
+            true
+        } else {
+            false
+        };
 
         // Merge the branch into the main repo
         let merge_msg = format!("swarm: merge {issue_id}");
@@ -634,6 +657,30 @@ impl WorktreeBridge {
             3,
         )
         .context("Failed to merge worktree branch")?;
+
+        // Restore stash regardless of merge outcome
+        if did_stash {
+            let pop = Command::new("git")
+                .args(["stash", "pop"])
+                .current_dir(&self.repo_root)
+                .output();
+            match pop {
+                Ok(out) if out.status.success() => {
+                    tracing::debug!(issue_id = %issue_id, "Auto-stash restored after merge");
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    tracing::warn!(
+                        issue_id = %issue_id,
+                        stderr = %stderr.trim(),
+                        "Auto-stash pop had conflicts — stash preserved, check manually"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(issue_id = %issue_id, error = %e, "Failed to pop auto-stash");
+                }
+            }
+        }
 
         if !merge.status.success() {
             let stderr = String::from_utf8_lossy(&merge.stderr);
@@ -1317,7 +1364,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_and_remove_rejects_dirty_target_repo() {
+    fn test_merge_and_remove_auto_stashes_dirty_target_repo() {
         let repo_dir = tempfile::tempdir().unwrap();
         let wt_base = tempfile::tempdir().unwrap();
 
@@ -1353,6 +1400,7 @@ mod tests {
             .expect("bridge creation");
         let wt_path = bridge.create("dirty-target").expect("create worktree");
 
+        // Commit a change in the worktree
         std::fs::write(wt_path.join("README.md"), "worktree change").unwrap();
         Command::new("git")
             .args(["add", "."])
@@ -1365,22 +1413,30 @@ mod tests {
             .output()
             .unwrap();
 
+        // Dirty a different file in the main repo (like Cargo.lock from a build)
         std::fs::write(repo_dir.path().join("config.toml"), "value = 2\n").unwrap();
 
+        // Merge should succeed — auto-stash handles the dirty file
         let result = bridge.merge_and_remove("dirty-target");
         assert!(
-            result.is_err(),
-            "merge_and_remove should fail on dirty repo_root"
-        );
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("Target repo has tracked local changes"),
-            "error should explain dirty target repo, got: {err_msg}"
+            result.is_ok(),
+            "merge_and_remove should auto-stash dirty files, got: {:?}",
+            result.unwrap_err()
         );
 
-        bridge
-            .cleanup("dirty-target")
-            .expect("cleanup dirty-target");
+        // The dirty file should be restored after merge
+        let config = std::fs::read_to_string(repo_dir.path().join("config.toml")).unwrap();
+        assert_eq!(
+            config, "value = 2\n",
+            "auto-stash should restore the dirty file after merge"
+        );
+
+        // The worktree change should have landed
+        let readme = std::fs::read_to_string(repo_dir.path().join("README.md")).unwrap();
+        assert_eq!(
+            readme, "worktree change",
+            "worktree change should be merged"
+        );
     }
 
     #[test]
