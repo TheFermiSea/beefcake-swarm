@@ -10,7 +10,6 @@ mkdir -p /tmp/cuda-cache
 
 export APPTAINERENV_HOME=/tmp
 export APPTAINERENV_CUDA_CACHE_PATH=/tmp/cuda-cache
-export APPTAINERENV_GGML_CUDA_DISABLE_FUSION=1
 
 existing_pids="$(ps -eo pid=,args= | awk '/(llama-server-mmq|apptainer .*llama-server\.sif|\/usr\/local\/bin\/llama-server)( |$)/ { print $1 }')"
 if [[ -n "${existing_pids}" ]]; then
@@ -22,11 +21,11 @@ nohup numactl --interleave=all apptainer run --nv --bind /scratch/ai:/scratch/ai
   --model /scratch/ai/models/Qwen3.5-122B-A10B-Q4_K_M-00001-of-00003.gguf \
   --alias Qwen3.5-122B-A10B \
   --host 0.0.0.0 --port 8081 \
-  --ctx-size 65536 --n-gpu-layers 99 \
+  --ctx-size 16384 --n-gpu-layers 99 \
   -ot ".ffn_.*_exps.=CPU" \
   --threads 32 --batch-size 4096 --ubatch-size 4096 \
   --cache-type-k q4_0 --cache-type-v q4_0 \
-  --cache-prompt -fa on --parallel 4 --mlock --cont-batching --metrics --jinja \
+  --cache-prompt -fa on --parallel 1 --mlock --cont-batching --metrics --jinja \
   > "${LOG_PATH}" 2>&1 &
 
 echo "Started Qwen3.5-122B-A10B PID=$! container=${CONTAINER}"
