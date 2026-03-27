@@ -53,7 +53,7 @@ level = "episode"
 # Create datasets via the UI (http://localhost:4000/datasets/builder),
 # then run evaluations via CLI or UI.
 
-# Evaluate worker code edit quality across Qwen coder vs reasoning variants.
+# Evaluate worker code edit quality across model variants.
 [evaluations.worker_code_quality]
 type = "inference"
 function_name = "worker_code_edit"
@@ -113,50 +113,42 @@ tools = ["edit_file", "write_file", "proxy_edit_file", "proxy_write_file"]
 # Gateway runs with network_mode: host so it can reach vasp nodes directly
 # by IP and CLIAPIProxy on localhost:8317.
 #
-# Cluster layout (2026-03-26):
-#   vasp-03:8081 — Qwen3-Coder-Next (fast tier, 4 parallel, 65K ctx)
-#   vasp-01:8081 — Qwen3.5-122B-A10B MoE (coder, 4 parallel, CPU offload)
-#   vasp-02:8081 — Qwen3.5-122B-A10B MoE (reasoning, 4 parallel, CPU offload)
+# Cluster layout (2026-03-27, post dense-model migration):
+#   vasp-03:8081 — OmniCoder-9B Q4_K_M (scout/fast tier, ~66 tok/s, dense on GPU)
+#   vasp-01:8081 — Qwen3.5-27B Q4_K_M (coder tier, ~27 tok/s, dense on GPU)
+#   vasp-02:8081 — Qwen3.5-27B Q4_K_M (reasoning tier, ~27 tok/s, dense on GPU)
+#   vasp-*:8082  — nomic-embed-text-v1.5 (CPU embedding service, all nodes)
 
-# --- Fast tier on vasp-03 ---
+# --- Scout/fast tier on vasp-03 (OmniCoder-9B, agentic-trained) ---
 
 [models.qwen_fast]
 routing = ["vasp03"]
 
 [models.qwen_fast.providers.vasp03]
 type = "openai"
-model_name = "Qwen3-Coder-Next"
+model_name = "OmniCoder-9B"
 api_base = "http://10.0.0.22:8081/v1"
 api_key_location = "none"
 
-# --- General-purpose MoE models on vasp-01/02 ---
+# --- Coder tier on vasp-01 (Qwen3.5-27B dense) ---
 
 [models.qwen_coder]
 routing = ["vasp01"]
 
 [models.qwen_coder.providers.vasp01]
 type = "openai"
-model_name = "Qwen3.5-122B-A10B"
+model_name = "Qwen3.5-27B"
 api_base = "http://10.0.0.20:8081/v1"
 api_key_location = "none"
+
+# --- Reasoning tier on vasp-02 (Qwen3.5-27B dense) ---
 
 [models.qwen_reasoning]
 routing = ["vasp02"]
 
-# --- HydraCoder MoE on vasp-02:8082 ---
-
-[models.hydracoder]
-routing = ["vasp02_hydra"]
-
-[models.hydracoder.providers.vasp02_hydra]
-type = "openai"
-model_name = "HydraCoder.i1-Q4_K_M.gguf"
-api_base = "http://10.0.0.21:8083/v1"
-api_key_location = "none"
-
 [models.qwen_reasoning.providers.vasp02]
 type = "openai"
-model_name = "Qwen3.5-122B-A10B"
+model_name = "Qwen3.5-27B"
 api_base = "http://10.0.0.21:8081/v1"
 api_key_location = "none"
 
@@ -193,9 +185,6 @@ api_key_location = "env::SWARM_CLOUD_API_KEY"
 # Each function maps to a distinct inference task in the swarm pipeline.
 
 # --- Cloud Manager: decomposes tasks, delegates to workers ---
-# Pure proxy: no schema or templates. Rig sends raw OpenAI chat messages.
-# TZ logs the inference and routes to the configured model. Templates in
-# config/functions/ are preserved for future GEPA via native /inference API.
 [functions.cloud_manager_delegation]
 type = "chat"
 
@@ -204,7 +193,6 @@ type = "chat_completion"
 model = "claude_opus"
 
 # --- Architect: reads codebase, produces SEARCH/REPLACE plans ---
-# Pure proxy: same as cloud_manager_delegation.
 [functions.architect_plan]
 type = "chat"
 
@@ -218,16 +206,15 @@ type = "chat_completion"
 model = "claude_sonnet"
 
 # Adaptive: TZ shifts traffic to the variant that maximizes task_resolved.
-# Falls back to equal weights until feedback data accumulates (Phase 1 fix).
 [functions.architect_plan.experimentation]
 type = "adaptive"
 candidate_variants = ["opus_verbose", "sonnet_concise"]
 metric = "task_resolved"
 update_period_s = 300
 
-# --- Editor: applies Architect's SEARCH/REPLACE blocks mechanically ---
-# Pure proxy — Rig sends raw messages. Kept on the 122B nodes because historical
-# fast-tier models on vasp-03 had tool-call formatting issues under TensorZero.
+# --- Editor: applies Architect's SEARCH/REPLACE blocks ---
+# A/B test between vasp-01 (coder) and vasp-02 (reasoning) — same model,
+# different node. Tests whether load balancing or sticky routing is better.
 [functions.editor_apply]
 type = "chat"
 
@@ -245,7 +232,9 @@ candidate_variants = ["qwen_coder", "qwen_reasoning"]
 metric = "task_resolved"
 update_period_s = 300
 
-# --- Worker Code Edit: fast tier + 122B A/B test for code generation ---
+# --- Worker Code Edit: scout (OmniCoder-9B) vs coder (27B) A/B test ---
+# Key experiment: does the faster 9B model resolve issues as well as 27B?
+# TZ adaptive routing will learn the answer from production feedback.
 [functions.worker_code_edit]
 type = "chat"
 
@@ -261,7 +250,7 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "qwen_reasoning"
 
-# Adaptive: compare fast-tier throughput against the two 122B nodes.
+# Adaptive: is OmniCoder-9B's speed advantage worth the quality tradeoff?
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
 candidate_variants = ["qwen_fast", "qwen_coder", "qwen_reasoning"]
@@ -269,7 +258,6 @@ metric = "task_resolved"
 update_period_s = 300
 
 # --- Code Review: blind reviewer ---
-# Pure proxy — route reviews to the live fast tier on vasp-03.
 [functions.code_review]
 type = "chat"
 
@@ -278,16 +266,16 @@ type = "chat_completion"
 model = "qwen_fast"
 
 # --- Deep Reasoning: complex analysis ---
-# Pure proxy — stays on 122B MoE for deep thinking
+# Routes to vasp-02 (27B) for reasoning-heavy tasks.
 [functions.deep_reasoning]
 type = "chat"
 
-[functions.deep_reasoning.variants.qwen_122b]
+[functions.deep_reasoning.variants.qwen_27b]
 type = "chat_completion"
 model = "qwen_reasoning"
 
 # --- Task Planning: structured repair plans ---
-# Pure proxy — compare fast planning on vasp-03 with the main 122B planner.
+# A/B test: fast planning on OmniCoder-9B vs thorough planning on 27B.
 [functions.task_planning]
 type = "chat"
 
@@ -305,8 +293,8 @@ candidate_variants = ["qwen_fast_planner", "qwen_planner"]
 metric = "task_resolved"
 update_period_s = 300
 
-# --- Code Fixing: takes a plan and implements it ---
-# Pure proxy — compare the fast tier against the two 122B nodes.
+# --- Code Fixing: takes errors and fixes them ---
+# A/B test across all 3 nodes.
 [functions.code_fixing]
 type = "chat"
 
@@ -329,7 +317,6 @@ metric = "task_resolved"
 update_period_s = 300
 
 # --- Adversarial Testing: red-team agent ---
-# Pure proxy — uses Tessa-7B for fast adversarial probing
 [functions.adversarial_test]
 type = "chat"
 
