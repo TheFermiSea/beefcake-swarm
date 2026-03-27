@@ -15,6 +15,8 @@ mkdir -p /tmp/cuda-cache
 
 export APPTAINERENV_HOME=/tmp
 export APPTAINERENV_CUDA_CACHE_PATH=/tmp/cuda-cache
+# Hide GPU to prevent CUDA memory probe crash when GPU is full from main model.
+export CUDA_VISIBLE_DEVICES=
 
 # Kill only embedding processes (port 8082), not the main LLM server (8081)
 existing_pids="$(ps -eo pid=,args= | awk '/llama-server.*--port '"$PORT"'/ { print $1 }')"
