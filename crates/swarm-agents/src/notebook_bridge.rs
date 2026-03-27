@@ -5,7 +5,8 @@
 
 use std::collections::HashMap;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
@@ -16,6 +17,10 @@ const AUTH_RETRY_COUNT: u32 = 1;
 
 /// Delay between auth retries (seconds) — gives CSRF refresh time to settle.
 const AUTH_RETRY_DELAY_SECS: u64 = 2;
+
+/// Maximum time (seconds) to wait for an `nlm` subprocess to complete.
+/// Queries normally finish in <30s; anything beyond this is hung.
+const NLM_TIMEOUT_SECS: u64 = 120;
 
 /// A single notebook entry in the registry.
 #[derive(Debug, Clone, Deserialize)]
@@ -119,25 +124,57 @@ impl NotebookBridge {
     /// (CSRF refresh → disk reload → headless Chrome) runs on each attempt,
     /// so a retry gives the CSRF token refresh a second chance after the
     /// ~20-minute session timeout.
+    ///
+    /// All invocations enforce a `NLM_TIMEOUT_SECS` deadline. The `nlm` CLI
+    /// can hang indefinitely on network/auth issues, which previously blocked
+    /// swarm-agents processes for 10-24 hours.
     fn run_command(&self, args: &[&str]) -> Result<String> {
         let cmd_label = format!("{} {}", self.bin, args.first().unwrap_or(&""));
+        let timeout = Duration::from_secs(NLM_TIMEOUT_SECS);
 
         for attempt in 0..=AUTH_RETRY_COUNT {
-            let output = Command::new(&self.bin)
+            let mut child = Command::new(&self.bin)
                 .args(args)
-                .output()
-                .context(format!("Failed to run `{cmd_label}`"))?;
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()
+                .context(format!("Failed to spawn `{cmd_label}`"))?;
 
-            if output.status.success() {
-                return Ok(String::from_utf8_lossy(&output.stdout).trim().to_string());
+            let deadline = Instant::now() + timeout;
+            let status = loop {
+                match child.try_wait()? {
+                    Some(status) => break status,
+                    None if Instant::now() >= deadline => {
+                        warn!(
+                            cmd = %cmd_label,
+                            timeout_secs = NLM_TIMEOUT_SECS,
+                            "NLM command timed out — killing subprocess"
+                        );
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        anyhow::bail!("{cmd_label} timed out after {NLM_TIMEOUT_SECS}s");
+                    }
+                    None => std::thread::sleep(Duration::from_secs(1)),
+                }
+            };
+
+            let mut stdout_buf = String::new();
+            let mut stderr_buf = String::new();
+            if let Some(mut out) = child.stdout.take() {
+                std::io::Read::read_to_string(&mut out, &mut stdout_buf)?;
+            }
+            if let Some(mut err) = child.stderr.take() {
+                std::io::Read::read_to_string(&mut err, &mut stderr_buf)?;
             }
 
-            let stderr = String::from_utf8_lossy(&output.stderr);
+            if status.success() {
+                return Ok(stdout_buf.trim().to_string());
+            }
 
             // Check if this is an auth error worth retrying
-            let is_auth_error = stderr.contains("Authentication expired")
-                || stderr.contains("RPC Error 16")
-                || stderr.contains("AuthenticationError");
+            let is_auth_error = stderr_buf.contains("Authentication expired")
+                || stderr_buf.contains("RPC Error 16")
+                || stderr_buf.contains("AuthenticationError");
 
             if is_auth_error && attempt < AUTH_RETRY_COUNT {
                 warn!(
@@ -145,11 +182,11 @@ impl NotebookBridge {
                     attempt = attempt + 1,
                     "NotebookLM auth expired, retrying after {AUTH_RETRY_DELAY_SECS}s"
                 );
-                std::thread::sleep(std::time::Duration::from_secs(AUTH_RETRY_DELAY_SECS));
+                std::thread::sleep(Duration::from_secs(AUTH_RETRY_DELAY_SECS));
                 continue;
             }
 
-            anyhow::bail!("{cmd_label} failed: {stderr}");
+            anyhow::bail!("{cmd_label} failed: {stderr_buf}");
         }
 
         unreachable!()
