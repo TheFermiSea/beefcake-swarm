@@ -16,6 +16,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
+use super::semantic;
+
 /// Regex for extracting file paths from cargo stderr output (e.g., ` --> path/to/file.rs:123:45`).
 static STDERR_FILE_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"-->\s*([^\s:]+\.rs):(\d+)").expect("STDERR_FILE_RE regex should compile")
@@ -122,6 +124,12 @@ impl ContextPacker {
             packet.repo_map = Some(repo_map);
         }
 
+        // Semantic relevance scoring: re-rank file contexts by similarity
+        // to the objective before trimming. Priority 0 (error) contexts are
+        // preserved — only priority 2+ (structural/reference) get reranked
+        // so the most relevant files survive trim_to_budget().
+        semantic::score_and_rerank(&packet.objective, &mut packet.file_contexts);
+
         // Trim to fit token budget
         self.trim_to_budget(&mut packet);
         packet
@@ -163,6 +171,9 @@ impl ContextPacker {
         } else {
             self.build_retry_file_contexts(verifier_report, &packet.files_touched)
         };
+
+        // Semantic reranking before trim (same as pack_initial)
+        semantic::score_and_rerank(&packet.objective, &mut packet.file_contexts);
 
         self.trim_to_budget(&mut packet);
         packet

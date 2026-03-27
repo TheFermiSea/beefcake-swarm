@@ -8,6 +8,7 @@ pub mod file_walker;
 pub mod packer;
 pub mod probes;
 pub mod repo_map;
+pub(crate) mod semantic;
 pub mod source_provider;
 
 pub use ast_index::{FileSymbolIndex, RustSymbol, SymbolKind};
