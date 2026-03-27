@@ -97,6 +97,41 @@ pub struct BeadsBridge {
     wt_path: Option<std::path::PathBuf>,
 }
 
+const MAIL_HEALTH_FILENAME: &str = ".swarm-mailbox-health.jsonl";
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub(crate) struct MailHealthRecord {
+    pub(crate) timestamp: String,
+    pub(crate) operation: String,
+    pub(crate) error_class: String,
+    pub(crate) error: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MailboxPoll {
+    Messages(String),
+    Advisory {
+        message: String,
+        health: MailHealthRecord,
+    },
+}
+
+impl MailboxPoll {
+    pub(crate) fn prompt_heading(&self) -> &'static str {
+        match self {
+            Self::Messages(_) => "## Agent Mail (from previous iteration)\n",
+            Self::Advisory { .. } => "## Agent Mail Status\n",
+        }
+    }
+
+    pub(crate) fn prompt_body(&self) -> &str {
+        match self {
+            Self::Messages(message) => message,
+            Self::Advisory { message, .. } => message,
+        }
+    }
+}
+
 impl Default for BeadsBridge {
     fn default() -> Self {
         Self::new()
@@ -325,6 +360,55 @@ impl BeadsBridge {
     }
 }
 
+fn classify_mail_error(error: &str) -> &'static str {
+    if error.contains("Merge conflict detected") {
+        "dolt_merge_conflict"
+    } else if error.contains("failed to stage dolt_ignore") {
+        "dolt_ignore_stage_failed"
+    } else if error.contains("No such file or directory") {
+        "bd_not_available"
+    } else {
+        "bd_mail_failed"
+    }
+}
+
+fn same_mail_failure(a: &MailHealthRecord, b: &MailHealthRecord) -> bool {
+    a.operation == b.operation && a.error_class == b.error_class && a.error == b.error
+}
+
+fn record_mail_failure(wt_path: &Path, operation: &str, error: &anyhow::Error) -> MailHealthRecord {
+    let record = MailHealthRecord {
+        timestamp: chrono::Utc::now().to_rfc3339(),
+        operation: operation.to_string(),
+        error_class: classify_mail_error(&error.to_string()).to_string(),
+        error: error.to_string(),
+    };
+    let path = wt_path.join(MAIL_HEALTH_FILENAME);
+    let last = crate::jsonl::load_tail::<MailHealthRecord>(&path, 1)
+        .into_iter()
+        .next();
+    if last
+        .as_ref()
+        .is_none_or(|previous| !same_mail_failure(previous, &record))
+    {
+        crate::jsonl::append(&path, &record);
+    }
+    record
+}
+
+pub(crate) fn latest_mail_health(wt_path: &Path) -> Option<MailHealthRecord> {
+    crate::jsonl::load_tail::<MailHealthRecord>(&wt_path.join(MAIL_HEALTH_FILENAME), 1)
+        .into_iter()
+        .next()
+}
+
+fn mail_unavailable_advisory(record: &MailHealthRecord) -> String {
+    format!(
+        "Agent mail is currently unavailable (`bd mail {}` failed with {}: {}). Rely on the shared workpad for same-worktree coordination until Beads mail recovers.",
+        record.operation, record.error_class, record.error
+    )
+}
+
 impl IssueTracker for BeadsBridge {
     /// List ready issues (open and not blocked), sorted by priority.
     fn list_ready(&self) -> Result<Vec<BeadsIssue>> {
@@ -441,9 +525,13 @@ pub fn default_actor() -> String {
 
 /// Poll the `bd mail inbox` for messages directed at the current actor.
 ///
-/// Returns `Some(inbox_text)` if there are unread messages, `None` otherwise.
-/// Fails silently — mail unavailability never blocks orchestration.
-pub fn poll_mail_inbox(wt_path: &Path) -> Option<String> {
+/// Returns `Some(Messages(..))` if there are unread messages, or an advisory if
+/// the inbox cannot be checked due to Beads mail health problems.
+///
+/// Mail unavailability still does not block orchestration, but it is surfaced
+/// explicitly so the next agent prompt can fall back to workpad-only
+/// coordination instead of treating the failure as real mail.
+pub(crate) fn poll_mail_inbox(wt_path: &Path) -> Option<MailboxPoll> {
     let bridge = BeadsBridge::with_worktree(wt_path);
     match bridge.check_inbox() {
         Ok(inbox) if !inbox.trim().is_empty() && !inbox.contains("no messages") => {
@@ -451,12 +539,20 @@ pub fn poll_mail_inbox(wt_path: &Path) -> Option<String> {
                 inbox_len = inbox.len(),
                 "Unread mail messages detected between iterations"
             );
-            Some(inbox)
+            Some(MailboxPoll::Messages(inbox))
         }
         Ok(_) => None,
         Err(e) => {
-            tracing::debug!(error = %e, "Mail inbox check failed (non-fatal)");
-            None
+            let record = record_mail_failure(wt_path, "inbox", &e);
+            tracing::warn!(
+                error_class = %record.error_class,
+                error = %record.error,
+                "Mail inbox check failed; falling back to workpad-only coordination"
+            );
+            Some(MailboxPoll::Advisory {
+                message: mail_unavailable_advisory(&record),
+                health: record,
+            })
         }
     }
 }
@@ -465,16 +561,28 @@ pub fn poll_mail_inbox(wt_path: &Path) -> Option<String> {
 ///
 /// Sends to "lead" (the swarm lead actor). Non-blocking — failures are logged
 /// but never propagate errors.
-pub fn escalate_via_mail(wt_path: &Path, issue_id: &str, reason: &str) {
+pub(crate) fn escalate_via_mail(
+    wt_path: &Path,
+    issue_id: &str,
+    reason: &str,
+) -> Option<MailHealthRecord> {
     let bridge = BeadsBridge::with_worktree(wt_path);
     let subject = format!("Stuck: {issue_id}");
     match bridge.send_mail("lead", &subject, reason) {
-        Ok(()) => tracing::info!(issue_id, "Escalation mail sent via bd mail"),
-        Err(e) => tracing::warn!(
-            issue_id,
-            error = %e,
-            "bd mail send failed (non-fatal — escalation recorded in intervention file)"
-        ),
+        Ok(()) => {
+            tracing::info!(issue_id, "Escalation mail sent via bd mail");
+            None
+        }
+        Err(e) => {
+            let record = record_mail_failure(wt_path, "send", &e);
+            tracing::warn!(
+                issue_id,
+                error_class = %record.error_class,
+                error = %record.error,
+                "bd mail send failed (non-fatal — escalation recorded in intervention file)"
+            );
+            Some(record)
+        }
     }
 }
 
@@ -483,9 +591,16 @@ mod tests {
     use super::*;
     use std::fs;
     use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
+
+    fn beads_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_poll_mail_inbox_empty_returns_none() {
+        let _guard = beads_env_lock().lock().unwrap();
         // Create a temporary script that echoes empty output
         let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge");
         fs::create_dir_all(&tmp_dir).unwrap();
@@ -534,6 +649,7 @@ mod tests {
 
     #[test]
     fn test_beads_bridge_check_inbox_empty_returns_none() {
+        let _guard = beads_env_lock().lock().unwrap();
         // Create a temporary script that echoes empty output
         let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_check");
         fs::create_dir_all(&tmp_dir).unwrap();
@@ -584,6 +700,102 @@ mod tests {
         }
 
         // Cleanup
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_poll_mail_inbox_failure_returns_advisory_and_records_health() {
+        let _guard = beads_env_lock().lock().unwrap();
+        let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_failure");
+        fs::create_dir_all(&tmp_dir).unwrap();
+        let script_path = tmp_dir.join("bd_mock");
+
+        let script_content = "#!/bin/bash\nif [ \"$1\" = \"mail\" ] && [ \"$2\" = \"inbox\" ]; then\n  echo \"Merge conflict detected\" >&2\n  exit 1\nfi\nexit 0\n";
+        {
+            let mut file = fs::File::create(&script_path).unwrap();
+            file.write_all(script_content.as_bytes()).unwrap();
+        }
+        fs::set_permissions(
+            &script_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        let old_bin = std::env::var("SWARM_BEADS_BIN").ok();
+        std::env::set_var("SWARM_BEADS_BIN", &script_path);
+
+        let tmp_wt = tmp_dir.join("test_wt");
+        fs::create_dir_all(&tmp_wt).unwrap();
+
+        let result = poll_mail_inbox(&tmp_wt);
+        let advisory = result.expect("expected advisory when mail inbox fails");
+        let MailboxPoll::Advisory { message, health } = advisory else {
+            panic!("expected advisory poll result");
+        };
+        assert!(message.contains("Agent mail is currently unavailable"));
+        assert!(message.contains("dolt_merge_conflict"));
+        assert_eq!(health.operation, "inbox");
+        assert_eq!(health.error_class, "dolt_merge_conflict");
+
+        let health_path = tmp_wt.join(MAIL_HEALTH_FILENAME);
+        let entries = crate::jsonl::load_all::<MailHealthRecord>(&health_path);
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].operation, "inbox");
+        assert_eq!(entries[0].error_class, "dolt_merge_conflict");
+
+        // Repeating the same failure should not append a duplicate record.
+        let _ = poll_mail_inbox(&tmp_wt);
+        let entries = crate::jsonl::load_all::<MailHealthRecord>(&health_path);
+        assert_eq!(entries.len(), 1);
+
+        if let Some(bin) = old_bin {
+            std::env::set_var("SWARM_BEADS_BIN", bin);
+        } else {
+            std::env::remove_var("SWARM_BEADS_BIN");
+        }
+
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_escalate_via_mail_returns_health_record_on_send_failure() {
+        let _guard = beads_env_lock().lock().unwrap();
+        let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_send_failure");
+        fs::create_dir_all(&tmp_dir).unwrap();
+        let script_path = tmp_dir.join("bd_mock");
+
+        let script_content = "#!/bin/bash\nif [ \"$1\" = \"mail\" ] && [ \"$2\" = \"send\" ]; then\n  echo \"failed to stage dolt_ignore\" >&2\n  exit 1\nfi\nexit 0\n";
+        {
+            let mut file = fs::File::create(&script_path).unwrap();
+            file.write_all(script_content.as_bytes()).unwrap();
+        }
+        fs::set_permissions(
+            &script_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        let old_bin = std::env::var("SWARM_BEADS_BIN").ok();
+        std::env::set_var("SWARM_BEADS_BIN", &script_path);
+
+        let tmp_wt = tmp_dir.join("test_wt");
+        fs::create_dir_all(&tmp_wt).unwrap();
+
+        let health = escalate_via_mail(&tmp_wt, "beefcake-test", "stuck on retries")
+            .expect("expected send failure health record");
+        assert_eq!(health.operation, "send");
+        assert_eq!(health.error_class, "dolt_ignore_stage_failed");
+
+        let latest = latest_mail_health(&tmp_wt).expect("expected saved mail health");
+        assert_eq!(latest.operation, "send");
+        assert_eq!(latest.error_class, "dolt_ignore_stage_failed");
+
+        if let Some(bin) = old_bin {
+            std::env::set_var("SWARM_BEADS_BIN", bin);
+        } else {
+            std::env::remove_var("SWARM_BEADS_BIN");
+        }
+
         let _ = fs::remove_dir_all(&tmp_dir);
     }
 }

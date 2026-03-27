@@ -1271,8 +1271,9 @@ async fn process_issue_core(
 
         // Append mail messages if any were received between iterations
         if let Some(ref mail) = mail_context {
-            full_objective.push_str("\n\n## Agent Mail (from previous iteration)\n");
-            full_objective.push_str(mail);
+            full_objective.push_str("\n\n");
+            full_objective.push_str(mail.prompt_heading());
+            full_objective.push_str(mail.prompt_body());
         }
 
         // Pack context with tier-appropriate token budget
