@@ -32,7 +32,7 @@ fi
 # --embedding enables the /v1/embeddings endpoint.
 # --parallel 8: embedding requests are cheap, serve many concurrently.
 # --ctx-size 8192: nomic-embed-text-v1.5 supports up to 8192 tokens.
-nohup numactl --membind=1 apptainer run --bind /scratch/ai:/scratch/ai:ro "${CONTAINER}" \
+nohup numactl --membind=1 apptainer run --nv --bind /scratch/ai:/scratch/ai:ro "${CONTAINER}" \
   --model "${MODEL_FILE}" \
   --alias nomic-embed-text-v1.5 \
   --host 0.0.0.0 --port "${PORT}" \
