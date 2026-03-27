@@ -37,7 +37,7 @@ nohup numactl --membind=1 apptainer run --nv --bind /scratch/ai:/scratch/ai:ro "
   --alias nomic-embed-text-v1.5 \
   --host 0.0.0.0 --port "${PORT}" \
   --embedding \
-  --n-gpu-layers 0 \
+  --n-gpu-layers 0 -fit off \
   --ctx-size 8192 --batch-size 8192 \
   --threads 8 \
   --parallel 8 \
