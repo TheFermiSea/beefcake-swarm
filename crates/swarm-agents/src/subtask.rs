@@ -6,11 +6,11 @@
 //!
 //! # Native Beads Integration
 //!
-//! This module uses `BeadsBridge::send_mail` for inter-worker communication
-//! during concurrent execution. Workers announce their progress and interface
-//! changes via `bd mail send`, allowing other workers to adapt before their
-//! final edits. The workpad tools (`announce` + `check_announcements`) provide
-//! a higher-level abstraction over the native messaging primitives.
+//! This module uses the workpad tools (`announce` + `check_announcements`) as
+//! the primary coordination channel for concurrent workers in the same
+//! worktree. Beads mail remains available for escalation and cross-iteration
+//! coordination, but same-worktree worker broadcast stays file-backed so it
+//! keeps working when Beads/Dolt mail is temporarily unhealthy.
 //!
 //! The native messaging layer replaces the previous BeadHub coordination tools
 //! (team_status, check_mail, send_mail, chat_send, etc.). Messages are stored
@@ -18,9 +18,9 @@
 //!
 //! # Inline Usage Notes
 //!
-//! - `BeadsBridge::send_mail` is called directly for low-level messaging
-//! - Workpad tools provide a file-based abstraction layer
-//! - Both mechanisms support concurrent subtask coordination
+//! - Workpad tools are the primary concurrent-worker coordination path
+//! - `BeadsBridge::send_mail` is reserved for escalation / higher-level mail
+//! - Both mechanisms still participate in the broader hybrid coordination model
 //!
 //! Flow:
 //! 1. Planner agent analyzes issue + codebase → produces `SubtaskPlan` (JSON)

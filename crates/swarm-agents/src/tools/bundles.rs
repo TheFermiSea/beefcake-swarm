@@ -122,18 +122,17 @@ pub fn manager_tools(
 /// BeadHub coordination tools (team_status, check_mail, send_mail, check_locks,
 /// chat_send, chat_check) were removed in the native beads migration.
 ///
-/// Native messaging is now handled via `BeadsBridge::send_mail` and
-/// `BeadsBridge::check_inbox` primitives. The `bd mail` command stores
-/// messages as Dolt rows and syncs via `bd dolt push/pull`.
+/// Native Beads mail remains available via `BeadsBridge`, but concurrent subtask
+/// workers currently coordinate through workpad tools (`announce` +
+/// `check_announcements`) because the file-backed channel is local to the
+/// worktree and remains available even if Beads/Dolt mail is temporarily
+/// unhealthy.
 ///
 /// # Inline Usage Notes
 ///
-/// - `BeadsBridge::send_mail` provides direct native messaging
-/// - Workpad tools (`announce` + `check_announcements`) offer file-based abstraction
-/// - Both are used in `subtask.rs` for concurrent worker coordination
-///
-/// These primitives enable inter-worker communication during concurrent/// subtask execution (see `subtask.rs`), where workers announce their
-/// progress and interface changes via `bd mail send`.
+/// - Workpad tools provide the primary same-worktree broadcast path
+/// - `BeadsBridge::send_mail` / `check_inbox` remain useful for higher-level mail
+/// - The hybrid model is documented in `subtask.rs`
 ///
 /// Phase 2 will re-add higher-level coordination abstractions on top of
 /// the native messaging primitives.

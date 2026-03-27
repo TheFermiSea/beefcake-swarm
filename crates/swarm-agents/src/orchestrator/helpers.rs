@@ -216,8 +216,11 @@ pub(crate) fn create_stuck_intervention(
         format!("Stuck — human intervention requested: {reason}"),
     );
 
+    // --- Mechanism 4: Native beads mail escalation ---
+    let mail_health = crate::beads_bridge::escalate_via_mail(wt_path, &feature_id, reason);
+
     // --- Mechanism 2: Write intervention JSON to worktree ---
-    let intervention_data = serde_json::json!({
+    let mut intervention_data = serde_json::json!({
         "session_id": session.session_id(),
         "feature_id": feature_id,
         "iteration": iteration,
@@ -225,6 +228,19 @@ pub(crate) fn create_stuck_intervention(
         "type": "review_required",
         "timestamp": chrono::Utc::now().to_rfc3339(),
     });
+    if let Some(record) = mail_health {
+        intervention_data["mail_status"] = serde_json::json!({
+            "operation": record.operation,
+            "error_class": record.error_class,
+            "error": record.error,
+        });
+    } else if let Some(record) = crate::beads_bridge::latest_mail_health(wt_path) {
+        intervention_data["mail_status"] = serde_json::json!({
+            "operation": record.operation,
+            "error_class": record.error_class,
+            "error": record.error,
+        });
+    }
     let intervention_path = wt_path.join(".swarm-interventions.json");
     match std::fs::write(
         &intervention_path,
@@ -252,9 +268,6 @@ pub(crate) fn create_stuck_intervention(
             }
         });
     }
-
-    // --- Mechanism 4: Native beads mail escalation ---
-    crate::beads_bridge::escalate_via_mail(wt_path, &feature_id, reason);
 }
 
 // ── Pattern detection + directive injection ─────────────────────────
@@ -376,6 +389,14 @@ pub(crate) fn list_changed_files(worktree_path: &Path) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+    use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
+
+    fn beads_env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
 
     #[test]
     fn test_query_kb_with_failsafe_on_failure() {
@@ -471,5 +492,46 @@ mod tests {
         let entries = progress.read_all().unwrap();
         assert_eq!(entries.len(), 1);
         assert!(entries[0].summary.contains("human intervention"));
+    }
+
+    #[test]
+    fn test_create_stuck_intervention_records_mail_status_when_escalation_fails() {
+        let _guard = beads_env_lock().lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let script_path = dir.path().join("bd_mock");
+        let script_content = "#!/bin/bash\nif [ \"$1\" = \"mail\" ] && [ \"$2\" = \"send\" ]; then\n  echo \"failed to stage dolt_ignore\" >&2\n  exit 1\nfi\nexit 0\n";
+        {
+            let mut file = fs::File::create(&script_path).unwrap();
+            file.write_all(script_content.as_bytes()).unwrap();
+        }
+        fs::set_permissions(
+            &script_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        let old_bin = std::env::var("SWARM_BEADS_BIN").ok();
+        std::env::set_var("SWARM_BEADS_BIN", &script_path);
+
+        let mut session = SessionManager::new(dir.path().to_path_buf(), 10);
+        session.start().unwrap();
+        session.set_current_feature("test-issue-002");
+        let progress = ProgressTracker::new(dir.path().join("progress.txt"));
+
+        create_stuck_intervention(&mut session, &progress, dir.path(), 2, "mail send failed");
+
+        let intervention_path = dir.path().join(".swarm-interventions.json");
+        let intervention_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(intervention_path).unwrap()).unwrap();
+        assert_eq!(
+            intervention_json["mail_status"]["error_class"],
+            "dolt_ignore_stage_failed"
+        );
+
+        if let Some(bin) = old_bin {
+            std::env::set_var("SWARM_BEADS_BIN", bin);
+        } else {
+            std::env::remove_var("SWARM_BEADS_BIN");
+        }
     }
 }
