@@ -561,13 +561,15 @@ impl Default for SwarmConfig {
         let phase_selector =
             PhaseModelSelector::new(cloud_model_catalog.clone(), max_cost_per_issue);
 
-        // When SWARM_TENSORZERO_URL is set, route local inference through TZ gateway
-        // for adaptive A/B testing. TZ's OpenAI-compatible endpoint uses function names
-        // as model identifiers (e.g., "tensorzero::function_name::worker_code_edit").
-        let tz_url = std::env::var("SWARM_TENSORZERO_URL")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let tz_base = tz_url.as_ref().map(|u| format!("{u}/openai/v1"));
+        // TZ adaptive routing via OpenAI-compat proxy is available but currently
+        // disabled: Rig's client probes /v1/models on init which TZ doesn't serve,
+        // causing all local endpoints to appear down and falling back to cloud-only.
+        // TODO(beefcake-tz-routing): re-enable once Rig's model-list probe is suppressed
+        // or TZ adds /openai/v1/models support.
+        // let tz_url = std::env::var("SWARM_TENSORZERO_URL").ok().filter(|s| !s.is_empty());
+        // let tz_base = tz_url.as_ref().map(|u| format!("{u}/openai/v1"));
+        let _tz_url = std::env::var("SWARM_TENSORZERO_URL").ok();
+        let tz_base: Option<String> = None; // disabled — see TODO above
 
         Self {
             fast_endpoint: Endpoint {
