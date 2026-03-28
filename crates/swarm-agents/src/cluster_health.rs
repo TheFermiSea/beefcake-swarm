@@ -319,8 +319,17 @@ async fn probe_endpoint(base_url: &str, api_key: Option<&str>) -> ProbeResult {
         .build()
         .unwrap_or_default();
 
-    // Try /health first (llama-server native)
-    let health_url = base_url.trim_end_matches("/v1").to_string() + "/health";
+    // Try /health first (llama-server native).
+    // TZ OpenAI compat uses /openai/v1 as base — strip that to reach /health.
+    let health_url = if base_url.contains("/openai/v1") {
+        base_url
+            .trim_end_matches("/v1")
+            .trim_end_matches("/openai")
+            .to_string()
+            + "/health"
+    } else {
+        base_url.trim_end_matches("/v1").to_string() + "/health"
+    };
     let start = Instant::now();
 
     let mut req = client.get(&health_url);
