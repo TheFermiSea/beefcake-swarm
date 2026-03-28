@@ -5,16 +5,15 @@ export RUST_LOG="${RUST_LOG:-info}"
 # BD_ACTOR identifies this orchestrator instance for `bd mail` messaging.
 # Defaults to hostname-based identity; override for multi-instance setups.
 export BD_ACTOR="${BD_ACTOR:-swarm-$(hostname -s 2>/dev/null || echo worker)}"
-# Scout/Fast tier: Qwen3-Coder-Next on vasp-03 (80B/3B MoE, expert-offload, 65K context)
-# Replaced Qwen3.5-27B-Opus-Distilled. Rollback model at /scratch/ai/models/Qwen3.5-27B-*.gguf
+# Scout/Fast tier: OmniCoder-9B on vasp-03 (dense, GPU-resident, ~66 tok/s, 32K context)
 export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-03:8081/v1}"
-export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3-Coder-Next}"
-# Coder/Integrator tier: Qwen3.5-122B-A10B MoE on vasp-01 (expert-offload, 65K context)
+export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-OmniCoder-9B}"
+# Coder tier: Qwen3.5-27B on vasp-01 (dense, GPU-resident, ~27 tok/s, 32K context)
 export SWARM_CODER_URL="${SWARM_CODER_URL:-http://vasp-01:8081/v1}"
-export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-122B-A10B}"
-# Reasoning tier: Qwen3.5-122B-A10B MoE on vasp-02 (independent instance, expert-offload, 65K context)
+export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-27B}"
+# Reasoning tier: Qwen3.5-27B on vasp-02 (dense, GPU-resident, ~27 tok/s, 32K context)
 export SWARM_REASONING_URL="${SWARM_REASONING_URL:-http://vasp-02:8081/v1}"
-export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-Qwen3.5-122B-A10B}"
+export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-Qwen3.5-27B}"
 # Cloud manager via CLIAPIProxy
 # Set SWARM_CLOUD_URL="" (empty) to run in worker-first mode (local models only).
 # Default to localhost when running on ai-proxy (where the proxy lives).
