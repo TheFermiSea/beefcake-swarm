@@ -560,28 +560,54 @@ impl Default for SwarmConfig {
             .unwrap_or(0.0_f64);
         let phase_selector =
             PhaseModelSelector::new(cloud_model_catalog.clone(), max_cost_per_issue);
+
+        // When SWARM_TENSORZERO_URL is set, route local inference through TZ gateway
+        // for adaptive A/B testing. TZ's OpenAI-compatible endpoint uses function names
+        // as model identifiers (e.g., "tensorzero::function_name::worker_code_edit").
+        let tz_url = std::env::var("SWARM_TENSORZERO_URL")
+            .ok()
+            .filter(|s| !s.is_empty());
+        let tz_base = tz_url.as_ref().map(|u| format!("{u}/openai/v1"));
+
         Self {
             fast_endpoint: Endpoint {
-                url: std::env::var("SWARM_FAST_URL")
-                    .unwrap_or_else(|_| "http://vasp-03:8081/v1".into()),
-                model: std::env::var("SWARM_FAST_MODEL").unwrap_or_else(|_| "OmniCoder-9B".into()),
+                url: tz_base
+                    .clone()
+                    .or_else(|| std::env::var("SWARM_FAST_URL").ok())
+                    .unwrap_or_else(|| "http://vasp-03:8081/v1".into()),
+                model: if tz_base.is_some() {
+                    "tensorzero::function_name::worker_code_edit".into()
+                } else {
+                    std::env::var("SWARM_FAST_MODEL").unwrap_or_else(|_| "OmniCoder-9B".into())
+                },
                 tier: Tier::Fast,
                 api_key: std::env::var("SWARM_FAST_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
             },
             coder_endpoint: Endpoint {
-                url: std::env::var("SWARM_CODER_URL")
-                    .unwrap_or_else(|_| "http://vasp-01:8081/v1".into()),
-                model: std::env::var("SWARM_CODER_MODEL").unwrap_or_else(|_| "Qwen3.5-27B".into()),
+                url: tz_base
+                    .clone()
+                    .or_else(|| std::env::var("SWARM_CODER_URL").ok())
+                    .unwrap_or_else(|| "http://vasp-01:8081/v1".into()),
+                model: if tz_base.is_some() {
+                    "tensorzero::function_name::worker_code_edit".into()
+                } else {
+                    std::env::var("SWARM_CODER_MODEL").unwrap_or_else(|_| "Qwen3.5-27B".into())
+                },
                 tier: Tier::Coder,
                 api_key: std::env::var("SWARM_CODER_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
             },
             reasoning_endpoint: Endpoint {
-                url: std::env::var("SWARM_REASONING_URL")
-                    .unwrap_or_else(|_| "http://vasp-02:8081/v1".into()),
-                model: std::env::var("SWARM_REASONING_MODEL")
-                    .unwrap_or_else(|_| "Qwen3.5-27B".into()),
+                url: tz_base
+                    .clone()
+                    .or_else(|| std::env::var("SWARM_REASONING_URL").ok())
+                    .unwrap_or_else(|| "http://vasp-02:8081/v1".into()),
+                model: if tz_base.is_some() {
+                    "tensorzero::function_name::deep_reasoning".into()
+                } else {
+                    std::env::var("SWARM_REASONING_MODEL").unwrap_or_else(|_| "Qwen3.5-27B".into())
+                },
                 tier: Tier::Reasoning,
                 api_key: std::env::var("SWARM_REASONING_API_KEY")
                     .unwrap_or_else(|_| "not-needed".into()),
