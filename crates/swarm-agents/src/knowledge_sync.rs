@@ -62,6 +62,15 @@ pub struct KnowledgeCapture {
     pub tags: Vec<String>,
 }
 
+/// Context retrieved from the KB before an iteration begins.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct PreIterationContext {
+    pub iteration: u32,
+    pub queried_categories: Vec<String>,
+    pub known_fixes: Vec<String>,
+    pub prompt_snippet: String,
+}
+
 // ---------------------------------------------------------------------------
 // KnowledgeSyncService
 // ---------------------------------------------------------------------------
@@ -235,6 +244,14 @@ impl<'a> KnowledgeSyncService<'a> {
                 None
             }
         }
+    }
+
+    pub fn query_pre_iteration_context(
+        &self,
+        iteration: u32,
+        prev_error_categories: &[String],
+    ) -> PreIterationContext {
+        query_pre_iteration_context(self.kb, iteration, prev_error_categories)
     }
 }
 
@@ -418,6 +435,65 @@ pub fn capture_error_pattern(
             warn!(issue_id, "Failed to capture error pattern (non-fatal): {e}");
             Ok(()) // Non-fatal
         }
+    }
+}
+
+/// Query the debugging KB for known fixes related to the given error categories.
+///
+/// This is called before an iteration begins to provide context about
+/// previously encountered similar error patterns and their resolutions.
+pub fn query_pre_iteration_context(
+    kb: &dyn KnowledgeBase,
+    iteration: u32,
+    prev_error_categories: &[String],
+) -> PreIterationContext {
+    let mut known_fixes = Vec::new();
+    let mut prompt_snippet = String::new();
+
+    if !prev_error_categories.is_empty() {
+        // Query the debugging KB for known fixes related to these error categories
+        let query = format!(
+            "known fixes for error categories: {}",
+            prev_error_categories.join(", ")
+        );
+
+        match kb.query("debugging_kb", &query) {
+            Ok(response) => {
+                if !response.is_empty() {
+                    // Extract known fixes from the response
+                    known_fixes = response
+                        .lines()
+                        .filter(|line| {
+                            line.to_lowercase().contains("fix")
+                                || line.to_lowercase().contains("resolution")
+                                || line.to_lowercase().contains("solution")
+                        })
+                        .map(String::from)
+                        .collect();
+
+                    // Create a prompt snippet from the response
+                    prompt_snippet = format!(
+                        "Previous knowledge for iteration {}: {}",
+                        iteration,
+                        response.lines().take(5).collect::<Vec<_>>().join(" ")
+                    );
+                }
+            }
+            Err(e) => {
+                debug!(
+                    iteration,
+                    error_categories = ?prev_error_categories,
+                    "KB query failed (non-fatal): {e}"
+                );
+            }
+        }
+    }
+
+    PreIterationContext {
+        iteration,
+        queried_categories: prev_error_categories.to_vec(),
+        known_fixes,
+        prompt_snippet,
     }
 }
 
@@ -765,6 +841,29 @@ mod tests {
         assert!(content.contains("Borrow cascade"));
         assert!(content.contains("Use RefCell"));
         assert!(content.contains("Lessons learned"));
+    }
+
+    #[test]
+    fn test_query_pre_iteration_context_empty_categories() {
+        let mock = MockKnowledgeBase::new();
+        let context = query_pre_iteration_context(&mock, 1, &[]);
+
+        assert_eq!(context.iteration, 1);
+        assert!(context.queried_categories.is_empty());
+        assert!(context.known_fixes.is_empty());
+        assert!(context.prompt_snippet.is_empty());
+    }
+
+    #[test]
+    fn test_query_pre_iteration_context_with_categories() {
+        let mock = MockKnowledgeBase::new();
+        let categories = vec!["Borrow checker".into(), "Lifetime".into()];
+        let context = query_pre_iteration_context(&mock, 2, &categories);
+
+        assert_eq!(context.iteration, 2);
+        assert_eq!(context.queried_categories, categories);
+        // Even with a mock that returns empty, the structure should be correct
+        assert!(context.known_fixes.is_empty());
     }
 
     #[test]
