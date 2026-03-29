@@ -740,6 +740,30 @@ impl WorktreeBridge {
             }
         }
 
+        // --- Push to remote ---
+        // Push merged changes to origin so they're not stranded on the local repo.
+        // Best-effort: push failure is non-fatal (the merge already succeeded locally).
+        let push = Command::new("git")
+            .args(["push", "origin", "main"])
+            .current_dir(&self.repo_root)
+            .output();
+        match push {
+            Ok(output) if output.status.success() => {
+                tracing::info!(issue_id = %issue_id, "Pushed merge to origin/main");
+            }
+            Ok(output) => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::warn!(
+                    issue_id = %issue_id,
+                    stderr = %stderr.trim(),
+                    "git push failed (non-fatal) — merge is local only"
+                );
+            }
+            Err(e) => {
+                tracing::warn!(issue_id = %issue_id, error = %e, "git push failed (non-fatal)");
+            }
+        }
+
         // Remove the worktree (--force: untracked .swarm-* artifacts are expected)
         let remove = Command::new("git")
             .args([
