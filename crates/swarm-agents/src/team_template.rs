@@ -165,6 +165,7 @@ pub fn select_template(_repo_root: &Path, language: Option<&str>) -> String {
 }
 
 /// List all available team templates in the config directory.
+#[allow(dead_code)]
 pub fn list_templates(repo_root: &Path) -> Vec<PathBuf> {
     let dir = repo_root.join("config/teams");
     if !dir.exists() {
