@@ -24,6 +24,12 @@ role = "codebase"
 auto_query = false
 auto_update = false
 
+[notebooks.self_training]
+id = "a5ca2dd9-8960-4632-9b46-95061b8fd9ec"
+role = "self_training"
+auto_query = false
+auto_update = false
+
 [notebooks.security]
 id = "1a2ccd75-02ab-4172-b539-b1dfd69685c9"
 role = "security"
