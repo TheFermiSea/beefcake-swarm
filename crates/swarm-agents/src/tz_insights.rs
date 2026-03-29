@@ -106,13 +106,16 @@ impl TzInsights {
         });
 
         let stats = query_variant_stats(&client).await?;
+        let global_model_stats = query_global_model_effectiveness(&client).await?;
 
-        if stats.is_empty() {
+        if stats.is_empty() && global_model_stats.is_empty() {
             info!("TZ insights: no variant stats found (need 3+ calls per variant)");
             return Ok(Vec::new());
         }
 
-        let directives = generate_directives(&stats);
+        let mut directives = generate_directives(&stats);
+        directives.extend(generate_global_directives(&global_model_stats));
+        directives.truncate(8); // cap total directives
         Ok(directives)
     }
 }
@@ -171,6 +174,111 @@ ORDER BY function_name, call_count DESC
         .collect();
 
     Ok(stats)
+}
+
+/// Global model effectiveness: success rate per model across ALL projects.
+///
+/// Queries the boolean_metric_feedback table (task_resolved metric) joined
+/// with model_inferences to get per-model success rates. No repo_id filter —
+/// this is intentionally cross-project to capture universal model strengths.
+#[derive(Debug, Clone)]
+struct GlobalModelStat {
+    model_name: String,
+    total_episodes: u64,
+    success_rate: f64,
+    avg_iterations: f64,
+}
+
+async fn query_global_model_effectiveness(
+    client: &tokio_postgres::Client,
+) -> Result<Vec<GlobalModelStat>, Box<dyn std::error::Error + Send + Sync>> {
+    // This query joins feedback (task_resolved) with the model that handled
+    // the episode. It aggregates across all repos for universal insights.
+    let rows = client
+        .query(
+            r#"
+SELECT
+    mi.model_name,
+    COUNT(DISTINCT bmf.episode_id)::float8 AS total_episodes,
+    AVG(CASE WHEN bmf.value THEN 1.0 ELSE 0.0 END)::float8 AS success_rate,
+    COALESCE(AVG(fmf.value), 0)::float8 AS avg_iterations
+FROM tensorzero.boolean_metric_feedback bmf
+JOIN tensorzero.chat_inferences ci ON bmf.episode_id = ci.episode_id
+JOIN tensorzero.model_inferences mi ON ci.id = mi.inference_id
+LEFT JOIN tensorzero.float_metric_feedback fmf
+    ON bmf.episode_id = fmf.episode_id AND fmf.metric_name = 'iterations_used'
+WHERE bmf.metric_name = 'task_resolved'
+  AND bmf.created_at > NOW() - INTERVAL '14 days'
+GROUP BY mi.model_name
+HAVING COUNT(DISTINCT bmf.episode_id) >= 5
+ORDER BY success_rate DESC
+"#,
+            &[],
+        )
+        .await;
+
+    match rows {
+        Ok(rows) => Ok(rows
+            .iter()
+            .map(|row| GlobalModelStat {
+                model_name: row.get("model_name"),
+                total_episodes: row.get::<_, f64>("total_episodes") as u64,
+                success_rate: row.get("success_rate"),
+                avg_iterations: row.get("avg_iterations"),
+            })
+            .collect()),
+        Err(e) => {
+            // Non-fatal: the feedback tables may not have data yet
+            tracing::debug!(error = %e, "Global model effectiveness query failed (non-fatal)");
+            Ok(Vec::new())
+        }
+    }
+}
+
+/// Generate directives from global cross-project model effectiveness data.
+fn generate_global_directives(stats: &[GlobalModelStat]) -> Vec<String> {
+    let mut directives = Vec::new();
+
+    if stats.len() < 2 {
+        return directives;
+    }
+
+    // Best model by success rate (with 10+ episodes for significance)
+    let significant: Vec<&GlobalModelStat> =
+        stats.iter().filter(|s| s.total_episodes >= 10).collect();
+    if let Some(best) = significant.first() {
+        if best.success_rate >= 0.5 {
+            directives.push(format!(
+                "[global] Best model across all projects: {} ({:.0}% success, {} episodes, {:.1} avg iterations)",
+                best.model_name,
+                best.success_rate * 100.0,
+                best.total_episodes,
+                best.avg_iterations,
+            ));
+        }
+    }
+
+    // Model with fewest iterations (efficiency champion)
+    if let Some(efficient) = significant
+        .iter()
+        .filter(|s| s.avg_iterations > 0.0)
+        .min_by(|a, b| {
+            a.avg_iterations
+                .partial_cmp(&b.avg_iterations)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    {
+        if efficient.avg_iterations < 3.0 {
+            directives.push(format!(
+                "[global] Most efficient model: {} ({:.1} avg iterations, {:.0}% success)",
+                efficient.model_name,
+                efficient.avg_iterations,
+                efficient.success_rate * 100.0,
+            ));
+        }
+    }
+
+    directives
 }
 
 /// Generate human-readable directives from variant statistics.
