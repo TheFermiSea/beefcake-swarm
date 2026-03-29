@@ -54,6 +54,7 @@ pub mod feedback;
 pub mod fim;
 pub mod harness;
 pub mod otel;
+pub mod reformulation;
 pub mod rollout;
 pub mod router;
 pub mod state;
