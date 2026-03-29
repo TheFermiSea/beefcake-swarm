@@ -465,69 +465,6 @@ pub fn run_initial(
     ctx
 }
 
-/// Input for the retry preflight pipeline.
-pub struct RetryInput<'a> {
-    pub wt_path: &'a std::path::Path,
-    pub issue_id: &'a str,
-    pub issue_title: &'a str,
-    pub tier: SwarmTier,
-    pub escalation: &'a EscalationState,
-    pub last_report: &'a VerifierReport,
-    pub knowledge_base: Option<&'a dyn KnowledgeBase>,
-    /// Structured records of approaches that failed in previous iterations.
-    ///
-    /// Injected into `packet.previous_attempts` as formatted strings so that
-    /// the worker prompt contains a "What We've Tried" section preventing
-    /// re-attempts of known dead ends.
-    pub failed_approaches: &'a [FailedApproach],
-}
-
-/// Run the preflight pipeline for a retry iteration (has prior verifier report).
-pub fn run_retry(input: &RetryInput<'_>, config: &PreflightConfig) -> PreflightContext {
-    let packer = ContextPacker::new(input.wt_path, input.tier);
-    let mut packet = packer.pack_retry(
-        input.issue_id,
-        input.issue_title,
-        input.escalation,
-        input.last_report,
-    );
-
-    // Inject structured failed-approach entries as formatted prompt strings.
-    // The dispatch formatter renders these as the "Previous Attempts" section.
-    for fa in input.failed_approaches {
-        packet.previous_attempts.push(format!(
-            "[iter {}] {} — Failed because: {}",
-            fa.iteration, fa.summary, fa.error_output
-        ));
-    }
-
-    let mut ctx = PreflightContext {
-        packet,
-        plan: None,
-        verifier_hints: Vec::new(),
-        kb_enriched: false,
-        stages_run: vec!["context_packing".into()],
-        acceptance_criteria: None,
-    };
-
-    // Extract verifier hints from the last report
-    ctx = stage_verifier_hints(ctx, input.last_report, config.max_verifier_hints);
-
-    if config.enable_kb_enrichment {
-        ctx = stage_knowledge_enrichment(
-            ctx,
-            input.issue_id,
-            input.issue_title,
-            Some(input.last_report),
-            input.knowledge_base,
-        );
-    }
-
-    ctx = stage_acceptance_criteria(ctx);
-
-    ctx
-}
-
 /// Stage: Extract actionable hints from the last verifier report.
 fn stage_verifier_hints(
     mut ctx: PreflightContext,

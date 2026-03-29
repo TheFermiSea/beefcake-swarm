@@ -1,0 +1,1 @@
+{"timestamp":"2026-03-29T14:39:39.787597881+00:00","operation":"inbox","error_class":"bd_mail_failed","error":"bd mail failed: Error: no mail delegate configured\n\nbd mail delegates to an external mail provider.\nConfigure one of:\n  export BEADS_MAIL_DELEGATE=\"gt mail\"   # Environment variable\n  bd config set mail.delegate \"gt mail\"  # Per-project config\n"}
