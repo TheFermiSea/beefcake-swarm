@@ -687,6 +687,59 @@ impl WorktreeBridge {
             bail!("Merge failed for {issue_id} (possible conflict): {stderr}");
         }
 
+        // --- Post-merge verification ---
+        // Quick `cargo check` on the repo root to catch merge-induced regressions.
+        // If the merge broke compilation, revert it and reopen the issue.
+        // Skip for non-Rust repos (no Cargo.toml at root).
+        let has_cargo = self.repo_root.join("Cargo.toml").exists();
+        let check = if !has_cargo {
+            tracing::debug!(issue_id = %issue_id, "No Cargo.toml — skipping post-merge verification");
+            Ok(std::process::Output {
+                status: std::process::ExitStatus::default(),
+                stdout: vec![],
+                stderr: vec![],
+            })
+        } else {
+            Command::new("cargo")
+                .args(["check", "--workspace", "--quiet"])
+                .current_dir(&self.repo_root)
+                .env(
+                    "CARGO_TARGET_DIR",
+                    std::env::var("CARGO_TARGET_DIR")
+                        .unwrap_or_else(|_| "/tmp/beefcake-shared-target".into()),
+                )
+                .output()
+        };
+        match check {
+            Ok(output) if !output.status.success() => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                tracing::error!(
+                    issue_id = %issue_id,
+                    stderr = %stderr.chars().take(500).collect::<String>(),
+                    "Post-merge cargo check FAILED — reverting merge"
+                );
+                // Revert the merge commit
+                let _ = Command::new("git")
+                    .args(["reset", "--hard", "HEAD~1"])
+                    .current_dir(&self.repo_root)
+                    .output();
+                bail!(
+                    "Post-merge verification failed for {issue_id}: cargo check errors. Merge reverted."
+                );
+            }
+            Ok(_) => {
+                tracing::debug!(issue_id = %issue_id, "Post-merge cargo check passed");
+            }
+            Err(e) => {
+                // cargo check failed to run (not installed, etc.) — proceed anyway
+                tracing::warn!(
+                    issue_id = %issue_id,
+                    error = %e,
+                    "Post-merge cargo check could not run — proceeding without verification"
+                );
+            }
+        }
+
         // Remove the worktree (--force: untracked .swarm-* artifacts are expected)
         let remove = Command::new("git")
             .args([

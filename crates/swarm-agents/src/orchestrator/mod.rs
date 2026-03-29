@@ -596,6 +596,24 @@ async fn process_issue_core(
     // and triage for observability, but only honor it when the feature flag is
     // enabled. Otherwise default to Council from the beginning.
     let recommendation = classify_initial_tier(&issue.title, &[]);
+
+    // --- UCB model recommendation from mutation archive ---
+    // Consult historical success rates to suggest the best model for this issue's
+    // likely error types. The archive's recommend_model() uses UCB1 scoring with
+    // lineage-based aggregation per error_category.
+    let candidate_models: Vec<String> = vec![
+        config.fast_endpoint.model.clone(),
+        config.coder_endpoint.model.clone(),
+        config.reasoning_endpoint.model.clone(),
+    ];
+    let ucb_model_hint = archive.recommend_model(&[], &candidate_models, 5);
+    if let Some(ref model) = ucb_model_hint {
+        info!(
+            recommended_model = %model,
+            "Mutation archive UCB recommendation for initial model"
+        );
+    }
+
     // Override tier based on triage complexity when triage provides higher confidence.
     let triage_tier = match triage_result.complexity {
         triage::Complexity::Simple => SwarmTier::Worker,
