@@ -68,18 +68,50 @@ impl MetaReflector {
 
     /// Run reflection on the last `window_size` records. Returns new insights.
     pub fn reflect(&self, window_size: usize) -> Vec<MetaInsight> {
+        self.reflect_with_slo_violations(window_size, &[])
+    }
+
+    /// Run reflection on the last `window_size` records, incorporating any SLO
+    /// violations as additional context. Each entry in `slo_violations` is a
+    /// human-readable SLO name (e.g. "Overall success rate") that was violated
+    /// in the current session. Returns new insights.
+    pub fn reflect_with_slo_violations(
+        &self,
+        window_size: usize,
+        slo_violations: &[String],
+    ) -> Vec<MetaInsight> {
         let all = self.archive.load_all();
         let records: Vec<&MutationRecord> = all.iter().rev().take(window_size).collect();
         if records.len() < 5 {
             debug!("Too few records ({}) for reflection", records.len());
-            return vec![];
+            // Still emit SLO-violation insights even with a thin archive.
+            return self.analyze_slo_violations(slo_violations);
         }
 
         let mut insights = Vec::new();
         insights.extend(self.analyze_model_performance(&records));
         insights.extend(self.analyze_error_trends(&records));
         insights.extend(self.analyze_prompt_performance(&records));
+        insights.extend(self.analyze_slo_violations(slo_violations));
         insights
+    }
+
+    /// Convert SLO violations into `ErrorPattern` insights so they are
+    /// persisted and injected into future task prompts.
+    fn analyze_slo_violations(&self, slo_violations: &[String]) -> Vec<MetaInsight> {
+        slo_violations
+            .iter()
+            .map(|name| MetaInsight {
+                timestamp: chrono::Utc::now(),
+                insight_type: InsightType::ErrorPattern,
+                description: format!("SLO violated in recent session: {name}"),
+                recommendation: format!(
+                    "Investigate '{name}' SLO breach — consider adjusting routing or escalation thresholds"
+                ),
+                confidence: 0.8,
+                evidence: vec![],
+            })
+            .collect()
     }
 
     /// Persist insights to the JSONL file.

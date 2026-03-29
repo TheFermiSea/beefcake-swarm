@@ -778,6 +778,7 @@ mod tests {
             validator_feedback: vec![],
             change_contract: None,
             repo_map: None,
+            failed_approach_summary: None,
         };
 
         let prompt = crate::orchestrator::format_task_prompt(&packet);

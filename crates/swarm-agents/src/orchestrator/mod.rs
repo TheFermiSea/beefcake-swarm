@@ -3479,6 +3479,13 @@ async fn process_issue_core(
         },
     };
     let slo_report = slo::evaluate_slos(&orch_metrics);
+    // Collect violated SLO names for adaptive meta-reflection below.
+    let slo_violated_names: Vec<String> = slo_report
+        .results
+        .iter()
+        .filter(|r| r.is_violated())
+        .map(|r| r.target.name.clone())
+        .collect();
     match slo_report.overall_severity {
         AlertSeverity::Ok => {
             info!(passing = slo_report.passing, "SLO check: all passing");
@@ -3631,15 +3638,26 @@ async fn process_issue_core(
         }
     }
 
-    // --- Hyperagents: periodic meta-reflection ---
-    // Every 10 completed issues, analyze recent outcomes for patterns.
+    // --- Hyperagents: adaptive meta-reflection ---
+    // Triggers when EITHER:
+    //   (a) this was a high-error session (>3 iterations), OR
+    //   (b) every 10 completed issues (periodic baseline).
+    // SLO violations from the current session are fed in as additional context.
     // Runs synchronously but is fast (purely local computation, no LLM calls).
     {
         let archive_size = archive.load_all().len();
-        if archive_size > 0 && archive_size.is_multiple_of(10) {
-            info!(archive_size, "Hyperagents: triggering meta-reflection");
+        let high_error_session = session_metrics.total_iterations > 3;
+        let periodic_trigger = archive_size > 0 && archive_size.is_multiple_of(10);
+        if high_error_session || periodic_trigger {
+            info!(
+                archive_size,
+                high_error = high_error_session,
+                periodic = periodic_trigger,
+                slo_violations = slo_violated_names.len(),
+                "Hyperagents: triggering adaptive meta-reflection"
+            );
             let reflector = crate::meta_reflection::MetaReflector::new(worktree_bridge.repo_root());
-            let insights = reflector.reflect(20);
+            let insights = reflector.reflect_with_slo_violations(20, &slo_violated_names);
             if !insights.is_empty() {
                 info!(
                     count = insights.len(),

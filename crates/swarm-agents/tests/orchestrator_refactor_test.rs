@@ -47,6 +47,7 @@ fn make_packet(objective: &str, iteration: u32) -> WorkPacket {
         validator_feedback: vec![],
         change_contract: None,
         repo_map: None,
+        failed_approach_summary: None,
     }
 }
 
