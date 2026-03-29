@@ -730,54 +730,6 @@ pub fn append_telemetry(metrics: &SessionMetrics, repo_root: &Path) {
     }
 }
 
-/// Append a decision trace entry to `.swarm-decision-trace.jsonl` in the repo root.
-///
-/// Inspired by LDP's Stochastic Computation Graph: each iteration's tool calls
-/// are captured as a structured trace for causal debugging, pattern mining,
-/// and future RL training data collection.
-///
-/// Each line is a JSON object with: issue_id, iteration, tool events, reward_score,
-/// all_green, timestamp.
-pub fn append_decision_trace(
-    repo_root: &Path,
-    issue_id: &str,
-    iteration: usize,
-    tool_events: &[crate::runtime_adapter::ToolEvent],
-    reward_score: f64,
-    all_green: bool,
-) {
-    let path = repo_root.join(".swarm-decision-trace.jsonl");
-    let trace = serde_json::json!({
-        "timestamp": chrono::Utc::now().to_rfc3339(),
-        "issue_id": issue_id,
-        "iteration": iteration,
-        "reward_score": (reward_score * 1000.0).round() / 1000.0,
-        "all_green": all_green,
-        "tool_calls": tool_events.len(),
-        "tools": tool_events.iter().map(|e| serde_json::json!({
-            "tool": e.tool_name,
-            "outcome": format!("{:?}", e.outcome),
-            "duration_ms": e.duration_ms,
-        })).collect::<Vec<_>>(),
-    });
-    match serde_json::to_string(&trace) {
-        Ok(json) => {
-            use std::io::Write;
-            match std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(&path)
-            {
-                Ok(mut file) => {
-                    let _ = writeln!(file, "{json}");
-                }
-                Err(e) => warn!("Failed to open decision trace: {e}"),
-            }
-        }
-        Err(e) => warn!("Failed to serialize decision trace: {e}"),
-    }
-}
-
 /// Append a row to `experiments.tsv` in the worktree.
 ///
 /// Each row captures a single iteration decision point for trajectory analysis.
