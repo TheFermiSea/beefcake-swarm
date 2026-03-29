@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Model Selection & Routing
 
-- **Scout/Fast (vasp-03:8081):** Qwen3-Coder-Next — 80B/3B MoE, expert-offload, 65K context. Used for scout, reviewer, fixer roles.
-- **Coder (vasp-01:8081):** Qwen3.5-122B-A10B MoE — expert-offload, 65K context, ~5-8 tok/s. Multi-file code generation and integration.
-- **Reasoning (vasp-02:8081):** Qwen3.5-122B-A10B MoE — expert-offload, 65K context, ~5-8 tok/s. Complex reasoning, planning, architecture decisions.
+- **Scout/Fast (vasp-03:8081):** GLM-4.7-Flash — 30B/3B MoE, SOTA tool-calling, ~50 tok/s. Used for scout, reviewer, fixer roles.
+- **Coder (vasp-01:8081):** Qwen3.5-27B — dense GPU-resident, 32K context, ~27 tok/s. Multi-file code generation and integration.
+- **Reasoning (vasp-02:8081):** Devstral-Small-2-24B — dense GPU-resident, 32K context, ~30 tok/s. Complex reasoning, planning, architecture decisions.
 - **Cloud Manager:** Claude Opus 4.6 via CLIAPIProxy (localhost:8317). Fallback cascade: Gemini 3.1 Pro → Sonnet 4.6 → Gemini 3.1 Flash Lite.
 - **Strategist (optional):** Qwen3.5-397B-A17B — advisor tier for non-writing arbitration. Configured via `SWARM_STRATEGIST_URL`.
 - **Research:** Always check **NotebookLM** first using `/ask-notebook` or `notebook_query`.
@@ -65,7 +65,7 @@ Key modules:
 1. Pick highest-priority beads issue (or CLI `--issue`); up to `SWARM_PARALLEL_ISSUES` (default: 3) concurrently
 2. Create git worktree in `/tmp/beefcake-wt/<issue-id>`
 3. Cloud manager (Claude Opus 4.6 via CLIAPIProxy) plans and delegates
-4. Local workers (27B on vasp-03, 122B on vasp-01/02) execute code changes
+4. Local workers (GLM-4.7-Flash on vasp-03, Qwen3.5-27B on vasp-01, Devstral-24B on vasp-02) execute code changes
 5. Verifier (deterministic quality gates) after each iteration — multi-language (Rust, Python, TypeScript, Go)
 6. Pass → merge + close issue; Fail → retry up to `SWARM_MAX_RETRIES`; circuit breaker after `SWARM_MAX_NO_CHANGE` stuck iterations
 
@@ -87,9 +87,9 @@ Key modules:
 Cloud Manager (Claude Opus 4.6 via CLIAPIProxy, max 10 iterations)
     → cloud fallback: Opus 4.6 → Gemini 3.1 Pro → Sonnet 4.6 → Gemini 3.1 Flash Lite
     → delegates to local workers:
-        vasp-03:8081 — Qwen3-Coder-Next (scout, reviewer, fixer)
-        vasp-01:8081 — Qwen3.5-122B-A10B MoE (coder, general worker)
-        vasp-02:8081 — Qwen3.5-122B-A10B MoE (planner, reasoning worker)
+        vasp-03:8081 — GLM-4.7-Flash (scout, reviewer, fixer)
+        vasp-01:8081 — Qwen3.5-27B (coder, general worker)
+        vasp-02:8081 — Devstral-Small-2-24B (planner, reasoning worker)
     → optional: Qwen3.5-397B-A17B strategist (advisor, non-writing arbitration)
     → runs verifier after each worker completes
     → circuit breaker: SWARM_MAX_NO_CHANGE (default: 3) stuck iterations → abort
@@ -116,14 +116,19 @@ Heterogeneous local cluster — each node runs a different model tier. See `docs
 
 | Tier | Endpoint | Model | Hardware | Throughput |
 |------|----------|-------|----------|------------|
-| Scout/Fast | http://vasp-03:8081/v1 | Qwen3-Coder-Next-UD Q4_K_XL (80B/3B MoE) | V100S 32GB (expert-offload) | TBD |
-| Coder | http://vasp-01:8081/v1 | Qwen3.5-122B-A10B MoE | V100S 32GB (expert-offload) | ~5-8 tok/s |
-| Reasoning | http://vasp-02:8081/v1 | Qwen3.5-122B-A10B MoE | V100S 32GB (expert-offload) | ~5-8 tok/s |
+| Scout/Fast | http://vasp-03:8081/v1 | GLM-4.7-Flash Q4_K_M (30B/3B MoE) | V100S 32GB | ~50 tok/s |
+| Coder | http://vasp-01:8081/v1 | Qwen3.5-27B Q4_K_M (dense) | V100S 32GB | ~27 tok/s |
+| Reasoning | http://vasp-02:8081/v1 | Devstral-Small-2-24B Q4_K_M (dense) | V100S 32GB | ~30 tok/s |
+| SWE Specialist | http://vasp-03:8083/v1 | SERA-14B Q4_K_M (Qwen3 backbone) | V100S 32GB (shared) | TBD |
 | Cloud | http://localhost:8317/v1 | gpt-5.4-mini (CLIAPIProxy) | ai-proxy | N/A |
 
-**Qwen3-Coder-Next**: 80B/3B MoE (Mixture of Experts). Expert FFN layers offloaded to CPU RAM, attention on GPU. Replaces the 27B-Opus-Distilled as the fast tier model.
+**GLM-4.7-Flash**: 30B total / 3B active MoE. SOTA tool-calling (tau2 84.7). Native OpenAI-format function calling. 200K context window.
 
-**122B-A10B MoE**: Mixture-of-Experts with ~10B active parameters. Expert FFN layers offloaded to CPU RAM (~225GB), attention on GPU. Each vasp node runs an independent instance.
+**Qwen3.5-27B**: Dense 27B model, GPU-resident. Primary code generation tier. 32K context.
+
+**Devstral-Small-2-24B**: Mistral's agentic coding model. Dense 24B, GPU-resident. Reasoning and planning tier. 32K context.
+
+**SERA-14B**: Allen AI's SWE agent model on Qwen3 backbone. SFT on synthetic SWE trajectories. Shares vasp-03 GPU with GLM-4.7-Flash. 8K context (VRAM-constrained).
 
 **Cloud fallback matrix** (configured in config.rs `CloudFallbackMatrix::default_matrix`):
 1. `gpt-5.4-mini` (primary)
@@ -134,12 +139,12 @@ Heterogeneous local cluster — each node runs a different model tier. See `docs
 **Start inference:**
 
 ```bash
-ssh root@10.0.0.22 "bash /tmp/start-inference.sh"   # vasp-03 (Qwen3-Coder-Next)
-ssh root@10.0.0.20 "bash /tmp/start-inference.sh"   # vasp-01 (122B-A10B coder)
-ssh root@10.0.0.21 "bash /tmp/start-inference.sh"   # vasp-02 (122B-A10B reasoning)
+ssh root@10.0.0.22 "bash /tmp/start-inference.sh"   # vasp-03 (GLM-4.7-Flash)
+ssh root@10.0.0.20 "bash /tmp/start-inference.sh"   # vasp-01 (Qwen3.5-27B coder)
+ssh root@10.0.0.21 "bash /tmp/start-inference.sh"   # vasp-02 (Devstral-24B reasoning)
 ```
 
-Scripts are version-controlled at `inference/start-inference-*.sh` and deployed to `/tmp/start-inference.sh` on each node. vasp-01/02 use HPC SDK CUDA paths; vasp-03 uses cuda-unified.
+Scripts are version-controlled at `inference/start-inference-*.sh` and deployed to `/tmp/start-inference.sh` on each node. All models are now dense/small-MoE and GPU-resident (no expert-offload).
 
 **Cloud proxy:** CLIAPIProxy (Router-for-Me v6.8.54) runs on ai-proxy (localhost:8317). Binary at `/opt/cli-proxy-api/cli-proxy-api`, config at `/opt/cli-proxy-api/config.yaml`, credentials in `/root/.cli-proxy-api/`. Uses `x-api-key` header for inference, `Authorization: Bearer` for management API. API key: `rust-daq-proxy-key` (same for both, set via `SWARM_CLOUD_API_KEY` env var). Remote management enabled — accessible from any Tailnet host at `http://100.105.113.58:8317`. Use `/cloud-proxy` skill for diagnostics and management commands. Docs: https://help.router-for.me/management/api
 
@@ -151,16 +156,16 @@ Set by `scripts/run-swarm.sh` (overrides config.rs defaults). See `crates/swarm-
 
 ### Tier Endpoints
 
-Heterogeneous model setup: 27B on vasp-03, 122B on vasp-01/02.
+Dense models on all three nodes. GLM-4.7-Flash + SERA-14B share vasp-03.
 
 | Variable | Default |
 |----------|---------|
 | `SWARM_FAST_URL` | `http://vasp-03:8081/v1` |
-| `SWARM_FAST_MODEL` | `Qwen3-Coder-Next` |
+| `SWARM_FAST_MODEL` | `GLM-4.7-Flash` (run-swarm.sh override; config.rs default is `OmniCoder-9B`) |
 | `SWARM_CODER_URL` | `http://vasp-01:8081/v1` |
-| `SWARM_CODER_MODEL` | `Qwen3.5-122B-A10B` |
+| `SWARM_CODER_MODEL` | `Qwen3.5-27B` |
 | `SWARM_REASONING_URL` | `http://vasp-02:8081/v1` |
-| `SWARM_REASONING_MODEL` | `Qwen3.5-122B-A10B` |
+| `SWARM_REASONING_MODEL` | `Qwen3.5-27B` |
 | `SWARM_STRATEGIST_URL` | *(none)* |
 | `SWARM_STRATEGIST_MODEL` | `Qwen3.5-397B-A17B` |
 
@@ -301,9 +306,9 @@ tail -f ~/code/beefcake-swarm/logs/dogfood/run-N-<issue>-*.log
 grep -o 'gen_ai.tool.name[^"]*"[^"]*"' logs/dogfood/run-*.log | sort | uniq -c | sort -rn
 
 # Check endpoint health
-curl -s http://vasp-03:8081/health  # Scout (Qwen3-Coder-Next)
-curl -s http://vasp-01:8081/health  # Coder (122B-A10B MoE)
-curl -s http://vasp-02:8081/health  # Reasoning (122B-A10B MoE)
+curl -s http://vasp-03:8081/health  # Scout (GLM-4.7-Flash)
+curl -s http://vasp-01:8081/health  # Coder (Qwen3.5-27B)
+curl -s http://vasp-02:8081/health  # Reasoning (Devstral-24B)
 ```
 
 ### Healthy Startup Log
@@ -381,9 +386,9 @@ nlm source add "<ID>" --file "doc.md"
 ## Cluster Access
 
 - slurm-ctl: `ssh root@10.0.0.5` (controller, NFS server — VM 500 on pve1)
-- vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, Qwen3.5-122B-A10B MoE — VM 600 on pve1)
-- vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, Qwen3.5-122B-A10B MoE — VM 601 on pve2)
-- vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM, Qwen3-Coder-Next 80B/3B MoE — VM 602 on pve3)
+- vasp-01: `ssh root@10.0.0.20` (V100S + 256GB RAM, Qwen3.5-27B dense — VM 600 on pve1)
+- vasp-02: `ssh root@10.0.0.21` (V100S + 256GB RAM, Devstral-Small-2-24B dense — VM 601 on pve2)
+- vasp-03: `ssh root@10.0.0.22` (V100S + 256GB RAM, GLM-4.7-Flash + SERA-14B — VM 602 on pve3)
 - pve1: `ssh root@10.0.0.1` (Proxmox host, cluster gateway — DO NOT reboot)
 - pve2: `ssh root@10.0.0.2` (Proxmox host)
 - pve3: `ssh root@10.0.0.3` (Proxmox host)
@@ -413,7 +418,6 @@ Worktrees are created locally at `/tmp/beefcake-wt/<issue-id>` (not on NFS). Bea
 
 - `#![allow(dead_code)]` in `coordination/src/main.rs` — rmcp `#[tool_router]` macro triggers false positives. Targeted `#[allow]` used elsewhere after refactor (PR #20).
 - `CLIAPIProxy ownership check` — Reports `owned_by=antigravity`. run-swarm.sh now accepts both "anthropic" and "antigravity", so ownership check passes normally.
-- `vasp-03 NFS` — /home, /cluster/shared still NFS-mounted from slurm-ctl. Set `HOME=/tmp CUDA_CACHE_PATH=/tmp/cuda-cache` before running anything that writes to $HOME.
 
 ## Agent Teams
 

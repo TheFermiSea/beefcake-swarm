@@ -300,7 +300,7 @@ type = "chat_completion"
 model = "qwen_fast"
 
 # --- Deep Reasoning: complex analysis ---
-# Routes to vasp-02 (27B) for reasoning-heavy tasks.
+# Routes to vasp-02 (Devstral-24B) for reasoning-heavy tasks.
 [functions.deep_reasoning]
 type = "chat"
 
@@ -309,7 +309,7 @@ type = "chat_completion"
 model = "qwen_reasoning"
 
 # --- Task Planning: structured repair plans ---
-# A/B test: fast planning on OmniCoder-9B vs thorough planning on 27B.
+# A/B test: fast planning on GLM-4.7-Flash vs thorough planning on 27B.
 [functions.task_planning]
 type = "chat"
 
