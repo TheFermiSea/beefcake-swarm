@@ -1,0 +1,39 @@
+# LoRA / QLoRA training configuration for fine-tuning local swarm models.
+#
+# Used by scripts/train-lora.sh to configure training hyperparameters.
+# Training data is produced by scripts/extract-training-data.py as JSONL
+# with chat-style messages: {system, user, assistant} per episode.
+
+[base_model]
+name = "Qwen2.5-Coder-14B-Instruct"
+source = "unsloth/Qwen2.5-Coder-14B-Instruct"
+
+[qlora]
+rank = 32
+alpha = 16
+dropout = 0.1
+target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
+
+[training]
+epochs = 2
+learning_rate = 2e-4
+batch_size = 4
+gradient_accumulation_steps = 4
+max_seq_length = 4096
+warmup_ratio = 0.05
+weight_decay = 0.01
+lr_scheduler = "cosine"
+logging_steps = 10
+save_steps = 100
+seed = 42
+
+[data]
+# Only include episodes from the mutation archive that resolved successfully.
+min_episodes = 100
+# Cleaner signal from quick resolutions (fewer noisy retry loops).
+max_iterations = 3
+
+[output]
+adapter_dir = "/scratch/ai/adapters"
+# GGUF LoRA format for llama.cpp --lora flag.
+export_gguf = true
