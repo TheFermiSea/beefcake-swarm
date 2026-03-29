@@ -33,7 +33,6 @@ from __future__ import annotations
 import json
 import os
 import sys
-import tempfile
 from pathlib import Path
 
 import modal
@@ -62,8 +61,9 @@ training_image = (
         "sentencepiece",
         "protobuf",
         "huggingface_hub",
-        "flash-attn>=2.6.0",
     )
+    # Note: flash-attn omitted — requires building from source with torch present.
+    # Falls back to PyTorch SDPA attention, which is nearly equivalent on H100.
     .env({"HF_HUB_ENABLE_HF_TRANSFER": "1"})
 )
 
@@ -102,7 +102,7 @@ DEFAULTS = {
     gpu="H100",
     timeout=7200,  # 2 hour max
     volumes={"/cache": model_cache},
-    secrets=[modal.Secret.from_name("huggingface", required=False)],
+    secrets=[modal.Secret.from_name("huggingface")],
 )
 def train_lora_sft(
     base_model: str,
@@ -161,7 +161,7 @@ def train_lora_sft(
         quantization_config=bnb_config,
         device_map="auto",
         trust_remote_code=True,
-        attn_implementation="flash_attention_2",
+        attn_implementation="sdpa",
         cache_dir=cache_dir,
     )
     model = prepare_model_for_kbit_training(model)
@@ -199,7 +199,7 @@ def train_lora_sft(
         logging_steps=5,
         save_strategy="epoch",
         bf16=True,
-        max_seq_length=max_seq,
+        max_length=max_seq,
         dataset_text_field="text",
         packing=True,
         gradient_checkpointing=True,
@@ -242,7 +242,7 @@ def train_lora_sft(
     gpu="H100",
     timeout=7200,
     volumes={"/cache": model_cache},
-    secrets=[modal.Secret.from_name("huggingface", required=False)],
+    secrets=[modal.Secret.from_name("huggingface")],
 )
 def train_dpo(
     base_model: str,
@@ -296,7 +296,7 @@ def train_dpo(
         quantization_config=bnb_config,
         device_map="auto",
         trust_remote_code=True,
-        attn_implementation="flash_attention_2",
+        attn_implementation="sdpa",
         cache_dir=cache_dir,
     )
 
