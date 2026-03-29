@@ -79,6 +79,10 @@ pub struct WorkPacket {
     /// without reading files one by one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repo_map: Option<String>,
+    /// Summary of the previously attempted approach that failed, injected
+    /// when a pivot is detected so the receiving tier knows what NOT to repeat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failed_approach_summary: Option<String>,
 }
 
 impl WorkPacket {
@@ -379,6 +383,7 @@ mod tests {
             validator_feedback: vec![],
             change_contract: None,
             repo_map: None,
+            failed_approach_summary: None,
         };
 
         let summary = packet.summary();
@@ -425,6 +430,7 @@ mod tests {
             validator_feedback: vec![],
             change_contract: None,
             repo_map: None,
+            failed_approach_summary: None,
         };
 
         let json = serde_json::to_string_pretty(&packet).unwrap();
@@ -466,6 +472,7 @@ mod tests {
             validator_feedback: vec![],
             change_contract: None,
             repo_map: None,
+            failed_approach_summary: None,
         };
 
         // Should be a reasonable estimate
@@ -552,6 +559,7 @@ mod tests {
             validator_feedback: vec![],
             change_contract: Some(contract),
             repo_map: None,
+            failed_approach_summary: None,
         };
 
         // Round-trip with contract
