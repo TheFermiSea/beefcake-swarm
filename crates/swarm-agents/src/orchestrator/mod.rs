@@ -3404,6 +3404,9 @@ async fn process_issue_core(
             language: Some(triage_result.language.to_string()),
             triage_complexity: Some(triage_result.complexity.to_string()),
             model: config.cloud_endpoint.as_ref().map(|e| e.model.clone()),
+            repo_id: std::env::var("SWARM_REPO_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
         };
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {

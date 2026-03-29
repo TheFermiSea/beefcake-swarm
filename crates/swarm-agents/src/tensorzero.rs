@@ -41,6 +41,10 @@ pub struct FeedbackTags {
     pub triage_complexity: Option<String>,
     /// Primary model used for this run (e.g. `claude-opus-4-6`).
     pub model: Option<String>,
+    /// Repository identifier for project isolation (e.g. `beefcake-swarm`, `rust-daq`).
+    /// Prevents TZ feedback from one project contaminating routing for another.
+    /// Set from `SWARM_REPO_ID` env var (auto-populated from `--repo-root` basename).
+    pub repo_id: Option<String>,
 }
 
 impl FeedbackTags {
@@ -59,6 +63,9 @@ impl FeedbackTags {
         }
         if let Some(v) = self.model {
             map.insert("model".to_string(), v);
+        }
+        if let Some(v) = self.repo_id {
+            map.insert("repo_id".to_string(), v);
         }
         map
     }
@@ -281,6 +288,7 @@ pub async fn post_resolved_feedback(
             language: m.get("language").cloned(),
             triage_complexity: m.get("triage_complexity").cloned(),
             model: m.get("model").cloned(),
+            repo_id: m.get("repo_id").cloned(),
         });
         post_episode_feedback(
             gateway_url,

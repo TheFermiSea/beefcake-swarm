@@ -99,6 +99,16 @@ export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
 # disables TZ routing (config.rs filters empty strings).
 export SWARM_TENSORZERO_URL="${SWARM_TENSORZERO_URL-http://localhost:3000}"
 export SWARM_TENSORZERO_PG_URL="${SWARM_TENSORZERO_PG_URL-postgres://tensorzero:tensorzero@localhost:5433/tensorzero}"
+# Auto-detect repo ID for TZ project isolation. Prevents cross-project
+# feedback contamination when the swarm works on multiple codebases.
+# Defaults to the basename of --repo-root or the current directory.
+if [[ -z "${SWARM_REPO_ID-}" ]]; then
+  if [[ -n "${_REPO_ROOT:-}" ]]; then
+    export SWARM_REPO_ID="$(basename "$_REPO_ROOT")"
+  else
+    export SWARM_REPO_ID="$(basename "$(pwd)")"
+  fi
+fi
 
 # ── Beads OpenTelemetry ──
 # Export beads operational metrics (issue counts, storage ops) to OTLP collector.

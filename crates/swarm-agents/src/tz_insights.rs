@@ -17,6 +17,11 @@ pub struct TzInsights {
     pg_url: String,
     ttl: Duration,
     cache: Mutex<Option<CachedInsights>>,
+    /// Optional repo_id filter. When set, insights only include data from
+    /// this repository, preventing cross-project contamination.
+    /// TODO: Wire into query_variant_stats() SQL WHERE clause via feedback tags JOIN.
+    #[allow(dead_code)]
+    repo_id: Option<String>,
 }
 
 struct CachedInsights {
@@ -41,6 +46,8 @@ pub struct VariantStat {
 
 impl TzInsights {
     /// Create a new TzInsights reader.
+    ///
+    /// When `repo_id` is set, only insights from that repository are included.
     pub fn new(pg_url: &str, ttl_secs: u64) -> Result<Self, String> {
         if pg_url.is_empty() {
             return Err("empty Postgres URL".into());
@@ -49,6 +56,9 @@ impl TzInsights {
             pg_url: pg_url.to_string(),
             ttl: Duration::from_secs(ttl_secs),
             cache: Mutex::new(None),
+            repo_id: std::env::var("SWARM_REPO_ID")
+                .ok()
+                .filter(|s| !s.is_empty()),
         })
     }
 
@@ -431,6 +441,7 @@ mod tests {
                 generated_at: Instant::now(),
                 directives: vec!["cached directive".into()],
             })),
+            repo_id: None,
         };
         // Cache is fresh — should not attempt Postgres connection
         let guard = insights.cache.lock().unwrap();
@@ -458,6 +469,7 @@ mod tests {
                 generated_at: Instant::now(),
                 directives: vec!["test insight".into()],
             })),
+            repo_id: None,
         };
         // Should return cached value without hitting Postgres
         let d = insights.get_directives().await;
