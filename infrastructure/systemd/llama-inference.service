@@ -1,0 +1,18 @@
+[Unit]
+Description=llama.cpp inference server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/opt/beefcake-swarm/inference/llama-inference-systemd.sh /opt/beefcake-swarm/inference/model.conf
+Restart=on-failure
+RestartSec=15
+TimeoutStartSec=120
+KillMode=process
+ExecStopPost=/bin/sleep 5
+LimitNOFILE=65536
+LimitMEMLOCK=infinity
+
+[Install]
+WantedBy=multi-user.target
