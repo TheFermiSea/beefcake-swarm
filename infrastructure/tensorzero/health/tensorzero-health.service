@@ -1,0 +1,8 @@
+[Unit]
+Description=TensorZero health check and auto-recovery
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/tensorzero-health-check.sh
+User=root
