@@ -1,8 +1,8 @@
-//! AST Index — Tree-sitter-based Rust symbol extraction.
+//! AST Index — Tree-sitter-based multi-language symbol extraction.
 //!
-//! Parses Rust source files with tree-sitter-rust to extract structured
-//! symbol information: function signatures, struct/enum/trait definitions,
-//! impl blocks, and their byte/line ranges.
+//! Parses source files with tree-sitter grammars (Rust, Python, TypeScript, Go)
+//! to extract structured symbol information: function signatures, class/struct
+//! definitions, and their byte/line ranges.
 //!
 //! Used by the ContextPacker to build smarter initial context that includes
 //! complete signatures and type definitions instead of raw first-N-lines.
@@ -27,7 +27,7 @@ pub struct RustSymbol {
     pub signature: String,
 }
 
-/// Categories of Rust symbols.
+/// Categories of source code symbols (multi-language).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
@@ -41,6 +41,11 @@ pub enum SymbolKind {
     Static,
     Mod,
     Macro,
+    // Multi-language additions
+    Class,
+    Interface,
+    Method,
+    Decorator,
 }
 
 impl std::fmt::Display for SymbolKind {
@@ -56,6 +61,10 @@ impl std::fmt::Display for SymbolKind {
             Self::Static => write!(f, "static"),
             Self::Mod => write!(f, "mod"),
             Self::Macro => write!(f, "macro"),
+            Self::Class => write!(f, "class"),
+            Self::Interface => write!(f, "interface"),
+            Self::Method => write!(f, "method"),
+            Self::Decorator => write!(f, "decorator"),
         }
     }
 }
@@ -70,6 +79,292 @@ pub struct FileSymbolIndex {
 }
 
 impl FileSymbolIndex {
+    /// Parse a source file and extract symbols, dispatching by file extension.
+    ///
+    /// Supports: `.rs` (Rust), `.py` (Python), `.ts/.tsx` (TypeScript), `.go` (Go).
+    /// Falls back to Rust parser for unknown extensions.
+    pub fn from_source_language(file: &str, source: &str) -> Self {
+        let ext = file.rsplit('.').next().unwrap_or("");
+        match ext {
+            "py" | "pyi" => Self::from_python(file, source),
+            "ts" | "tsx" | "js" | "jsx" => Self::from_typescript(file, source),
+            "go" => Self::from_go(file, source),
+            _ => Self::from_source(file, source), // Rust or unknown
+        }
+    }
+
+    /// Parse a Python source file and extract classes, functions, and decorators.
+    fn from_python(file: &str, source: &str) -> Self {
+        let mut parser = Parser::new();
+        if parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .is_err()
+        {
+            return Self::empty(file);
+        }
+        let tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => return Self::empty(file),
+        };
+        let source_bytes = source.as_bytes();
+        let mut symbols = Vec::new();
+
+        for i in 0..tree.root_node().child_count() {
+            let node = tree.root_node().child(i).unwrap();
+            match node.kind() {
+                "function_definition" => {
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        let name = name_node.utf8_text(source_bytes).unwrap_or("?").to_string();
+                        let sig = source_bytes[node.start_byte()..node.end_byte()]
+                            .iter()
+                            .take(120)
+                            .copied()
+                            .take_while(|&b| b != b'\n')
+                            .collect::<Vec<_>>();
+                        symbols.push(RustSymbol {
+                            name,
+                            kind: SymbolKind::Function,
+                            is_public: true,
+                            start_line: node.start_position().row,
+                            end_line: node.end_position().row,
+                            signature: String::from_utf8_lossy(&sig).to_string(),
+                        });
+                    }
+                }
+                "class_definition" => {
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        let name = name_node.utf8_text(source_bytes).unwrap_or("?").to_string();
+                        let sig = source_bytes[node.start_byte()..node.end_byte()]
+                            .iter()
+                            .take(120)
+                            .copied()
+                            .take_while(|&b| b != b'\n')
+                            .collect::<Vec<_>>();
+                        symbols.push(RustSymbol {
+                            name,
+                            kind: SymbolKind::Class,
+                            is_public: true,
+                            start_line: node.start_position().row,
+                            end_line: node.end_position().row,
+                            signature: String::from_utf8_lossy(&sig).to_string(),
+                        });
+                    }
+                }
+                "decorated_definition" => {
+                    if let Some(def) = node.child_by_field_name("definition") {
+                        if let Some(name_node) = def.child_by_field_name("name") {
+                            let name = name_node.utf8_text(source_bytes).unwrap_or("?").to_string();
+                            let kind = if def.kind() == "class_definition" {
+                                SymbolKind::Class
+                            } else {
+                                SymbolKind::Function
+                            };
+                            let sig = source_bytes[node.start_byte()..node.end_byte()]
+                                .iter()
+                                .take(120)
+                                .copied()
+                                .take_while(|&b| b != b'\n')
+                                .collect::<Vec<_>>();
+                            symbols.push(RustSymbol {
+                                name,
+                                kind,
+                                is_public: true,
+                                start_line: node.start_position().row,
+                                end_line: node.end_position().row,
+                                signature: String::from_utf8_lossy(&sig).to_string(),
+                            });
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Self {
+            file: file.to_string(),
+            symbols,
+        }
+    }
+
+    /// Parse a TypeScript/JavaScript source file and extract functions, classes, interfaces.
+    fn from_typescript(file: &str, source: &str) -> Self {
+        let mut parser = Parser::new();
+        let lang = if file.ends_with(".tsx") || file.ends_with(".jsx") {
+            tree_sitter_typescript::LANGUAGE_TSX.into()
+        } else {
+            tree_sitter_typescript::LANGUAGE_TYPESCRIPT.into()
+        };
+        if parser.set_language(&lang).is_err() {
+            return Self::empty(file);
+        }
+        let tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => return Self::empty(file),
+        };
+        let source_bytes = source.as_bytes();
+        let mut symbols = Vec::new();
+
+        Self::walk_ts_node(tree.root_node(), source_bytes, &mut symbols);
+
+        Self {
+            file: file.to_string(),
+            symbols,
+        }
+    }
+
+    fn walk_ts_node(node: Node, source: &[u8], symbols: &mut Vec<RustSymbol>) {
+        match node.kind() {
+            "function_declaration" | "export_statement" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(source).unwrap_or("?").to_string();
+                    let sig_line = Self::first_line(node, source);
+                    symbols.push(RustSymbol {
+                        name,
+                        kind: SymbolKind::Function,
+                        is_public: true,
+                        start_line: node.start_position().row,
+                        end_line: node.end_position().row,
+                        signature: sig_line,
+                    });
+                }
+            }
+            "class_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(source).unwrap_or("?").to_string();
+                    symbols.push(RustSymbol {
+                        name,
+                        kind: SymbolKind::Class,
+                        is_public: true,
+                        start_line: node.start_position().row,
+                        end_line: node.end_position().row,
+                        signature: Self::first_line(node, source),
+                    });
+                }
+            }
+            "interface_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(source).unwrap_or("?").to_string();
+                    symbols.push(RustSymbol {
+                        name,
+                        kind: SymbolKind::Interface,
+                        is_public: true,
+                        start_line: node.start_position().row,
+                        end_line: node.end_position().row,
+                        signature: Self::first_line(node, source),
+                    });
+                }
+            }
+            "type_alias_declaration" => {
+                if let Some(name_node) = node.child_by_field_name("name") {
+                    let name = name_node.utf8_text(source).unwrap_or("?").to_string();
+                    symbols.push(RustSymbol {
+                        name,
+                        kind: SymbolKind::TypeAlias,
+                        is_public: true,
+                        start_line: node.start_position().row,
+                        end_line: node.end_position().row,
+                        signature: Self::first_line(node, source),
+                    });
+                }
+            }
+            _ => {}
+        }
+        for i in 0..node.child_count() {
+            if let Some(child) = node.child(i) {
+                Self::walk_ts_node(child, source, symbols);
+            }
+        }
+    }
+
+    /// Parse a Go source file and extract functions, structs, interfaces.
+    fn from_go(file: &str, source: &str) -> Self {
+        let mut parser = Parser::new();
+        if parser
+            .set_language(&tree_sitter_go::LANGUAGE.into())
+            .is_err()
+        {
+            return Self::empty(file);
+        }
+        let tree = match parser.parse(source, None) {
+            Some(t) => t,
+            None => return Self::empty(file),
+        };
+        let source_bytes = source.as_bytes();
+        let mut symbols = Vec::new();
+
+        for i in 0..tree.root_node().child_count() {
+            let node = tree.root_node().child(i).unwrap();
+            match node.kind() {
+                "function_declaration" => {
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        let name = name_node.utf8_text(source_bytes).unwrap_or("?").to_string();
+                        symbols.push(RustSymbol {
+                            name,
+                            kind: SymbolKind::Function,
+                            is_public: true,
+                            start_line: node.start_position().row,
+                            end_line: node.end_position().row,
+                            signature: Self::first_line(node, source_bytes),
+                        });
+                    }
+                }
+                "method_declaration" => {
+                    if let Some(name_node) = node.child_by_field_name("name") {
+                        let name = name_node.utf8_text(source_bytes).unwrap_or("?").to_string();
+                        symbols.push(RustSymbol {
+                            name,
+                            kind: SymbolKind::Method,
+                            is_public: true,
+                            start_line: node.start_position().row,
+                            end_line: node.end_position().row,
+                            signature: Self::first_line(node, source_bytes),
+                        });
+                    }
+                }
+                "type_declaration" => {
+                    // Go type declarations can be struct, interface, or alias
+                    for j in 0..node.child_count() {
+                        if let Some(spec) = node.child(j) {
+                            if spec.kind() == "type_spec" {
+                                if let Some(name_node) = spec.child_by_field_name("name") {
+                                    let name = name_node
+                                        .utf8_text(source_bytes)
+                                        .unwrap_or("?")
+                                        .to_string();
+                                    let type_node = spec.child_by_field_name("type");
+                                    let kind = match type_node.map(|n| n.kind()) {
+                                        Some("struct_type") => SymbolKind::Struct,
+                                        Some("interface_type") => SymbolKind::Interface,
+                                        _ => SymbolKind::TypeAlias,
+                                    };
+                                    symbols.push(RustSymbol {
+                                        name,
+                                        kind,
+                                        is_public: true,
+                                        start_line: spec.start_position().row,
+                                        end_line: spec.end_position().row,
+                                        signature: Self::first_line(spec, source_bytes),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        Self {
+            file: file.to_string(),
+            symbols,
+        }
+    }
+
+    fn empty(file: &str) -> Self {
+        Self {
+            file: file.to_string(),
+            symbols: Vec::new(),
+        }
+    }
+
     /// Parse a Rust source file and extract all top-level symbols.
     pub fn from_source(file: &str, source: &str) -> Self {
         let mut parser = Parser::new();
@@ -279,10 +574,14 @@ impl FileSymbolIndex {
         // Sort by kind priority: structs/enums/traits first, then fns, then impls
         let mut sorted: Vec<&RustSymbol> = self.symbols.iter().collect();
         sorted.sort_by_key(|s| match s.kind {
-            SymbolKind::Struct | SymbolKind::Enum | SymbolKind::Trait => 0,
+            SymbolKind::Struct
+            | SymbolKind::Enum
+            | SymbolKind::Trait
+            | SymbolKind::Class
+            | SymbolKind::Interface => 0,
             SymbolKind::TypeAlias | SymbolKind::Const | SymbolKind::Static => 1,
-            SymbolKind::Function => 2,
-            SymbolKind::Impl => 3,
+            SymbolKind::Function | SymbolKind::Method => 2,
+            SymbolKind::Impl | SymbolKind::Decorator => 3,
             SymbolKind::Mod | SymbolKind::Macro => 4,
         });
 

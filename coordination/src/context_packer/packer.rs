@@ -764,7 +764,7 @@ impl ContextPacker {
                 Err(_) => continue,
             };
 
-            let index = FileSymbolIndex::from_source(&rel, &source);
+            let index = FileSymbolIndex::from_source_language(&rel, &source);
             for sym in &index.symbols {
                 if referenced.contains(&sym.name) {
                     symbol_locations.push((
@@ -905,7 +905,7 @@ impl ContextPacker {
     fn build_ast_context(file: &str, source: &str, lines: &[&str]) -> Option<String> {
         use crate::context_packer::ast_index::FileSymbolIndex;
 
-        let index = FileSymbolIndex::from_source(file, source);
+        let index = FileSymbolIndex::from_source_language(file, source);
         if index.symbols.is_empty() {
             return None; // Parse failure or empty file — fallback
         }

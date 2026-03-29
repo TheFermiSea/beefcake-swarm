@@ -25,9 +25,12 @@ clap = { version = "4", features = ["derive"] }
 regex = "1"
 ignore = "0.4"
 
-# AST-aware context packing
+# AST-aware context packing (multi-language)
 tree-sitter = "0.24"
 tree-sitter-rust = "0.23"
+tree-sitter-python = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-go = "0.25"
 
 # Ensemble coordination dependencies (optional, behind heavy-state feature)
 rocksdb = { version = "0.24", optional = true }
