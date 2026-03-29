@@ -8,7 +8,11 @@
 
 LOG="/var/log/tensorzero-health.log"
 COMPOSE_DIR="/home/brian/code/beefcake-swarm/infrastructure/tensorzero"
-export SWARM_CLOUD_API_KEY="rust-daq-proxy-key"
+
+# Source env from persistent file (not hardcoded — survives key rotation)
+if [[ -f /home/brian/.swarm-env ]]; then
+    set -a; source /home/brian/.swarm-env; set +a
+fi
 
 log() { echo "$(date -Iseconds) $*" >> "$LOG"; }
 

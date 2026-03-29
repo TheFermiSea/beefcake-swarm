@@ -29,6 +29,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Source persistent env file if it exists (ensures API keys are available
+# in nohup/cron/systemd contexts where ~/.bashrc is not sourced).
+if [[ -f "$HOME/.swarm-env" ]]; then
+    set -a; source "$HOME/.swarm-env"; set +a
+fi
+
 # --- Configuration ---
 MAX_RUNS="${DOGFOOD_MAX_RUNS:-0}"       # 0 = unlimited
 COOLDOWN="${DOGFOOD_COOLDOWN:-30}"
