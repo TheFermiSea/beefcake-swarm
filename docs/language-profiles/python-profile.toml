@@ -1,0 +1,42 @@
+# Python project language profile for the beefcake swarm.
+# Copy to .swarm/profile.toml in the target repository.
+
+language = "python"
+source_extensions = [".py", ".pyi"]
+package_manifest = "pyproject.toml"
+integration_files = ["pyproject.toml", "__init__.py", "conftest.py"]
+
+[[gates]]
+name = "lint"
+command = "ruff"
+args = ["check", "."]
+timeout_secs = 120
+
+[[gates]]
+name = "format"
+command = "ruff"
+args = ["format", "--check", "."]
+timeout_secs = 60
+
+[[gates]]
+name = "typecheck"
+command = "mypy"
+args = ["."]
+timeout_secs = 300
+blocking = false  # mypy can be noisy; treat as advisory
+
+[[gates]]
+name = "test"
+command = "pytest"
+args = ["-x", "--tb=short", "-q"]
+timeout_secs = 600
+
+[[auto_fix]]
+name = "ruff-fix"
+command = "ruff"
+args = ["check", "--fix", "."]
+
+[[auto_fix]]
+name = "ruff-format"
+command = "ruff"
+args = ["format", "."]

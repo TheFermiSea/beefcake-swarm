@@ -1,7 +1,8 @@
-//! Rustc error classification and parsing
+//! Multi-language error classification and parsing
 //!
-//! Extracts structured information from compiler errors to guide model selection
-//! and prompt construction.
+//! Extracts structured information from compiler/linter errors to guide model
+//! selection and prompt construction. Supports Rust, Python, TypeScript, and Go
+//! error patterns.
 
 use crate::feedback::compiler::{CargoMessage, DiagnosticMessage};
 use regex::Regex;
@@ -31,6 +32,51 @@ static MACRO_PATTERN: LazyLock<Regex> =
 
 static IMPORT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"(?i)(unresolved|cannot find|not found|use of undeclared|E0432|E0433)").unwrap()
+});
+
+// --- Multi-language patterns ---
+// These catch errors from Python, TypeScript, and Go that map to existing categories.
+
+/// Python-specific error patterns.
+static PYTHON_TYPE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(TypeError|Incompatible (return |)type|expected .*, got|has no attribute)")
+        .expect("valid python type regex")
+});
+
+static PYTHON_IMPORT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(ImportError|ModuleNotFoundError|No module named|cannot import)")
+        .expect("valid python import regex")
+});
+
+static PYTHON_SYNTAX_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(SyntaxError|IndentationError|TabError|unexpected indent|invalid syntax)")
+        .expect("valid python syntax regex")
+});
+
+static PYTHON_NAME_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(NameError|undefined name|is not defined)").expect("valid python name regex")
+});
+
+/// TypeScript-specific error patterns.
+static TS_TYPE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(TS2345|TS2322|TS2304|TS7006|Type .* is not assignable|cannot find name|implicitly has .* type)")
+        .expect("valid typescript type regex")
+});
+
+static TS_IMPORT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(TS2307|Cannot find module|Module .* has no exported member)")
+        .expect("valid typescript import regex")
+});
+
+/// Go-specific error patterns.
+static GO_TYPE_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(cannot use .* as|incompatible type|missing method)")
+        .expect("valid go type regex")
+});
+
+static GO_IMPORT_PATTERN: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(imported and not used|could not import|undefined:)")
+        .expect("valid go import regex")
 });
 
 /// Error categories for routing to appropriate models
@@ -115,6 +161,70 @@ impl std::str::FromStr for ErrorCategory {
             _ => Ok(Self::Other),
         }
     }
+}
+
+/// Classify an error from raw stderr text (multi-language).
+///
+/// Unlike `classify_error()` which parses structured rustc JSON diagnostics,
+/// this function works on raw text output from any compiler/linter/test runner.
+/// Used by `ScriptVerifier` for Python, TypeScript, Go, and other languages.
+pub fn classify_from_text(text: &str) -> ErrorCategory {
+    // Rust patterns (check first — most specific)
+    if BORROW_PATTERN.is_match(text) {
+        return ErrorCategory::BorrowChecker;
+    }
+    if LIFETIME_PATTERN.is_match(text) {
+        return ErrorCategory::Lifetime;
+    }
+    if TRAIT_PATTERN.is_match(text) {
+        return ErrorCategory::TraitBound;
+    }
+    if ASYNC_PATTERN.is_match(text) {
+        return ErrorCategory::Async;
+    }
+    if MACRO_PATTERN.is_match(text) {
+        return ErrorCategory::Macro;
+    }
+
+    // Python patterns
+    if PYTHON_SYNTAX_PATTERN.is_match(text) {
+        return ErrorCategory::Syntax;
+    }
+    if PYTHON_IMPORT_PATTERN.is_match(text) {
+        return ErrorCategory::ImportResolution;
+    }
+    if PYTHON_NAME_PATTERN.is_match(text) {
+        return ErrorCategory::ImportResolution; // unresolved name ≈ import issue
+    }
+    if PYTHON_TYPE_PATTERN.is_match(text) {
+        return ErrorCategory::TypeMismatch;
+    }
+
+    // TypeScript patterns
+    if TS_IMPORT_PATTERN.is_match(text) {
+        return ErrorCategory::ImportResolution;
+    }
+    if TS_TYPE_PATTERN.is_match(text) {
+        return ErrorCategory::TypeMismatch;
+    }
+
+    // Go patterns
+    if GO_IMPORT_PATTERN.is_match(text) {
+        return ErrorCategory::ImportResolution;
+    }
+    if GO_TYPE_PATTERN.is_match(text) {
+        return ErrorCategory::TypeMismatch;
+    }
+
+    // Generic patterns (work across languages)
+    if TYPE_PATTERN.is_match(text) {
+        return ErrorCategory::TypeMismatch;
+    }
+    if IMPORT_PATTERN.is_match(text) {
+        return ErrorCategory::ImportResolution;
+    }
+
+    ErrorCategory::Other
 }
 
 /// Parsed and classified error

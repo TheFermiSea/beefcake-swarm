@@ -1,0 +1,35 @@
+# TypeScript project language profile for the beefcake swarm.
+# Copy to .swarm/profile.toml in the target repository.
+
+language = "typescript"
+source_extensions = [".ts", ".tsx", ".js", ".jsx"]
+package_manifest = "package.json"
+integration_files = ["package.json", "tsconfig.json", "index.ts", "index.tsx"]
+
+[[gates]]
+name = "lint"
+command = "npx"
+args = ["eslint", "."]
+timeout_secs = 120
+
+[[gates]]
+name = "typecheck"
+command = "npx"
+args = ["tsc", "--noEmit"]
+timeout_secs = 300
+
+[[gates]]
+name = "test"
+command = "npx"
+args = ["vitest", "run", "--reporter=verbose"]
+timeout_secs = 600
+
+[[auto_fix]]
+name = "eslint-fix"
+command = "npx"
+args = ["eslint", "--fix", "."]
+
+[[auto_fix]]
+name = "prettier"
+command = "npx"
+args = ["prettier", "--write", "."]

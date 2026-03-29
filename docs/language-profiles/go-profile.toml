@@ -1,0 +1,42 @@
+# Go project language profile for the beefcake swarm.
+# Copy to .swarm/profile.toml in the target repository.
+
+language = "go"
+source_extensions = [".go"]
+package_manifest = "go.mod"
+integration_files = ["go.mod", "go.sum", "main.go"]
+
+[[gates]]
+name = "vet"
+command = "go"
+args = ["vet", "./..."]
+timeout_secs = 120
+
+[[gates]]
+name = "lint"
+command = "golangci-lint"
+args = ["run"]
+timeout_secs = 300
+blocking = false  # not always installed; treat as advisory
+
+[[gates]]
+name = "build"
+command = "go"
+args = ["build", "./..."]
+timeout_secs = 300
+
+[[gates]]
+name = "test"
+command = "go"
+args = ["test", "-count=1", "-short", "./..."]
+timeout_secs = 600
+
+[[auto_fix]]
+name = "gofmt"
+command = "gofmt"
+args = ["-w", "."]
+
+[[auto_fix]]
+name = "goimports"
+command = "goimports"
+args = ["-w", "."]
