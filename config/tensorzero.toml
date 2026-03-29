@@ -155,14 +155,17 @@ model_name = "Devstral-Small-2-24B"
 api_base = "http://10.0.0.21:8081/v1"
 api_key_location = "none"
 
-# --- Code specialist: Qwen2.5-Coder-14B on vasp-03 port 8083 ---
+# --- Rust specialist: Strand-Rust-Coder-14B on vasp-03 port 8083 ---
+# Full fine-tune of Qwen2.5-Coder-14B on 191K Rust examples (Strandset-Rust-v1).
+# 4K context (VRAM-constrained, shares GPU with GLM-4.7-Flash on 8081).
+# A/B test: Rust specialist vs general coder for Rust-focused issues.
 
-[models.qwen_coder_14b]
-routing = ["vasp03_coder"]
+[models.strand_rust_coder]
+routing = ["vasp03_strand"]
 
-[models.qwen_coder_14b.providers.vasp03_coder]
+[models.strand_rust_coder.providers.vasp03_strand]
 type = "openai"
-model_name = "Qwen2.5-Coder-14B"
+model_name = "Strand-Rust-Coder-14B"
 api_base = "http://10.0.0.22:8083/v1"
 api_key_location = "none"
 
@@ -275,15 +278,16 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
-[functions.worker_code_edit.variants.qwen25_coder_14b]
+[functions.worker_code_edit.variants.strand_rust_14b]
 type = "chat_completion"
-model = "qwen_coder_14b"
+model = "strand_rust_coder"
 
 # Adaptive: TZ converges on the best model per task type via Thompson Sampling.
 # 4 models × diverse codebases = rich parameter space for autoresearch.
+# Strand-Rust-Coder replaces generic Qwen2.5-Coder-14B — same VRAM, Rust-specialized.
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
-candidate_variants = ["omnicoder_9b", "qwen35_27b", "devstral_24b", "qwen25_coder_14b"]
+candidate_variants = ["omnicoder_9b", "qwen35_27b", "devstral_24b", "strand_rust_14b"]
 metric = "task_resolved"
 update_period_s = 300
 
@@ -339,13 +343,13 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
-[functions.code_fixing.variants.coder14b_fixer]
+[functions.code_fixing.variants.strand_rust_fixer]
 type = "chat_completion"
-model = "qwen_coder_14b"
+model = "strand_rust_coder"
 
 [functions.code_fixing.experimentation]
 type = "adaptive"
-candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "coder14b_fixer"]
+candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "strand_rust_fixer"]
 metric = "task_resolved"
 update_period_s = 300
 
