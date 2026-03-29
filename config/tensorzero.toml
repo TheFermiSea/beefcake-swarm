@@ -113,21 +113,23 @@ tools = ["edit_file", "write_file", "proxy_edit_file", "proxy_write_file"]
 # Gateway runs with network_mode: host so it can reach vasp nodes directly
 # by IP and CLIAPIProxy on localhost:8317.
 #
-# Cluster layout (2026-03-29, model zoo for autoresearch):
-#   vasp-01:8081 — Qwen3.5-27B Q4_K_M (coder champion, ~27 tok/s)
-#   vasp-02:8081 — Devstral-Small-2-24B Q4_K_M (agentic coding challenger, ~30 tok/s est.)
-#   vasp-03:8081 — OmniCoder-9B Q4_K_M (scout/fast, ~66 tok/s)
-#   vasp-03:8083 — Qwen2.5-Coder-14B Q4_K_M (code specialist, ~45 tok/s est.)
+# Cluster layout (2026-03-29, 5-model zoo for autoresearch):
+#   vasp-01:8081 — Qwen3.5-27B Q4_K_M (coder champion, ~27 tok/s, SWE-bench 72.4%)
+#   vasp-02:8081 — Devstral-Small-2-24B Q4_K_M (agentic challenger, ~30 tok/s, SWE-bench 68.0%)
+#   vasp-03:8081 — GLM-4.7-Flash Q4_K_M (SOTA tool-calling, 3B active, ~50 tok/s, tau2 84.7)
+#   vasp-03:8083 — Qwen2.5-Coder-14B Q4_K_M (code specialist, ~45 tok/s, HumanEval 88.4%)
 #   vasp-*:8082  — nomic-embed-text-v1.5 (CPU embedding service, all nodes)
+#
+# Total: 5 local models + embedding. TZ adaptive routing experiments across all 5.
 
-# --- Scout/fast tier on vasp-03 (OmniCoder-9B, agentic-trained) ---
+# --- Scout/fast tier on vasp-03 (GLM-4.7-Flash, SOTA tool-calling) ---
 
 [models.qwen_fast]
 routing = ["vasp03"]
 
 [models.qwen_fast.providers.vasp03]
 type = "openai"
-model_name = "OmniCoder-9B"
+model_name = "GLM-4.7-Flash"
 api_base = "http://10.0.0.22:8081/v1"
 api_key_location = "none"
 
