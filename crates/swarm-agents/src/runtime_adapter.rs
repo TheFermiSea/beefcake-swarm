@@ -196,6 +196,7 @@ impl RuntimeAdapter {
     }
 
     /// Create a new adapter with validators for pre-tool-call validation.
+    #[allow(dead_code)]
     pub fn with_validators(
         config: AdapterConfig,
         validators: Vec<Box<dyn ActionValidator>>,
