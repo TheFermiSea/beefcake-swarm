@@ -568,6 +568,36 @@ impl EscalationEngine {
             action: SuggestedAction::ArchitecturalGuidance,
         }
     }
+
+    /// Process a pivot signal and produce a decision.
+    ///
+    /// Applies the pivot to `state` (advancing to the next higher tier) and
+    /// returns an `EscalationDecision` that reflects the new tier and the
+    /// failed approach context.  The `failed_summary` is embedded in the
+    /// decision's `reason` field so callers can surface it in logs and work
+    /// packets without needing to inspect the escalation history directly.
+    pub fn decide_with_pivot(
+        &self,
+        state: &mut EscalationState,
+        trigger_phrase: &str,
+        failed_summary: &str,
+    ) -> EscalationDecision {
+        state.apply_pivot(trigger_phrase);
+        let target_tier = state.current_tier;
+        let reason = format!(
+            "Pivot to {} — trigger: '{}' | failed approach: {}",
+            target_tier, trigger_phrase, failed_summary
+        );
+        EscalationDecision {
+            target_tier,
+            escalated: true,
+            reason,
+            resolved: false,
+            stuck: false,
+            needs_review: false,
+            action: SuggestedAction::RepairPlan,
+        }
+    }
 }
 
 impl Default for EscalationEngine {

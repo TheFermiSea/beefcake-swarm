@@ -177,6 +177,11 @@ pub enum EscalationReason {
     FrictionDetected { description: String },
     /// Worker self-reported low confidence >= threshold times
     LowConfidence { count: u32, threshold: u32 },
+    /// Pivot triggered by a recognised trigger phrase in agent output
+    PivotDetected {
+        trigger_phrase: String,
+        iteration: u32,
+    },
 }
 
 impl std::fmt::Display for EscalationReason {
@@ -213,6 +218,16 @@ impl std::fmt::Display for EscalationReason {
                     f,
                     "{} low-confidence signals (threshold: {})",
                     count, threshold
+                )
+            }
+            Self::PivotDetected {
+                trigger_phrase,
+                iteration,
+            } => {
+                write!(
+                    f,
+                    "pivot detected at iteration {} (trigger: '{}')",
+                    iteration, trigger_phrase
                 )
             }
         }
@@ -493,6 +508,25 @@ impl EscalationState {
             .iter()
             .filter(|r| !r.all_green)
             .count() as u32
+    }
+
+    /// Switch to the next higher tier and record a PivotDetected escalation reason.
+    ///
+    /// The escalation ladder is Worker → Strategist → Council → Human.
+    /// If already at Human, the tier is left unchanged and no escalation
+    /// record is written.
+    pub fn apply_pivot(&mut self, trigger_phrase: &str) {
+        let next_tier = match self.current_tier {
+            SwarmTier::Worker => SwarmTier::Strategist,
+            SwarmTier::Strategist => SwarmTier::Council,
+            SwarmTier::Council => SwarmTier::Human,
+            SwarmTier::Human => return,
+        };
+        let reason = EscalationReason::PivotDetected {
+            trigger_phrase: trigger_phrase.to_string(),
+            iteration: self.total_iterations,
+        };
+        self.record_escalation(next_tier, reason);
     }
 
     /// Get a summary for logging

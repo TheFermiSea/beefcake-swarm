@@ -169,13 +169,14 @@ impl WorkPacketGenerator {
             decisions: vec![],           // Populated from Decision Journal
             generated_at: Utc::now(),
             max_patch_loc: self.default_max_loc,
-            iteration_deltas: vec![],   // Populated by delta computation
-            delegation_chain: vec![],   // Populated during manager-to-manager handoffs
-            skill_hints: vec![],        // Populated by orchestrator from skill library
-            replay_hints: vec![],       // Populated by orchestrator from trace index
-            validator_feedback: vec![], // Populated by orchestrator from reviewer feedback
-            change_contract: None,      // Populated by planner agent
-            repo_map: None,             // Populated by ContextPacker
+            iteration_deltas: vec![],      // Populated by delta computation
+            delegation_chain: vec![],      // Populated during manager-to-manager handoffs
+            skill_hints: vec![],           // Populated by orchestrator from skill library
+            replay_hints: vec![],          // Populated by orchestrator from trace index
+            validator_feedback: vec![],    // Populated by orchestrator from reviewer feedback
+            change_contract: None,         // Populated by planner agent
+            repo_map: None,                // Populated by ContextPacker
+            failed_approach_summary: None, // Populated by inject_pivot_context
         }
     }
 
@@ -551,6 +552,15 @@ impl WorkPacketGenerator {
             })
             .unwrap_or_default()
     }
+}
+
+/// Inject pivot context into an existing [`WorkPacket`].
+///
+/// Sets `failed_approach_summary` so the receiving tier knows which approach
+/// was abandoned and should not be retried.  Call this after
+/// [`EscalationEngine::decide_with_pivot`] and before dispatching the packet.
+pub fn inject_pivot_context(packet: &mut WorkPacket, failed_summary: &str) {
+    packet.failed_approach_summary = Some(failed_summary.to_string());
 }
 
 #[cfg(test)]
