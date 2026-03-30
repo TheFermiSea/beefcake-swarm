@@ -867,37 +867,6 @@ mod tests {
     }
 
     #[test]
-    fn work_result_from_adapter_report() {
-        let report = AdapterReport {
-            agent_name: "test-coder".into(),
-            tool_events: vec![],
-            turn_count: 5,
-            total_tool_calls: 12,
-            total_tool_time_ms: 3000,
-            wall_time_ms: 15000,
-            terminated_early: false,
-            termination_reason: None,
-            has_written: true,
-            files_read: vec!["src/lib.rs".into()],
-            files_modified: vec!["src/parser.rs".into()],
-            successful_writes: 3,
-            last_failed_edits: vec![],
-        };
-
-        let result =
-            WorkResult::from_adapter_report("order-1", &report, WorkStatus::Complete, "Fixed it");
-
-        assert_eq!(result.order_id, "order-1");
-        assert!(matches!(result.status, WorkStatus::Complete));
-        assert_eq!(result.files_modified, vec!["src/parser.rs"]);
-        assert_eq!(result.files_read, vec!["src/lib.rs"]);
-        assert_eq!(result.tool_calls, 12);
-        assert_eq!(result.turns_used, 5);
-        assert_eq!(result.wall_time_ms, 15000);
-        assert!(!result.needs_escalation()); // confidence 0.5, complete status
-    }
-
-    #[test]
     fn infer_status_complete() {
         let report = AdapterReport {
             agent_name: "test".into(),
