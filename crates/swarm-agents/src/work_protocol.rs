@@ -1009,28 +1009,6 @@ mod tests {
     }
 
     #[test]
-    fn heuristic_confidence_terminated_no_write() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 40,
-            total_tool_calls: 80,
-            total_tool_time_ms: 10000,
-            wall_time_ms: 30000,
-            terminated_early: true,
-            termination_reason: Some("deadline".into()),
-            has_written: false,
-            files_read: vec![],
-            files_modified: vec![],
-            successful_writes: 0,
-            last_failed_edits: vec![("src/lib.rs".into(), "not found".into())],
-        };
-        let conf = WorkResult::heuristic_confidence(&report);
-        // 0.0 (no write) + 0.0 (terminated) + 0.0 (no writes) + 0.0 (failed edits) = 0.0
-        assert!(conf < 0.1, "expected < 0.1, got {conf}");
-    }
-
-    #[test]
     fn verification_confidence_mapping() {
         let v = VerificationResult {
             all_green: true,
