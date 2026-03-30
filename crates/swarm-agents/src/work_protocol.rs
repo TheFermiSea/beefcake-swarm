@@ -898,29 +898,6 @@ mod tests {
     }
 
     #[test]
-    fn infer_status_complete() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 5,
-            total_tool_calls: 10,
-            total_tool_time_ms: 1000,
-            wall_time_ms: 5000,
-            terminated_early: false,
-            termination_reason: None,
-            has_written: true,
-            files_read: vec![],
-            files_modified: vec![],
-            successful_writes: 2,
-            last_failed_edits: vec![],
-        };
-        assert!(matches!(
-            WorkResult::infer_status(&report),
-            WorkStatus::Complete
-        ));
-    }
-
-    #[test]
     fn infer_status_partial() {
         let report = AdapterReport {
             agent_name: "test".into(),

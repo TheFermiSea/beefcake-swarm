@@ -203,11 +203,7 @@ pub async fn post_episode_metric(
         .await
     {
         Ok(resp) if resp.status().is_success() => {
-            info!(
-                metric = metric_name,
-                episode_id,
-                "Posted TZ episode metric"
-            );
+            info!(metric = metric_name, episode_id, "Posted TZ episode metric");
         }
         Ok(resp) => {
             warn!(
