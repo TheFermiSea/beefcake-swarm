@@ -149,6 +149,21 @@ print(f'Curated: {kept} kept, {dropped} dropped (from {kept+dropped} raw)')
 CURATED_COUNT=$(wc -l < "${WORK_DIR}/tz-curated.jsonl" 2>/dev/null || echo 0)
 log "  Raw: ${RAW_COUNT}, Curated: ${CURATED_COUNT} (max ${MAX_ITERATIONS} iterations, deduped)"
 
+# Normalize TZ trajectories to standard chat format for SFT training.
+# TZ stores nested content arrays + tool_call objects; SFT needs flat role/content strings.
+if [[ "$CURATED_COUNT" -gt 0 ]]; then
+    log "  Normalizing TZ trajectories to chat format..."
+    python3 scripts/normalize-trajectories.py \
+        "${WORK_DIR}/tz-curated.jsonl" \
+        "${WORK_DIR}/tz-normalized.jsonl" \
+        --max-tokens 4096 2>&1
+    NORMALIZED_COUNT=$(wc -l < "${WORK_DIR}/tz-normalized.jsonl" 2>/dev/null || echo 0)
+    log "  Normalized: ${NORMALIZED_COUNT} (from ${CURATED_COUNT} curated)"
+    # Use normalized data going forward
+    mv "${WORK_DIR}/tz-normalized.jsonl" "${WORK_DIR}/tz-curated.jsonl"
+    CURATED_COUNT="$NORMALIZED_COUNT"
+fi
+
 # ─── Step 2: AUGMENT — Generate synthetic trajectories ──────────────────────
 
 SYNTH_COUNT=0
