@@ -16,6 +16,7 @@
 #   bash scripts/self-training-cycle.sh
 #   bash scripts/self-training-cycle.sh --skip-synthetic
 #   bash scripts/self-training-cycle.sh --skip-eval     # dangerous: deploy without gate
+#   bash scripts/self-training-cycle.sh --eval-mode generation  # v3 compile-check proxy
 #   bash scripts/self-training-cycle.sh --dry-run
 #
 set -euo pipefail
@@ -44,6 +45,8 @@ EVAL_THRESHOLD=0.0
 MIN_SAMPLES=50
 # Maximum iterations for quality filter (lower = higher quality training data)
 MAX_ITERATIONS=3
+# Evaluation mode: "perplexity" (v2, default) or "generation" (v3 compile-check proxy)
+EVAL_MODE="perplexity"
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -53,9 +56,15 @@ while [[ $# -gt 0 ]]; do
         --num-synthetic)  NUM_SYNTHETIC="$2"; shift 2 ;;
         --base)           BASE_MODEL="$2"; shift 2 ;;
         --threshold)      EVAL_THRESHOLD="$2"; shift 2 ;;
+        --eval-mode)      EVAL_MODE="$2"; shift 2 ;;
         *) echo "Unknown: $1"; exit 1 ;;
     esac
 done
+
+if [[ "$EVAL_MODE" != "perplexity" && "$EVAL_MODE" != "generation" ]]; then
+    echo "ERROR: --eval-mode must be 'perplexity' or 'generation', got '${EVAL_MODE}'"
+    exit 1
+fi
 
 mkdir -p "$WORK_DIR" "$EVAL_DIR" "$HISTORY_DIR"
 log() { echo "[$(date +%H:%M:%S)] $*"; }
@@ -65,6 +74,7 @@ log "╔════════════════════════
 log "║  Self-Training Cycle: ${TIMESTAMP}              ║"
 log "╠══════════════════════════════════════════════════╣"
 log "║  Base model:     ${BASE_MODEL}"
+log "║  Eval mode:      ${EVAL_MODE}"
 log "║  Eval threshold: ${EVAL_THRESHOLD}"
 log "║  Max iterations: ${MAX_ITERATIONS}"
 log "║  Min samples:    ${MIN_SAMPLES}"
@@ -257,45 +267,47 @@ if [[ "$SKIP_EVAL" == true ]]; then
     log "Step 5: EVALUATE — Skipped (--skip-eval)"
     EVAL_PASS=true
 else
-    log "Step 5: EVALUATE — Perplexity benchmark on holdout set (Modal H100)..."
+    if [[ "$EVAL_MODE" == "generation" ]]; then
+        log "Step 5: EVALUATE — Generation eval (v3 compile-check proxy) on holdout set (Modal H100)..."
+    else
+        log "Step 5: EVALUATE — Perplexity benchmark on holdout set (Modal H100)..."
+    fi
     log "  Comparing: base ${BASE_MODEL} vs base+adapter on ${HOLDOUT_COUNT} holdout samples"
+    log "  Eval mode: ${EVAL_MODE}"
 
-    # Run perplexity evaluation on Modal.
-    # Loads base model, computes perplexity on holdout.
-    # Then applies the adapter, computes again.
-    # Adapter must have LOWER perplexity (= better fit to correct answers).
+    # Deploy the app so Modal functions are available, then run the
+    # selected evaluation mode. Both modes load the base model + adapter
+    # on a Modal H100 and return a JSON result with a "passed" field.
 
     EVAL_RESULT=$(python3 -c "
 import json, sys, subprocess, os
 from pathlib import Path
 
-# Read adapter files
+eval_mode = '${EVAL_MODE}'
 adapter_dir = '${WORK_DIR}/adapter'
-adapter_files = {}
-for fname in os.listdir(adapter_dir):
-    fpath = os.path.join(adapter_dir, fname)
-    if os.path.isfile(fpath) and not fname.startswith('checkpoint'):
-        adapter_files[fname] = open(fpath, 'rb').read()
+holdout_path = '${EVAL_DIR}/holdout.jsonl'
+base_model = '${BASE_MODEL}'
+repo_root = '${REPO_ROOT}'
 
-# Read holdout data
-holdout_data = open('${EVAL_DIR}/holdout.jsonl', 'rb').read()
-
-# Call Modal evaluate_adapter function
-# We use subprocess to call 'modal run' with a special eval entrypoint
-# But actually we need to call evaluate_adapter.remote() from Python.
+# Determine which Modal function to call
+if eval_mode == 'generation':
+    func_name = 'evaluate_generation'
+    data_arg_name = 'eval_prompts_jsonl'
+else:
+    func_name = 'evaluate_adapter'
+    data_arg_name = 'holdout_jsonl'
 
 # Write a temporary eval script that imports and calls the function
-eval_script = '''
+eval_script = f'''
 import modal, json, os, sys
 
-app = modal.App.lookup(\"beefcake-lora-training\")
-evaluate_adapter = modal.Function.from_name(\"beefcake-lora-training\", \"evaluate_adapter\")
+func = modal.Function.from_name(\"beefcake-lora-training\", \"{func_name}\")
 
 adapter_dir = sys.argv[1]
 holdout_path = sys.argv[2]
 base_model = sys.argv[3]
 
-adapter_files = {}
+adapter_files = {{}}
 for fname in os.listdir(adapter_dir):
     fpath = os.path.join(adapter_dir, fname)
     if os.path.isfile(fpath) and not fname.startswith(\"checkpoint\"):
@@ -305,7 +317,7 @@ for fname in os.listdir(adapter_dir):
 with open(holdout_path, \"rb\") as f:
     holdout_data = f.read()
 
-result = evaluate_adapter.remote(base_model, adapter_files, holdout_data)
+result = func.remote(base_model, adapter_files, holdout_data)
 print(json.dumps(result))
 '''
 
@@ -314,24 +326,24 @@ with open('/tmp/run_eval.py', 'w') as f:
 
 # Deploy the app first so the function is available
 subprocess.run(
-    ['modal', 'deploy', '${REPO_ROOT}/scripts/modal_train.py'],
+    ['modal', 'deploy', f'{repo_root}/scripts/modal_train.py'],
     capture_output=True, timeout=300
 )
 
 # Run eval
 proc = subprocess.run(
-    ['python3', '/tmp/run_eval.py', adapter_dir, '${EVAL_DIR}/holdout.jsonl', '${BASE_MODEL}'],
-    capture_output=True, text=True, timeout=600
+    ['python3', '/tmp/run_eval.py', adapter_dir, holdout_path, base_model],
+    capture_output=True, text=True, timeout=3600
 )
 
 if proc.returncode != 0:
     print(json.dumps({'error': proc.stderr[-500:] if proc.stderr else 'unknown', 'passed': False}))
 else:
-    # Find the JSON line in output
+    # Find the JSON line in output (look for passed field which both modes return)
     for line in proc.stdout.strip().split('\n'):
         try:
             d = json.loads(line)
-            if 'base_ppl' in d:
+            if 'passed' in d and ('base_ppl' in d or 'base_avg_score' in d):
                 print(json.dumps(d))
                 sys.exit(0)
         except json.JSONDecodeError:
@@ -341,7 +353,7 @@ else:
 
     log "  Eval result: ${EVAL_RESULT}"
 
-    # Parse the result
+    # Parse the result — handles both perplexity and generation eval formats
     EVAL_PASS=$(python3 -c "
 import json, sys
 try:
@@ -350,27 +362,42 @@ except:
     d = {}
 
 passed = d.get('passed', False)
-base_ppl = d.get('base_ppl', 'N/A')
-adapter_ppl = d.get('adapter_ppl', 'N/A')
-improvement = d.get('improvement_pct', 0)
 error = d.get('error', '')
+eval_mode = d.get('eval_mode', 'perplexity')
+improvement = d.get('improvement_pct', 0)
 
 if error:
     print(f'ERROR: {error}')
-    print('FALLBACK')  # Fall back to loss comparison
-elif passed:
-    print(f'Base PPL={base_ppl:.2f}, Adapter PPL={adapter_ppl:.2f}, Improvement={improvement:+.1f}%')
-    print('PASS')
+    print('FALLBACK')
+elif eval_mode == 'generation':
+    base_avg = d.get('base_avg_score', 'N/A')
+    adapter_avg = d.get('adapter_avg_score', 'N/A')
+    if passed:
+        print(f'Base score={base_avg:.2f}, Adapter score={adapter_avg:.2f}, Improvement={improvement:+.1f}%')
+        print('PASS')
+    else:
+        print(f'Base score={base_avg:.2f}, Adapter score={adapter_avg:.2f}, Improvement={improvement:+.1f}%')
+        print('FAIL')
 else:
-    print(f'Base PPL={base_ppl:.2f}, Adapter PPL={adapter_ppl:.2f}, Improvement={improvement:+.1f}%')
-    print('FAIL')
+    base_ppl = d.get('base_ppl', 'N/A')
+    adapter_ppl = d.get('adapter_ppl', 'N/A')
+    if passed:
+        print(f'Base PPL={base_ppl:.2f}, Adapter PPL={adapter_ppl:.2f}, Improvement={improvement:+.1f}%')
+        print('PASS')
+    else:
+        print(f'Base PPL={base_ppl:.2f}, Adapter PPL={adapter_ppl:.2f}, Improvement={improvement:+.1f}%')
+        print('FAIL')
 " 2>&1)
 
     log "  ${EVAL_PASS}"
 
     if echo "$EVAL_PASS" | grep -q "PASS"; then
         EVAL_PASS=true
-        log "  Evaluation PASSED — adapter improves perplexity on holdout set"
+        if [[ "$EVAL_MODE" == "generation" ]]; then
+            log "  Evaluation PASSED — adapter produces better structural fixes"
+        else
+            log "  Evaluation PASSED — adapter improves perplexity on holdout set"
+        fi
     elif echo "$EVAL_PASS" | grep -q "FALLBACK"; then
         log "  Evaluation had errors — falling back to loss comparison"
         # Fallback: compare training loss vs previous cycle
@@ -388,9 +415,13 @@ else:
         fi
     else
         EVAL_PASS=false
-        log "  Evaluation FAILED — adapter makes perplexity worse"
+        if [[ "$EVAL_MODE" == "generation" ]]; then
+            log "  Evaluation FAILED — adapter produces worse structural fixes"
+        else
+            log "  Evaluation FAILED — adapter makes perplexity worse"
+        fi
         log "  Adapter saved to ${WORK_DIR}/adapter/ for inspection but NOT deployed"
-        echo "${TIMESTAMP}: REJECTED eval_result='${EVAL_RESULT}' samples=${TRAIN_COUNT}" \
+        echo "${TIMESTAMP}: REJECTED eval_mode=${EVAL_MODE} eval_result='${EVAL_RESULT}' samples=${TRAIN_COUNT}" \
             >> "${HISTORY_DIR}/cycle-log.txt"
         exit 0
     fi

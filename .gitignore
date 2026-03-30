@@ -84,3 +84,4 @@ GEMINI_SUGGESTIONS/
 *.db
 .beadhub
 .aw/
+adapters/

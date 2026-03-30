@@ -506,6 +506,289 @@ def evaluate_adapter(
 
 
 # ---------------------------------------------------------------------------
+# Generation-based evaluation (v3 compile-check proxy)
+# ---------------------------------------------------------------------------
+
+def _score_rust_fix(code_block: str, full_response: str) -> dict:
+    """Score a single Rust code fix using structural heuristics.
+
+    Returns a dict with individual scores and a total (0-10).
+    Since we can't run cargo check on Modal (no Rust toolchain / project
+    context), we use lightweight heuristics that catch the most common
+    failure modes of LLM-generated Rust fixes.
+    """
+    import re
+
+    scores = {}
+
+    # (1) Contains a code block? (+2)
+    scores["has_code_block"] = 2 if code_block else 0
+
+    if not code_block:
+        scores["balanced_braces"] = 0
+        scores["no_stubs"] = 0
+        scores["no_bare_unwrap"] = 0
+        scores["has_explanation"] = 0
+        scores["modifies_code"] = 0
+        scores["total"] = 0
+        return scores
+
+    # (2) Balanced braces / parens / angle brackets? (+2)
+    open_braces = code_block.count("{") - code_block.count("}")
+    open_parens = code_block.count("(") - code_block.count(")")
+    open_angles = code_block.count("<") - code_block.count(">")
+    balanced = abs(open_braces) <= 1 and abs(open_parens) <= 1 and abs(open_angles) <= 1
+    scores["balanced_braces"] = 2 if balanced else 0
+
+    # (3) No todo!/unimplemented! stubs? (+2)
+    has_stubs = bool(re.search(r'\b(todo|unimplemented|panic)\s*!\s*\(', code_block))
+    scores["no_stubs"] = 0 if has_stubs else 2
+
+    # (4) No bare unwrap()? (+1)
+    # Allow unwrap in test code (lines containing #[test] or mod tests)
+    non_test_lines = []
+    in_test = False
+    for line in code_block.split("\n"):
+        if "#[test]" in line or "#[cfg(test)]" in line or "mod tests" in line:
+            in_test = True
+        if not in_test:
+            non_test_lines.append(line)
+    non_test_code = "\n".join(non_test_lines)
+    has_bare_unwrap = bool(re.search(r'\.unwrap\(\)', non_test_code))
+    scores["no_bare_unwrap"] = 0 if has_bare_unwrap else 1
+
+    # (5) Response explains the fix? (+1)
+    # Look for explanation text outside the code block
+    explanation = full_response.replace(code_block, "").strip()
+    has_explanation = len(explanation) > 30
+    scores["has_explanation"] = 1 if has_explanation else 0
+
+    # (6) Fix contains substantive code (not just comments/whitespace)? (+2)
+    code_lines = [
+        l.strip() for l in code_block.split("\n")
+        if l.strip() and not l.strip().startswith("//")
+    ]
+    scores["modifies_code"] = 2 if len(code_lines) >= 2 else 0
+
+    scores["total"] = sum(v for k, v in scores.items() if k != "total")
+    return scores
+
+
+def _extract_rust_code_blocks(text: str) -> list[str]:
+    """Extract all ```rust ... ``` code blocks from text. Falls back to ``` ... ```."""
+    import re
+
+    # Try ```rust blocks first
+    blocks = re.findall(r"```rust\s*\n(.*?)```", text, re.DOTALL)
+    if blocks:
+        return blocks
+
+    # Fall back to generic code blocks
+    blocks = re.findall(r"```\s*\n(.*?)```", text, re.DOTALL)
+    return blocks
+
+
+@app.function(
+    gpu="H100",
+    timeout=3600,
+    volumes={"/cache": model_cache},
+    secrets=[modal.Secret.from_name("huggingface")],
+)
+def evaluate_generation(
+    base_model: str,
+    adapter_files: dict,
+    eval_prompts_jsonl: bytes,
+) -> dict:
+    """Generate fixes with base model and adapter, compare structural quality.
+
+    This is the v3 "compile-check" evaluation. Since we cannot run cargo check
+    on Modal (no Rust toolchain or project context), we generate actual fixes
+    from each model and score them with structural heuristics that catch the
+    most common LLM failure modes: missing code blocks, unbalanced braces,
+    stub placeholders, bare unwrap(), lack of explanation, and trivial output.
+
+    For each eval prompt the function:
+      1. Generates a fix with the base model (no adapter)
+      2. Generates a fix with the adapter model
+      3. Scores each fix 0-10 using heuristics
+      4. Compares average scores
+
+    Returns dict with base_avg, adapter_avg, improvement_pct, per-sample
+    detail, and pass/fail verdict.
+    """
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from peft import PeftModel
+
+    cache_dir = "/cache/models"
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # --- Load eval prompts ---
+    # Each line is a JSON object with "messages" containing the conversation
+    # up to (but not including) the assistant's fix. We strip the final
+    # assistant message to create the generation prompt.
+    print("Loading eval prompts...")
+    prompts = []
+    for line in eval_prompts_jsonl.decode("utf-8").strip().split("\n"):
+        d = json.loads(line)
+        msgs = d["messages"]
+        # Keep only system + user messages (drop final assistant response)
+        prompt_msgs = [m for m in msgs if m.get("role") != "assistant"]
+        if not prompt_msgs:
+            prompt_msgs = msgs[:-1] if len(msgs) > 1 else msgs
+        prompts.append(prompt_msgs)
+    print(f"  {len(prompts)} eval prompts loaded")
+
+    if not prompts:
+        return {
+            "error": "No eval prompts provided",
+            "passed": False,
+        }
+
+    # --- Load tokenizer ---
+    print(f"Loading tokenizer for {base_model}...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        base_model, trust_remote_code=True, cache_dir=cache_dir
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # --- Load base model in 4-bit ---
+    print(f"Loading {base_model} in 4-bit for generation...")
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        base_model,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
+        attn_implementation="sdpa",
+        cache_dir=cache_dir,
+    )
+
+    def generate_fix(current_model, prompt_messages, max_new_tokens=1024):
+        """Generate a fix response from a model given chat messages."""
+        text = tokenizer.apply_chat_template(
+            prompt_messages, tokenize=False, add_generation_prompt=True
+        )
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=3072)
+        inputs = {k: v.to(current_model.device) for k, v in inputs.items()}
+
+        with torch.no_grad():
+            outputs = current_model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=0.3,
+                top_p=0.9,
+                do_sample=True,
+                pad_token_id=tokenizer.pad_token_id,
+            )
+        # Decode only the generated tokens (skip input)
+        generated = outputs[0][inputs["input_ids"].shape[1]:]
+        return tokenizer.decode(generated, skip_special_tokens=True)
+
+    # --- Generate with base model ---
+    print("Generating fixes with base model...")
+    base_results = []
+    for i, prompt_msgs in enumerate(prompts):
+        response = generate_fix(model, prompt_msgs)
+        code_blocks = _extract_rust_code_blocks(response)
+        code_block = code_blocks[0] if code_blocks else ""
+        score = _score_rust_fix(code_block, response)
+        base_results.append({
+            "index": i,
+            "response_len": len(response),
+            "code_block_count": len(code_blocks),
+            "scores": score,
+        })
+        if (i + 1) % 5 == 0:
+            print(f"  Base: {i + 1}/{len(prompts)} done")
+    print(f"  Base model: {len(base_results)} generations complete")
+
+    # --- Apply adapter ---
+    print("Saving adapter files to disk...")
+    adapter_dir = "/tmp/gen-eval-adapter"
+    os.makedirs(adapter_dir, exist_ok=True)
+    for fname, content in adapter_files.items():
+        if not fname.startswith("_"):
+            with open(os.path.join(adapter_dir, fname), "wb") as f:
+                f.write(content)
+
+    print("Applying LoRA adapter...")
+    adapter_model = PeftModel.from_pretrained(model, adapter_dir)
+    adapter_model = adapter_model.merge_and_unload()
+
+    # --- Generate with adapter model ---
+    print("Generating fixes with adapter model...")
+    adapter_results = []
+    for i, prompt_msgs in enumerate(prompts):
+        response = generate_fix(adapter_model, prompt_msgs)
+        code_blocks = _extract_rust_code_blocks(response)
+        code_block = code_blocks[0] if code_blocks else ""
+        score = _score_rust_fix(code_block, response)
+        adapter_results.append({
+            "index": i,
+            "response_len": len(response),
+            "code_block_count": len(code_blocks),
+            "scores": score,
+        })
+        if (i + 1) % 5 == 0:
+            print(f"  Adapter: {i + 1}/{len(prompts)} done")
+    print(f"  Adapter model: {len(adapter_results)} generations complete")
+
+    # --- Compare ---
+    base_avg = sum(r["scores"]["total"] for r in base_results) / len(base_results)
+    adapter_avg = sum(r["scores"]["total"] for r in adapter_results) / len(adapter_results)
+    improvement = ((adapter_avg - base_avg) / max(base_avg, 0.01)) * 100
+    passed = adapter_avg >= base_avg
+
+    # Per-category averages for diagnostics
+    categories = ["has_code_block", "balanced_braces", "no_stubs",
+                   "no_bare_unwrap", "has_explanation", "modifies_code"]
+    base_category_avgs = {}
+    adapter_category_avgs = {}
+    for cat in categories:
+        base_category_avgs[cat] = sum(
+            r["scores"][cat] for r in base_results
+        ) / len(base_results)
+        adapter_category_avgs[cat] = sum(
+            r["scores"][cat] for r in adapter_results
+        ) / len(adapter_results)
+
+    print(f"\n{'=' * 60}")
+    print(f"  Generation Evaluation (v3 compile-check proxy)")
+    print(f"  {'─' * 56}")
+    print(f"  Base avg score:    {base_avg:.2f} / 10")
+    print(f"  Adapter avg score: {adapter_avg:.2f} / 10")
+    print(f"  Improvement:       {improvement:+.1f}%")
+    print(f"  Verdict:           {'PASS' if passed else 'FAIL'}")
+    print(f"  {'─' * 56}")
+    print(f"  Category breakdown (base / adapter):")
+    for cat in categories:
+        print(f"    {cat:20s}  {base_category_avgs[cat]:.2f}  /  {adapter_category_avgs[cat]:.2f}")
+    print(f"{'=' * 60}")
+
+    model_cache.commit()
+
+    return {
+        "eval_mode": "generation",
+        "base_avg_score": base_avg,
+        "adapter_avg_score": adapter_avg,
+        "improvement_pct": improvement,
+        "eval_samples": len(prompts),
+        "passed": passed,
+        "base_category_avgs": base_category_avgs,
+        "adapter_category_avgs": adapter_category_avgs,
+        "base_results": base_results,
+        "adapter_results": adapter_results,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Local entrypoint (runs on your machine, orchestrates Modal)
 # ---------------------------------------------------------------------------
 
