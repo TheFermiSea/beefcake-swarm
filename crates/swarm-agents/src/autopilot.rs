@@ -27,7 +27,9 @@ use tracing::{info, warn};
 
 use crate::meta_reflection::{MetaInsight, MetaReflector};
 use crate::mutation_archive::{ArchiveSummary, MutationArchive};
-use crate::recommendations::{generate_recommendations, ExperimentRecommendation};
+use crate::recommendations::{
+    generate_recommendations, to_runner_inputs, ExperimentRecommendation,
+};
 
 /// Configuration for the autopilot runner.
 pub struct AutopilotRunner {
@@ -167,6 +169,11 @@ impl AutopilotRunner {
         // Write recommendations
         let recs_path = artifacts_dir.join(format!("recommendations-{run_id}.json"));
         write_json(&recs_path, &recommendations);
+
+        // Write flat runner-input records (one row per variant, ready for adaptive runner)
+        let runner_inputs = to_runner_inputs(&recommendations);
+        let runner_path = artifacts_dir.join(format!("runner-inputs-{run_id}.json"));
+        write_json(&runner_path, &runner_inputs);
 
         // Write full report
         let report = AutopilotReport {
