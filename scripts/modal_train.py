@@ -93,6 +93,20 @@ DEFAULTS = {
     ],
 }
 
+# Conservative overrides for large models (20B+) to fit H100 80GB.
+# 27B in 4-bit ≈ 15GB weights + activations. batch=4 × seq=4096 OOMs.
+# batch=1 × grad_accum=16 preserves effective batch size of 16.
+LARGE_MODEL_OVERRIDES = {
+    "batch_size": 1,
+    "grad_accum": 16,
+    "max_seq_length": 2048,
+}
+
+
+def _is_large_model(name: str) -> bool:
+    """Detect models that need reduced batch/seq for H100 80GB."""
+    return any(s in name.lower() for s in ["27b", "32b", "33b", "34b", "70b"])
+
 
 # ---------------------------------------------------------------------------
 # Core training function (runs on Modal GPU)
@@ -825,6 +839,17 @@ def main(
         "lr": lr,
         "max_seq_length": max_seq_length,
     }
+
+    # Auto-scale for large models to avoid OOM on H100 80GB.
+    # Only override values that weren't explicitly changed from defaults by the caller.
+    if _is_large_model(base):
+        for key, override_val in LARGE_MODEL_OVERRIDES.items():
+            if config[key] == DEFAULTS[key]:
+                print(f"  Large model detected — overriding {key}: {config[key]} → {override_val}")
+                config[key] = override_val
+        batch_size = config["batch_size"]
+        grad_accum = config["grad_accum"]
+        max_seq_length = config["max_seq_length"]
 
     # --- Cost estimate ---
     effective_batch = batch_size * grad_accum
