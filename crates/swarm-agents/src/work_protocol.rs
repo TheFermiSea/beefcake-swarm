@@ -1232,6 +1232,46 @@ mod tests {
     }
 
     #[test]
+    fn work_result_with_verification_refines_confidence() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 5,
+            total_tool_calls: 10,
+            total_tool_time_ms: 1000,
+            wall_time_ms: 5000,
+            terminated_early: false,
+            termination_reason: None,
+            has_written: true,
+            files_read: vec![],
+            files_modified: vec!["src/a.rs".into()],
+            successful_writes: 2,
+            last_failed_edits: vec![],
+        };
+
+        let result = WorkResult::from_adapter_report("o1", &report, WorkStatus::Complete, "done")
+            .with_verification(VerificationResult {
+                all_green: true,
+                fmt_pass: true,
+                clippy_pass: true,
+                check_pass: true,
+                test_pass: Some(true),
+                error_count: 0,
+                gates_passed: 4,
+                gates_total: 4,
+                summary: "4/4 ✓".into(),
+            });
+
+        // Confidence should be 1.0 (all gates passed)
+        assert!(
+            (result.confidence - 1.0).abs() < f32::EPSILON,
+            "expected 1.0, got {}",
+            result.confidence
+        );
+        assert!(!result.needs_escalation());
+    }
+
+    #[test]
     fn work_result_summary() {
         let result = WorkResult {
             order_id: "o1".into(),
