@@ -909,8 +909,14 @@ impl WorktreeBridge {
         let branch_text = String::from_utf8_lossy(&branch_output.stdout);
         let swarm_branches: Vec<String> = branch_text
             .lines()
-            .map(|l| l.trim().trim_start_matches("* ").to_string())
-            .filter(|b| !b.is_empty())
+            .map(|l| {
+                // git branch prefixes: "  " (normal), "* " (current), "+ " (previous)
+                l.trim()
+                    .trim_start_matches("* ")
+                    .trim_start_matches("+ ")
+                    .to_string()
+            })
+            .filter(|b| !b.is_empty() && b.starts_with("swarm/"))
             .collect();
 
         if swarm_branches.is_empty() {

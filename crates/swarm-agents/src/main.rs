@@ -637,7 +637,7 @@ async fn dispatch_parallel_issues(
         return Ok(());
     }
     if any_failed {
-        std::process::exit(1);
+        anyhow::bail!("One or more parallel issues failed");
     }
     Ok(())
 }
