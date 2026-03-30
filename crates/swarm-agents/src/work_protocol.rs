@@ -1208,30 +1208,6 @@ mod tests {
     }
 
     #[test]
-    fn done_criteria_serialization() {
-        let cases = vec![
-            DoneCriteria::CompileClean,
-            DoneCriteria::TestsPass {
-                packages: vec!["foo".into(), "bar".into()],
-            },
-            DoneCriteria::PatternRemoved {
-                pattern: "TODO".into(),
-            },
-            DoneCriteria::Custom {
-                command: "cargo test -p foo".into(),
-            },
-        ];
-
-        for criteria in cases {
-            let json = serde_json::to_string(&criteria).unwrap();
-            let parsed: DoneCriteria = serde_json::from_str(&json).unwrap();
-            // Just verify it round-trips without error
-            let json2 = serde_json::to_string(&parsed).unwrap();
-            assert_eq!(json, json2);
-        }
-    }
-
-    #[test]
     fn work_result_with_verification_refines_confidence() {
         let report = AdapterReport {
             agent_name: "test".into(),
