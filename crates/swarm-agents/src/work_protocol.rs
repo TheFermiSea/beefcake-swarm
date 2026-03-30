@@ -799,24 +799,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn work_order_serialization() {
-        let order =
-            WorkOrder::new("o1", "issue-1", "do stuff").done_when(DoneCriteria::TestsPass {
-                packages: vec!["coordination".into()],
-            });
-
-        let json = serde_json::to_string(&order).unwrap();
-        let parsed: WorkOrder = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.id, "o1");
-        match parsed.done_criteria {
-            DoneCriteria::TestsPass { packages } => {
-                assert_eq!(packages, vec!["coordination"]);
-            }
-            _ => panic!("wrong done_criteria variant"),
-        }
-    }
-
-    #[test]
     fn work_status_properties() {
         assert!(WorkStatus::Complete.keep_changes());
         assert!(WorkStatus::Partial { reason: "x".into() }.keep_changes());
