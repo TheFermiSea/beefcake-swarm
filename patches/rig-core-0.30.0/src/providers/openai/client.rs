@@ -50,7 +50,10 @@ pub type CompletionsClientBuilder<H = reqwest::Client> =
 impl Provider for OpenAIResponsesExt {
     type Builder = OpenAIResponsesExtBuilder;
 
-    const VERIFY_PATH: &'static str = "/models";
+    // Changed from "/models" to "" to skip init probe.
+    // TZ gateway doesn't serve /models, causing false-negative health checks.
+    // Our own cluster_health.rs does proper endpoint probing.
+    const VERIFY_PATH: &'static str = "";
 
     fn build<H>(
         _: &crate::client::ClientBuilder<Self::Builder, OpenAIApiKey, H>,
@@ -62,7 +65,7 @@ impl Provider for OpenAIResponsesExt {
 impl Provider for OpenAICompletionsExt {
     type Builder = OpenAICompletionsExtBuilder;
 
-    const VERIFY_PATH: &'static str = "/models";
+    const VERIFY_PATH: &'static str = "";
 
     fn build<H>(
         _: &crate::client::ClientBuilder<Self::Builder, OpenAIApiKey, H>,
