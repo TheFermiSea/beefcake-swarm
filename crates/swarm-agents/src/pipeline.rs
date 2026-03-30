@@ -13,13 +13,12 @@
 //! making the pipeline testable and deterministic (LLM stages wrap outputs
 //! in validated schemas or discard on failure).
 
-use coordination::{ContextPacker, EscalationState, SwarmTier, VerifierReport, WorkPacket};
+use coordination::{ContextPacker, SwarmTier, VerifierReport, WorkPacket};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::notebook_bridge::KnowledgeBase;
-use crate::work_protocol::FailedApproach;
 
 /// Context threaded through the preflight pipeline.
 ///
@@ -466,6 +465,7 @@ pub fn run_initial(
 }
 
 /// Stage: Extract actionable hints from the last verifier report.
+#[allow(dead_code)]
 fn stage_verifier_hints(
     mut ctx: PreflightContext,
     report: &VerifierReport,
@@ -703,6 +703,7 @@ pub fn stage_acceptance_criteria(mut ctx: PreflightContext) -> PreflightContext 
 /// Handles patterns like:
 /// - `error[E0308]: mismatched types --> src/lib.rs:42:5`
 /// - `src/main.rs:10:3: warning: ...`
+#[allow(dead_code)]
 fn parse_file_line(line: &str) -> (Option<String>, Option<usize>) {
     // Pattern: "... --> file:line:col"
     if let Some(arrow_pos) = line.find("--> ") {
@@ -721,6 +722,7 @@ fn parse_file_line(line: &str) -> (Option<String>, Option<usize>) {
     (None, None)
 }
 
+#[allow(dead_code)]
 fn parse_file_colon_line(s: &str) -> (Option<String>, Option<usize>) {
     let parts: Vec<&str> = s.splitn(3, ':').collect();
     if parts.len() >= 2 {
