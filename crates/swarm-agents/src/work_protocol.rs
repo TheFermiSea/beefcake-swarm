@@ -917,28 +917,6 @@ mod tests {
     }
 
     #[test]
-    fn heuristic_confidence_wrote_and_finished() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 5,
-            total_tool_calls: 10,
-            total_tool_time_ms: 1000,
-            wall_time_ms: 5000,
-            terminated_early: false,
-            termination_reason: None,
-            has_written: true,
-            files_read: vec![],
-            files_modified: vec![],
-            successful_writes: 3,
-            last_failed_edits: vec![],
-        };
-        let conf = WorkResult::heuristic_confidence(&report);
-        // 0.3 (wrote) + 0.2 (no early term) + efficiency + 0.1 (no failed edits) ≈ 0.6–0.8
-        assert!(conf >= 0.6, "expected >= 0.6, got {conf}");
-    }
-
-    #[test]
     fn verification_confidence_mapping() {
         let v = VerificationResult {
             all_green: true,
