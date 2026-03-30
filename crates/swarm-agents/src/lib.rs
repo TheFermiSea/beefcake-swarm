@@ -24,6 +24,7 @@ pub mod notebook_bridge;
 pub mod orchestrator;
 pub mod pipeline;
 pub mod prompts;
+pub mod recommendations;
 pub mod reformulation;
 pub mod runtime_adapter;
 pub mod state_machine;
