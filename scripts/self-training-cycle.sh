@@ -94,28 +94,50 @@ max_iter = ${MAX_ITERATIONS}
 kept, dropped = 0, 0
 seen_issues = set()
 
+def content_length(msg):
+    '''Handle both string content and TZ nested content arrays.'''
+    c = msg.get('content', '')
+    if isinstance(c, str):
+        return len(c)
+    if isinstance(c, list):
+        return sum(len(item.get('text', '')) for item in c if isinstance(item, dict))
+    return 0
+
+def total_content_length(sample):
+    '''Total content across all messages, including system prompt.'''
+    total = 0
+    # Top-level system prompt (TZ format)
+    system = sample.get('messages', [{}])[0] if sample.get('messages') else {}
+    if isinstance(system, dict) and 'system' in system:
+        total += len(system.get('system', ''))
+        for m in system.get('messages', []):
+            total += content_length(m)
+    else:
+        # Standard chat format
+        for m in sample.get('messages', []):
+            total += content_length(m)
+    return total
+
 with open('${WORK_DIR}/tz-raw.jsonl') as fin, open('${WORK_DIR}/tz-curated.jsonl', 'w') as fout:
     for line in fin:
         d = json.loads(line)
         meta = d.get('metadata', {})
 
-        # Quality filters
-        iterations = meta.get('iterations_used', 999)
+        # Quality filters — try both field names
+        iterations = meta.get('iterations', meta.get('iterations_used', 999))
         if iterations > max_iter:
             dropped += 1
             continue
 
-        # Dedup by issue_id (keep first = lowest iteration count)
-        issue_id = meta.get('issue_id', '')
+        # Dedup by issue_id or episode_id
+        issue_id = meta.get('issue_id', meta.get('episode_id', ''))
         if issue_id and issue_id in seen_issues:
             dropped += 1
             continue
         seen_issues.add(issue_id)
 
-        # Check messages have substance (not empty responses)
-        messages = d.get('messages', [])
-        total_len = sum(len(m.get('content', '')) for m in messages)
-        if total_len < 100:
+        # Check messages have substance
+        if total_content_length(d) < 100:
             dropped += 1
             continue
 
@@ -130,7 +152,7 @@ log "  Raw: ${RAW_COUNT}, Curated: ${CURATED_COUNT} (max ${MAX_ITERATIONS} itera
 # ─── Step 2: AUGMENT — Generate synthetic trajectories ──────────────────────
 
 SYNTH_COUNT=0
-if [[ "$SKIP_SYNTHETIC" == false && "$CURATED_COUNT" -gt 0 ]]; then
+if [[ "$SKIP_SYNTHETIC" == false ]]; then
     log "Step 2: AUGMENT — Generating ${NUM_SYNTHETIC} synthetic trajectories..."
     TEACHER_API_KEY="${SWARM_CLOUD_API_KEY:-}" \
     TEACHER_API_URL="${SWARM_CLOUD_URL:-http://localhost:8317/v1}" \
