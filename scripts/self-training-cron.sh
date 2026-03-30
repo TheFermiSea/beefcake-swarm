@@ -36,7 +36,7 @@ try:
     conn = psycopg2.connect('${PG_URL}')
     cur = conn.cursor()
     cur.execute('''
-        SELECT COUNT(DISTINCT episode_id)
+        SELECT COUNT(DISTINCT target_id)
         FROM tensorzero.boolean_metric_feedback
         WHERE metric_name = 'task_resolved'
           AND value = true
