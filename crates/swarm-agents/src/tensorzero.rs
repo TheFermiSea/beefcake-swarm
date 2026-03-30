@@ -14,13 +14,21 @@ use serde::Serialize;
 use tracing::{info, warn};
 
 /// Feedback payload for TensorZero's `/feedback` endpoint.
+///
+/// TZ distinguishes episode-level feedback (keyed by `episode_id`) from
+/// inference-level feedback (keyed by `inference_id`). Exactly one of
+/// the two ID fields should be `Some`.
 #[derive(Debug, Serialize)]
 struct FeedbackRequest {
-    /// Metric name as defined in tensorzero.toml.
+    /// Metric name as defined in tensorzero.toml (or `"demonstration"` / `"comment"`).
     metric_name: String,
-    /// Episode ID linking this feedback to all inferences in the run.
-    episode_id: String,
-    /// The feedback value (type depends on the metric: boolean or float).
+    /// Episode ID — for episode-level metrics like `task_resolved`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    episode_id: Option<String>,
+    /// Inference ID — for inference-level metrics like `verifier_pass` and demonstrations.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    inference_id: Option<String>,
+    /// The feedback value (type depends on the metric: boolean, float, or string).
     value: serde_json::Value,
     /// Optional segmentation tags stored in the `tags jsonb` column.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -99,24 +107,34 @@ pub async fn post_episode_feedback(
     // Convert tags once; clone the resulting map for each metric.
     let tags_map: Option<HashMap<String, String>> = tags.and_then(|t| t.into_option_map());
 
-    // task_resolved: boolean — did the issue get resolved?
+    // Episode-level metrics — all keyed by episode_id.
     let feedbacks = vec![
         FeedbackRequest {
             metric_name: "task_resolved".to_string(),
-            episode_id: episode_id.to_string(),
+            episode_id: Some(episode_id.to_string()),
+            inference_id: None,
             value: serde_json::Value::Bool(success),
             tags: tags_map.clone(),
         },
         FeedbackRequest {
             metric_name: "iterations_used".to_string(),
-            episode_id: episode_id.to_string(),
+            episode_id: Some(episode_id.to_string()),
+            inference_id: None,
             value: serde_json::json!(iterations as f64),
             tags: tags_map.clone(),
         },
         FeedbackRequest {
             metric_name: "wall_time_seconds".to_string(),
-            episode_id: episode_id.to_string(),
+            episode_id: Some(episode_id.to_string()),
+            inference_id: None,
             value: serde_json::json!(wall_time_secs),
+            tags: tags_map.clone(),
+        },
+        FeedbackRequest {
+            metric_name: "iteration_efficiency".to_string(),
+            episode_id: Some(episode_id.to_string()),
+            inference_id: None,
+            value: serde_json::json!(iterations as f64),
             tags: tags_map,
         },
     ];
@@ -132,7 +150,7 @@ pub async fn post_episode_feedback(
             Ok(resp) if resp.status().is_success() => {
                 info!(
                     metric = %fb.metric_name,
-                    episode_id = %fb.episode_id,
+                    episode_id = episode_id,
                     "Posted TensorZero feedback"
                 );
             }
@@ -304,6 +322,152 @@ pub async fn post_resolved_feedback(
         episodes = episode_ids.len(),
         success, "Posted TZ feedback to all resolved episodes"
     );
+}
+
+/// Post inference-level feedback (e.g. `verifier_pass` after each iteration).
+///
+/// Unlike episode-level feedback, this targets a specific inference via its
+/// `inference_id`. The inference_id comes from TZ's response (the `id` field
+/// in the ChatCompletion) or from Postgres resolution.
+pub async fn post_inference_feedback(
+    gateway_url: &str,
+    inference_id: &str,
+    metric_name: &str,
+    value: serde_json::Value,
+    tags: Option<FeedbackTags>,
+) {
+    let client = reqwest::Client::new();
+    let feedback_url = format!("{gateway_url}/feedback");
+    let tags_map = tags.and_then(|t| t.into_option_map());
+
+    let fb = FeedbackRequest {
+        metric_name: metric_name.to_string(),
+        episode_id: None,
+        inference_id: Some(inference_id.to_string()),
+        value,
+        tags: tags_map,
+    };
+
+    match client
+        .post(&feedback_url)
+        .json(&fb)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            info!(
+                metric = metric_name,
+                inference_id,
+                "Posted TZ inference-level feedback"
+            );
+        }
+        Ok(resp) => {
+            warn!(
+                metric = metric_name,
+                status = %resp.status(),
+                "TZ inference feedback rejected"
+            );
+        }
+        Err(e) => {
+            warn!(
+                metric = metric_name,
+                error = %e,
+                "Failed to post TZ inference feedback"
+            );
+        }
+    }
+}
+
+/// Post a demonstration (ideal output) for a specific inference.
+///
+/// Demonstrations are the foundation for DICL (Dynamic In-Context Learning)
+/// and improve DPO preference pair quality. TZ stores them and retrieves
+/// similar examples at inference time when a DICL variant is configured.
+///
+/// `value` should be the successful worker output — typically the git diff
+/// of the changes that passed verification.
+pub async fn post_demonstration(gateway_url: &str, inference_id: &str, value: &str) {
+    let client = reqwest::Client::new();
+    let feedback_url = format!("{gateway_url}/feedback");
+
+    let fb = FeedbackRequest {
+        metric_name: "demonstration".to_string(),
+        episode_id: None,
+        inference_id: Some(inference_id.to_string()),
+        value: serde_json::Value::String(value.to_string()),
+        tags: None,
+    };
+
+    match client
+        .post(&feedback_url)
+        .json(&fb)
+        .timeout(std::time::Duration::from_secs(15))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            info!(
+                inference_id,
+                demo_len = value.len(),
+                "Posted TZ demonstration feedback"
+            );
+        }
+        Ok(resp) => {
+            warn!(
+                status = %resp.status(),
+                "TZ demonstration feedback rejected"
+            );
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to post TZ demonstration");
+        }
+    }
+}
+
+/// Resolve the most recent inference IDs from TZ Postgres.
+///
+/// Returns inference IDs ordered newest-first. Used to target inference-level
+/// feedback (verifier_pass, demonstrations) at the correct TZ inference record.
+pub async fn resolve_recent_inference_ids(
+    pg_url: &str,
+    since_secs: f64,
+    limit: i64,
+) -> Vec<String> {
+    let Ok((client, connection)) = tokio_postgres::connect(pg_url, tokio_postgres::NoTls).await
+    else {
+        warn!("Failed to connect to TZ Postgres for inference ID resolution");
+        return Vec::new();
+    };
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            warn!(error = %e, "TZ Postgres connection error during inference resolution");
+        }
+    });
+
+    let cutoff_secs = (since_secs - 10.0).max(0.0);
+    let rows = match client
+        .query(
+            r#"
+SELECT id::text
+FROM tensorzero.chat_inferences
+WHERE created_at > to_timestamp($1)
+ORDER BY created_at DESC
+LIMIT $2
+"#,
+            &[&cutoff_secs, &limit],
+        )
+        .await
+    {
+        Ok(r) => r,
+        Err(e) => {
+            warn!(error = %e, "Failed to query TZ inference IDs");
+            return Vec::new();
+        }
+    };
+
+    rows.iter().filter_map(|row| row.get(0)).collect()
 }
 
 /// Check if a TensorZero gateway is reachable.

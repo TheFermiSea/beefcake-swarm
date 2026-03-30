@@ -2591,6 +2591,32 @@ async fn process_issue_core(
             "Verifier report"
         );
 
+        // --- TZ inference-level feedback: verifier_pass per iteration ---
+        // Posts verifier outcome to the most recent inference in TZ, giving
+        // Thompson Sampling per-call signal (not just per-episode).
+        if let (Some(ref tz_url), Some(ref pg_url)) =
+            (&config.tensorzero_url, &config.tensorzero_pg_url)
+        {
+            let now_secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64();
+            // Look back from just before this iteration's worker call
+            let since = now_secs - iter_start.elapsed().as_secs_f64() - 5.0;
+            let inf_ids =
+                crate::tensorzero::resolve_recent_inference_ids(pg_url, since, 1).await;
+            if let Some(inf_id) = inf_ids.first() {
+                crate::tensorzero::post_inference_feedback(
+                    tz_url,
+                    inf_id,
+                    "verifier_pass",
+                    serde_json::Value::Bool(report.all_green),
+                    None,
+                )
+                .await;
+            }
+        }
+
         // Record gate results into span summary
         for gate in &report.gates {
             let passed = matches!(gate.outcome, coordination::GateOutcome::Passed);
@@ -3130,6 +3156,47 @@ async fn process_issue_core(
             warn!(id = %issue.id, "Failed to commit worker edits before merge: {e}");
         }
 
+        // --- TZ demonstration feedback: capture the successful diff ---
+        // Post the git diff as a "demonstration" (ideal output) to TZ.
+        // This is the foundation for DICL (retrieval of similar past fixes)
+        // and improves DPO preference pair quality.
+        if let (Some(ref tz_url), Some(ref pg_url)) =
+            (&config.tensorzero_url, &config.tensorzero_pg_url)
+        {
+            // Capture the diff of what the worker changed
+            let diff = std::process::Command::new("git")
+                .args(["diff", "HEAD~1", "--stat", "-p"])
+                .current_dir(&wt_path)
+                .output()
+                .ok()
+                .and_then(|o| {
+                    if o.status.success() {
+                        String::from_utf8(o.stdout).ok()
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_default();
+
+            if !diff.is_empty() && diff.len() < 50_000 {
+                // Find the most recent inference in this session for the demo target
+                let inf_ids = crate::tensorzero::resolve_recent_inference_ids(
+                    pg_url,
+                    tz_session_start_secs,
+                    1,
+                )
+                .await;
+                if let Some(inf_id) = inf_ids.first() {
+                    crate::tensorzero::post_demonstration(tz_url, inf_id, &diff).await;
+                }
+            } else if diff.len() >= 50_000 {
+                info!(
+                    diff_len = diff.len(),
+                    "Skipping TZ demonstration — diff too large"
+                );
+            }
+        }
+
         info!(
             id = %issue.id,
             session_id = session.short_id(),
@@ -3417,9 +3484,31 @@ async fn process_issue_core(
                 success,
                 session_metrics.total_iterations,
                 wall_secs,
-                Some(tz_tags),
+                Some(tz_tags.clone()),
             )
             .await;
+
+            // Post verifier_gates_passed as episode-level float feedback.
+            // This gives TZ a finer signal than boolean task_resolved — a run
+            // that passed 3/4 gates is closer to success than one that passed 0/4.
+            if let Some(ref final_report) = last_report {
+                let gates_passed = final_report.gates_passed as f64;
+                let episode_ids = crate::tensorzero::resolve_episode_ids(
+                    pg_url,
+                    tz_session_start_secs,
+                )
+                .await;
+                for ep_id in &episode_ids {
+                    crate::tensorzero::post_inference_feedback(
+                        tz_url,
+                        ep_id,
+                        "verifier_gates_passed",
+                        serde_json::json!(gates_passed),
+                        Some(tz_tags.clone()),
+                    )
+                    .await;
+                }
+            }
         } else if let Some(ref ep_id) = tensorzero_episode_id {
             // Legacy fallback: use self-generated episode_id (may fail if TZ
             // doesn't recognize it, but harmless — feedback is best-effort)

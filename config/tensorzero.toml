@@ -287,7 +287,7 @@ model = "sera_14b"
 # SERA-14B replaces generic Qwen2.5-Coder-14B — purpose-built SWE agent.
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
-candidate_variants = ["omnicoder_9b", "qwen35_27b", "devstral_24b", "sera_14b_worker"]
+candidate_variants = ["omnicoder_9b", "qwen35_27b", "devstral_24b", "sera_14b_worker", "dicl_worker"]
 metric = "task_resolved"
 update_period_s = 300
 
@@ -349,7 +349,7 @@ model = "sera_14b"
 
 [functions.code_fixing.experimentation]
 type = "adaptive"
-candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer"]
+candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer", "dicl_fixer"]
 metric = "task_resolved"
 update_period_s = 300
 
@@ -359,4 +359,36 @@ type = "chat"
 
 [functions.adversarial_test.variants.qwen_breaker]
 type = "chat_completion"
+model = "qwen_coder"
+
+# ─── Embedding Models ──────────────────────────────────────────────────────
+# nomic-embed-text-v1.5 runs on CPU across all vasp nodes (port 8082).
+# Used by DICL for semantic similarity retrieval of past successful fixes.
+
+[models.nomic_embed]
+routing = ["vasp_embed"]
+
+[models.nomic_embed.providers.vasp_embed]
+type = "openai"
+model_name = "nomic-embed-text-v1.5"
+api_base = "http://10.0.0.22:8082/v1"
+api_key_location = "none"
+
+# ─── DICL Variants ─────────────────────────────────────────────────────────
+# Dynamic In-Context Learning: retrieves k most-similar past successful fixes
+# at inference time and injects them into the prompt. Requires demonstrations
+# to be posted and DICL optimization to be run (see scripts/setup-dicl.py).
+
+# --- DICL variant for worker_code_edit ---
+[functions.worker_code_edit.variants.dicl_worker]
+type = "experimental_dynamic_in_context_learning"
+embedding_model = "nomic_embed"
+k = 3
+model = "qwen_coder"
+
+# --- DICL variant for code_fixing ---
+[functions.code_fixing.variants.dicl_fixer]
+type = "experimental_dynamic_in_context_learning"
+embedding_model = "nomic_embed"
+k = 3
 model = "qwen_coder"
