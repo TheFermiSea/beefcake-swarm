@@ -353,6 +353,159 @@ def train_dpo(
 
 
 # ---------------------------------------------------------------------------
+# Evaluation function (runs on Modal GPU)
+# ---------------------------------------------------------------------------
+
+@app.function(
+    gpu="H100",
+    timeout=3600,
+    volumes={"/cache": model_cache},
+    secrets=[modal.Secret.from_name("huggingface")],
+)
+def evaluate_adapter(
+    base_model: str,
+    adapter_files: dict,
+    holdout_jsonl: bytes,
+) -> dict:
+    """Evaluate a LoRA adapter vs base model on a holdout set.
+
+    Computes perplexity for both configurations on the same data.
+    Lower perplexity = better model fit = the model is more confident
+    about the correct completions.
+
+    Returns dict with base_ppl, adapter_ppl, improvement_pct, and pass/fail.
+    """
+    import math
+    import torch
+    from datasets import Dataset
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+    from peft import PeftModel
+
+    cache_dir = "/cache/models"
+    os.makedirs(cache_dir, exist_ok=True)
+
+    # --- Load holdout data ---
+    print("Loading holdout data...")
+    rows = []
+    for line in holdout_jsonl.decode("utf-8").strip().split("\n"):
+        d = json.loads(line)
+        rows.append({"messages": d["messages"]})
+    print(f"  {len(rows)} holdout samples")
+
+    if len(rows) < 5:
+        print("WARNING: Very small holdout set — evaluation may be noisy")
+
+    # --- Load tokenizer and format data ---
+    print(f"Loading tokenizer for {base_model}...")
+    tokenizer = AutoTokenizer.from_pretrained(
+        base_model, trust_remote_code=True, cache_dir=cache_dir
+    )
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+
+    # Format holdout as text
+    texts = []
+    for row in rows:
+        text = tokenizer.apply_chat_template(
+            row["messages"], tokenize=False, add_generation_prompt=False
+        )
+        texts.append(text)
+
+    # Tokenize with truncation
+    max_len = 2048
+    encodings = tokenizer(
+        texts, return_tensors="pt", truncation=True,
+        max_length=max_len, padding=True
+    )
+
+    def compute_perplexity(model, encodings):
+        """Compute perplexity over a set of encodings."""
+        model.eval()
+        total_loss = 0.0
+        total_tokens = 0
+        device = next(model.parameters()).device
+
+        with torch.no_grad():
+            for i in range(len(texts)):
+                input_ids = encodings["input_ids"][i:i+1].to(device)
+                attention_mask = encodings["attention_mask"][i:i+1].to(device)
+                labels = input_ids.clone()
+                labels[attention_mask == 0] = -100
+
+                outputs = model(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    labels=labels,
+                )
+                total_loss += outputs.loss.item() * attention_mask.sum().item()
+                total_tokens += attention_mask.sum().item()
+
+        avg_loss = total_loss / total_tokens if total_tokens > 0 else float("inf")
+        return math.exp(avg_loss), avg_loss
+
+    # --- Evaluate base model ---
+    print(f"Loading {base_model} in 4-bit for base evaluation...")
+    bnb_config = BitsAndBytesConfig(
+        load_in_4bit=True,
+        bnb_4bit_compute_dtype=torch.bfloat16,
+        bnb_4bit_quant_type="nf4",
+        bnb_4bit_use_double_quant=True,
+    )
+    base = AutoModelForCausalLM.from_pretrained(
+        base_model,
+        quantization_config=bnb_config,
+        device_map="auto",
+        trust_remote_code=True,
+        attn_implementation="sdpa",
+        cache_dir=cache_dir,
+    )
+
+    print("Computing base model perplexity...")
+    base_ppl, base_loss = compute_perplexity(base, encodings)
+    print(f"  Base perplexity: {base_ppl:.2f} (loss: {base_loss:.4f})")
+
+    # --- Save adapter files to disk for PeftModel.from_pretrained ---
+    adapter_dir = "/tmp/eval-adapter"
+    os.makedirs(adapter_dir, exist_ok=True)
+    for fname, content in adapter_files.items():
+        if not fname.startswith("_"):
+            with open(os.path.join(adapter_dir, fname), "wb") as f:
+                f.write(content)
+
+    # --- Evaluate adapter model ---
+    print("Applying LoRA adapter...")
+    adapter_model = PeftModel.from_pretrained(base, adapter_dir)
+    adapter_model = adapter_model.merge_and_unload()
+
+    print("Computing adapter perplexity...")
+    adapter_ppl, adapter_loss = compute_perplexity(adapter_model, encodings)
+    print(f"  Adapter perplexity: {adapter_ppl:.2f} (loss: {adapter_loss:.4f})")
+
+    # --- Compare ---
+    improvement = (base_ppl - adapter_ppl) / base_ppl * 100
+    passed = adapter_ppl < base_ppl
+
+    print(f"\n{'='*50}")
+    print(f"  Base perplexity:    {base_ppl:.2f}")
+    print(f"  Adapter perplexity: {adapter_ppl:.2f}")
+    print(f"  Improvement:        {improvement:+.1f}%")
+    print(f"  Verdict:            {'PASS' if passed else 'FAIL'}")
+    print(f"{'='*50}")
+
+    model_cache.commit()
+
+    return {
+        "base_ppl": base_ppl,
+        "base_loss": base_loss,
+        "adapter_ppl": adapter_ppl,
+        "adapter_loss": adapter_loss,
+        "improvement_pct": improvement,
+        "holdout_samples": len(rows),
+        "passed": passed,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Local entrypoint (runs on your machine, orchestrates Modal)
 # ---------------------------------------------------------------------------
 
