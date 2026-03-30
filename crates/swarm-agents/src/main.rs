@@ -83,6 +83,14 @@ enum SubCommand {
         #[arg(long, default_value_t = true)]
         json: bool,
     },
+    /// Run the Autopilot analysis pipeline: archive → insights → recommendations.
+    ///
+    /// Writes JSON artifacts to .swarm/autopilot/ and prints an operator summary.
+    Autopilot {
+        /// Number of recent mutation records to analyze (default: 50).
+        #[arg(long, default_value_t = 50)]
+        window: usize,
+    },
 }
 
 #[tokio::main]
@@ -98,6 +106,17 @@ async fn main() -> Result<()> {
     // --- Handle subcommands before full orchestrator initialization ---
     if let Some(SubCommand::PickNext { json: _ }) = &args.command {
         return handle_pick_next(args.repo_root.as_deref());
+    }
+    if let Some(SubCommand::Autopilot { window }) = &args.command {
+        let repo_root = args
+            .repo_root
+            .clone()
+            .unwrap_or_else(|| std::env::current_dir().expect("current dir"));
+        let runner = swarm_agents::autopilot::AutopilotRunner::new(&repo_root)
+            .with_window_size(*window);
+        let report = runner.run().await;
+        println!("{}", report.operator_summary());
+        return Ok(());
     }
 
     let mut config = SwarmConfig::default();

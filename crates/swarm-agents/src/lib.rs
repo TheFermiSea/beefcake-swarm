@@ -2,6 +2,7 @@ pub mod acceptance;
 pub mod action_validator;
 pub mod agents;
 pub mod auto_fix;
+pub mod autopilot;
 pub mod beads_bridge;
 pub mod cluster_health;
 pub mod confidence;
