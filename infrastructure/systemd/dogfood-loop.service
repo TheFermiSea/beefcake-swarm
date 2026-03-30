@@ -1,0 +1,28 @@
+[Unit]
+Description=Beefcake Swarm dogfood loop
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=brian
+WorkingDirectory=/home/brian/code/beefcake-swarm
+EnvironmentFile=/home/brian/.swarm-env
+Environment=SWARM_TENSORZERO_URL=http://localhost:3000
+Environment=SWARM_TENSORZERO_PG_URL=postgres://tensorzero:tensorzero@localhost:5433/tensorzero
+Environment=PATH=/home/brian/.cargo/bin:/home/brian/.local/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/brian/code/beefcake-swarm/scripts/dogfood-loop.sh --discover --parallel 3 --cooldown 60
+Restart=on-failure
+RestartSec=30
+# Give running issues time to finish before hard kill
+TimeoutStopSec=120
+# Don't kill child processes immediately — let the trap handler clean up
+KillMode=mixed
+KillSignal=SIGTERM
+
+# Prevent runaway resource usage
+LimitNOFILE=65536
+MemoryMax=8G
+
+[Install]
+WantedBy=multi-user.target
