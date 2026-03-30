@@ -1,0 +1,16 @@
+[Unit]
+Description=Dolt SQL server with remotesapi (beads issue tracking)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=brian
+WorkingDirectory=/home/brian/.beads/shared-server/dolt
+ExecStart=/usr/local/bin/dolt sql-server --config config.yaml
+Restart=on-failure
+RestartSec=10
+LimitNOFILE=65536
+
+[Install]
+WantedBy=multi-user.target

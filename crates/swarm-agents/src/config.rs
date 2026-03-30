@@ -1158,8 +1158,41 @@ pub async fn check_endpoint_with_model(
     api_key: Option<&str>,
     expected_model: Option<&str>,
 ) -> bool {
-    let models_url = format!("{url}/models");
     let client = reqwest::Client::new();
+
+    // When routing through TZ, the URL is like http://localhost:3000/openai/v1.
+    // TZ doesn't serve /models — try /health on the gateway root first.
+    if url.contains("/openai/v1") {
+        let health_url = url
+            .trim_end_matches("/v1")
+            .trim_end_matches("/openai")
+            .to_string()
+            + "/health";
+        let mut req = client
+            .get(&health_url)
+            .timeout(std::time::Duration::from_secs(5));
+        if let Some(key) = api_key {
+            if key != "not-needed" {
+                req = req.bearer_auth(key).header("x-api-key", key);
+            }
+        }
+        return match req.send().await {
+            Ok(resp) if resp.status().is_success() => {
+                tracing::info!(endpoint = url, "TZ gateway health check passed");
+                true
+            }
+            Ok(resp) => {
+                tracing::warn!(endpoint = url, status = %resp.status(), "TZ gateway unhealthy");
+                false
+            }
+            Err(e) => {
+                tracing::warn!(endpoint = url, error = %e, "TZ gateway unreachable");
+                false
+            }
+        };
+    }
+
+    let models_url = format!("{url}/models");
     let mut req = client
         .get(&models_url)
         .timeout(std::time::Duration::from_secs(5));
