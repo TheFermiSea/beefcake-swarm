@@ -2603,8 +2603,7 @@ async fn process_issue_core(
                 .as_secs_f64();
             // Look back from just before this iteration's worker call
             let since = now_secs - iter_start.elapsed().as_secs_f64() - 5.0;
-            let inf_ids =
-                crate::tensorzero::resolve_recent_inference_ids(pg_url, since, 1).await;
+            let inf_ids = crate::tensorzero::resolve_recent_inference_ids(pg_url, since, 1).await;
             if let Some(inf_id) = inf_ids.first() {
                 crate::tensorzero::post_inference_feedback(
                     tz_url,
@@ -3493,11 +3492,8 @@ async fn process_issue_core(
             // that passed 3/4 gates is closer to success than one that passed 0/4.
             if let Some(ref final_report) = last_report {
                 let gates_passed = final_report.gates_passed as f64;
-                let episode_ids = crate::tensorzero::resolve_episode_ids(
-                    pg_url,
-                    tz_session_start_secs,
-                )
-                .await;
+                let episode_ids =
+                    crate::tensorzero::resolve_episode_ids(pg_url, tz_session_start_secs).await;
                 for ep_id in &episode_ids {
                     crate::tensorzero::post_episode_metric(
                         tz_url,

@@ -265,12 +265,7 @@ impl AutopilotReport {
             let high_priority: Vec<_> = self
                 .recommendations
                 .iter()
-                .filter(|r| {
-                    matches!(
-                        r.priority,
-                        crate::recommendations::ExperimentPriority::High
-                    )
-                })
+                .filter(|r| matches!(r.priority, crate::recommendations::ExperimentPriority::High))
                 .collect();
             if !high_priority.is_empty() {
                 lines.push(format!(
