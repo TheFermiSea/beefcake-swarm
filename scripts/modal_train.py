@@ -855,8 +855,8 @@ def main(
     effective_batch = batch_size * grad_accum
     steps_per_epoch = max(1, num_samples // effective_batch)
     total_steps = steps_per_epoch * epochs
-    # Rough estimate: ~2s/step on H100 for 14B, ~5s/step for 27B
-    is_large = "27" in base or "32" in base
+    # Rough estimate: ~2s/step on H100 for 14B, ~5s/step for 27B+
+    is_large = _is_large_model(base)
     secs_per_step = 5 if is_large else 2
     est_minutes = (total_steps * secs_per_step) / 60
     est_cost = est_minutes * (5.49 / 60)  # H100 ~$5.49/hr on Modal

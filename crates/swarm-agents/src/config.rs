@@ -1285,7 +1285,7 @@ mod tests {
             "SWARM_CLOUD_API_KEY",
             "SWARM_CLOUD_MODEL",
             "SWARM_MAX_NO_CHANGE",
-            "SWARM_TENSORZERO_URL", // Add this to ensure we test the default endpoints
+            "SWARM_TENSORZERO_URL",
         ] {
             std::env::remove_var(var);
         }

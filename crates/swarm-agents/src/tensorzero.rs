@@ -128,13 +128,6 @@ pub async fn post_episode_feedback(
             episode_id: Some(episode_id.to_string()),
             inference_id: None,
             value: serde_json::json!(wall_time_secs),
-            tags: tags_map.clone(),
-        },
-        FeedbackRequest {
-            metric_name: "iteration_efficiency".to_string(),
-            episode_id: Some(episode_id.to_string()),
-            inference_id: None,
-            value: serde_json::json!(iterations as f64),
             tags: tags_map,
         },
     ];

@@ -29,11 +29,12 @@ if [[ -f "$LAST_TRAIN_FILE" ]]; then
     LAST_TS=$(cat "$LAST_TRAIN_FILE")
 fi
 
-# Count new successful episodes since last training
-NEW_EPISODES=$(python3 -c "
-import psycopg2, sys
+# Count new successful episodes since last training.
+# PG_URL and LAST_TS passed via env to avoid shell injection in the Python string.
+NEW_EPISODES=$(GATE_PG_URL="$PG_URL" GATE_LAST_TS="$LAST_TS" python3 -c "
+import os, psycopg2, sys
 try:
-    conn = psycopg2.connect('${PG_URL}')
+    conn = psycopg2.connect(os.environ['GATE_PG_URL'])
     cur = conn.cursor()
     cur.execute('''
         SELECT COUNT(DISTINCT target_id)
@@ -41,7 +42,7 @@ try:
         WHERE metric_name = 'task_resolved'
           AND value = true
           AND created_at > %s::timestamptz
-    ''', ('${LAST_TS}',))
+    ''', (os.environ['GATE_LAST_TS'],))
     print(cur.fetchone()[0])
     conn.close()
 except Exception as e:

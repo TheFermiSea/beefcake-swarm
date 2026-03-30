@@ -3162,11 +3162,13 @@ async fn process_issue_core(
         if let (Some(ref tz_url), Some(ref pg_url)) =
             (&config.tensorzero_url, &config.tensorzero_pg_url)
         {
-            // Capture the diff of what the worker changed
-            let diff = std::process::Command::new("git")
+            // Capture the diff of what the worker changed (async to avoid
+            // blocking the tokio executor on large diffs).
+            let diff = tokio::process::Command::new("git")
                 .args(["diff", "HEAD~1", "--stat", "-p"])
                 .current_dir(&wt_path)
                 .output()
+                .await
                 .ok()
                 .and_then(|o| {
                     if o.status.success() {
@@ -3476,24 +3478,32 @@ async fn process_issue_core(
         };
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {
-            crate::tensorzero::post_resolved_feedback(
-                tz_url,
-                pg_url,
-                tz_session_start_secs,
-                success,
-                session_metrics.total_iterations,
-                wall_secs,
-                Some(tz_tags.clone()),
-            )
-            .await;
+            // Resolve episode IDs once — reused for both feedback calls below.
+            let episode_ids =
+                crate::tensorzero::resolve_episode_ids(pg_url, tz_session_start_secs).await;
 
-            // Post verifier_gates_passed as episode-level float feedback.
-            // This gives TZ a finer signal than boolean task_resolved — a run
-            // that passed 3/4 gates is closer to success than one that passed 0/4.
+            // Post core episode metrics (task_resolved, iterations_used, wall_time, etc.)
+            for ep_id in &episode_ids {
+                crate::tensorzero::post_episode_feedback(
+                    tz_url,
+                    ep_id,
+                    success,
+                    session_metrics.total_iterations,
+                    wall_secs,
+                    Some(tz_tags.clone()),
+                )
+                .await;
+            }
+            if !episode_ids.is_empty() {
+                info!(
+                    episodes = episode_ids.len(),
+                    success, "Posted TZ feedback to all resolved episodes"
+                );
+            }
+
+            // Post verifier_gates_passed — finer signal than boolean task_resolved.
             if let Some(ref final_report) = last_report {
                 let gates_passed = final_report.gates_passed as f64;
-                let episode_ids =
-                    crate::tensorzero::resolve_episode_ids(pg_url, tz_session_start_secs).await;
                 for ep_id in &episode_ids {
                     crate::tensorzero::post_episode_metric(
                         tz_url,

@@ -707,6 +707,8 @@ mod tests {
     fn test_poll_mail_inbox_failure_returns_advisory_and_records_health() {
         let _guard = beads_env_lock().lock().unwrap();
         let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_failure");
+        // Clean stale state from previous test runs
+        let _ = fs::remove_dir_all(&tmp_dir);
         fs::create_dir_all(&tmp_dir).unwrap();
         let script_path = tmp_dir.join("bd_mock");
 
