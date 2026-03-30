@@ -3499,7 +3499,7 @@ async fn process_issue_core(
                 )
                 .await;
                 for ep_id in &episode_ids {
-                    crate::tensorzero::post_inference_feedback(
+                    crate::tensorzero::post_episode_metric(
                         tz_url,
                         ep_id,
                         "verifier_gates_passed",

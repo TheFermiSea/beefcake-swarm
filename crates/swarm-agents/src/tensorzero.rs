@@ -172,6 +172,60 @@ pub async fn post_episode_feedback(
     }
 }
 
+/// Post a single episode-level metric by name and value.
+///
+/// Use this for metrics like `verifier_gates_passed` that need to target
+/// a specific episode_id with an arbitrary value.
+pub async fn post_episode_metric(
+    gateway_url: &str,
+    episode_id: &str,
+    metric_name: &str,
+    value: serde_json::Value,
+    tags: Option<FeedbackTags>,
+) {
+    let client = reqwest::Client::new();
+    let feedback_url = format!("{gateway_url}/feedback");
+    let tags_map = tags.and_then(|t| t.into_option_map());
+
+    let fb = FeedbackRequest {
+        metric_name: metric_name.to_string(),
+        episode_id: Some(episode_id.to_string()),
+        inference_id: None,
+        value,
+        tags: tags_map,
+    };
+
+    match client
+        .post(&feedback_url)
+        .json(&fb)
+        .timeout(std::time::Duration::from_secs(10))
+        .send()
+        .await
+    {
+        Ok(resp) if resp.status().is_success() => {
+            info!(
+                metric = metric_name,
+                episode_id,
+                "Posted TZ episode metric"
+            );
+        }
+        Ok(resp) => {
+            warn!(
+                metric = metric_name,
+                status = %resp.status(),
+                "TZ episode metric rejected"
+            );
+        }
+        Err(e) => {
+            warn!(
+                metric = metric_name,
+                error = %e,
+                "Failed to post TZ episode metric"
+            );
+        }
+    }
+}
+
 /// Generate a UUIDv7 episode ID for a given issue and session.
 ///
 /// TensorZero requires episode IDs to be UUIDv7 (RFC 9562), which
