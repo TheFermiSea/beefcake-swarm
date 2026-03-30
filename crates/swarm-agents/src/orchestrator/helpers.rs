@@ -139,8 +139,8 @@ pub fn try_scaffold_fallback(
          <!-- TODO: Describe the purpose and scope -->\n\n\
          ## Details\n\n\
          <!-- TODO: Fill in the content -->\n\n\
-         ## Open Questions\n\n\
-         <!-- TODO: List any unresolved questions -->\n",
+        ## Open Questions\n\n\n
+         ",
         title = issue_title,
         id = issue_id,
         iter = iteration,
