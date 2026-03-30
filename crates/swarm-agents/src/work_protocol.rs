@@ -747,49 +747,6 @@ pub struct EscalationRequest {
     pub blocking_files: Vec<String>,
 }
 
-// ── Build file manifest ──────────────────────────────────────────────────────
-
-/// Build a file manifest from a list of modified file paths in a worktree.
-///
-/// Reads each file and computes a blake3 short hash. Files that don't
-/// exist are assumed deleted. New files are detected by comparing against
-/// a baseline file list.
-pub fn build_file_manifest(
-    worktree_path: &std::path::Path,
-    files_modified: &[String],
-    baseline_files: &[String],
-) -> Vec<FileManifestEntry> {
-    files_modified
-        .iter()
-        .map(|path| {
-            let full_path = worktree_path.join(path);
-            if full_path.exists() {
-                let content = std::fs::read_to_string(&full_path).unwrap_or_default();
-                let hash = blake3::hash(content.as_bytes());
-                let short_hash = format!("{:02x}{:02x}", hash.as_bytes()[0], hash.as_bytes()[1]);
-                let action = if baseline_files.contains(path) {
-                    FileAction::Modified
-                } else {
-                    FileAction::Created
-                };
-                FileManifestEntry {
-                    path: path.clone(),
-                    hash: short_hash,
-                    action,
-                }
-            } else {
-                FileManifestEntry {
-                    path: path.clone(),
-                    hash: String::new(),
-                    action: FileAction::Deleted,
-                }
-            }
-        })
-        .collect()
-}
-
-// ── Conversions ──────────────────────────────────────────────────────────────
-
 /// Convert a `coordination::verifier::VerifierReport` to a `VerificationResult`.
 ///
 /// This bridges the coordination crate's detailed report to the simplified
@@ -1179,32 +1136,6 @@ mod tests {
         assert!(matches!(parsed.status, WorkStatus::Partial { .. }));
         assert_eq!(parsed.file_manifest.len(), 1);
         assert!(parsed.verification.is_some());
-    }
-
-    #[test]
-    fn file_manifest_from_worktree() {
-        let dir = tempfile::tempdir().unwrap();
-        let file_path = dir.path().join("src");
-        std::fs::create_dir_all(&file_path).unwrap();
-        std::fs::write(file_path.join("a.rs"), "fn main() {}").unwrap();
-        std::fs::write(file_path.join("b.rs"), "struct Foo;").unwrap();
-
-        let manifest = build_file_manifest(
-            dir.path(),
-            &[
-                "src/a.rs".into(),
-                "src/b.rs".into(),
-                "src/deleted.rs".into(),
-            ],
-            &["src/a.rs".into()], // a.rs existed before → Modified
-        );
-
-        assert_eq!(manifest.len(), 3);
-        assert_eq!(manifest[0].action, FileAction::Modified); // a.rs
-        assert_eq!(manifest[1].action, FileAction::Created); // b.rs (not in baseline)
-        assert_eq!(manifest[2].action, FileAction::Deleted); // deleted.rs
-        assert!(!manifest[0].hash.is_empty());
-        assert!(manifest[2].hash.is_empty()); // deleted file has no hash
     }
 
     #[test]
