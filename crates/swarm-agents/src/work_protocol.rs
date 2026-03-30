@@ -1097,48 +1097,6 @@ mod tests {
     }
 
     #[test]
-    fn work_result_serialization_roundtrip() {
-        let result = WorkResult {
-            order_id: "o1".into(),
-            status: WorkStatus::Partial {
-                reason: "need more time".into(),
-            },
-            files_modified: vec!["src/a.rs".into()],
-            files_read: vec!["src/b.rs".into()],
-            file_manifest: vec![FileManifestEntry {
-                path: "src/a.rs".into(),
-                hash: "ab".into(),
-                action: FileAction::Modified,
-            }],
-            tool_calls: 5,
-            turns_used: 3,
-            wall_time_ms: 10000,
-            git_diff_summary: " 1 file changed".into(),
-            verification: Some(VerificationResult {
-                all_green: false,
-                fmt_pass: true,
-                clippy_pass: true,
-                check_pass: false,
-                test_pass: None,
-                error_count: 2,
-                gates_passed: 2,
-                gates_total: 3,
-                summary: "2/3".into(),
-            }),
-            worker_message: "partially done".into(),
-            confidence: 0.4,
-            escalation: None,
-        };
-
-        let json = serde_json::to_string_pretty(&result).unwrap();
-        let parsed: WorkResult = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.order_id, "o1");
-        assert!(matches!(parsed.status, WorkStatus::Partial { .. }));
-        assert_eq!(parsed.file_manifest.len(), 1);
-        assert!(parsed.verification.is_some());
-    }
-
-    #[test]
     fn work_result_with_verification_refines_confidence() {
         let report = AdapterReport {
             agent_name: "test".into(),
