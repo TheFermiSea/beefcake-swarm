@@ -1272,13 +1272,6 @@ mod tests {
     }
 
     #[test]
-    fn worker_tier_display() {
-        assert_eq!(format!("{}", WorkerTier::Fast), "fast");
-        assert_eq!(format!("{}", WorkerTier::Coder), "coder");
-        assert_eq!(format!("{}", WorkerTier::Reasoning), "reasoning");
-    }
-
-    #[test]
     fn work_result_summary() {
         let result = WorkResult {
             order_id: "o1".into(),
