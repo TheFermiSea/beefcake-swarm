@@ -136,9 +136,9 @@ pub fn try_scaffold_fallback(
          > Auto-generated scaffold by swarm orchestrator.\n\
          > Issue: `{id}` | Generated at iteration {iter}\n\n\
          ## Overview\n\n\
-         <!-- TODO: Describe the purpose and scope -->\n\n\
+         <!-- Purpose and scope of the issue being tracked in the swarm orchestrator -->\n\n\
          ## Details\n\n\
-         <!-- TODO: Fill in the content -->\n\n\
+         <!-- Implementation details and technical context for the tracked issue -->\n\n\
         ## Open Questions\n\n\n
          ",
         title = issue_title,
