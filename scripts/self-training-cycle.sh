@@ -178,15 +178,33 @@ fi
 
 SYNTH_COUNT=0
 if [[ "$SKIP_SYNTHETIC" == false ]]; then
-    log "Step 2: AUGMENT — Generating ${NUM_SYNTHETIC} synthetic trajectories..."
+    # Generate a mix: 70% agentic (multi-turn tool-calling) + 30% direct (single-turn Q&A).
+    # Agentic trajectories match the real swarm workflow; direct provides broader coverage.
+    AGENTIC_NUM=$(( NUM_SYNTHETIC * 7 / 10 ))
+    DIRECT_NUM=$(( NUM_SYNTHETIC - AGENTIC_NUM ))
+
+    log "Step 2: AUGMENT — Generating ${NUM_SYNTHETIC} synthetic trajectories (${AGENTIC_NUM} agentic + ${DIRECT_NUM} direct)..."
+
     TEACHER_API_KEY="${SWARM_CLOUD_API_KEY:-}" \
     TEACHER_API_URL="${SWARM_CLOUD_URL:-http://localhost:8317/v1}" \
     python3 scripts/generate-synthetic-trajectories.py \
         --model claude-sonnet-4-6 \
-        --num "$NUM_SYNTHETIC" \
+        --num "$AGENTIC_NUM" \
+        --mode agentic \
+        --output "${WORK_DIR}/synthetic-agentic.jsonl" \
+        --categories all 2>&1 | tail -3
+
+    TEACHER_API_KEY="${SWARM_CLOUD_API_KEY:-}" \
+    TEACHER_API_URL="${SWARM_CLOUD_URL:-http://localhost:8317/v1}" \
+    python3 scripts/generate-synthetic-trajectories.py \
+        --model claude-sonnet-4-6 \
+        --num "$DIRECT_NUM" \
         --mode direct \
-        --output "${WORK_DIR}/synthetic.jsonl" \
-        --categories all 2>&1 | tail -5
+        --output "${WORK_DIR}/synthetic-direct.jsonl" \
+        --categories all 2>&1 | tail -3
+
+    cat "${WORK_DIR}/synthetic-agentic.jsonl" "${WORK_DIR}/synthetic-direct.jsonl" \
+        > "${WORK_DIR}/synthetic.jsonl" 2>/dev/null
     SYNTH_COUNT=$(wc -l < "${WORK_DIR}/synthetic.jsonl" 2>/dev/null || echo 0)
     log "  Generated ${SYNTH_COUNT} synthetic trajectories"
 else
