@@ -1068,6 +1068,35 @@ mod tests {
     }
 
     #[test]
+    fn work_result_escalation_signals() {
+        let result = WorkResult {
+            order_id: "o1".into(),
+            status: WorkStatus::Stuck {
+                reason: "can't fix".into(),
+            },
+            files_modified: vec![],
+            files_read: vec![],
+            file_manifest: vec![],
+            tool_calls: 0,
+            turns_used: 0,
+            wall_time_ms: 0,
+            git_diff_summary: String::new(),
+            verification: None,
+            worker_message: String::new(),
+            confidence: 0.2,
+            escalation: Some(EscalationRequest {
+                reason: "borrow checker".into(),
+                suggested_action: "restructure lifetimes".into(),
+                blocking_files: vec!["src/main.rs".into()],
+            }),
+        };
+
+        assert!(result.needs_escalation());
+        assert!(result.needs_human_review()); // confidence < 0.3
+        assert!(!result.made_progress());
+    }
+
+    #[test]
     fn work_result_serialization_roundtrip() {
         let result = WorkResult {
             order_id: "o1".into(),
