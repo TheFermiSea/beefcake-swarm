@@ -412,8 +412,7 @@ pub async fn post_inference_feedback(
         Ok(resp) if resp.status().is_success() => {
             info!(
                 metric = metric_name,
-                inference_id,
-                "Posted TZ inference-level feedback"
+                inference_id, "Posted TZ inference-level feedback"
             );
         }
         Ok(resp) => {
