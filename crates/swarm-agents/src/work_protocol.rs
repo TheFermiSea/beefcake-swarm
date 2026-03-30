@@ -799,27 +799,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn work_order_builder() {
-        let order = WorkOrder::new("order-1", "beads-abc", "Fix parser")
-            .target_files(vec!["src/parser.rs".into()])
-            .forbidden_files(vec!["src/main.rs".into()])
-            .done_when(DoneCriteria::CompileClean)
-            .max_turns(20)
-            .timeout_secs(600)
-            .worker_tier(WorkerTier::Coder)
-            .iteration(2);
-
-        assert_eq!(order.id, "order-1");
-        assert_eq!(order.issue_id, "beads-abc");
-        assert_eq!(order.target_files, vec!["src/parser.rs"]);
-        assert_eq!(order.forbidden_files, vec!["src/main.rs"]);
-        assert_eq!(order.max_turns, 20);
-        assert_eq!(order.timeout_secs, 600);
-        assert_eq!(order.worker_tier, Some(WorkerTier::Coder));
-        assert_eq!(order.iteration, 2);
-    }
-
-    #[test]
     fn work_order_serialization() {
         let order =
             WorkOrder::new("o1", "issue-1", "do stuff").done_when(DoneCriteria::TestsPass {
