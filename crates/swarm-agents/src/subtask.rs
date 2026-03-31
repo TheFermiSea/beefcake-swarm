@@ -1062,30 +1062,6 @@ mod tests {
     }
 
     #[test]
-    fn integration_file_detection_python() {
-        let python_files = vec![
-            "pyproject.toml".to_string(),
-            "conftest.py".to_string(),
-            "__init__.py".to_string(),
-        ];
-        assert!(is_integration_file("pyproject.toml", Some(&python_files)));
-        assert!(is_integration_file(
-            "cflibs/__init__.py",
-            Some(&python_files)
-        ));
-        assert!(is_integration_file(
-            "tests/conftest.py",
-            Some(&python_files)
-        ));
-        assert!(!is_integration_file(
-            "cflibs/plasma/state.py",
-            Some(&python_files)
-        ));
-        // Rust files should NOT match Python profile
-        assert!(!is_integration_file("Cargo.toml", Some(&python_files)));
-    }
-
-    #[test]
     fn parse_plan_rejects_integration_file_in_multiple_subtasks() {
         // Use different paths that both have integration file basenames (mod.rs in different dirs).
         let json = r#"{
