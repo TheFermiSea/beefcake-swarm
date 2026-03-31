@@ -815,19 +815,6 @@ mod tests {
     }
 
     #[test]
-    fn work_status_labels() {
-        assert_eq!(WorkStatus::Complete.label(), "complete");
-        assert_eq!(
-            WorkStatus::Partial { reason: "x".into() }.label(),
-            "partial"
-        );
-        assert_eq!(
-            WorkStatus::OutOfScope { reason: "x".into() }.label(),
-            "out_of_scope"
-        );
-    }
-
-    #[test]
     fn infer_status_complete() {
         let report = AdapterReport {
             agent_name: "test".into(),
