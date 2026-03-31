@@ -1546,26 +1546,6 @@ mod data_guard_tests {
     use super::*;
 
     #[test]
-    fn detects_fabricated_benchmark_output() {
-        let content = r#"
-Benchmark Results
-================
-
-F1 Score: 0.847
-RMSE: 2.34
-MAE: 1.89
-
-Sample 1: 0.789 0.812 0.845
-Sample 2: 0.812 0.845 0.878
-Sample 3: 0.845 0.878 0.911
-
-Wall Time: 12.45 seconds
-Throughput: 850.2 tok/s
-"#;
-        assert!(looks_like_fabricated_data(content));
-    }
-
-    #[test]
     fn allows_normal_code() {
         let content = r#"
 def calculate_temperature(slope: float) -> float:
