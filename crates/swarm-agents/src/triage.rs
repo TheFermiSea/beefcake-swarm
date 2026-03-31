@@ -473,48 +473,12 @@ fn keyword_triage(title: &str, description: Option<&str>) -> TriageResult {
 mod tests {
     use super::*;
 
+    #[test]
     fn keyword_triage_simple() {
         let result = keyword_triage("Fix clippy warning in config.rs", None);
         assert_eq!(result.complexity, Complexity::Simple);
         assert_eq!(result.language, "rust");
         assert!(!result.used_llm);
-    }
-
-    fn phase_selector_cheapest_for_triage() {
-        let catalog = CloudModelCatalog::default_catalog();
-        let selector = PhaseModelSelector::new(catalog, 0.0);
-        let model = selector.select_for_phase(WorkflowPhase::Triage, None, None);
-        assert!(model.is_some());
-        // Should pick the cheapest triage model (Gemini Flash at $0.10/M).
-        let m = model.unwrap();
-        assert!(
-            m.cost_input_per_m <= 0.15,
-            "Expected cheap triage model, got {}",
-            m.model
-        );
-    }
-
-    fn phase_selector_cheapest_for_plan() {
-        let catalog = CloudModelCatalog::default_catalog();
-        let selector = PhaseModelSelector::new(catalog, 0.0);
-        let model = selector.select_for_phase(WorkflowPhase::Plan, None, None);
-        assert!(model.is_some());
-        // Should pick the cheapest plan-capable model.
-        // gemini-3.1-pro-high has the "plan" capability at $1.25/M input —
-        // cheaper than Sonnet ($3/M) and far cheaper than Opus ($15/M).
-        // TZ analysis: Sonnet and Opus have identical p50 latency (~4s) and success
-        // rates (~27%), but Opus costs 3.3x more ($0.046/call vs $0.014/call).
-        let m = model.unwrap();
-        assert!(
-            m.cost_input_per_m < 3.0,
-            "Expected cheap plan model, got {} at ${}/M",
-            m.model,
-            m.cost_input_per_m
-        );
-        assert_ne!(
-            m.model, "claude-opus-4-6",
-            "Plan should not use Opus (too expensive)"
-        );
     }
 
     #[test]
