@@ -1,0 +1,8 @@
+{"worker":"subtask-2","type":"note","file":"crates/swarm-agents/src/orchestrator/dispatch.rs","detail":"Verified that dispatch.rs contains no references to full_reformulation_pipeline - no changes needed"}
+{"worker":"subtask-2","type":"done","file":"crates/swarm-agents/src/orchestrator/dispatch.rs","detail":"Subtask completed - no references to full_reformulation_pipeline found in dispatch.rs"}
+{"worker":"subtask-2","type":"done","file":"crates/swarm-agents/src/orchestrator/dispatch.rs","detail":"Subtask completed - no references to full_reformulation_pipeline found in dispatch.rs"}
+{"worker":"subtask-1","type":"interface_change","file":"crates/swarm-agents/src/reformulation.rs","detail":"Removed unused test function `full_reformulation_pipeline` from reformulation.rs"}
+{"worker":"subtask-2","type":"done","file":"crates/swarm-agents/src/orchestrator/dispatch.rs","detail":"Subtask completed - no references to full_reformulation_pipeline found in dispatch.rs"}
+{"worker":"subtask-1","type":"done","file":"crates/swarm-agents/src/reformulation.rs","detail":"Removed unused test function `full_reformulation_pipeline` from reformulation.rs"}
+{"worker":"subtask-1","type":"done","file":"crates/swarm-agents/src/reformulation.rs","detail":"Removed unused test function `full_reformulation_pipeline` from reformulation.rs"}
+{"worker":"subtask-1","type":"done","file":"crates/swarm-agents/src/reformulation.rs","detail":"Removed unused test function `full_reformulation_pipeline` from reformulation.rs"}

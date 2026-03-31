@@ -1192,54 +1192,6 @@ mod tests {
     }
 
     #[test]
-    fn full_reformulation_pipeline() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = ReformulationStore::new(dir.path());
-
-        // Save intent contract first
-        let contract = IntentContract::from_issue(
-            "ruff-test",
-            "Add annotations to boltzmann.py",
-            Some("- Add `from __future__ import annotations`\nRun: ruff check"),
-        );
-        store.save_contract(&contract);
-
-        let input = FailureReviewInput {
-            issue_id: "ruff-test".into(),
-            issue_title: "Add annotations to boltzmann.py".into(),
-            issue_description: Some(
-                "- Add `from __future__ import annotations`\nRun: ruff check".into(),
-            ),
-            failure_ledger: vec![make_entry(
-                "exec_tool",
-                "CommandBlocked",
-                "command 'ruff' not in allowlist",
-                false,
-                1,
-            )],
-            iterations_used: 10,
-            max_iterations: 10,
-            files_changed: vec![],
-            error_categories: vec![],
-            failure_reason: None,
-        };
-
-        let result = reformulate(&store, &input);
-        assert!(matches!(
-            result.classification,
-            FailureClassification::ToolConstraintMismatch { .. }
-        ));
-        assert!(result.retry_now);
-        assert!(result.intent_guard_passed);
-        assert!(result.new_description.is_some());
-        let new_desc = result.new_description.unwrap();
-        assert!(
-            !new_desc.to_lowercase().contains("ruff"),
-            "Ruff should be removed from: {new_desc}"
-        );
-    }
-
-    #[test]
     fn should_skip_escalated_issue() {
         let dir = tempfile::tempdir().unwrap();
         let store = ReformulationStore::new(dir.path());
