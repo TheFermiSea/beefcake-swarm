@@ -383,4 +383,15 @@ mod tests {
             vec!["cargo fmt".to_string(), "cargo check".to_string()]
         );
     }
+
+    #[test]
+    fn pipeline_splitter_rejects_unterminated_quotes() {
+        // A command with an unterminated double-quote must be rejected.
+        let command = "cargo test --lib | grep \"FAILED";
+        let result = split_pipeline_segments(command);
+        assert!(
+            result.is_err(),
+            "expected error for unterminated quote, got: {result:?}"
+        );
+    }
 }
