@@ -183,22 +183,3 @@ impl Tool for BatchExecute {
             .map_err(|e| ToolError::Policy(format!("failed to serialize results: {e}")))
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn make_batch() -> BatchExecute {
-        BatchExecute::new()
-            .register("echo", |args| async move {
-                Ok(args
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string())
-            })
-            .register("fail", |_| async move {
-                Err(ToolError::Policy("deliberate failure".into()))
-            })
-    }
-}
