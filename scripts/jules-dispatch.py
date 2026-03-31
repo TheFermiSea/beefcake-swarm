@@ -61,6 +61,23 @@ REPOS = {
         ),
         "context": (
             "Rust DAQ system for physics data acquisition. "
+            "Multi-crate workspace for detector readout, event building, and online analysis."
+        ),
+    },
+    "CF-LIBS-improved": {
+        "github": "TheFermiSea/CF-LIBS-improved",
+        "branch": "main",
+        "beads_root": os.path.expanduser("~/code/CF-LIBS-improved"),
+        "patterns": ["TODO:", "bug", "refactor", "cleanup", "test", "type hint", "docstring"],
+        "quality_gates": (
+            "python -m pytest && "
+            "python -m mypy . --ignore-missing-imports || true && "
+            "ruff check ."
+        ),
+        "context": (
+            "Python scientific computing: CF-LIBS (Calibration-Free Laser-Induced "
+            "Breakdown Spectroscopy) analysis pipeline. NumPy/SciPy/Matplotlib stack. "
+            "Planned merge with CF-LIBS repo — keep changes backward-compatible."
         ),
     },
 }
