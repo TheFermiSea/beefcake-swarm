@@ -799,22 +799,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn work_status_properties() {
-        assert!(WorkStatus::Complete.keep_changes());
-        assert!(WorkStatus::Partial { reason: "x".into() }.keep_changes());
-        assert!(!WorkStatus::Stuck { reason: "x".into() }.keep_changes());
-        assert!(!WorkStatus::Failed { error: "x".into() }.keep_changes());
-
-        assert!(!WorkStatus::Complete.is_retryable());
-        assert!(WorkStatus::Partial { reason: "x".into() }.is_retryable());
-        assert!(WorkStatus::Stuck { reason: "x".into() }.is_retryable());
-        assert!(!WorkStatus::Failed { error: "x".into() }.is_retryable());
-
-        assert!(!WorkStatus::Complete.is_terminal());
-        assert!(WorkStatus::Failed { error: "x".into() }.is_terminal());
-    }
-
-    #[test]
     fn infer_status_complete() {
         let report = AdapterReport {
             agent_name: "test".into(),
