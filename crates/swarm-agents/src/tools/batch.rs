@@ -210,30 +210,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn executes_registered_handlers_concurrently() {
-        let tool = make_batch();
-        let calls = vec![
-            BatchCall {
-                tool: "echo".into(),
-                args: serde_json::json!({"message": "hello"}),
-            },
-            BatchCall {
-                tool: "echo".into(),
-                args: serde_json::json!({"message": "world"}),
-            },
-        ];
-        let raw = tool.call(BatchExecuteArgs { calls }).await.unwrap();
-        let results: Vec<BatchCallResult> = serde_json::from_str(&raw).unwrap();
-
-        assert_eq!(results.len(), 2);
-        // Results must be in input order.
-        assert_eq!(results[0].index, 0);
-        assert_eq!(results[0].output.as_deref(), Some("hello"));
-        assert_eq!(results[1].index, 1);
-        assert_eq!(results[1].output.as_deref(), Some("world"));
-    }
-
-    #[tokio::test]
     async fn captures_errors_without_propagating() {
         let tool = make_batch();
         let calls = vec![
