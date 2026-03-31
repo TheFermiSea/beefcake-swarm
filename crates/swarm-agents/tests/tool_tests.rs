@@ -628,11 +628,8 @@ async fn test_run_command_allows_ampersand() {
         .await;
     // Should not be rejected by metachar filter. The `2>&1` is passed as a
     // literal arg to ls (no shell), so the result is Ok with some output.
-    match &result {
-        Err(ToolError::CommandNotAllowed { .. }) => {
-            panic!("should not reject ampersand in arguments")
-        }
-        _ => {} // Any other result is fine
+    if let Err(ToolError::CommandNotAllowed { .. }) = &result {
+        panic!("should not reject ampersand in arguments")
     }
 }
 
@@ -666,11 +663,8 @@ async fn test_run_command_allows_dollar_and_parens_in_args() {
         .await;
     // Should succeed (rg available) or fail due to rg not installed,
     // but NOT be rejected by metachar filter
-    match &result {
-        Err(ToolError::CommandNotAllowed { .. }) => {
-            panic!("should not reject parentheses in arguments")
-        }
-        _ => {} // Any other result is fine
+    if let Err(ToolError::CommandNotAllowed { .. }) = &result {
+        panic!("should not reject parentheses in arguments")
     }
 }
 

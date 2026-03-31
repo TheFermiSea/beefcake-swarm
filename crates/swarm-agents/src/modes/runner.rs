@@ -323,8 +323,10 @@ mod tests {
 
     #[tokio::test]
     async fn orchestrator_hits_budget_limit() {
-        let mut cfg = ModeRunnerConfig::default();
-        cfg.max_iterations = 2;
+        let cfg = ModeRunnerConfig {
+            max_iterations: 2,
+            ..Default::default()
+        };
 
         let mut runner = AlwaysSucceedRunner {
             steps_until_done: 100,

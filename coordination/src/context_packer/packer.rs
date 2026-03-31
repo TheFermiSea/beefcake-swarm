@@ -1249,7 +1249,9 @@ mod tests {
             error_count: 1,
             warning_count: 0,
             errors: vec![],
-            stderr_excerpt: Some("error[E0308]: mismatched types\n --> src/lib.rs:1:26\n".to_string()),
+            stderr_excerpt: Some(
+                "error[E0308]: mismatched types\n --> src/lib.rs:1:26\n".to_string(),
+            ),
         });
 
         let contexts = packer.build_retry_file_contexts(&report, &[]);
@@ -1849,6 +1851,9 @@ mod tests {
 
         // The file is >200 lines. Should have two separate windows (lines 50 and 150 are far apart)
         let lib_contexts: Vec<_> = contexts.iter().filter(|c| c.file == "src/lib.rs").collect();
-        assert!(!lib_contexts.is_empty(), "Should include error file context");
+        assert!(
+            !lib_contexts.is_empty(),
+            "Should include error file context"
+        );
     }
 }
