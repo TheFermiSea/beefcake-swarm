@@ -318,6 +318,57 @@ ORDER BY episode_id::text
     ids
 }
 
+/// Query total token usage for a session from TZ Postgres.
+///
+/// Returns `(input_tokens, output_tokens)` or `(0, 0)` on any error.
+pub async fn query_session_token_usage(pg_url: &str, since_secs: f64) -> (u64, u64) {
+    let Ok((client, connection)) = tokio_postgres::connect(pg_url, tokio_postgres::NoTls).await
+    else {
+        warn!("Failed to connect to TZ Postgres for token usage query");
+        return (0, 0);
+    };
+
+    tokio::spawn(async move {
+        if let Err(e) = connection.await {
+            warn!(error = %e, "TZ Postgres connection error during token query");
+        }
+    });
+
+    let cutoff = (since_secs - 60.0).max(0.0);
+    match client
+        .query_one(
+            r#"
+SELECT COALESCE(SUM(input_tokens), 0)::bigint,
+       COALESCE(SUM(output_tokens), 0)::bigint
+FROM tensorzero.model_inferences
+WHERE created_at > to_timestamp($1)
+"#,
+            &[&cutoff],
+        )
+        .await
+    {
+        Ok(row) => {
+            let input: i64 = row.get(0);
+            let output: i64 = row.get(1);
+            info!(input_tokens = input, output_tokens = output, "TZ session token usage");
+            (input.max(0) as u64, output.max(0) as u64)
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to query TZ token usage");
+            (0, 0)
+        }
+    }
+}
+
+/// Estimate cost in USD from token counts.
+///
+/// Uses Opus-class cloud pricing: $15/M input, $75/M output.
+/// Local inference is free but we estimate conservatively to track
+/// what the equivalent cloud cost would be.
+pub fn estimate_cost(input_tokens: u64, output_tokens: u64) -> f64 {
+    (input_tokens as f64 * 15.0 / 1_000_000.0) + (output_tokens as f64 * 75.0 / 1_000_000.0)
+}
+
 /// Post feedback to all resolved TZ episode IDs.
 ///
 /// Wraps `post_episode_feedback` to handle the many-episode case where each

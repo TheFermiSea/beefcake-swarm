@@ -235,6 +235,41 @@ impl EscalationEngine {
             };
         }
 
+        // Trigger T_NR: All errors are non-retryable — escalate immediately.
+        // Non-retryable errors (missing crate, syntax) can't be resolved by trying
+        // a different approach at the same tier. Skip straight to Council/Strategist
+        // instead of burning iterations.
+        if !report.all_green {
+            let error_cats = report.unique_error_categories();
+            if !error_cats.is_empty() && error_cats.iter().all(|c| !c.retryable()) {
+                let target = if is_strategist_profile {
+                    SwarmTier::Strategist
+                } else {
+                    SwarmTier::Council
+                };
+                let reason = format!(
+                    "All errors non-retryable: {}",
+                    error_cats
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                state.record_escalation(target, EscalationReason::FrictionDetected {
+                    description: reason.clone(),
+                });
+                return EscalationDecision {
+                    target_tier: target,
+                    escalated: true,
+                    reason,
+                    resolved: false,
+                    stuck: false,
+                    needs_review: false,
+                    action: SuggestedAction::RepairPlan,
+                };
+            }
+        }
+
         // strategist_hybrid_v1: consult strategist after 2 failed worker iterations
         if is_strategist_profile
             && state.total_failures() >= 2

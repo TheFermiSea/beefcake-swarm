@@ -433,6 +433,9 @@ mod tests {
             role_map_version: "v1".to_string(),
             tensorzero_episode_id: None,
             harness_trace: Default::default(),
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: 0.0,
         }
     }
 

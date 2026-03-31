@@ -384,15 +384,29 @@ async fn process_issue_core(
     beads.update_status(&issue.id, "in_progress")?;
     info!(id = %issue.id, "Claimed issue");
 
-    // --- Create worktree ---
-    let wt_path = match worktree_bridge.create(&issue.id) {
-        Ok(p) => {
-            info!(path = %p.display(), "Created worktree");
-            p
+    // --- Create or reuse worktree ---
+    let wt_path = if worktree_bridge.worktree_exists(&issue.id) {
+        match worktree_bridge.reset_worktree(&issue.id) {
+            Ok(p) => {
+                info!(path = %p.display(), "Reused existing worktree (reset for retry)");
+                p
+            }
+            Err(e) => {
+                warn!(id = %issue.id, "Worktree reset failed, recreating: {e}");
+                let _ = worktree_bridge.cleanup(&issue.id);
+                worktree_bridge.create(&issue.id)?
+            }
         }
-        Err(e) => {
-            error!(id = %issue.id, "Failed to create worktree: {e}");
-            return Err(e);
+    } else {
+        match worktree_bridge.create(&issue.id) {
+            Ok(p) => {
+                info!(path = %p.display(), "Created worktree");
+                p
+            }
+            Err(e) => {
+                error!(id = %issue.id, "Failed to create worktree: {e}");
+                return Err(e);
+            }
         }
     };
 
@@ -3214,18 +3228,22 @@ async fn process_issue_core(
         )?;
         clear_resume_file(worktree_bridge.repo_root());
 
-        // --- Self-improvement: post-merge quality scan ---
+        // --- Post-merge CI watcher: verify main still compiles after merge ---
         //
-        // After successful merge, run the verifier on the repo root to check
-        // if the merge introduced or unmasked new issues. Log the results
-        // to the quality trend file for tracking codebase health over time.
-        if is_script_verifier {
-            let scan_report = run_verifier(
-                worktree_bridge.repo_root(),
-                &verifier_config,
-                &language_profile,
-            )
-            .await;
+        // Run a lightweight check (fmt + clippy + check, skip tests) on the
+        // repo root after merge. If the merge introduced a regression (e.g.
+        // interacting changes from parallel merges), reopen the issue.
+        {
+            let post_merge_config = VerifierConfig {
+                check_fmt: true,
+                check_clippy: true,
+                check_compile: true,
+                check_test: false, // skip tests — only check compilation
+                ..verifier_config.clone()
+            };
+            let scan_report =
+                run_verifier_opts(worktree_bridge.repo_root(), &post_merge_config, &language_profile, true).await;
+
             // Append quality metrics to trend file
             let trend_path = worktree_bridge
                 .repo_root()
@@ -3247,11 +3265,22 @@ async fn process_issue_core(
                         use std::io::Write;
                         writeln!(f, "{json}")
                     });
+            }
+
+            if scan_report.all_green {
                 info!(
                     id = %issue.id,
                     summary = %scan_report.summary(),
-                    "Post-merge quality scan recorded"
+                    "Post-merge verification PASSED"
                 );
+            } else {
+                warn!(
+                    id = %issue.id,
+                    summary = %scan_report.summary(),
+                    "Post-merge regression detected — reopening issue"
+                );
+                let _ = beads.update_status(&issue.id, "open");
+                success = false;
             }
         }
         info!(id = %issue.id, "Issue closed");
@@ -3455,7 +3484,17 @@ async fn process_issue_core(
 
     // --- Write telemetry ---
     let final_tier = format!("{:?}", escalation.current_tier);
-    let session_metrics = metrics.finalize(success, &final_tier);
+    let mut session_metrics = metrics.finalize(success, &final_tier);
+
+    // Populate token usage and cost from TZ Postgres if available.
+    if let Some(ref pg_url) = config.tensorzero_pg_url {
+        let (input, output) =
+            crate::tensorzero::query_session_token_usage(pg_url, tz_session_start_secs).await;
+        session_metrics.input_tokens = input;
+        session_metrics.output_tokens = output;
+        session_metrics.estimated_cost_usd = crate::tensorzero::estimate_cost(input, output);
+    }
+
     telemetry::write_session_metrics(&session_metrics, &wt_path);
     telemetry::append_telemetry(&session_metrics, worktree_bridge.repo_root());
 

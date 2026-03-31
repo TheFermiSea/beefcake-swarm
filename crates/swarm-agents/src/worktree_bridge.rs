@@ -177,6 +177,55 @@ impl WorktreeBridge {
         self.base_dir.join(Self::sanitize_id(issue_id))
     }
 
+    /// Check whether a worktree already exists for the given issue.
+    pub fn worktree_exists(&self, issue_id: &str) -> bool {
+        let safe_id = Self::sanitize_id(issue_id);
+        let wt_path = self.base_dir.join(&safe_id);
+        if !wt_path.exists() {
+            return false;
+        }
+        // Verify git also tracks it (not just a stale directory)
+        self.list()
+            .unwrap_or_default()
+            .iter()
+            .any(|w| w.branch == format!("swarm/{safe_id}"))
+    }
+
+    /// Reset an existing worktree to a clean state for retry reuse.
+    ///
+    /// Runs `git checkout HEAD -- .`, `git clean -fd`, `git reset --hard HEAD`
+    /// to restore the worktree to the branch tip. Returns the path on success,
+    /// or an error if the worktree doesn't exist or any git command fails.
+    /// Caller should fall back to `cleanup()` + `create()` on error.
+    pub fn reset_worktree(&self, issue_id: &str) -> Result<PathBuf> {
+        let safe_id = Self::sanitize_id(issue_id);
+        let wt_path = self.base_dir.join(&safe_id);
+        if !self.worktree_exists(issue_id) {
+            bail!(
+                "Worktree for {issue_id} does not exist at {}",
+                wt_path.display()
+            );
+        }
+        tracing::info!(path = %wt_path.display(), "Resetting existing worktree for reuse");
+
+        for (args, label) in [
+            (vec!["checkout", "HEAD", "--", "."], "git checkout"),
+            (vec!["clean", "-fd"], "git clean"),
+            (vec!["reset", "--hard", "HEAD"], "git reset"),
+        ] {
+            let out = Command::new("git")
+                .args(&args)
+                .current_dir(&wt_path)
+                .output()
+                .with_context(|| format!("{label} failed in worktree"))?;
+            if !out.status.success() {
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                bail!("{label} failed: {stderr}");
+            }
+        }
+        Ok(wt_path)
+    }
+
     /// Create a new worktree for the given issue, branching from HEAD.
     ///
     /// Creates branch `swarm/<issue_id>` and places the worktree at `<base_dir>/<issue_id>`.

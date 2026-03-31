@@ -245,6 +245,15 @@ pub struct SessionMetrics {
     /// load-bearing and can be simplified away.
     #[serde(default)]
     pub harness_trace: HarnessComponentTrace,
+    /// Total input tokens consumed across all TZ inferences in this session.
+    #[serde(default)]
+    pub input_tokens: u64,
+    /// Total output tokens generated across all TZ inferences in this session.
+    #[serde(default)]
+    pub output_tokens: u64,
+    /// Estimated cost in USD based on cloud pricing rates.
+    #[serde(default)]
+    pub estimated_cost_usd: f64,
 }
 
 /// Per-session record of which harness components fired and whether they
@@ -687,6 +696,9 @@ impl MetricsCollector {
             role_map_version: self.role_map_version,
             tensorzero_episode_id: self.tensorzero_episode_id,
             harness_trace: self.harness_trace,
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: 0.0,
         }
     }
 }
@@ -1760,6 +1772,9 @@ mod tests {
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
             harness_trace: HarnessComponentTrace::default(),
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: 0.0,
         };
 
         write_session_metrics(&metrics, dir.path());
@@ -1799,6 +1814,9 @@ mod tests {
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
             harness_trace: HarnessComponentTrace::default(),
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: 0.0,
         };
         let metrics2 = SessionMetrics {
             session_id: "sess-2".into(),
@@ -1822,6 +1840,9 @@ mod tests {
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
             harness_trace: HarnessComponentTrace::default(),
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: 0.0,
         };
 
         append_telemetry(&metrics1, dir.path());
@@ -1867,6 +1888,9 @@ mod tests {
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
             harness_trace: HarnessComponentTrace::default(),
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: 0.0,
         };
         metrics1.iterations.push(IterationMetrics {
             iteration: 1,
@@ -1933,6 +1957,9 @@ mod tests {
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
             harness_trace: HarnessComponentTrace::default(),
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: 0.0,
         };
         metrics2.iterations.push(IterationMetrics {
             iteration: 1,
@@ -2117,6 +2144,9 @@ mod tests {
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
             harness_trace: HarnessComponentTrace::default(),
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: 0.0,
         }
     }
 
@@ -2523,6 +2553,9 @@ mod tests {
             role_map_version: "v1".into(),
             tensorzero_episode_id: None,
             harness_trace: HarnessComponentTrace::default(),
+            input_tokens: 0,
+            output_tokens: 0,
+            estimated_cost_usd: 0.0,
         };
 
         write_execution_artifacts(&metrics, dir.path(), None);

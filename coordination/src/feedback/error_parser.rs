@@ -104,6 +104,28 @@ pub enum ErrorCategory {
 }
 
 impl ErrorCategory {
+    /// Whether this error type is retryable with a different approach.
+    ///
+    /// Retryable errors (borrow checker, lifetimes, type mismatches) can often
+    /// be resolved by the agent trying an alternative implementation. Non-retryable
+    /// errors (missing crate/module, syntax errors) indicate structural problems
+    /// that need human intervention or issue reformulation.
+    ///
+    /// The escalation engine uses this to skip retries on non-retryable errors.
+    pub fn retryable(&self) -> bool {
+        match self {
+            Self::BorrowChecker => true,
+            Self::Lifetime => true,
+            Self::TypeMismatch => true,
+            Self::TraitBound => true,
+            Self::Async => true,
+            Self::Macro => true,
+            Self::Other => true, // unknown errors get the benefit of the doubt
+            Self::ImportResolution => false, // missing crate/module is structural
+            Self::Syntax => false,           // repeated syntax errors = fundamental misunderstanding
+        }
+    }
+
     /// Determine complexity level (1-3, higher = more complex)
     pub fn complexity(&self) -> u8 {
         match self {
