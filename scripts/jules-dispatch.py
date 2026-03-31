@@ -102,7 +102,12 @@ def get_api_key() -> str:
 
 
 def get_beads_issues(repo_config: dict, max_issues: int) -> list[dict]:
-    """Query beads for simple issues matching configured patterns."""
+    """Query beads for simple issues matching configured patterns.
+
+    Fetches full issue details via `bd show` to get file locations and
+    descriptions — critical for giving Jules enough context to find the
+    right code.
+    """
     beads_root = repo_config["beads_root"]
     if not os.path.isdir(beads_root):
         print(f"  WARN: beads root not found: {beads_root}", file=sys.stderr)
@@ -142,7 +147,39 @@ def get_beads_issues(repo_config: dict, max_issues: int) -> list[dict]:
         else:
             title = " ".join(parts[2:])
 
-        issues.append({"id": issue_id, "title": title})
+        # Fetch full description and labels via `bd show`
+        description = ""
+        labels = ""
+        try:
+            show = subprocess.run(
+                ["bd", "show", issue_id],
+                capture_output=True, text=True, timeout=10,
+                cwd=beads_root,
+            )
+            if show.returncode == 0:
+                in_desc = False
+                desc_lines = []
+                for sl in show.stdout.split("\n"):
+                    if sl.strip() == "DESCRIPTION":
+                        in_desc = True
+                        continue
+                    if in_desc:
+                        if sl.strip().startswith(("LABELS:", "PARENT", "DEPENDS", "BLOCKS", "CHILDREN")):
+                            in_desc = False
+                            if sl.strip().startswith("LABELS:"):
+                                labels = sl.strip().replace("LABELS:", "").strip()
+                            continue
+                        desc_lines.append(sl)
+                description = "\n".join(desc_lines).strip()
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        issues.append({
+            "id": issue_id,
+            "title": title,
+            "description": description,
+            "labels": labels,
+        })
         if len(issues) >= max_issues:
             break
 
@@ -164,6 +201,83 @@ def load_dispatched() -> set[str]:
     return dispatched
 
 
+def _build_task_instructions(title: str, description: str, labels: str) -> str:
+    """Generate task-specific instructions based on issue type.
+
+    The key insight from Jules batch #1: generic "fix this" prompts fail.
+    Jules needs explicit instructions: which file, which function, what
+    action to take (delete, modify, add).
+    """
+    title_lower = title.lower()
+
+    # Extract file location from description if present
+    location = ""
+    for line in description.split("\n"):
+        if line.strip().lower().startswith("location:"):
+            location = line.strip().split(":", 1)[1].strip()
+            break
+
+    loc_hint = f"\n**File location:** `{location}`\n" if location else ""
+
+    if "unused function" in title_lower or "dead-code" in labels:
+        func_name = title.replace("Unused function:", "").replace("Unused function", "").strip()
+        return f"""This is a dead code removal task.
+{loc_hint}
+1. Search the codebase for the function `{func_name}` using grep or the search tool
+2. If the function exists and has NO callers, delete it and any associated test functions
+3. If the function is already gone, verify with grep and create an empty PR (or skip)
+4. Remove any `use` imports that become unused after the deletion
+5. Run `cargo check` (or equivalent) to verify nothing breaks"""
+
+    if "todo:" in title_lower or "fixme" in title_lower:
+        return f"""This is a TODO/FIXME resolution task.
+{loc_hint}
+1. Find the TODO/FIXME comment at the specified location
+2. Implement what the comment describes, or remove it if it's obsolete
+3. Keep the implementation minimal — do exactly what the comment says"""
+
+    if "vulnerable dependency" in title_lower or "security" in labels:
+        dep_name = ""
+        for word in title.split():
+            if word not in ("Vulnerable", "dependency:", "dependency"):
+                dep_name = word
+                break
+        return f"""This is a dependency vulnerability fix.
+{loc_hint}
+1. Update the vulnerable dependency `{dep_name}` to the patched version
+2. For Rust: edit Cargo.toml version constraint, then run `cargo update -p {dep_name}`
+3. For Python: update the version in requirements.txt/pyproject.toml
+4. Run tests to verify the update doesn't break anything"""
+
+    if "large file" in title_lower:
+        return f"""This is a code organization task — split a large file.
+{loc_hint}
+1. Identify logical groupings of functions/types in the file
+2. Extract cohesive groups into new submodules
+3. Re-export public items from the parent module for backward compatibility"""
+
+    if "low test ratio" in title_lower or "low-test-ratio" in labels:
+        return f"""This is a test coverage task.
+{loc_hint}
+1. Identify the key public functions in the module that lack tests
+2. Add unit tests for the most important 2-3 functions
+3. Focus on edge cases and error paths, not just happy paths"""
+
+    if "complex function" in title_lower:
+        return f"""This is a refactoring task — reduce function complexity.
+{loc_hint}
+1. Identify the function and understand what it does
+2. Extract logical sub-operations into well-named helper functions
+3. Keep the public API unchanged — only refactor internals"""
+
+    # Generic fallback — still better than before
+    return f"""Analyze the issue and implement the fix.
+{loc_hint}
+1. Read the issue description carefully
+2. Search the codebase to understand the current state
+3. Make the minimal change needed to resolve the issue"""
+
+
 def dispatch_jules(
     api_key: str,
     repo_config: dict,
@@ -176,27 +290,42 @@ def dispatch_jules(
     context = repo_config.get("context", "")
     quality_gates = repo_config.get("quality_gates", "")
 
-    prompt = f"""Fix the following issue in the {github_repo} repository.
+    description = issue.get("description", "")
+    labels = issue.get("labels", "")
+    title = issue["title"]
 
-## Issue: {issue['title']}
+    # Build task-specific instructions based on issue type
+    task_instructions = _build_task_instructions(title, description, labels)
 
-Beads ID: `{issue['id']}`
+    prompt = f"""You are fixing a specific issue in the {github_repo} repository.
 
-## Instructions
+## Task: {title}
+
+{f"### Details{chr(10)}{description}" if description else ""}
+
+## What to do
+
+{task_instructions}
+
+## Repository context
 
 {context}
 
-Quality gates (all must pass before creating PR):
+## Verification
+
+Run these quality gates — ALL must pass before creating the PR:
 ```bash
 {quality_gates}
 ```
 
-Rules:
-- Make minimal changes — fix the issue, nothing more
-- Do not add comments explaining what the code does
-- Do not refactor surrounding code
-- Run quality gates before creating the PR
-- Title the PR: "fix: {issue['title']}"
+## Rules
+
+- Make ONLY the changes needed to fix this specific issue
+- Do NOT add comments, docstrings, or documentation
+- Do NOT refactor or reformat surrounding code
+- Do NOT create any temporary or debug files
+- If the function/code is already removed, verify it's gone and close with no changes
+- Title the PR: "fix: {title}"
 """
 
     payload = {
