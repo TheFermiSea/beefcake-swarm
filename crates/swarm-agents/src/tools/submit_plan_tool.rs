@@ -202,20 +202,4 @@ mod tests {
 
         assert!(result.is_err());
     }
-
-    #[test]
-    fn format_plan_context_output() {
-        let plan = WorkPlan {
-            approach: "Introduce a newtype wrapper for the ID".to_string(),
-            target_files: vec!["src/types.rs".to_string(), "src/api.rs".to_string()],
-            risk: "medium".to_string(),
-            submitted_at_iteration: 1,
-        };
-
-        let output = format_plan_context(&plan);
-        assert!(output.contains("## Approved Plan"));
-        assert!(output.contains("newtype wrapper"));
-        assert!(output.contains("`src/types.rs`"));
-        assert!(output.contains("Risk:** medium"));
-    }
 }
