@@ -822,6 +822,81 @@ mod tests {
     }
 
     #[test]
+    fn infer_status_partial() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 5,
+            total_tool_calls: 10,
+            total_tool_time_ms: 1000,
+            wall_time_ms: 5000,
+            terminated_early: true,
+            termination_reason: Some("max turns reached".into()),
+            has_written: true,
+            files_read: vec![],
+            files_modified: vec![],
+            successful_writes: 2,
+            last_failed_edits: vec![],
+        };
+        let status = WorkResult::infer_status(&report);
+        if let WorkStatus::Partial { reason } = status {
+            assert_eq!(reason, "max turns reached");
+        } else {
+            panic!("expected WorkStatus::Partial, got {:?}", status);
+        }
+    }
+
+    #[test]
+    fn infer_status_stuck() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 5,
+            total_tool_calls: 10,
+            total_tool_time_ms: 1000,
+            wall_time_ms: 5000,
+            terminated_early: true,
+            termination_reason: Some("blocked by borrow checker".into()),
+            has_written: false,
+            files_read: vec![],
+            files_modified: vec![],
+            successful_writes: 0,
+            last_failed_edits: vec![],
+        };
+        let status = WorkResult::infer_status(&report);
+        if let WorkStatus::Stuck { reason } = status {
+            assert_eq!(reason, "blocked by borrow checker");
+        } else {
+            panic!("expected WorkStatus::Stuck, got {:?}", status);
+        }
+    }
+
+    #[test]
+    fn infer_status_stuck_no_write_no_termination() {
+        let report = AdapterReport {
+            agent_name: "test".into(),
+            tool_events: vec![],
+            turn_count: 5,
+            total_tool_calls: 10,
+            total_tool_time_ms: 1000,
+            wall_time_ms: 5000,
+            terminated_early: false,
+            termination_reason: None,
+            has_written: false,
+            files_read: vec![],
+            files_modified: vec![],
+            successful_writes: 0,
+            last_failed_edits: vec![],
+        };
+        let status = WorkResult::infer_status(&report);
+        if let WorkStatus::Stuck { reason } = status {
+            assert!(reason.contains("without writing any files"));
+        } else {
+            panic!("expected WorkStatus::Stuck, got {:?}", status);
+        }
+    }
+
+    #[test]
     fn verification_confidence_mapping() {
         let v = VerificationResult {
             all_green: true,

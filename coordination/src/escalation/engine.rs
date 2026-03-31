@@ -255,9 +255,12 @@ impl EscalationEngine {
                         .collect::<Vec<_>>()
                         .join(", ")
                 );
-                state.record_escalation(target, EscalationReason::FrictionDetected {
-                    description: reason.clone(),
-                });
+                state.record_escalation(
+                    target,
+                    EscalationReason::FrictionDetected {
+                        description: reason.clone(),
+                    },
+                );
                 return EscalationDecision {
                     target_tier: target,
                     escalated: true,
