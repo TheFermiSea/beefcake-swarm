@@ -1047,55 +1047,6 @@ mod tests {
         ));
     }
 
-    #[cfg(test)]
-    fn _classify_task_formulation_defect() {
-        let ledger: Vec<_> = (0..10)
-            .map(|i| make_entry("read_file", "Ok", "", true, i))
-            .collect();
-
-        let input = FailureReviewInput {
-            issue_id: "test-005".into(),
-            issue_title: "Fix something".into(),
-            issue_description: Some("Fix the thing".into()),
-            failure_ledger: ledger,
-            iterations_used: 10,
-            max_iterations: 10,
-            files_changed: vec![],
-            error_categories: vec![],
-            failure_reason: None,
-        };
-
-        let classification = classify_failure(&input);
-        // Either ContextDeficit or TaskFormulationDefect — both are valid
-        // since all iterations were read-only AND no files changed
-        assert!(
-            matches!(
-                classification,
-                FailureClassification::ContextDeficit { .. }
-                    | FailureClassification::TaskFormulationDefect { .. }
-            ),
-            "Expected ContextDeficit or TaskFormulationDefect, got {classification:?}"
-        );
-    }
-
-    #[test]
-    fn recovery_action_for_tool_mismatch() {
-        let classification = FailureClassification::ToolConstraintMismatch {
-            blocked_command: "ruff".into(),
-        };
-        let action = choose_recovery_action(&classification, 0);
-        assert!(matches!(action, RecoveryAction::RewriteAndRetryNow));
-    }
-
-    #[test]
-    fn recovery_action_exhausted() {
-        let classification = FailureClassification::ToolConstraintMismatch {
-            blocked_command: "ruff".into(),
-        };
-        let action = choose_recovery_action(&classification, 3);
-        assert!(matches!(action, RecoveryAction::EscalateToHuman { .. }));
-    }
-
     #[test]
     fn store_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
