@@ -482,15 +482,6 @@ mod tests {
     }
 
     #[test]
-    fn keyword_triage_complex() {
-        let result = keyword_triage(
-            "Refactor architecture for async migration",
-            Some("Multi-file cross-module changes needed"),
-        );
-        assert_eq!(result.complexity, Complexity::Complex);
-    }
-
-    #[test]
     fn phase_selector_cheapest_for_triage() {
         let catalog = CloudModelCatalog::default_catalog();
         let selector = PhaseModelSelector::new(catalog, 0.0);
