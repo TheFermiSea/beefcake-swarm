@@ -1384,10 +1384,9 @@ mod tests {
         assert!(ver.max_iterations.is_none());
 
         // SelectingIssue has no budget
-        assert!(config
+        assert!(!config
             .budgets
-            .get(&OrchestratorState::SelectingIssue)
-            .is_none());
+            .contains_key(&OrchestratorState::SelectingIssue));
     }
 
     #[test]

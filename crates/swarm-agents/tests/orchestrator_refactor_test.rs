@@ -138,7 +138,7 @@ fn routing_rust_errors_to_rust_coder() {
     ];
     for cat in &rust_categories {
         assert_eq!(
-            route_to_coder(&[cat.clone()]),
+            route_to_coder(std::slice::from_ref(cat)),
             CoderRoute::RustCoder,
             "{cat:?} should route to RustCoder"
         );
@@ -155,7 +155,7 @@ fn routing_general_errors_to_general_coder() {
     ];
     for cat in &general_categories {
         assert_eq!(
-            route_to_coder(&[cat.clone()]),
+            route_to_coder(std::slice::from_ref(cat)),
             CoderRoute::GeneralCoder,
             "{cat:?} should route to GeneralCoder"
         );
@@ -325,10 +325,6 @@ fn scaffold_fallback_skips_non_doc_task() {
 #[test]
 fn send_safety_assertion_compiles() {
     // This test is a documentation marker. The actual Send assertion lives
-    // in orchestrator/mod.rs and is checked at compile time. If you can run
-    // this test, process_issue_core is Send.
-    assert!(
-        true,
-        "If this test runs, the compile-time Send assertion passed"
-    );
+    // in orchestrator/mod.rs and is checked at compile time. If this file
+    // compiles, the contract holds.
 }

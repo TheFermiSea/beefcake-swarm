@@ -3241,8 +3241,13 @@ async fn process_issue_core(
                 check_test: false, // skip tests — only check compilation
                 ..verifier_config.clone()
             };
-            let scan_report =
-                run_verifier_opts(worktree_bridge.repo_root(), &post_merge_config, &language_profile, true).await;
+            let scan_report = run_verifier_opts(
+                worktree_bridge.repo_root(),
+                &post_merge_config,
+                &language_profile,
+                true,
+            )
+            .await;
 
             // Append quality metrics to trend file
             let trend_path = worktree_bridge
@@ -4208,11 +4213,8 @@ mod tests {
         session.start().unwrap();
 
         let mut iterations = Vec::new();
-        loop {
-            match session.next_iteration() {
-                Ok(i) => iterations.push(i),
-                Err(_) => break,
-            }
+        while let Ok(i) = session.next_iteration() {
+            iterations.push(i);
         }
 
         assert_eq!(iterations, vec![1, 2, 3, 4, 5, 6]);

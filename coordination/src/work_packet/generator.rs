@@ -666,7 +666,7 @@ pub async fn parse_stream(input: &str) -> Result<(), Error> {
             .output()
             .unwrap();
 
-        let gen = WorkPacketGenerator::new(wd.to_path_buf());
+        let gen = WorkPacketGenerator::new(wd);
         let branch = gen.git_branch().unwrap();
         assert_eq!(branch, "test-branch");
     }
@@ -725,7 +725,7 @@ pub async fn parse_stream(input: &str) -> Result<(), Error> {
             std::env::remove_var(k);
         }
 
-        let gen = WorkPacketGenerator::new(wd.to_path_buf());
+        let gen = WorkPacketGenerator::new(wd);
         let branch = gen.git_branch().unwrap();
 
         // Restore env vars before any assertions (so failures don't leak state).
@@ -784,7 +784,7 @@ pub async fn parse_stream(input: &str) -> Result<(), Error> {
         // Hold the env lock so this test doesn't race with other tests that
         // clear/restore CI env vars (e.g. test_git_branch_detached_head_fallback).
         let _env_guard = env_lock();
-        let gen = WorkPacketGenerator::new(wd.to_path_buf());
+        let gen = WorkPacketGenerator::new(wd);
         let branch = gen.git_branch().unwrap();
         assert_ne!(
             branch, "HEAD",

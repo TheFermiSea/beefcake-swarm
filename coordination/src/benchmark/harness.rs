@@ -396,6 +396,7 @@ fn percentile_duration(sorted: &[Duration], p: usize) -> Duration {
 mod tests {
     use super::*;
 
+    #[allow(clippy::too_many_arguments)]
     fn make_record(
         id: &str,
         first_pass: bool,
