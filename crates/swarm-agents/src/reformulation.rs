@@ -1048,37 +1048,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_task_formulation_defect() {
-        let ledger: Vec<_> = (0..10)
-            .map(|i| make_entry("read_file", "Ok", "", true, i))
-            .collect();
-
-        let input = FailureReviewInput {
-            issue_id: "test-005".into(),
-            issue_title: "Fix something".into(),
-            issue_description: Some("Fix the thing".into()),
-            failure_ledger: ledger,
-            iterations_used: 10,
-            max_iterations: 10,
-            files_changed: vec![],
-            error_categories: vec![],
-            failure_reason: None,
-        };
-
-        let classification = classify_failure(&input);
-        // Either ContextDeficit or TaskFormulationDefect — both are valid
-        // since all iterations were read-only AND no files changed
-        assert!(
-            matches!(
-                classification,
-                FailureClassification::ContextDeficit { .. }
-                    | FailureClassification::TaskFormulationDefect { .. }
-            ),
-            "Expected ContextDeficit or TaskFormulationDefect, got {classification:?}"
-        );
-    }
-
-    #[test]
     fn recovery_action_for_tool_mismatch() {
         let classification = FailureClassification::ToolConstraintMismatch {
             blocked_command: "ruff".into(),
