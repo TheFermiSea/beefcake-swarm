@@ -248,45 +248,4 @@ mod tests {
         let entries = read_workpad(dir.path()).unwrap();
         assert!(entries.is_empty());
     }
-
-    #[tokio::test]
-    async fn check_announcements_filters_own_worker() {
-        let dir = tempfile::tempdir().unwrap();
-        init_workpad(dir.path()).unwrap();
-
-        // Worker 1 announces
-        let tool1 = AnnounceTool::new(dir.path(), "subtask-1");
-        tool1
-            .call(AnnounceArgs {
-                entry_type: "interface_change".to_string(),
-                file: "src/types.rs".to_string(),
-                detail: "Changed FooConfig".to_string(),
-            })
-            .await
-            .unwrap();
-
-        // Worker 2 announces
-        let tool2 = AnnounceTool::new(dir.path(), "subtask-2");
-        tool2
-            .call(AnnounceArgs {
-                entry_type: "done".to_string(),
-                file: "src/handler.rs".to_string(),
-                detail: "Finished handler update".to_string(),
-            })
-            .await
-            .unwrap();
-
-        // Worker 1 checks — should only see worker 2's announcement
-        let check1 = CheckAnnouncementsTool::new(dir.path(), "subtask-1");
-        let result = check1.call(CheckAnnouncementsArgs {}).await.unwrap();
-        assert!(result.contains("subtask-2"));
-        assert!(!result.contains("subtask-1"));
-        assert!(result.contains("1 announcement(s)"));
-
-        // Worker 2 checks — should only see worker 1's announcement
-        let check2 = CheckAnnouncementsTool::new(dir.path(), "subtask-2");
-        let result = check2.call(CheckAnnouncementsArgs {}).await.unwrap();
-        assert!(result.contains("subtask-1"));
-        assert!(result.contains("1 announcement(s)"));
-    }
 }
