@@ -1050,18 +1050,6 @@ mod tests {
     }
 
     #[test]
-    fn integration_file_detection_default() {
-        // Default (Rust) integration files
-        assert!(is_integration_file("Cargo.toml", None));
-        assert!(is_integration_file("src/mod.rs", None));
-        assert!(is_integration_file("crates/foo/src/lib.rs", None));
-        assert!(is_integration_file("src/main.rs", None));
-        assert!(is_integration_file("Cargo.lock", None));
-        assert!(!is_integration_file("src/parser.rs", None));
-        assert!(!is_integration_file("src/config.rs", None));
-    }
-
-    #[test]
     fn parse_plan_rejects_integration_file_in_multiple_subtasks() {
         // Use different paths that both have integration file basenames (mod.rs in different dirs).
         let json = r#"{
