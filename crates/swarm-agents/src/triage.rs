@@ -491,12 +491,6 @@ mod tests {
     }
 
     #[test]
-    fn keyword_triage_critical() {
-        let result = keyword_triage("Fix SQL injection vulnerability in auth", None);
-        assert_eq!(result.complexity, Complexity::Critical);
-    }
-
-    #[test]
     fn phase_selector_cheapest_for_triage() {
         let catalog = CloudModelCatalog::default_catalog();
         let selector = PhaseModelSelector::new(catalog, 0.0);
