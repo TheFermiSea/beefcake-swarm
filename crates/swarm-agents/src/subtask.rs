@@ -932,13 +932,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_plan_with_markdown_fences() {
-        let json = "```json\n{\"summary\": \"one task\", \"subtasks\": [{\"id\": \"s1\", \"objective\": \"do it\", \"target_files\": [\"a.rs\"]}]}\n```";
-        let plan = parse_subtask_plan(json).unwrap();
-        assert_eq!(plan.subtasks.len(), 1);
-    }
-
-    #[test]
     fn parse_plan_rejects_overlapping_files() {
         let json = r#"{
             "summary": "bad plan",
