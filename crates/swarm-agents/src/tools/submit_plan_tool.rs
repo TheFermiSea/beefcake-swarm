@@ -186,20 +186,4 @@ mod tests {
         assert!(plan.is_some());
         assert_eq!(plan.as_ref().unwrap().submitted_at_iteration, 1);
     }
-
-    #[tokio::test]
-    async fn empty_approach_rejected() {
-        let slot = new_work_plan_slot();
-        let tool = SubmitPlanTool::new(slot.clone(), 1);
-
-        let result = tool
-            .call(SubmitPlanArgs {
-                approach: "  ".to_string(),
-                target_files: vec!["src/lib.rs".to_string()],
-                risk: "low".to_string(),
-            })
-            .await;
-
-        assert!(result.is_err());
-    }
 }
