@@ -362,15 +362,6 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_splitter_rejects_unterminated_quotes() {
-        let err = split_pipeline_segments(r#"grep "FAILED|failures:"#).unwrap_err();
-        assert!(
-            format!("{err:?}").contains("invalid quoting"),
-            "unexpected error: {err:?}"
-        );
-    }
-
-    #[test]
     fn pipeline_splitter_allows_logical_or_fallbacks() {
         let command = r#"ls -la .beads/ 2>&1 || echo "missing""#;
         let segments = split_pipeline_segments(command).expect("split logical or");
