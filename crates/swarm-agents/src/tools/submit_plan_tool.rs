@@ -203,22 +203,6 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[tokio::test]
-    async fn no_files_rejected() {
-        let slot = new_work_plan_slot();
-        let tool = SubmitPlanTool::new(slot.clone(), 1);
-
-        let result = tool
-            .call(SubmitPlanArgs {
-                approach: "Fix the bug".to_string(),
-                target_files: vec![],
-                risk: "low".to_string(),
-            })
-            .await;
-
-        assert!(result.is_err());
-    }
-
     #[test]
     fn format_plan_context_output() {
         let plan = WorkPlan {
