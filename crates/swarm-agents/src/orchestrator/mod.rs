@@ -524,6 +524,42 @@ async fn process_issue_core(
         Vec::new()
     };
 
+    // --- Meta-insights from past runs (Hyperagents pattern) ---
+    let meta_insights_prompt = {
+        let reflector = crate::meta_reflection::MetaReflector::new(worktree_bridge.repo_root());
+        let insights = reflector.load_recent_insights(10);
+        let mut top: Vec<_> = insights.into_iter().collect();
+        top.sort_by(|a, b| {
+            b.confidence
+                .partial_cmp(&a.confidence)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+        top.truncate(3);
+        if top.is_empty() {
+            String::new()
+        } else {
+            info!(
+                count = top.len(),
+                "Loaded meta-insights for prompt injection"
+            );
+            let lines: Vec<String> = top
+                .iter()
+                .map(|i| {
+                    format!(
+                        "- [{:.0}%] {}: {}",
+                        i.confidence * 100.0,
+                        i.insight_type_label(),
+                        i.recommendation
+                    )
+                })
+                .collect();
+            format!(
+                "\n## Swarm Meta-Insights (from past runs)\n{}\n",
+                lines.join("\n")
+            )
+        }
+    };
+
     // --- Acceptance policy ---
     let acceptance_policy = AcceptancePolicy::default();
 
@@ -1084,6 +1120,16 @@ async fn process_issue_core(
         }
     }
 
+    // Pre-identify planned target files for scope drift detection in the main loop.
+    // Uses the same heuristic as the concurrent subtask planner.
+    let planned_target_files: Option<Vec<String>> = {
+        let src_exts = language_profile
+            .as_ref()
+            .map(|p| p.source_extensions.clone())
+            .unwrap_or_default();
+        crate::file_targeting::find_target_files_by_grep(&wt_path, &issue.title, &src_exts)
+    };
+
     // --- Baseline verification (autoresearch pattern) ---
     //
     // Run a lightweight check on the clean worktree before the agent touches anything.
@@ -1481,6 +1527,11 @@ async fn process_issue_core(
             for d in &tz_directives {
                 task_prompt.push_str(&format!("- {d}\n"));
             }
+        }
+
+        // --- Meta-insights injection (Hyperagents pattern) ---
+        if !meta_insights_prompt.is_empty() {
+            task_prompt.push_str(&meta_insights_prompt);
         }
 
         // --- Cross-worker context injection (ClawTeam adoption #3) ---
@@ -2605,6 +2656,26 @@ async fn process_issue_core(
             "Verifier report"
         );
 
+        // Scope drift detection: check if worker touched files outside the plan
+        if let Some(ref tf) = planned_target_files {
+            let changed = helpers::list_changed_files(&wt_path);
+            let target_set: std::collections::HashSet<&str> =
+                tf.iter().map(|s| s.as_str()).collect();
+            let drift_files: Vec<&str> = changed
+                .iter()
+                .map(|s| s.as_str())
+                .filter(|f| !target_set.contains(f))
+                .collect();
+            if !drift_files.is_empty() {
+                warn!(
+                    iteration,
+                    drift_count = drift_files.len(),
+                    files = drift_files.join(", "),
+                    "Scope drift: worker modified files outside the planned target"
+                );
+            }
+        }
+
         // --- TZ inference-level feedback: verifier_pass per iteration ---
         // Posts verifier outcome to the most recent inference in TZ, giving
         // Thompson Sampling per-call signal (not just per-episode).
@@ -2624,6 +2695,14 @@ async fn process_issue_core(
                     inf_id,
                     "verifier_pass",
                     serde_json::Value::Bool(report.all_green),
+                    None,
+                )
+                .await;
+                crate::tensorzero::post_inference_feedback(
+                    tz_url,
+                    inf_id,
+                    "edit_accuracy",
+                    serde_json::json!(report.health_score()),
                     None,
                 )
                 .await;
