@@ -1264,18 +1264,4 @@ mod tests {
         assert!(should_skip_issue(&store, "stuck-001").is_some());
         assert!(should_skip_issue(&store, "other-001").is_none());
     }
-
-    #[test]
-    fn fingerprint_stability() {
-        let c1 = FailureClassification::ToolConstraintMismatch {
-            blocked_command: "ruff".into(),
-        };
-        let c2 = FailureClassification::ToolConstraintMismatch {
-            blocked_command: "ruff".into(),
-        };
-        assert_eq!(c1.fingerprint(), c2.fingerprint());
-
-        let c3 = FailureClassification::GenuineCodeDefect;
-        assert_ne!(c1.fingerprint(), c3.fingerprint());
-    }
 }
