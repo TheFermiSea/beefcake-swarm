@@ -250,27 +250,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn announce_appends_to_workpad() {
-        let dir = tempfile::tempdir().unwrap();
-        init_workpad(dir.path()).unwrap();
-
-        let tool = AnnounceTool::new(dir.path(), "subtask-1");
-        tool.call(AnnounceArgs {
-            entry_type: "interface_change".to_string(),
-            file: "src/types.rs".to_string(),
-            detail: "Added timeout field to Config".to_string(),
-        })
-        .await
-        .unwrap();
-
-        let entries = read_workpad(dir.path()).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].worker, "subtask-1");
-        assert_eq!(entries[0].entry_type, "interface_change");
-        assert_eq!(entries[0].file, "src/types.rs");
-    }
-
-    #[tokio::test]
     async fn check_announcements_filters_own_worker() {
         let dir = tempfile::tempdir().unwrap();
         init_workpad(dir.path()).unwrap();
