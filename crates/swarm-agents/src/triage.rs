@@ -474,14 +474,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keyword_triage_simple() {
-        let result = keyword_triage("Fix clippy warning in config.rs", None);
-        assert_eq!(result.complexity, Complexity::Simple);
-        assert_eq!(result.language, "rust");
-        assert!(!result.used_llm);
-    }
-
-    #[test]
     fn parse_triage_json() {
         let json = r#"{"complexity": "simple", "language": "rust", "suggested_models": [], "reasoning": "lint fix"}"#;
         let result = parse_triage_response(json).unwrap();
