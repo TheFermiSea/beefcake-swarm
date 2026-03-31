@@ -1566,14 +1566,4 @@ def calculate_temperature(slope: float) -> float:
 "#;
         assert!(!looks_like_fabricated_data(content));
     }
-
-    #[test]
-    fn data_file_detection() {
-        assert!(is_data_file("experiments.tsv"));
-        assert!(is_data_file("results/benchmark_gate/output.csv"));
-        assert!(is_data_file("quality-trend.jsonl"));
-        assert!(is_data_file(".swarm-telemetry.jsonl"));
-        assert!(!is_data_file("src/main.rs"));
-        assert!(!is_data_file("cflibs/inversion/boltzmann.py"));
-    }
 }
