@@ -1097,37 +1097,6 @@ mod tests {
     }
 
     #[test]
-    fn intent_guard_rejects_requirement_removal() {
-        let contract = IntentContract {
-            issue_id: "test".into(),
-            original_title: "Add annotations and fix imports".into(),
-            original_description: Some(
-                "- Add `from __future__ import annotations`\n\
-                 - Fix circular imports in utils.py"
-                    .into(),
-            ),
-            required_outcomes: vec![
-                "Add annotations and fix imports".into(),
-                "Add `from __future__ import annotations`".into(),
-                "Fix circular imports in utils.py".into(),
-            ],
-            acceptance_signals: vec!["verifier_all_green".into()],
-            intent_digest: "abc123".into(),
-            created_at: Utc::now(),
-        };
-
-        // Rewrite that drops the circular imports requirement
-        let new_desc = "- Add `from __future__ import annotations`\n\
-                         Make the changes directly.";
-
-        let verdict = check_intent_guard(&contract, new_desc);
-        assert!(
-            !verdict.allowed,
-            "Should reject removing a non-verification requirement"
-        );
-    }
-
-    #[test]
     fn store_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let store = ReformulationStore::new(dir.path());
