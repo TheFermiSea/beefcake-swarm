@@ -1048,7 +1048,7 @@ mod tests {
     }
 
     #[cfg(test)]
-    fn classify_task_formulation_defect() {
+    fn _classify_task_formulation_defect() {
         let ledger: Vec<_> = (0..10)
             .map(|i| make_entry("read_file", "Ok", "", true, i))
             .collect();
