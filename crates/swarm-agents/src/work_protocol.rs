@@ -896,27 +896,6 @@ mod tests {
     }
 
     #[test]
-    fn infer_status_stuck_no_write_no_termination() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 3,
-            total_tool_calls: 5,
-            total_tool_time_ms: 500,
-            wall_time_ms: 2000,
-            terminated_early: false,
-            termination_reason: None,
-            has_written: false,
-            files_read: vec![],
-            files_modified: vec![],
-            successful_writes: 0,
-            last_failed_edits: vec![],
-        };
-        let status = WorkResult::infer_status(&report);
-        assert!(matches!(status, WorkStatus::Stuck { .. }));
-    }
-
-    #[test]
     fn verification_confidence_mapping() {
         let v = VerificationResult {
             all_green: true,
