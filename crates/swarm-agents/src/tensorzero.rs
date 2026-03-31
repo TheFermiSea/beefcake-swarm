@@ -350,7 +350,11 @@ WHERE created_at > to_timestamp($1)
         Ok(row) => {
             let input: i64 = row.get(0);
             let output: i64 = row.get(1);
-            info!(input_tokens = input, output_tokens = output, "TZ session token usage");
+            info!(
+                input_tokens = input,
+                output_tokens = output,
+                "TZ session token usage"
+            );
             (input.max(0) as u64, output.max(0) as u64)
         }
         Err(e) => {
