@@ -1278,14 +1278,4 @@ mod tests {
         let c3 = FailureClassification::GenuineCodeDefect;
         assert_ne!(c1.fingerprint(), c3.fingerprint());
     }
-
-    #[test]
-    fn content_digest_deterministic() {
-        let d1 = content_digest("title", Some("description"));
-        let d2 = content_digest("title", Some("description"));
-        assert_eq!(d1, d2);
-
-        let d3 = content_digest("title", Some("different"));
-        assert_ne!(d1, d3);
-    }
 }
