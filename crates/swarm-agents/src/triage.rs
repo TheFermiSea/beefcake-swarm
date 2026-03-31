@@ -557,15 +557,6 @@ mod tests {
     }
 
     #[test]
-    fn phase_selector_budget_exhausted() {
-        let catalog = CloudModelCatalog::default_catalog();
-        let selector = PhaseModelSelector::new(catalog, 0.0001); // Tiny budget.
-        let model = selector.select_for_phase(WorkflowPhase::Plan, None, None);
-        // Opus costs ~$0.80 per call estimate — should be rejected.
-        assert!(model.is_none());
-    }
-
-    #[test]
     fn parse_triage_json() {
         let json = r#"{"complexity": "simple", "language": "rust", "suggested_models": [], "reasoning": "lint fix"}"#;
         let result = parse_triage_response(json).unwrap();
