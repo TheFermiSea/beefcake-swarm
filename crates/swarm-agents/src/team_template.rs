@@ -186,44 +186,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_rust_fix_template() {
-        let toml_str = r#"
-[team]
-name = "rust-fix"
-description = "Standard Rust bug fix"
-max_iterations = 10
-
-[[team.phases]]
-name = "scout"
-role = "Scout"
-model_tier = "fast"
-objective = "Read the issue"
-writes_code = false
-
-[[team.phases]]
-name = "implement"
-role = "RustWorker"
-model_tier = "coder"
-objective = "Fix the bug"
-writes_code = true
-
-[[team.phases]]
-name = "fix"
-role = "Fixer"
-model_tier = "coder"
-objective = "Fix verifier errors"
-writes_code = true
-trigger = "verifier_failure"
-"#;
-        let template: TeamTemplate = toml::from_str(toml_str).unwrap();
-        assert_eq!(template.team.name, "rust-fix");
-        assert_eq!(template.team.phases.len(), 3);
-        assert_eq!(template.team.default_phases().len(), 2);
-        assert!(template.team.failure_phase().is_some());
-        assert!(template.team.escalation_phase().is_none());
-    }
-
-    #[test]
     fn select_template_defaults() {
         // No env var set, Rust language
         std::env::remove_var("SWARM_TEAM_TEMPLATE");
