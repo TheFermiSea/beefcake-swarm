@@ -136,10 +136,12 @@ pub fn try_scaffold_fallback(
          > Auto-generated scaffold by swarm orchestrator.\n\
          > Issue: `{id}` | Generated at iteration {iter}\n\n\
          ## Overview\n\n\
-         <!-- Purpose and scope of the issue being tracked in the swarm orchestrator -->\n\n\
+         <!-- Purpose and scope of the issue being tracked in the swarm orchestrator -->
+
+         Add a brief description of what this issue is about and its scope. What problem does it solve? What are the boundaries of this work?\n\n\
          ## Details\n\n\
          <!-- Implementation details and technical context for the tracked issue -->\n\n\
-        ## Open Questions\n\n\n
+        ## Open Questions\n\n\n         <!-- Questions that need answers before implementation can proceed -->\n\n         - What are the key requirements and constraints?\n\n         - What are the potential edge cases or failure modes?\n\n         - What alternatives were considered and why were they rejected?\n\n         - Who are the stakeholders and what are their concerns?\n\n         \n\n\n         
          ",
         title = issue_title,
         id = issue_id,

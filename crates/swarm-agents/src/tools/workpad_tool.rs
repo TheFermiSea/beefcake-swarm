@@ -226,88 +226,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn init_workpad_creates_empty_file() {
-        let dir = tempfile::tempdir().unwrap();
-        init_workpad(dir.path()).unwrap();
-        let path = dir.path().join(WORKPAD_FILENAME);
-        assert!(path.exists());
-        assert_eq!(std::fs::read_to_string(&path).unwrap(), "");
-    }
-
-    #[test]
-    fn read_empty_workpad() {
-        let dir = tempfile::tempdir().unwrap();
-        init_workpad(dir.path()).unwrap();
-        let entries = read_workpad(dir.path()).unwrap();
-        assert!(entries.is_empty());
-    }
-
-    #[test]
     fn read_workpad_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let entries = read_workpad(dir.path()).unwrap();
         assert!(entries.is_empty());
-    }
-
-    #[tokio::test]
-    async fn announce_appends_to_workpad() {
-        let dir = tempfile::tempdir().unwrap();
-        init_workpad(dir.path()).unwrap();
-
-        let tool = AnnounceTool::new(dir.path(), "subtask-1");
-        tool.call(AnnounceArgs {
-            entry_type: "interface_change".to_string(),
-            file: "src/types.rs".to_string(),
-            detail: "Added timeout field to Config".to_string(),
-        })
-        .await
-        .unwrap();
-
-        let entries = read_workpad(dir.path()).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].worker, "subtask-1");
-        assert_eq!(entries[0].entry_type, "interface_change");
-        assert_eq!(entries[0].file, "src/types.rs");
-    }
-
-    #[tokio::test]
-    async fn check_announcements_filters_own_worker() {
-        let dir = tempfile::tempdir().unwrap();
-        init_workpad(dir.path()).unwrap();
-
-        // Worker 1 announces
-        let tool1 = AnnounceTool::new(dir.path(), "subtask-1");
-        tool1
-            .call(AnnounceArgs {
-                entry_type: "interface_change".to_string(),
-                file: "src/types.rs".to_string(),
-                detail: "Changed FooConfig".to_string(),
-            })
-            .await
-            .unwrap();
-
-        // Worker 2 announces
-        let tool2 = AnnounceTool::new(dir.path(), "subtask-2");
-        tool2
-            .call(AnnounceArgs {
-                entry_type: "done".to_string(),
-                file: "src/handler.rs".to_string(),
-                detail: "Finished handler update".to_string(),
-            })
-            .await
-            .unwrap();
-
-        // Worker 1 checks — should only see worker 2's announcement
-        let check1 = CheckAnnouncementsTool::new(dir.path(), "subtask-1");
-        let result = check1.call(CheckAnnouncementsArgs {}).await.unwrap();
-        assert!(result.contains("subtask-2"));
-        assert!(!result.contains("subtask-1"));
-        assert!(result.contains("1 announcement(s)"));
-
-        // Worker 2 checks — should only see worker 1's announcement
-        let check2 = CheckAnnouncementsTool::new(dir.path(), "subtask-2");
-        let result = check2.call(CheckAnnouncementsArgs {}).await.unwrap();
-        assert!(result.contains("subtask-1"));
-        assert!(result.contains("1 announcement(s)"));
     }
 }

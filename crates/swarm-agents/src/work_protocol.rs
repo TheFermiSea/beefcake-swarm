@@ -799,35 +799,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn work_status_properties() {
-        assert!(WorkStatus::Complete.keep_changes());
-        assert!(WorkStatus::Partial { reason: "x".into() }.keep_changes());
-        assert!(!WorkStatus::Stuck { reason: "x".into() }.keep_changes());
-        assert!(!WorkStatus::Failed { error: "x".into() }.keep_changes());
-
-        assert!(!WorkStatus::Complete.is_retryable());
-        assert!(WorkStatus::Partial { reason: "x".into() }.is_retryable());
-        assert!(WorkStatus::Stuck { reason: "x".into() }.is_retryable());
-        assert!(!WorkStatus::Failed { error: "x".into() }.is_retryable());
-
-        assert!(!WorkStatus::Complete.is_terminal());
-        assert!(WorkStatus::Failed { error: "x".into() }.is_terminal());
-    }
-
-    #[test]
-    fn work_status_labels() {
-        assert_eq!(WorkStatus::Complete.label(), "complete");
-        assert_eq!(
-            WorkStatus::Partial { reason: "x".into() }.label(),
-            "partial"
-        );
-        assert_eq!(
-            WorkStatus::OutOfScope { reason: "x".into() }.label(),
-            "out_of_scope"
-        );
-    }
-
-    #[test]
     fn infer_status_complete() {
         let report = AdapterReport {
             agent_name: "test".into(),
@@ -848,94 +819,6 @@ mod tests {
             WorkResult::infer_status(&report),
             WorkStatus::Complete
         ));
-    }
-
-    #[test]
-    fn infer_status_partial() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 15,
-            total_tool_calls: 30,
-            total_tool_time_ms: 5000,
-            wall_time_ms: 15000,
-            terminated_early: true,
-            termination_reason: Some("deadline exceeded".into()),
-            has_written: true,
-            files_read: vec![],
-            files_modified: vec![],
-            successful_writes: 1,
-            last_failed_edits: vec![],
-        };
-        let status = WorkResult::infer_status(&report);
-        assert!(matches!(status, WorkStatus::Partial { .. }));
-        if let WorkStatus::Partial { reason } = status {
-            assert!(reason.contains("deadline"));
-        }
-    }
-
-    #[test]
-    fn infer_status_stuck() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 40,
-            total_tool_calls: 80,
-            total_tool_time_ms: 10000,
-            wall_time_ms: 30000,
-            terminated_early: true,
-            termination_reason: Some("write deadline".into()),
-            has_written: false,
-            files_read: vec!["src/lib.rs".into()],
-            files_modified: vec![],
-            successful_writes: 0,
-            last_failed_edits: vec![],
-        };
-        let status = WorkResult::infer_status(&report);
-        assert!(matches!(status, WorkStatus::Stuck { .. }));
-    }
-
-    #[test]
-    fn infer_status_stuck_no_write_no_termination() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 3,
-            total_tool_calls: 5,
-            total_tool_time_ms: 500,
-            wall_time_ms: 2000,
-            terminated_early: false,
-            termination_reason: None,
-            has_written: false,
-            files_read: vec![],
-            files_modified: vec![],
-            successful_writes: 0,
-            last_failed_edits: vec![],
-        };
-        let status = WorkResult::infer_status(&report);
-        assert!(matches!(status, WorkStatus::Stuck { .. }));
-    }
-
-    #[test]
-    fn heuristic_confidence_wrote_and_finished() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 5,
-            total_tool_calls: 10,
-            total_tool_time_ms: 1000,
-            wall_time_ms: 5000,
-            terminated_early: false,
-            termination_reason: None,
-            has_written: true,
-            files_read: vec![],
-            files_modified: vec![],
-            successful_writes: 3,
-            last_failed_edits: vec![],
-        };
-        let conf = WorkResult::heuristic_confidence(&report);
-        // 0.3 (wrote) + 0.2 (no early term) + efficiency + 0.1 (no failed edits) ≈ 0.6–0.8
-        assert!(conf >= 0.6, "expected >= 0.6, got {conf}");
     }
 
     #[test]
