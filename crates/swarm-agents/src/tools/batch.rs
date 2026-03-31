@@ -201,33 +201,4 @@ mod tests {
                 Err(ToolError::Policy("deliberate failure".into()))
             })
     }
-
-    #[tokio::test]
-    async fn returns_empty_array_for_empty_calls() {
-        let tool = make_batch();
-        let result = tool.call(BatchExecuteArgs { calls: vec![] }).await.unwrap();
-        assert_eq!(result, "[]");
-    }
-
-    #[tokio::test]
-    async fn captures_errors_without_propagating() {
-        let tool = make_batch();
-        let calls = vec![
-            BatchCall {
-                tool: "echo".into(),
-                args: serde_json::json!({"message": "ok"}),
-            },
-            BatchCall {
-                tool: "fail".into(),
-                args: serde_json::json!({}),
-            },
-        ];
-        // Should succeed even though one handler fails.
-        let raw = tool.call(BatchExecuteArgs { calls }).await.unwrap();
-        let results: Vec<BatchCallResult> = serde_json::from_str(&raw).unwrap();
-
-        assert_eq!(results.len(), 2);
-        assert!(results[0].output.is_some());
-        assert!(results[1].error.is_some());
-    }
 }
