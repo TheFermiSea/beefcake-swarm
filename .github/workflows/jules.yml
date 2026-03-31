@@ -1,0 +1,94 @@
+# Jules AI agent — triggered by issues labeled "jules" or manually.
+#
+# Jules (Gemini 3 Pro) handles simple fixes autonomously and creates PRs.
+# Free with Google AI Pro plan. Runs on Google Cloud VMs.
+#
+# A/B testing: the local swarm (beefcake-swarm) also picks up issues via
+# `bd ready`. When both Jules and the swarm work the same issue, we get
+# a natural comparison of cloud (Gemini) vs local (Qwen/Devstral/GLM)
+# resolution quality.
+#
+# Security: only issues from allowlisted users trigger Jules.
+# Jules PRs still require CI to pass (ci.yml) before merge.
+
+name: Jules Agent
+
+on:
+  issues:
+    types: [labeled]
+  workflow_dispatch:
+    inputs:
+      prompt:
+        description: "Task for Jules to perform"
+        required: true
+        type: string
+      branch:
+        description: "Starting branch"
+        required: false
+        default: "main"
+        type: string
+
+jobs:
+  # ── Issue-triggered: respond to "jules" label ──────────────────────────
+  fix-issue:
+    if: >
+      github.event_name == 'issues' &&
+      github.event.label.name == 'jules' &&
+      contains(fromJSON('["briansquires", "TheFermiSea"]'), github.event.issue.user.login)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: read
+    steps:
+      - uses: google-labs-code/jules-action@v1.0.0
+        with:
+          prompt: |
+            Fix the following GitHub issue for the beefcake-swarm project.
+
+            ## Issue #${{ github.event.issue.number }}: ${{ github.event.issue.title }}
+
+            ${{ github.event.issue.body }}
+
+            ## Instructions
+
+            This is a Rust workspace with two main crates:
+            - `coordination/` — deterministic logic layer (verifier, escalation, router)
+            - `crates/swarm-agents/` — orchestrator with Rig-based LLM agents
+
+            Quality gates (all must pass):
+            1. `cargo fmt --all -- --check`
+            2. `cargo clippy --workspace -- -D warnings`
+            3. `cargo check --workspace`
+            4. `cargo test -p coordination` (if you changed coordination/)
+            5. `cargo test -p swarm-agents` (if you changed swarm-agents/)
+
+            Rules:
+            - Make minimal changes — fix the issue, nothing more
+            - Do not add comments explaining what the code does
+            - Do not refactor surrounding code
+            - Run the quality gates before creating the PR
+            - Reference the issue number in your PR title
+          jules_api_key: ${{ secrets.JULES_API_KEY }}
+
+  # ── Manual dispatch: ad-hoc tasks ──────────────────────────────────────
+  manual-task:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: google-labs-code/jules-action@v1.0.0
+        with:
+          prompt: |
+            ${{ inputs.prompt }}
+
+            ## Context
+
+            This is a Rust workspace (beefcake-swarm) with:
+            - `coordination/` — deterministic logic (verifier, escalation, router)
+            - `crates/swarm-agents/` — orchestrator with LLM agents
+
+            Quality gates: cargo fmt, clippy -D warnings, cargo check, cargo test.
+            Make minimal changes. Run quality gates before creating the PR.
+          starting_branch: ${{ inputs.branch }}
+          jules_api_key: ${{ secrets.JULES_API_KEY }}
