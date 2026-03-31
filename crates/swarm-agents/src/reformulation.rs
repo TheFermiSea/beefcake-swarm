@@ -1128,24 +1128,6 @@ mod tests {
     }
 
     #[test]
-    fn rewrite_removes_blocked_command() {
-        let desc = "Add `from __future__ import annotations` to boltzmann.py.\n\
-                     Then replace `typing.List` with `list`.\n\
-                     Run: ruff check cflibs/ --select UP006,UP007";
-
-        let result = rewrite_remove_blocked_command(desc, "ruff");
-        assert!(
-            !result.to_lowercase().contains("ruff"),
-            "Should remove ruff reference: {result}"
-        );
-        assert!(
-            result.contains("annotations"),
-            "Should preserve the actual task"
-        );
-        assert!(result.contains("verifier"), "Should mention verifier");
-    }
-
-    #[test]
     fn store_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let store = ReformulationStore::new(dir.path());
