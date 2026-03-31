@@ -1,0 +1,57 @@
+# Jules batch dispatch — creates GitHub Issues from beads backlog daily.
+#
+# Runs at 07:00 UTC (after the 06:00 training cron, before peak hours).
+# Creates up to 30 issues/day labeled "jules", each triggering the
+# jules.yml workflow for autonomous resolution.
+#
+# With 100 daily Jules sessions and ~30 dispatched issues, there's
+# headroom for retries and manual dispatches.
+
+name: Jules Batch Dispatch
+
+on:
+  schedule:
+    - cron: "0 7 * * *"
+  workflow_dispatch:
+    inputs:
+      max_issues:
+        description: "Maximum issues to dispatch"
+        required: false
+        default: "30"
+        type: string
+      pattern:
+        description: "Grep pattern for issue selection"
+        required: false
+        default: "Unused function|TODO:|Large file:"
+        type: string
+      dry_run:
+        description: "Preview without creating issues"
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install beads CLI
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+
+      - name: Dispatch issues to Jules
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          MAX="${{ inputs.max_issues || '30' }}"
+          PATTERN="${{ inputs.pattern || 'Unused function|TODO:|Large file:' }}"
+          DRY_FLAG=""
+          if [[ "${{ inputs.dry_run }}" == "true" ]]; then
+            DRY_FLAG="--dry-run"
+          fi
+          bash scripts/dispatch-jules.sh --max "$MAX" --pattern "$PATTERN" $DRY_FLAG
