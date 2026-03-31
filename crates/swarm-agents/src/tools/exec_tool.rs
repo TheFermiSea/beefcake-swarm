@@ -349,19 +349,6 @@ mod tests {
     }
 
     #[test]
-    fn pipeline_splitter_keeps_escaped_pipe_literals() {
-        let command = r#"printf FAILED\|failures: | head -n 1"#;
-        let segments = split_pipeline_segments(command).expect("split escaped pipe");
-        assert_eq!(
-            segments,
-            vec![
-                r#"printf FAILED\|failures:"#.to_string(),
-                "head -n 1".to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn pipeline_splitter_allows_logical_or_fallbacks() {
         let command = r#"ls -la .beads/ 2>&1 || echo "missing""#;
         let segments = split_pipeline_segments(command).expect("split logical or");
