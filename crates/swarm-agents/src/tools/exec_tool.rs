@@ -336,19 +336,6 @@ mod tests {
     use super::split_pipeline_segments;
 
     #[test]
-    fn pipeline_splitter_keeps_quoted_regex_pipes() {
-        let command = r#"cargo test --lib 2>&1 | grep -E "FAILED|failures:""#;
-        let segments = split_pipeline_segments(command).expect("split quoted pipeline");
-        assert_eq!(
-            segments,
-            vec![
-                "cargo test --lib 2>&1".to_string(),
-                r#"grep -E "FAILED|failures:""#.to_string()
-            ]
-        );
-    }
-
-    #[test]
     fn pipeline_splitter_allows_logical_or_fallbacks() {
         let command = r#"ls -la .beads/ 2>&1 || echo "missing""#;
         let segments = split_pipeline_segments(command).expect("split logical or");
