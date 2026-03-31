@@ -46,7 +46,7 @@ pub struct TeamConfig {
     pub phases: Vec<PhaseConfig>,
 }
 
-fn default_max_iterations() -> u32 {
+pub fn default_max_iterations() -> u32 {
     10
 }
 
