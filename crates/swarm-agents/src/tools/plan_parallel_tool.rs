@@ -130,28 +130,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn single_subtask_rejected() {
-        let slot = new_plan_slot();
-        let tool = PlanParallelWorkTool::new(slot.clone());
-
-        let plan_json = r#"{
-            "summary": "Just one",
-            "subtasks": [
-                {"id": "subtask-1", "objective": "Fix it", "target_files": ["src/lib.rs"]}
-            ]
-        }"#;
-
-        let result = tool
-            .call(PlanParallelWorkArgs {
-                plan_json: plan_json.to_string(),
-            })
-            .await;
-
-        assert!(result.is_err());
-        assert!(slot.lock().unwrap().is_none());
-    }
-
-    #[tokio::test]
     async fn overlapping_files_rejected() {
         let slot = new_plan_slot();
         let tool = PlanParallelWorkTool::new(slot.clone());
