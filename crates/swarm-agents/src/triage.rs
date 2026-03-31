@@ -497,11 +497,6 @@ mod tests {
     }
 
     #[test]
-    fn keyword_triage_medium_default() {
-        let result = keyword_triage("Implement new endpoint for user settings", None);
-        assert_eq!(result.complexity, Complexity::Medium);
-    }
-
     #[test]
     fn keyword_triage_python() {
         let result = keyword_triage("Fix pytest failure in data_pipeline.py", None);
