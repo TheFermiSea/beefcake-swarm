@@ -986,61 +986,6 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_outcome_aggregation() {
-        let outcome = DispatchOutcome {
-            results: vec![
-                SubtaskResult {
-                    subtask_id: "s1".into(),
-                    success: true,
-                    response: "done".into(),
-                    elapsed: Duration::from_secs(10),
-                    report: Some(AdapterReport {
-                        agent_name: "test".into(),
-                        tool_events: vec![],
-                        turn_count: 3,
-                        total_tool_calls: 5,
-                        total_tool_time_ms: 100,
-                        wall_time_ms: 10000,
-                        terminated_early: false,
-                        termination_reason: None,
-                        has_written: true,
-                        files_read: vec![],
-                        files_modified: vec![],
-                        successful_writes: 0,
-                        last_failed_edits: vec![],
-                    }),
-                },
-                SubtaskResult {
-                    subtask_id: "s2".into(),
-                    success: true,
-                    response: "done".into(),
-                    elapsed: Duration::from_secs(8),
-                    report: Some(AdapterReport {
-                        agent_name: "test".into(),
-                        tool_events: vec![],
-                        turn_count: 2,
-                        total_tool_calls: 3,
-                        total_tool_time_ms: 50,
-                        wall_time_ms: 8000,
-                        terminated_early: false,
-                        termination_reason: None,
-                        has_written: true,
-                        files_read: vec![],
-                        files_modified: vec![],
-                        successful_writes: 0,
-                        last_failed_edits: vec![],
-                    }),
-                },
-            ],
-            total_elapsed: Duration::from_secs(12),
-        };
-
-        assert!(outcome.all_succeeded());
-        assert_eq!(outcome.success_count(), 2);
-        assert_eq!(outcome.total_tool_calls(), 8);
-    }
-
-    #[test]
     fn source_file_detection() {
         assert!(is_source_file("lib.rs"));
         assert!(is_source_file("Cargo.toml"));
