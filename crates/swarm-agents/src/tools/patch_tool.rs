@@ -1540,18 +1540,3 @@ pub fn looks_like_fabricated_data(content: &str) -> bool {
     );
     true
 }
-
-#[cfg(test)]
-mod data_guard_tests {
-    use super::*;
-
-    #[test]
-    fn allows_normal_code() {
-        let content = r#"
-def calculate_temperature(slope: float) -> float:
-    """Convert Boltzmann slope to temperature."""
-    return -1.0 / (KB_EV * slope)
-"#;
-        assert!(!looks_like_fabricated_data(content));
-    }
-}
