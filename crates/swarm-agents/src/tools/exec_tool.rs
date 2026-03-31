@@ -368,4 +368,17 @@ mod tests {
             "expected error for unterminated quote, got: {result:?}"
         );
     }
+
+    #[test]
+    fn pipeline_splitter_keeps_quoted_regex_pipes() {
+        // A pipe inside a quoted argument must NOT be treated as a pipeline
+        // separator — it is part of the regex/argument literal.
+        let command = r#"rg "foo|bar" src/"#;
+        let segments = split_pipeline_segments(command).expect("split quoted pipe");
+        assert_eq!(
+            segments,
+            vec![r#"rg "foo|bar" src/"#.to_string()],
+            "quoted pipe should not split the pipeline"
+        );
+    }
 }
