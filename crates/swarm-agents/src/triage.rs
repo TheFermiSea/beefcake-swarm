@@ -140,6 +140,9 @@ impl PhaseModelSelector {
 
     /// Select the best cloud model for a given workflow phase.
     ///
+    /// Each phase's model selection logic is handled directly here using
+    /// cost and capability matching from the catalog.
+    ///
     /// Returns `None` when no cloud model is available (budget exhausted,
     /// no models with the capability, etc.) — caller should fall back to local.
     pub fn select_for_phase(
