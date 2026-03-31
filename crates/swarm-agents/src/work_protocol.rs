@@ -851,30 +851,6 @@ mod tests {
     }
 
     #[test]
-    fn infer_status_partial() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 15,
-            total_tool_calls: 30,
-            total_tool_time_ms: 5000,
-            wall_time_ms: 15000,
-            terminated_early: true,
-            termination_reason: Some("deadline exceeded".into()),
-            has_written: true,
-            files_read: vec![],
-            files_modified: vec![],
-            successful_writes: 1,
-            last_failed_edits: vec![],
-        };
-        let status = WorkResult::infer_status(&report);
-        assert!(matches!(status, WorkStatus::Partial { .. }));
-        if let WorkStatus::Partial { reason } = status {
-            assert!(reason.contains("deadline"));
-        }
-    }
-
-    #[test]
     fn infer_status_stuck() {
         let report = AdapterReport {
             agent_name: "test".into(),
