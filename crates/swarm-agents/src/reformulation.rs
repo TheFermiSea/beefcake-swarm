@@ -1126,10 +1126,7 @@ mod tests {
             "Should reject removing a non-verification requirement"
         );
     }
-}
 
-#[test]
-fn store_roundtrip() {
     #[test]
     fn store_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
