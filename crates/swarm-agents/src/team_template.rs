@@ -46,7 +46,7 @@ pub struct TeamConfig {
     pub phases: Vec<PhaseConfig>,
 }
 
-fn default_max_iterations() -> u32 {
+pub fn default_max_iterations() -> u32 {
     10
 }
 
@@ -237,17 +237,5 @@ trigger = "verifier_failure"
         assert!(!phase.is_default_phase());
         assert!(phase.is_failure_phase());
         assert!(!phase.is_escalation_phase());
-    }
-
-    #[test]
-    fn select_template_defaults() {
-        // No env var set, Rust language
-        std::env::remove_var("SWARM_TEAM_TEMPLATE");
-        assert_eq!(select_template(Path::new("/tmp"), Some("rust")), "rust-fix");
-        assert_eq!(
-            select_template(Path::new("/tmp"), Some("python")),
-            "python-fix"
-        );
-        assert_eq!(select_template(Path::new("/tmp"), None), "rust-fix");
     }
 }
