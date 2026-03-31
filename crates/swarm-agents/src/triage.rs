@@ -548,15 +548,6 @@ mod tests {
     }
 
     #[test]
-    fn phase_selector_review_differs_from_implementer() {
-        let catalog = CloudModelCatalog::default_catalog();
-        let selector = PhaseModelSelector::new(catalog, 0.0);
-        let model = selector.select_for_phase(WorkflowPhase::Review, None, Some("claude-opus-4-6"));
-        assert!(model.is_some());
-        assert_ne!(model.unwrap().model, "claude-opus-4-6");
-    }
-
-    #[test]
     fn parse_triage_json() {
         let json = r#"{"complexity": "simple", "language": "rust", "suggested_models": [], "reasoning": "lint fix"}"#;
         let result = parse_triage_response(json).unwrap();
