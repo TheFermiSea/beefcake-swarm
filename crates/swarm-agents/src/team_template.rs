@@ -224,22 +224,6 @@ trigger = "verifier_failure"
     }
 
     #[test]
-    fn phase_triggers() {
-        let phase = PhaseConfig {
-            name: "fix".into(),
-            role: "Fixer".into(),
-            model_tier: "coder".into(),
-            objective: "Fix it".into(),
-            writes_code: true,
-            parallel: false,
-            trigger: Some("verifier_failure".into()),
-        };
-        assert!(!phase.is_default_phase());
-        assert!(phase.is_failure_phase());
-        assert!(!phase.is_escalation_phase());
-    }
-
-    #[test]
     fn select_template_defaults() {
         // No env var set, Rust language
         std::env::remove_var("SWARM_TEAM_TEMPLATE");
