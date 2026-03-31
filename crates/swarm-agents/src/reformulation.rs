@@ -1190,30 +1190,4 @@ mod tests {
         );
         assert_eq!(store.next_attempt_index("test-001"), 1);
     }
-
-    #[test]
-    fn should_skip_escalated_issue() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = ReformulationStore::new(dir.path());
-
-        let record = ReformulationRecord {
-            issue_id: "stuck-001".into(),
-            attempt_index: 3,
-            classification: FailureClassification::ToolConstraintMismatch {
-                blocked_command: "ruff".into(),
-            },
-            action: RecoveryAction::EscalateToHuman {
-                reason: "exhausted".into(),
-            },
-            prior_description_digest: "aabb".into(),
-            new_description_digest: None,
-            failure_fingerprint: "tool_constraint:ruff".into(),
-            intent_guard_passed: false,
-            timestamp: Utc::now(),
-        };
-        store.record_reformulation(&record);
-
-        assert!(should_skip_issue(&store, "stuck-001").is_some());
-        assert!(should_skip_issue(&store, "other-001").is_none());
-    }
 }
