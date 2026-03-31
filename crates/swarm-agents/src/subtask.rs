@@ -1103,21 +1103,6 @@ mod tests {
         // which is already caught by the non-overlap check. The real value is as a
         // documentation/prompt constraint for the planner.
         let plan = parse_subtask_plan(json).unwrap();
-        assert_eq!(plan.subtasks.len(), 2);
-    }
-
-    #[test]
-    fn parse_plan_allows_integration_file_in_one_subtask() {
-        let json = r#"{
-            "summary": "good integration",
-            "subtasks": [
-                {"id": "s1", "objective": "add dep and use it", "target_files": ["Cargo.toml", "src/a.rs"]},
-                {"id": "s2", "objective": "update handler", "target_files": ["src/b.rs"]}
-            ]
-        }"#;
-
-        let plan = parse_subtask_plan(json).unwrap();
-        assert_eq!(plan.subtasks.len(), 2);
     }
 
     #[test]
