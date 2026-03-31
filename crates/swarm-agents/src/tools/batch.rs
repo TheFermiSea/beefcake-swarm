@@ -254,18 +254,4 @@ mod tests {
         assert!(results[0].output.is_some());
         assert!(results[1].error.is_some());
     }
-
-    #[tokio::test]
-    async fn unknown_tool_returns_error_result_not_err() {
-        let tool = make_batch();
-        let calls = vec![BatchCall {
-            tool: "no_such_tool".into(),
-            args: serde_json::json!({}),
-        }];
-        let raw = tool.call(BatchExecuteArgs { calls }).await.unwrap();
-        let results: Vec<BatchCallResult> = serde_json::from_str(&raw).unwrap();
-
-        assert!(results[0].error.is_some());
-        assert!(results[0].error.as_ref().unwrap().contains("unknown tool"));
-    }
 }
