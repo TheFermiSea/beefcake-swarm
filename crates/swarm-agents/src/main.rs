@@ -114,7 +114,7 @@ async fn main() -> Result<()> {
             .unwrap_or_else(|| std::env::current_dir().expect("current dir"));
         let runner =
             swarm_agents::autopilot::AutopilotRunner::new(&repo_root).with_window_size(*window);
-        let report = runner.run().await;
+        let report = runner.run().await?;
         println!("{}", report.operator_summary());
         return Ok(());
     }
