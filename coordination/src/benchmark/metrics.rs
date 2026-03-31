@@ -245,6 +245,16 @@ impl BenchmarkMetrics {
 
         report
     }
+
+    /// Check if all targets are met
+    pub fn meets_targets(&self) -> bool {
+        self.first_attempt_rate >= 65.0
+            && self.overall_success_rate >= 85.0
+            && self.easy_success_rate >= 95.0
+            && self.hard_success_rate >= 75.0
+            && self.average_iterations <= 2.5
+    }
+
     /// Get metrics as JSON
     pub fn to_json(&self) -> Result<String, serde_json::Error> {
         serde_json::to_string_pretty(self)

@@ -1,0 +1,26 @@
+<<<<<<< SEARCH
+    /// Record cost spent, reducing the remaining budget.
+    ///
+    /// Uses an atomic compare-exchange loop so concurrent callers don't race.
+    pub fn record_cost(&self, cost_usd: f64) {
+        let _ = self
+            .cost_budget_bits
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |bits| {
+                if bits == u64::MAX {
+                    None // Unlimited — nothing to update.
+                } else {
+                    let remaining = f64::from_bits(bits);
+                    Some((remaining - cost_usd).max(0.0).to_bits())
+                }
+            });
+    }
+
+    /// Check if any budget remains (or if budgeting is disabled).
+    pub fn has_budget(&self) -> bool {
+        let bits = self.cost_budget_bits.load(Ordering::Relaxed);
+        bits == u64::MAX || f64::from_bits(bits) > 0.0
+    }
+}
+=======
+}
+>>>>>>> REPLACE
