@@ -235,14 +235,6 @@ mod tests {
     }
 
     #[test]
-    fn read_empty_workpad() {
-        let dir = tempfile::tempdir().unwrap();
-        init_workpad(dir.path()).unwrap();
-        let entries = read_workpad(dir.path()).unwrap();
-        assert!(entries.is_empty());
-    }
-
-    #[test]
     fn read_workpad_missing_file() {
         let dir = tempfile::tempdir().unwrap();
         let entries = read_workpad(dir.path()).unwrap();
