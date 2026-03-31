@@ -122,7 +122,7 @@ impl ErrorCategory {
             Self::Macro => true,
             Self::Other => true, // unknown errors get the benefit of the doubt
             Self::ImportResolution => false, // missing crate/module is structural
-            Self::Syntax => false,           // repeated syntax errors = fundamental misunderstanding
+            Self::Syntax => false, // repeated syntax errors = fundamental misunderstanding
         }
     }
 
