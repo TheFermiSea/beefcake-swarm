@@ -1,0 +1,955 @@
+     1	//! Structured inter-agent communication protocol for the swarm.
+     2	//!
+     3	//! Replaces the flat `String` return from Rig's agent-as-tool pattern with
+     4	//! typed contracts that enable:
+     5	//! - **WorkOrder**: what the worker MUST do (behavioral contract)
+     6	//! - **WorkResult**: what the worker DID (structured outcome)
+     7	//! - **WorkStatus**: tristate completion signal (Complete / Partial / Stuck / Failed)
+     8	//!
+     9	//! # Design Basis
+    10	//!
+    11	//! - SEMAP (APSEC 2025): behavioral contracts + structured messaging + lifecycle gates
+    12	//! - Agentic Lybic: FSM-based Controller/Manager/Workers/Evaluator with quality gating
+    13	//! - CodeCRDT: observation-driven coordination via shared state (git worktree = blackboard)
+    14	//! - MAST taxonomy: verification failures are the #1 cause of agent failures
+    15	//!
+    16	//! # Usage
+    17	//!
+    18	//! ```ignore
+    19	//! use swarm_agents::work_protocol::*;
+    20	//!
+    21	//! // Orchestrator creates a work order
+    22	//! let order = WorkOrder::new("order-1", "beads-abc", "Fix borrow checker error in parser.rs")
+    23	//!     .target_files(vec!["src/parser.rs".into()])
+    24	//!     .done_when(DoneCriteria::CompileClean)
+    25	//!     .max_turns(15);
+    26	//!
+    27	//! // After worker completes, build structured result from adapter report
+    28	//! let result = WorkResult::from_adapter_report("order-1", &report, WorkStatus::Complete, "Fixed it");
+    29	//!
+    30	//! // Attach verification
+    31	//! let result = result.with_verification(verification);
+    32	//! ```
+    33
+    34	use serde::{Deserialize, Serialize};
+    35
+    36	use crate::runtime_adapter::AdapterReport;
+    37
+    38	// ── WorkOrder ────────────────────────────────────────────────────────────────
+    39
+    40	/// Structured task contract sent to a worker.
+    41	///
+    42	/// Defines the behavioral contract: what the worker may do, what it must not
+    43	/// touch, and what "done" looks like. Analogous to `Subtask` but richer.
+    44	#[derive(Debug, Clone, Serialize, Deserialize)]
+    45	pub struct WorkOrder {
+    46	    /// Unique identifier for this work order.
+    47	    pub id: String,
+    48	    /// Beads issue ID this work order belongs to.
+    49	    pub issue_id: String,
+    50	    /// Human-readable objective — what the worker should accomplish.
+    51	    pub objective: String,
+    52	    /// Files the worker MAY modify.
+    53	    pub target_files: Vec<String>,
+    54	    /// Files the worker MUST NOT modify (hard constraint).
+    55	    #[serde(default)]
+    56	    pub forbidden_files: Vec<String>,
+    57	    /// What "done" means — the verification contract.
+    58	    pub done_criteria: DoneCriteria,
+    59	    /// Maximum LLM turns before the worker must stop.
+    60	    pub max_turns: usize,
+    61	    /// Wall-clock timeout in seconds.
+    62	    pub timeout_secs: u64,
+    63	    /// Contextual information to help the worker.
+    64	    pub context: WorkContext,
+    65	    /// Which worker tier should execute this order.
+    66	    #[serde(default)]
+    67	    pub worker_tier: Option<WorkerTier>,
+    68	    /// Current iteration number (0-based). Enables retry-aware behavior.
+    69	    #[serde(default)]
+    70	    pub iteration: usize,
+    71	    /// Optional sprint contract agreed with the evaluator before implementation.
+    72	    ///
+    73	    /// When present, both the coder prompt and reviewer receive the contract
+    74	    /// as a shared "done criteria" reference, aligning expectations before
+    75	    /// any code is written.
+    76	    #[serde(default, skip_serializing_if = "Option::is_none")]
+    77	    pub sprint_contract: Option<SprintContract>,
+    78	}
+    79
+    80	impl WorkOrder {
+    81	    /// Create a new work order with minimal required fields.
+    82	    pub fn new(
+    83	        id: impl Into<String>,
+    84	        issue_id: impl Into<String>,
+    85	        objective: impl Into<String>,
+    86	    ) -> Self {
+    87	        Self {
+    88	            id: id.into(),
+    89	            issue_id: issue_id.into(),
+    90	            objective: objective.into(),
+    91	            target_files: Vec::new(),
+    92	            forbidden_files: Vec::new(),
+    93	            done_criteria: DoneCriteria::CompileClean,
+    94	            max_turns: 15,
+    95	            timeout_secs: 900,
+    96	            context: WorkContext::default(),
+    97	            worker_tier: None,
+    98	            iteration: 0,
+    99	            sprint_contract: None,
+   100	        }
+   101	    }
+   102
+   103	    /// Set target files the worker may modify.
+   104	    pub fn target_files(mut self, files: Vec<String>) -> Self {
+   105	        self.target_files = files;
+   106	        self
+   107	    }
+   108
+   109	    /// Set forbidden files the worker must not touch.
+   110	    pub fn forbidden_files(mut self, files: Vec<String>) -> Self {
+   111	        self.forbidden_files = files;
+   112	        self
+   113	    }
+   114
+   115	    /// Set the done criteria (verification contract).
+   116	    pub fn done_when(mut self, criteria: DoneCriteria) -> Self {
+   117	        self.done_criteria = criteria;
+   118	        self
+   119	    }
+   120
+   121	    /// Set maximum LLM turns.
+   122	    pub fn max_turns(mut self, turns: usize) -> Self {
+   123	        self.max_turns = turns;
+   124	        self
+   125	    }
+   126
+   127	    /// Set wall-clock timeout.
+   128	    pub fn timeout_secs(mut self, secs: u64) -> Self {
+   129	        self.timeout_secs = secs;
+   130	        self
+   131	    }
+   132
+   133	    /// Set contextual information.
+   134	    pub fn context(mut self, ctx: WorkContext) -> Self {
+   135	        self.context = ctx;
+   136	        self
+   137	    }
+   138
+   139	    /// Set the worker tier.
+   140	    pub fn worker_tier(mut self, tier: WorkerTier) -> Self {
+   141	        self.worker_tier = Some(tier);
+   142	        self
+   143	    }
+   144
+   145	    /// Set the iteration number.
+   146	    pub fn iteration(mut self, iter: usize) -> Self {
+   147	        self.iteration = iter;
+   148	        self
+   149	    }
+   150
+   151	    /// Attach a sprint contract to this work order.
+   152	    pub fn sprint_contract(mut self, contract: SprintContract) -> Self {
+   153	        self.sprint_contract = Some(contract);
+   154	        self
+   155	    }
+   156	}
+   157
+   158	/// A sprint contract negotiated before the first implementation iteration.
+   159	///
+   160	/// Before any code is written, the manager proposes what will be built and how
+   161	/// it will be verified. The evaluator (reviewer) validates the contract is
+   162	/// testable and specific. The agreed contract is then embedded in all
+   163	/// `WorkOrder` instances for the issue, aligning both the coder and reviewer on
+   164	/// shared expectations — a key pattern from Anthropic's harness design article.
+   165	///
+   166	/// The contract is stored at `.swarm/sprint-contracts.jsonl` in the worktree.
+   167	#[derive(Debug, Clone, Serialize, Deserialize)]
+   168	pub struct SprintContract {
+   169	    /// Issue ID this contract applies to.
+   170	    pub issue_id: String,
+   171	    /// What will be built (scope statement).
+   172	    pub scope: String,
+   173	    /// Observable, verifiable conditions that must be true for the sprint to be
+   174	    /// considered done. Each entry should be independently verifiable.
+   175	    pub done_criteria: Vec<String>,
+   176	    /// Work explicitly excluded from this sprint to avoid scope creep.
+   177	    pub out_of_scope: Vec<String>,
+   178	    /// Specific `cargo test` expectations (e.g., "test_parser_handles_eof passes").
+   179	    pub test_expectations: Vec<String>,
+   180	    /// Whether the evaluator agent has agreed to the contract terms.
+   181	    pub agreed: bool,
+   182	    /// How many negotiation rounds were needed to reach agreement.
+   183	    pub negotiation_rounds: u8,
+   184	}
+   185
+   186	impl SprintContract {
+   187	    pub fn new(issue_id: impl Into<String>, scope: impl Into<String>) -> Self {
+   188	        Self {
+   189	            issue_id: issue_id.into(),
+   190	            scope: scope.into(),
+   191	            done_criteria: Vec::new(),
+   192	            out_of_scope: Vec::new(),
+   193	            test_expectations: Vec::new(),
+   194	            agreed: false,
+   195	            negotiation_rounds: 0,
+   196	        }
+   197	    }
+   198
+   199	    /// Add a done criterion.
+   200	    pub fn with_criterion(mut self, criterion: impl Into<String>) -> Self {
+   201	        self.done_criteria.push(criterion.into());
+   202	        self
+   203	    }
+   204
+   205	    /// Mark out-of-scope to prevent scope creep.
+   206	    pub fn exclude(mut self, item: impl Into<String>) -> Self {
+   207	        self.out_of_scope.push(item.into());
+   208	        self
+   209	    }
+   210
+   211	    /// Mark the contract as agreed.
+   212	    pub fn agree(mut self) -> Self {
+   213	        self.agreed = true;
+   214	        self
+   215	    }
+   216
+   217	    /// Render the contract as a prompt section injected into both
+   218	    /// coder and reviewer preambles.
+   219	    pub fn to_prompt_section(&self) -> String {
+   220	        let mut out = String::from("## Sprint Contract\n");
+   221	        out.push_str(&format!("**Scope:** {}\n\n", self.scope));
+   222
+   223	        if !self.done_criteria.is_empty() {
+   224	            out.push_str("**Done when:**\n");
+   225	            for c in &self.done_criteria {
+   226	                out.push_str(&format!("- {c}\n"));
+   227	            }
+   228	            out.push('\n');
+   229	        }
+   230
+   231	        if !self.out_of_scope.is_empty() {
+   232	            out.push_str("**Out of scope:**\n");
+   233	            for item in &self.out_of_scope {
+   234	                out.push_str(&format!("- {item}\n"));
+   235	            }
+   236	            out.push('\n');
+   237	        }
+   238
+   239	        if !self.test_expectations.is_empty() {
+   240	            out.push_str("**Test expectations:**\n");
+   241	            for t in &self.test_expectations {
+   242	                out.push_str(&format!("- `{t}`\n"));
+   243	            }
+   244	            out.push('\n');
+   245	        }
+   246
+   247	        out
+   248	    }
+   249	}
+   250
+   251	/// What "done" means — the verification contract.
+   252	///
+   253	/// The orchestrator checks this AFTER the worker completes but BEFORE
+   254	/// accepting the result. This is the behavioral contract from SEMAP.
+   255	#[derive(Debug, Clone, Serialize, Deserialize)]
+   256	#[serde(tag = "type", rename_all = "snake_case")]
+   257	pub enum DoneCriteria {
+   258	    /// All target_files modified, `cargo check` passes.
+   259	    CompileClean,
+   260	    /// `cargo test` passes for specified packages.
+   261	    TestsPass { packages: Vec<String> },
+   262	    /// Specific pattern no longer appears in target files.
+   263	    PatternRemoved { pattern: String },
+   264	    /// Custom verification command succeeds (exit code 0).
+   265	    Custom { command: String },
+   266	}
+   267
+   268	/// A structured record of an approach that was tried and failed within the
+   269	/// current session.
+   270	///
+   271	/// Populated by the orchestrator after each failed iteration and injected
+   272	/// into the next worker prompt as a "What We've Tried" section. This
+   273	/// prevents workers from re-attempting approaches that are already known
+   274	/// to fail — a key pattern from Anthropic's harness design article.
+   275	#[derive(Debug, Clone, Serialize, Deserialize)]
+   276	pub struct FailedApproach {
+   277	    /// Iteration number (1-indexed) when this approach was attempted.
+   278	    pub iteration: usize,
+   279	    /// Short description of what was attempted (1–2 sentences).
+   280	    pub summary: String,
+   281	    /// The concrete error or reviewer feedback explaining why it failed.
+   282	    pub error_output: String,
+   283	    /// Blake3 digest of the diff content; used to detect if the agent
+   284	    /// is about to repeat an identical approach without noticing.
+   285	    pub approach_digest: String,
+   286	}
+   287
+   288	impl FailedApproach {
+   289	    pub fn new(
+   290	        iteration: usize,
+   291	        summary: impl Into<String>,
+   292	        error_output: impl Into<String>,
+   293	    ) -> Self {
+   294	        let summary = summary.into();
+   295	        let error = error_output.into();
+   296	        let digest = blake3::hash(format!("{summary}{error}").as_bytes())
+   297	            .to_hex()
+   298	            .to_string();
+   299	        Self {
+   300	            iteration,
+   301	            summary,
+   302	            error_output: error,
+   303	            approach_digest: digest,
+   304	        }
+   305	    }
+   306	}
+   307
+   308	/// Contextual information to help the worker understand the task.
+   309	///
+   310	/// Derived from the orchestrator's accumulated state: previous errors,
+   311	/// file contents, constraints from the escalation engine.
+   312	#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+   313	pub struct WorkContext {
+   314	    /// Compilation/test error messages from previous iterations.
+   315	    #[serde(default)]
+   316	    pub error_history: Vec<String>,
+   317	    /// Relevant file snippets: (path, content_preview).
+   318	    #[serde(default)]
+   319	    pub file_snippets: Vec<FileSnippet>,
+   320	    /// Constraints from the escalation engine or manager.
+   321	    #[serde(default)]
+   322	    pub constraints: Vec<String>,
+   323	    /// Summary of previous attempts (what was tried and why it failed).
+   324	    #[serde(default)]
+   325	    pub previous_attempts: Vec<String>,
+   326	    /// Structured records of failed approaches within this session.
+   327	    ///
+   328	    /// These are injected into the worker prompt as a "What We've Tried"
+   329	    /// section. The digest field lets the orchestrator detect identical
+   330	    /// re-attempts before they are dispatched.
+   331	    #[serde(default)]
+   332	    pub failed_approaches: Vec<FailedApproach>,
+   333	    /// Reviewer/validator feedback from previous iterations (TextGrad).
+   334	    #[serde(default)]
+   335	    pub reviewer_feedback: Vec<String>,
+   336	}
+   337
+   338	/// A file snippet with path and content preview for the worker's context.
+   339	#[derive(Debug, Clone, Serialize, Deserialize)]
+   340	pub struct FileSnippet {
+   341	    pub path: String,
+   342	    pub content: String,
+   343	    /// Key symbols (functions, structs, traits) in this file.
+   344	    #[serde(default)]
+   345	    pub key_symbols: Vec<String>,
+   346	}
+   347
+   348	/// Which worker tier should execute a work order.
+   349	#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+   350	#[serde(rename_all = "snake_case")]
+   351	pub enum WorkerTier {
+   352	    /// Qwen3.5-27B-Distilled — fast, VRAM-resident, 192K context.
+   353	    Fast,
+   354	    /// Qwen3.5-122B-A10B MoE on vasp-01 — code specialist.
+   355	    Coder,
+   356	    /// Qwen3.5-122B-A10B MoE on vasp-02 — deep reasoning.
+   357	    Reasoning,
+   358	}
+   359
+   360	impl std::fmt::Display for WorkerTier {
+   361	    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+   362	        match self {
+   363	            WorkerTier::Fast => write!(f, "fast"),
+   364	            WorkerTier::Coder => write!(f, "coder"),
+   365	            WorkerTier::Reasoning => write!(f, "reasoning"),
+   366	        }
+   367	    }
+   368	}
+   369
+   370	// ── WorkResult ───────────────────────────────────────────────────────────────
+   371
+   372	/// Structured result returned by a worker after completing (or failing) a WorkOrder.
+   373	///
+   374	/// This is the core output type that replaces Rig's flat `String` return.
+   375	/// It provides the manager/orchestrator with structured information about
+   376	/// what happened, enabling programmatic decision-making.
+   377	#[derive(Debug, Clone, Serialize, Deserialize)]
+   378	pub struct WorkResult {
+   379	    /// WorkOrder ID this result corresponds to.
+   380	    pub order_id: String,
+   381	    /// Completion status — the tristate signal.
+   382	    pub status: WorkStatus,
+   383	    /// Files the worker modified (from RuntimeAdapter or git diff).
+   384	    pub files_modified: Vec<String>,
+   385	    /// Files the worker read (from RuntimeAdapter).
+   386	    pub files_read: Vec<String>,
+   387	    /// File manifest with blake3 hashes for programmatic verification.
+   388	    #[serde(default)]
+   389	    pub file_manifest: Vec<FileManifestEntry>,
+   390	    /// Total tool calls made by the worker.
+   391	    pub tool_calls: usize,
+   392	    /// LLM turns used.
+   393	    pub turns_used: usize,
+   394	    /// Wall-clock time in milliseconds.
+   395	    pub wall_time_ms: u64,
+   396	    /// Git diff summary (from `git diff --stat`).
+   397	    pub git_diff_summary: String,
+   398	    /// Verification result (if verifier ran after worker completed).
+   399	    pub verification: Option<VerificationResult>,
+   400	    /// Worker's free-text explanation of what it did.
+   401	    pub worker_message: String,
+   402	    /// Worker self-assessment confidence (0.0–1.0).
+   403	    /// Below 0.5 → auto-escalate to manager.
+   404	    /// Below 0.3 → flag for human review.
+   405	    pub confidence: f32,
+   406	    /// Escalation request if the worker needs help.
+   407	    pub escalation: Option<EscalationRequest>,
+   408	}
+   409
+   410	impl WorkResult {
+   411	    /// Build a WorkResult from a RuntimeAdapter report.
+   412	    ///
+   413	    /// This is the primary constructor — bridges the existing telemetry
+   414	    /// infrastructure (`AdapterReport`) to the new structured protocol.
+   415	    pub fn from_adapter_report(
+   416	        order_id: impl Into<String>,
+   417	        report: &AdapterReport,
+   418	        status: WorkStatus,
+   419	        worker_message: impl Into<String>,
+   420	    ) -> Self {
+   421	        Self {
+   422	            order_id: order_id.into(),
+   423	            status,
+   424	            files_modified: report.files_modified.clone(),
+   425	            files_read: report.files_read.clone(),
+   426	            file_manifest: Vec::new(),
+   427	            tool_calls: report.total_tool_calls,
+   428	            turns_used: report.turn_count,
+   429	            wall_time_ms: report.wall_time_ms,
+   430	            git_diff_summary: String::new(),
+   431	            verification: None,
+   432	            worker_message: worker_message.into(),
+   433	            confidence: 0.5, // default — refined by heuristics or verification
+   434	            escalation: None,
+   435	        }
+   436	    }
+   437
+   438	    /// Infer WorkStatus from an AdapterReport heuristically.
+   439	    ///
+   440	    /// Uses the adapter's termination signals to determine the most likely
+   441	    /// outcome without relying on the worker's self-report (which may be
+   442	    /// unreliable for local LLMs).
+   443	    pub fn infer_status(report: &AdapterReport) -> WorkStatus {
+   444	        if report.terminated_early {
+   445	            let reason = report
+   446	                .termination_reason
+   447	                .clone()
+   448	                .unwrap_or_else(|| "budget exhausted".into());
+   449	            if report.has_written {
+   450	                WorkStatus::Partial { reason }
+   451	            } else {
+   452	                WorkStatus::Stuck { reason }
+   453	            }
+   454	        } else if report.has_written {
+   455	            WorkStatus::Complete
+   456	        } else {
+   457	            // Agent finished normally but never wrote — likely confused or blocked.
+   458	            WorkStatus::Stuck {
+   459	                reason: "agent completed without writing any files".into(),
+   460	            }
+   461	        }
+   462	    }
+   463
+   464	    /// Compute a heuristic confidence score from adapter telemetry.
+   465	    ///
+   466	    /// This provides a baseline confidence before verification runs.
+   467	    /// After verification, use `with_verification()` which refines confidence
+   468	    /// based on gate pass rates.
+   469	    pub fn heuristic_confidence(report: &AdapterReport) -> f32 {
+   470	        let mut score: f32 = 0.0;
+   471
+   472	        // Did it write files? (+0.3)
+   473	        if report.has_written {
+   474	            score += 0.3;
+   475	        }
+   476
+   477	        // Didn't get terminated early? (+0.2)
+   478	        if !report.terminated_early {
+   479	            score += 0.2;
+   480	        }
+   481
+   482	        // Tool call efficiency: fewer calls per write = more focused (+0.1–0.2)
+   483	        if report.has_written && report.total_tool_calls > 0 {
+   484	            let writes = report.successful_writes.max(1) as f32;
+   485	            let ratio = writes / report.total_tool_calls as f32;
+   486	            // ratio of 0.1+ is efficient (1 write per 10 calls)
+   487	            score += (ratio * 2.0).min(0.2);
+   488	        }
+   489
+   490	        // No failed edits? (+0.1)
+   491	        if report.last_failed_edits.is_empty() {
+   492	            score += 0.1;
+   493	        }
+   494
+   495	        score.clamp(0.0, 1.0)
+   496	    }
+   497
+   498	    /// Attach verification results and refine confidence.
+   499	    pub fn with_verification(mut self, verification: VerificationResult) -> Self {
+   500	        // Refine confidence based on verification gates.
+   501	        self.confidence = verification.confidence_contribution();
+   502	        self.verification = Some(verification);
+   503	        self
+   504	    }
+   505
+   506	    /// Attach git diff summary.
+   507	    pub fn with_diff(mut self, diff: String) -> Self {
+   508	        self.git_diff_summary = diff;
+   509	        self
+   510	    }
+   511
+   512	    /// Attach file manifest with blake3 hashes.
+   513	    pub fn with_manifest(mut self, manifest: Vec<FileManifestEntry>) -> Self {
+   514	        self.file_manifest = manifest;
+   515	        self
+   516	    }
+   517
+   518	    /// Attach an escalation request.
+   519	    pub fn with_escalation(mut self, escalation: EscalationRequest) -> Self {
+   520	        self.escalation = Some(escalation);
+   521	        self
+   522	    }
+   523
+   524	    /// Override the confidence score.
+   525	    pub fn with_confidence(mut self, confidence: f32) -> Self {
+   526	        self.confidence = confidence.clamp(0.0, 1.0);
+   527	        self
+   528	    }
+   529
+   530	    /// Whether this result should trigger auto-escalation to the manager.
+   531	    pub fn needs_escalation(&self) -> bool {
+   532	        self.confidence < 0.5
+   533	            || self.escalation.is_some()
+   534	            || matches!(
+   535	                self.status,
+   536	                WorkStatus::Stuck { .. } | WorkStatus::OutOfScope { .. }
+   537	            )
+   538	    }
+   539
+   540	    /// Whether this result should be flagged for human review.
+   541	    pub fn needs_human_review(&self) -> bool {
+   542	        self.confidence < 0.3 || matches!(self.status, WorkStatus::Failed { .. })
+   543	    }
+   544
+   545	    /// Whether the worker made any meaningful progress.
+   546	    pub fn made_progress(&self) -> bool {
+   547	        !self.files_modified.is_empty()
+   548	            && matches!(
+   549	                self.status,
+   550	                WorkStatus::Complete | WorkStatus::Partial { .. }
+   551	            )
+   552	    }
+   553
+   554	    /// Summary suitable for logging.
+   555	    pub fn summary(&self) -> String {
+   556	        format!(
+   557	            "WorkResult[{}] status={} files_mod={} tools={} turns={} conf={:.2} {}",
+   558	            self.order_id,
+   559	            self.status,
+   560	            self.files_modified.len(),
+   561	            self.tool_calls,
+   562	            self.turns_used,
+   563	            self.confidence,
+   564	            if self.needs_escalation() {
+   565	                "[ESCALATE]"
+   566	            } else {
+   567	                ""
+   568	            },
+   569	        )
+   570	    }
+   571	}
+   572
+   573	// ── WorkStatus ───────────────────────────────────────────────────────────────
+   574
+   575	/// Tristate completion signal from a worker.
+   576	///
+   577	/// Research (MAST taxonomy) shows that binary success/fail is insufficient —
+   578	/// workers often make partial progress that should be preserved rather than
+   579	/// rolled back. The tristate enables the orchestrator to make nuanced decisions:
+   580	///
+   581	/// - **Complete**: worker believes task is done → run verification
+   582	/// - **Partial**: worker made progress but couldn't finish → keep changes, retry
+   583	/// - **Stuck**: worker is blocked, needs help → escalate to manager
+   584	/// - **OutOfScope**: task requires changes outside allowed files → reassign
+   585	/// - **Failed**: unrecoverable error → roll back, escalate
+   586	#[derive(Debug, Clone, Serialize, Deserialize)]
+   587	#[serde(tag = "type", rename_all = "snake_case")]
+   588	pub enum WorkStatus {
+   589	    /// Worker believes the task is done. Run verification to confirm.
+   590	    Complete,
+   591	    /// Worker made progress but couldn't finish. Keep changes.
+   592	    /// Retryable — the reason explains what's left.
+   593	    Partial { reason: String },
+   594	    /// Worker is blocked and needs help. Escalate to manager.
+   595	    Stuck { reason: String },
+   596	    /// Task requires changes outside the worker's allowed files.
+   597	    OutOfScope { reason: String },
+   598	    /// Unrecoverable error. Roll back changes.
+   599	    Failed { error: String },
+   600	}
+   601
+   602	impl WorkStatus {
+   603	    /// Whether changes from this status should be kept (not rolled back).
+   604	    pub fn keep_changes(&self) -> bool {
+   605	        matches!(self, WorkStatus::Complete | WorkStatus::Partial { .. })
+   606	    }
+   607
+   608	    /// Whether this status is retryable.
+   609	    pub fn is_retryable(&self) -> bool {
+   610	        matches!(
+   611	            self,
+   612	            WorkStatus::Partial { .. } | WorkStatus::Stuck { .. } | WorkStatus::OutOfScope { .. }
+   613	        )
+   614	    }
+   615
+   616	    /// Whether this status represents a terminal failure.
+   617	    pub fn is_terminal(&self) -> bool {
+   618	        matches!(self, WorkStatus::Failed { .. })
+   619	    }
+   620
+   621	    /// Short label for logging and events.
+   622	    pub fn label(&self) -> &'static str {
+   623	        match self {
+   624	            WorkStatus::Complete => "complete",
+   625	            WorkStatus::Partial { .. } => "partial",
+   626	            WorkStatus::Stuck { .. } => "stuck",
+   627	            WorkStatus::OutOfScope { .. } => "out_of_scope",
+   628	            WorkStatus::Failed { .. } => "failed",
+   629	        }
+   630	    }
+   631	}
+   632
+   633	impl std::fmt::Display for WorkStatus {
+   634	    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+   635	        match self {
+   636	            WorkStatus::Complete => write!(f, "complete"),
+   637	            WorkStatus::Partial { reason } => write!(f, "partial: {reason}"),
+   638	            WorkStatus::Stuck { reason } => write!(f, "stuck: {reason}"),
+   639	            WorkStatus::OutOfScope { reason } => write!(f, "out_of_scope: {reason}"),
+   640	            WorkStatus::Failed { error } => write!(f, "failed: {error}"),
+   641	        }
+   642	    }
+   643	}
+   644
+   645	// ── VerificationResult ───────────────────────────────────────────────────────
+   646
+   647	/// Simplified verification result for inter-agent communication.
+   648	///
+   649	/// Mirrors the coordination crate's `VerifierReport` but focused on what
+   650	/// the manager/orchestrator needs for decision-making, not the full pipeline
+   651	/// details.
+   652	#[derive(Debug, Clone, Serialize, Deserialize)]
+   653	pub struct VerificationResult {
+   654	    /// Whether ALL gates passed (clean build).
+   655	    pub all_green: bool,
+   656	    /// cargo fmt passed.
+   657	    pub fmt_pass: bool,
+   658	    /// cargo clippy passed.
+   659	    pub clippy_pass: bool,
+   660	    /// cargo check passed.
+   661	    pub check_pass: bool,
+   662	    /// cargo test passed (None if tests weren't run).
+   663	    pub test_pass: Option<bool>,
+   664	    /// Number of remaining errors.
+   665	    pub error_count: usize,
+   666	    /// Gates passed vs total.
+   667	    pub gates_passed: usize,
+   668	    pub gates_total: usize,
+   669	    /// Human-readable summary.
+   670	    pub summary: String,
+   671	}
+   672
+   673	impl VerificationResult {
+   674	    /// Compute a confidence contribution from verification gates.
+   675	    ///
+   676	    /// Maps gate pass rates to a 0.0–1.0 confidence score:
+   677	    /// - fmt only: 0.3
+   678	    /// - fmt + clippy: 0.5
+   679	    /// - fmt + clippy + check: 0.75
+   680	    /// - all gates: 1.0
+   681	    pub fn confidence_contribution(&self) -> f32 {
+   682	        let mut score = 0.0f32;
+   683	        if self.fmt_pass {
+   684	            score += 0.2;
+   685	        }
+   686	        if self.clippy_pass {
+   687	            score += 0.2;
+   688	        }
+   689	        if self.check_pass {
+   690	            score += 0.3;
+   691	        }
+   692	        if let Some(true) = self.test_pass {
+   693	            score += 0.3;
+   694	        }
+   695	        score.clamp(0.0, 1.0)
+   696	    }
+   697	}
+   698
+   699	// ── FileManifestEntry ────────────────────────────────────────────────────────
+   700
+   701	/// File manifest entry with blake3 hash for programmatic verification.
+   702	///
+   703	/// Enables the manager/orchestrator to verify that the worker's claimed
+   704	/// changes actually happened, without reading file contents.
+   705	#[derive(Debug, Clone, Serialize, Deserialize)]
+   706	pub struct FileManifestEntry {
+   707	    pub path: String,
+   708	    /// blake3 hash of the file content (short form, 2 hex chars).
+   709	    pub hash: String,
+   710	    /// What the worker did to this file.
+   711	    pub action: FileAction,
+   712	}
+   713
+   714	/// What happened to a file in the worktree.
+   715	#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+   716	#[serde(rename_all = "snake_case")]
+   717	pub enum FileAction {
+   718	    Created,
+   719	    Modified,
+   720	    Deleted,
+   721	}
+   722
+   723	impl std::fmt::Display for FileAction {
+   724	    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+   725	        match self {
+   726	            FileAction::Created => write!(f, "created"),
+   727	            FileAction::Modified => write!(f, "modified"),
+   728	            FileAction::Deleted => write!(f, "deleted"),
+   729	        }
+   730	    }
+   731	}
+   732
+   733	// ── EscalationRequest ────────────────────────────────────────────────────────
+   734
+   735	/// Worker requesting help from the manager or orchestrator.
+   736	///
+   737	/// Provides structured context about WHY the worker is stuck, enabling
+   738	/// the manager to provide targeted guidance rather than blind re-delegation.
+   739	#[derive(Debug, Clone, Serialize, Deserialize)]
+   740	pub struct EscalationRequest {
+   741	    /// Why the worker is stuck (e.g., "borrow checker error I can't resolve").
+   742	    pub reason: String,
+   743	    /// What the worker suggests the manager do.
+   744	    pub suggested_action: String,
+   745	    /// Files that are blocking progress (may be outside the worker's scope).
+   746	    #[serde(default)]
+   747	    pub blocking_files: Vec<String>,
+   748	}
+   749
+   750	/// Convert a `coordination::verifier::VerifierReport` to a `VerificationResult`.
+   751	///
+   752	/// This bridges the coordination crate's detailed report to the simplified
+   753	/// protocol type used for inter-agent communication.
+   754	pub fn verification_from_report(
+   755	    report: &coordination::verifier::VerifierReport,
+   756	) -> VerificationResult {
+   757	    use coordination::verifier::GateOutcome;
+   758
+   759	    let fmt_pass = report
+   760	        .gates
+   761	        .iter()
+   762	        .any(|g| g.gate == "fmt" && matches!(g.outcome, GateOutcome::Passed));
+   763	    let clippy_pass = report
+   764	        .gates
+   765	        .iter()
+   766	        .any(|g| g.gate == "clippy" && matches!(g.outcome, GateOutcome::Passed));
+   767	    let check_pass = report
+   768	        .gates
+   769	        .iter()
+   770	        .any(|g| g.gate == "check" && matches!(g.outcome, GateOutcome::Passed));
+   771	    let test_pass = report
+   772	        .gates
+   773	        .iter()
+   774	        .find(|g| g.gate == "test")
+   775	        .map(|g| matches!(g.outcome, GateOutcome::Passed));
+   776
+   777	    VerificationResult {
+   778	        all_green: report.all_green,
+   779	        fmt_pass,
+   780	        clippy_pass,
+   781	        check_pass,
+   782	        test_pass,
+   783	        error_count: report.failure_signals.len(),
+   784	        gates_passed: report.gates_passed,
+   785	        gates_total: report.gates_total,
+   786	        summary: format!(
+   787	            "{}/{} gates passed{}",
+   788	            report.gates_passed,
+   789	            report.gates_total,
+   790	            if report.all_green { " ✓" } else { "" }
+   791	        ),
+   792	    }
+   793	}
+   794
+   795	// ── Tests ────────────────────────────────────────────────────────────────────
+   796
+   797	#[cfg(test)]
+   798	mod tests {
+   799	    use super::*;
+   800
+   801	    #[test]
+   802	    fn infer_status_complete() {
+   803	        let report = AdapterReport {
+   804	            agent_name: "test".into(),
+   805	            tool_events: vec![],
+   806	            turn_count: 5,
+   807	            total_tool_calls: 10,
+   808	            total_tool_time_ms: 1000,
+   809	            wall_time_ms: 5000,
+   810	            terminated_early: false,
+   811	            termination_reason: None,
+   812	            has_written: true,
+   813	            files_read: vec![],
+   814	            files_modified: vec![],
+   815	            successful_writes: 2,
+   816	            last_failed_edits: vec![],
+   817	        };
+   818	        assert!(matches!(
+   819	            WorkResult::infer_status(&report),
+   820	            WorkStatus::Complete
+   821	        ));
+   822	    }
+   823
+   824	    #[test]
+   825	    fn verification_confidence_mapping() {
+   826	        let v = VerificationResult {
+   827	            all_green: true,
+   828	            fmt_pass: true,
+   829	            clippy_pass: true,
+   830	            check_pass: true,
+   831	            test_pass: Some(true),
+   832	            error_count: 0,
+   833	            gates_passed: 4,
+   834	            gates_total: 4,
+   835	            summary: "4/4 ✓".into(),
+   836	        };
+   837	        let conf = v.confidence_contribution();
+   838	        assert!(
+   839	            (conf - 1.0).abs() < f32::EPSILON,
+   840	            "expected 1.0, got {conf}"
+   841	        );
+   842
+   843	        let v2 = VerificationResult {
+   844	            all_green: false,
+   845	            fmt_pass: true,
+   846	            clippy_pass: true,
+   847	            check_pass: false,
+   848	            test_pass: None,
+   849	            error_count: 3,
+   850	            gates_passed: 2,
+   851	            gates_total: 3,
+   852	            summary: "2/3".into(),
+   853	        };
+   854	        let conf2 = v2.confidence_contribution();
+   855	        assert!(
+   856	            (conf2 - 0.4).abs() < f32::EPSILON,
+   857	            "expected 0.4, got {conf2}"
+   858	        );
+   859	    }
+   860
+   861	    #[test]
+   862	    fn work_result_escalation_signals() {
+   863	        let result = WorkResult {
+   864	            order_id: "o1".into(),
+   865	            status: WorkStatus::Stuck {
+   866	                reason: "can't fix".into(),
+   867	            },
+   868	            files_modified: vec![],
+   869	            files_read: vec![],
+   870	            file_manifest: vec![],
+   871	            tool_calls: 0,
+   872	            turns_used: 0,
+   873	            wall_time_ms: 0,
+   874	            git_diff_summary: String::new(),
+   875	            verification: None,
+   876	            worker_message: String::new(),
+   877	            confidence: 0.2,
+   878	            escalation: Some(EscalationRequest {
+   879	                reason: "borrow checker".into(),
+   880	                suggested_action: "restructure lifetimes".into(),
+   881	                blocking_files: vec!["src/main.rs".into()],
+   882	            }),
+   883	        };
+   884
+   885	        assert!(result.needs_escalation());
+   886	        assert!(result.needs_human_review()); // confidence < 0.3
+   887	        assert!(!result.made_progress());
+   888	    }
+   889
+   890	    #[test]
+   891	    fn work_result_with_verification_refines_confidence() {
+   892	        let report = AdapterReport {
+   893	            agent_name: "test".into(),
+   894	            tool_events: vec![],
+   895	            turn_count: 5,
+   896	            total_tool_calls: 10,
+   897	            total_tool_time_ms: 1000,
+   898	            wall_time_ms: 5000,
+   899	            terminated_early: false,
+   900	            termination_reason: None,
+   901	            has_written: true,
+   902	            files_read: vec![],
+   903	            files_modified: vec!["src/a.rs".into()],
+   904	            successful_writes: 2,
+   905	            last_failed_edits: vec![],
+   906	        };
+   907
+   908	        let result = WorkResult::from_adapter_report("o1", &report, WorkStatus::Complete, "done")
+   909	            .with_verification(VerificationResult {
+   910	                all_green: true,
+   911	                fmt_pass: true,
+   912	                clippy_pass: true,
+   913	                check_pass: true,
+   914	                test_pass: Some(true),
+   915	                error_count: 0,
+   916	                gates_passed: 4,
+   917	                gates_total: 4,
+   918	                summary: "4/4 ✓".into(),
+   919	            });
+   920
+   921	        // Confidence should be 1.0 (all gates passed)
+   922	        assert!(
+   923	            (result.confidence - 1.0).abs() < f32::EPSILON,
+   924	            "expected 1.0, got {}",
+   925	            result.confidence
+   926	        );
+   927	        assert!(!result.needs_escalation());
+   928	    }
+   929
+   930	    #[test]
+   931	    fn work_result_summary() {
+   932	        let result = WorkResult {
+   933	            order_id: "o1".into(),
+   934	            status: WorkStatus::Complete,
+   935	            files_modified: vec!["a.rs".into(), "b.rs".into()],
+   936	            files_read: vec![],
+   937	            file_manifest: vec![],
+   938	            tool_calls: 8,
+   939	            turns_used: 4,
+   940	            wall_time_ms: 5000,
+   941	            git_diff_summary: String::new(),
+   942	            verification: None,
+   943	            worker_message: String::new(),
+   944	            confidence: 0.8,
+   945	            escalation: None,
+   946	        };
+   947
+   948	        let s = result.summary();
+   949	        assert!(s.contains("o1"));
+   950	        assert!(s.contains("complete"));
+   951	        assert!(s.contains("files_mod=2"));
+   952	        assert!(s.contains("tools=8"));
+   953	        assert!(s.contains("conf=0.80"));
+   954	    }
+   955	}
