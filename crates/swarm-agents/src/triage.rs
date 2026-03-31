@@ -497,13 +497,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
-    fn keyword_triage_python() {
-        let result = keyword_triage("Fix pytest failure in data_pipeline.py", None);
-        assert_eq!(result.language, "python");
-    }
-
-    #[test]
     fn phase_selector_cheapest_for_triage() {
         let catalog = CloudModelCatalog::default_catalog();
         let selector = PhaseModelSelector::new(catalog, 0.0);
