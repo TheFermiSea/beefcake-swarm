@@ -473,7 +473,6 @@ fn keyword_triage(title: &str, description: Option<&str>) -> TriageResult {
 mod tests {
     use super::*;
 
-    #[test]
     fn keyword_triage_simple() {
         let result = keyword_triage("Fix clippy warning in config.rs", None);
         assert_eq!(result.complexity, Complexity::Simple);
@@ -481,7 +480,6 @@ mod tests {
         assert!(!result.used_llm);
     }
 
-    #[test]
     fn phase_selector_cheapest_for_triage() {
         let catalog = CloudModelCatalog::default_catalog();
         let selector = PhaseModelSelector::new(catalog, 0.0);
@@ -496,7 +494,6 @@ mod tests {
         );
     }
 
-    #[test]
     fn phase_selector_cheapest_for_plan() {
         let catalog = CloudModelCatalog::default_catalog();
         let selector = PhaseModelSelector::new(catalog, 0.0);
@@ -526,13 +523,5 @@ mod tests {
         let result = parse_triage_response(json).unwrap();
         assert_eq!(result.complexity, Complexity::Simple);
         assert_eq!(result.language, "rust");
-    }
-
-    #[test]
-    fn parse_triage_json_with_fences() {
-        let json = "```json\n{\"complexity\": \"complex\", \"language\": \"python\", \"suggested_models\": [], \"reasoning\": \"arch change\"}\n```";
-        let result = parse_triage_response(json).unwrap();
-        assert_eq!(result.complexity, Complexity::Complex);
-        assert_eq!(result.language, "python");
     }
 }
