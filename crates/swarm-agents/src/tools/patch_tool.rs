@@ -1540,6 +1540,3 @@ pub fn looks_like_fabricated_data(content: &str) -> bool {
     );
     true
 }
-
-#[cfg(test)]
-mod data_guard_tests {}
