@@ -138,8 +138,8 @@ fn smoke_patch_exact_deterministic() {
         description: None,
     };
 
-    let r1 = engine.apply(content, &[hunk.clone()]);
-    let r2 = engine.apply(content, &[hunk]);
+    let r1 = engine.apply(content, std::slice::from_ref(&hunk));
+    let r2 = engine.apply(content, std::slice::from_ref(&hunk));
     assert_eq!(r1.success, r2.success);
     assert_eq!(r1.patched_content, r2.patched_content);
     assert_eq!(r1.hunk_results[0].match_kind, MatchKind::Exact);

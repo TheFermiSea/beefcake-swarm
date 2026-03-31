@@ -539,7 +539,7 @@ mod tests {
         };
         let json = serde_json::to_string(&policy).unwrap();
         let parsed: ReviewerPolicy = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.require_ast_analysis, false);
+        assert!(!parsed.require_ast_analysis);
         assert_eq!(parsed.max_duration_ms, 30000);
     }
 

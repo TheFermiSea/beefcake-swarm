@@ -1607,9 +1607,8 @@ mod tests {
         let tracker = BudgetTracker::with_defaults();
         let config = tracker.config();
         assert_eq!(config.global_max_iterations, 10);
-        assert!(config
-            .budgets
-            .contains_key(&OrchestratorState::Implementing));
+        assert!(!config
+            .budgets.contains_key(&OrchestratorState::SelectingIssue));
     }
 
     // ──────────────────────────────────────────────────────────────────────

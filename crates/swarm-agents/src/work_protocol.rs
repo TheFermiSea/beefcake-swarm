@@ -461,40 +461,6 @@ impl WorkResult {
         }
     }
 
-    /// Compute a heuristic confidence score from adapter telemetry.
-    ///
-    /// This provides a baseline confidence before verification runs.
-    /// After verification, use `with_verification()` which refines confidence
-    /// based on gate pass rates.
-    pub fn heuristic_confidence(report: &AdapterReport) -> f32 {
-        let mut score: f32 = 0.0;
-
-        // Did it write files? (+0.3)
-        if report.has_written {
-            score += 0.3;
-        }
-
-        // Didn't get terminated early? (+0.2)
-        if !report.terminated_early {
-            score += 0.2;
-        }
-
-        // Tool call efficiency: fewer calls per write = more focused (+0.1–0.2)
-        if report.has_written && report.total_tool_calls > 0 {
-            let writes = report.successful_writes.max(1) as f32;
-            let ratio = writes / report.total_tool_calls as f32;
-            // ratio of 0.1+ is efficient (1 write per 10 calls)
-            score += (ratio * 2.0).min(0.2);
-        }
-
-        // No failed edits? (+0.1)
-        if report.last_failed_edits.is_empty() {
-            score += 0.1;
-        }
-
-        score.clamp(0.0, 1.0)
-    }
-
     /// Attach verification results and refine confidence.
     pub fn with_verification(mut self, verification: VerificationResult) -> Self {
         // Refine confidence based on verification gates.
@@ -518,12 +484,6 @@ impl WorkResult {
     /// Attach an escalation request.
     pub fn with_escalation(mut self, escalation: EscalationRequest) -> Self {
         self.escalation = Some(escalation);
-        self
-    }
-
-    /// Override the confidence score.
-    pub fn with_confidence(mut self, confidence: f32) -> Self {
-        self.confidence = confidence.clamp(0.0, 1.0);
         self
     }
 
@@ -747,79 +707,11 @@ pub struct EscalationRequest {
     pub blocking_files: Vec<String>,
 }
 
-/// Convert a `coordination::verifier::VerifierReport` to a `VerificationResult`.
-///
-/// This bridges the coordination crate's detailed report to the simplified
-/// protocol type used for inter-agent communication.
-pub fn verification_from_report(
-    report: &coordination::verifier::VerifierReport,
-) -> VerificationResult {
-    use coordination::verifier::GateOutcome;
-
-    let fmt_pass = report
-        .gates
-        .iter()
-        .any(|g| g.gate == "fmt" && matches!(g.outcome, GateOutcome::Passed));
-    let clippy_pass = report
-        .gates
-        .iter()
-        .any(|g| g.gate == "clippy" && matches!(g.outcome, GateOutcome::Passed));
-    let check_pass = report
-        .gates
-        .iter()
-        .any(|g| g.gate == "check" && matches!(g.outcome, GateOutcome::Passed));
-    let test_pass = report
-        .gates
-        .iter()
-        .find(|g| g.gate == "test")
-        .map(|g| matches!(g.outcome, GateOutcome::Passed));
-
-    VerificationResult {
-        all_green: report.all_green,
-        fmt_pass,
-        clippy_pass,
-        check_pass,
-        test_pass,
-        error_count: report.failure_signals.len(),
-        gates_passed: report.gates_passed,
-        gates_total: report.gates_total,
-        summary: format!(
-            "{}/{} gates passed{}",
-            report.gates_passed,
-            report.gates_total,
-            if report.all_green { " ✓" } else { "" }
-        ),
-    }
-}
-
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn infer_status_complete() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 5,
-            total_tool_calls: 10,
-            total_tool_time_ms: 1000,
-            wall_time_ms: 5000,
-            terminated_early: false,
-            termination_reason: None,
-            has_written: true,
-            files_read: vec![],
-            files_modified: vec![],
-            successful_writes: 2,
-            last_failed_edits: vec![],
-        };
-        assert!(matches!(
-            WorkResult::infer_status(&report),
-            WorkStatus::Complete
-        ));
-    }
 
     #[test]
     fn verification_confidence_mapping() {

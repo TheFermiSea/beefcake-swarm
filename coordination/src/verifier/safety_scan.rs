@@ -363,7 +363,7 @@ index abc..def 100644
             .filter(|w| w.category == WarningCategory::NetworkAccess)
             .collect();
         assert!(
-            net_warnings.len() >= 1,
+            !net_warnings.is_empty(),
             "Should detect network access: {net_warnings:?}"
         );
     }

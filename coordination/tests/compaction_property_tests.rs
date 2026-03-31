@@ -310,7 +310,7 @@ fn prop_single_entry_compaction() {
     );
 
     // With min_retained_entries=2 and only 1 entry, compaction should not destroy it
-    assert!(store.active_entries().len() >= 1);
+    assert!(!store.active_entries().is_empty());
 }
 
 // ── Property: varied entry sizes ────────────────────────────────────

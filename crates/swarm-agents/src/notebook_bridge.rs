@@ -285,6 +285,12 @@ pub mod tests {
         pub captured_uploads: Mutex<Vec<(String, String, String)>>,
     }
 
+    impl Default for MockKnowledgeBase {
+        fn default() -> Self {
+            Self::new()
+        }
+    }
+
     impl MockKnowledgeBase {
         pub fn new() -> Self {
             Self {

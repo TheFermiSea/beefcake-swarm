@@ -779,7 +779,7 @@ mod tests {
         assert_eq!(summary.resolved, 2);
         assert_eq!(summary.failed, 1);
         assert!((summary.avg_iterations_to_resolve - 3.0).abs() < 0.01);
-        assert_eq!(format!("{summary}").contains("3 attempts"), true);
+        assert!(format!("{summary}").contains("3 attempts"));
     }
 
     #[test]

@@ -389,7 +389,7 @@ mod tests {
             confidence: 0.9,
             evidence: vec!["issue-1".into()],
         };
-        let recs = generate_recommendations(&[insight.clone()]);
+        let recs = generate_recommendations(std::slice::from_ref(&insight));
 
         let report = AutopilotReport {
             timestamp: "2026-03-30T12:00:00Z".to_string(),

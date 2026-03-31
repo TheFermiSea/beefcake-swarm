@@ -4208,11 +4208,8 @@ mod tests {
         session.start().unwrap();
 
         let mut iterations = Vec::new();
-        loop {
-            match session.next_iteration() {
-                Ok(i) => iterations.push(i),
-                Err(_) => break,
-            }
+        while let Ok(i) = session.next_iteration() {
+            iterations.push(i);
         }
 
         assert_eq!(iterations, vec![1, 2, 3, 4, 5, 6]);

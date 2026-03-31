@@ -302,8 +302,10 @@ mod tests {
 
     #[test]
     fn zero_max_iterations_rejected() {
-        let mut cfg = ModeRunnerConfig::default();
-        cfg.max_iterations = 0;
+        let cfg = ModeRunnerConfig {
+            max_iterations: 0,
+            ..Default::default()
+        };
         assert!(cfg.validate().is_err());
     }
 }
