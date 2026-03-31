@@ -21,6 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::{Context, Result};
 use chrono::Utc;
 use serde::Serialize;
 use tracing::{info, warn};
@@ -102,7 +103,11 @@ impl AutopilotRunner {
     }
 
     /// Run the full autopilot pipeline.
-    pub async fn run(&self) -> AutopilotReport {
+    ///
+    /// # Errors
+    /// Returns an error if the artifacts directory cannot be created or if
+    /// any artifact file cannot be serialized or written to disk.
+    pub async fn run(&self) -> Result<AutopilotReport> {
         let now = Utc::now();
         info!("Autopilot: starting analysis pipeline");
 
@@ -156,24 +161,27 @@ impl AutopilotRunner {
 
         // --- Stage 5: Write artifacts ---
         let artifacts_dir = self.repo_root.join(".swarm").join("autopilot");
-        if let Err(e) = std::fs::create_dir_all(&artifacts_dir) {
-            warn!(error = %e, "Failed to create autopilot artifacts directory");
-        }
+        std::fs::create_dir_all(&artifacts_dir).with_context(|| {
+            format!(
+                "Failed to create autopilot artifacts directory: {}",
+                artifacts_dir.display()
+            )
+        })?;
 
         let run_id = now.format("%Y%m%d-%H%M%S").to_string();
 
         // Write insights
         let insights_path = artifacts_dir.join(format!("insights-{run_id}.json"));
-        write_json(&insights_path, &insights);
+        write_json(&insights_path, &insights)?;
 
         // Write recommendations
         let recs_path = artifacts_dir.join(format!("recommendations-{run_id}.json"));
-        write_json(&recs_path, &recommendations);
+        write_json(&recs_path, &recommendations)?;
 
         // Write flat runner-input records (one row per variant, ready for adaptive runner)
         let runner_inputs = to_runner_inputs(&recommendations);
         let runner_path = artifacts_dir.join(format!("runner-inputs-{run_id}.json"));
-        write_json(&runner_path, &runner_inputs);
+        write_json(&runner_path, &runner_inputs)?;
 
         // Write full report
         let report = AutopilotReport {
@@ -185,11 +193,11 @@ impl AutopilotRunner {
             artifacts_dir: artifacts_dir.display().to_string(),
         };
         let report_path = artifacts_dir.join(format!("report-{run_id}.json"));
-        write_json(&report_path, &report);
+        write_json(&report_path, &report)?;
 
         // Write a symlink-like "latest" pointer
         let latest_path = artifacts_dir.join("latest-report.json");
-        write_json(&latest_path, &report);
+        write_json(&latest_path, &report)?;
 
         info!(
             dir = %artifacts_dir.display(),
@@ -197,7 +205,7 @@ impl AutopilotRunner {
             "Autopilot: artifacts written"
         );
 
-        report
+        Ok(report)
     }
 }
 
@@ -308,14 +316,17 @@ impl AutopilotReport {
 ///
 /// # Example
 /// ```ignore
-/// let report = run_autopilot_loop(Path::new("."), 50, None).await;
+/// let report = run_autopilot_loop(Path::new("."), 50, None).await?;
 /// println!("{}", report.operator_summary());
 /// ```
+///
+/// # Errors
+/// Propagates any error returned by [`AutopilotRunner::run`].
 pub async fn run_autopilot_loop(
     repo_root: &Path,
     window_size: usize,
     pg_url: Option<&str>,
-) -> AutopilotReport {
+) -> Result<AutopilotReport> {
     let effective_window = if window_size == 0 { 50 } else { window_size };
 
     let mut runner = AutopilotRunner::new(repo_root).with_window_size(effective_window);
@@ -327,17 +338,16 @@ pub async fn run_autopilot_loop(
     runner.run().await
 }
 
-fn write_json<T: Serialize>(path: &Path, data: &T) {
-    match serde_json::to_string_pretty(data) {
-        Ok(json) => {
-            if let Err(e) = std::fs::write(path, json) {
-                warn!(path = %path.display(), error = %e, "Failed to write autopilot artifact");
-            }
-        }
-        Err(e) => {
-            warn!(error = %e, "Failed to serialize autopilot artifact");
-        }
-    }
+fn write_json<T: Serialize>(path: &Path, data: &T) -> Result<()> {
+    let json = serde_json::to_string_pretty(data).with_context(|| {
+        format!(
+            "Failed to serialize autopilot artifact for {}",
+            path.display()
+        )
+    })?;
+    std::fs::write(path, json)
+        .with_context(|| format!("Failed to write autopilot artifact: {}", path.display()))?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -429,7 +439,7 @@ mod tests {
         std::fs::create_dir_all(&swarm_dir).unwrap();
 
         let runner = AutopilotRunner::new(tmp.path()).with_window_size(10);
-        let report = runner.run().await;
+        let report = runner.run().await.unwrap();
 
         assert_eq!(report.archive_summary.total_attempts, 0);
         assert!(report.insights.is_empty());
