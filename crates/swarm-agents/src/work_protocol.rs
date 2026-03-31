@@ -435,66 +435,6 @@ impl WorkResult {
         }
     }
 
-    /// Infer WorkStatus from an AdapterReport heuristically.
-    ///
-    /// Uses the adapter's termination signals to determine the most likely
-    /// outcome without relying on the worker's self-report (which may be
-    /// unreliable for local LLMs).
-    pub fn infer_status(report: &AdapterReport) -> WorkStatus {
-        if report.terminated_early {
-            let reason = report
-                .termination_reason
-                .clone()
-                .unwrap_or_else(|| "budget exhausted".into());
-            if report.has_written {
-                WorkStatus::Partial { reason }
-            } else {
-                WorkStatus::Stuck { reason }
-            }
-        } else if report.has_written {
-            WorkStatus::Complete
-        } else {
-            // Agent finished normally but never wrote — likely confused or blocked.
-            WorkStatus::Stuck {
-                reason: "agent completed without writing any files".into(),
-            }
-        }
-    }
-
-    /// Compute a heuristic confidence score from adapter telemetry.
-    ///
-    /// This provides a baseline confidence before verification runs.
-    /// After verification, use `with_verification()` which refines confidence
-    /// based on gate pass rates.
-    pub fn heuristic_confidence(report: &AdapterReport) -> f32 {
-        let mut score: f32 = 0.0;
-
-        // Did it write files? (+0.3)
-        if report.has_written {
-            score += 0.3;
-        }
-
-        // Didn't get terminated early? (+0.2)
-        if !report.terminated_early {
-            score += 0.2;
-        }
-
-        // Tool call efficiency: fewer calls per write = more focused (+0.1–0.2)
-        if report.has_written && report.total_tool_calls > 0 {
-            let writes = report.successful_writes.max(1) as f32;
-            let ratio = writes / report.total_tool_calls as f32;
-            // ratio of 0.1+ is efficient (1 write per 10 calls)
-            score += (ratio * 2.0).min(0.2);
-        }
-
-        // No failed edits? (+0.1)
-        if report.last_failed_edits.is_empty() {
-            score += 0.1;
-        }
-
-        score.clamp(0.0, 1.0)
-    }
-
     /// Attach verification results and refine confidence.
     pub fn with_verification(mut self, verification: VerificationResult) -> Self {
         // Refine confidence based on verification gates.
@@ -797,29 +737,6 @@ pub fn verification_from_report(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn infer_status_complete() {
-        let report = AdapterReport {
-            agent_name: "test".into(),
-            tool_events: vec![],
-            turn_count: 5,
-            total_tool_calls: 10,
-            total_tool_time_ms: 1000,
-            wall_time_ms: 5000,
-            terminated_early: false,
-            termination_reason: None,
-            has_written: true,
-            files_read: vec![],
-            files_modified: vec![],
-            successful_writes: 2,
-            last_failed_edits: vec![],
-        };
-        assert!(matches!(
-            WorkResult::infer_status(&report),
-            WorkStatus::Complete
-        ));
-    }
 
     #[test]
     fn verification_confidence_mapping() {

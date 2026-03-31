@@ -23,7 +23,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use chrono::Utc;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::meta_reflection::{MetaInsight, MetaReflector};
@@ -44,7 +44,7 @@ pub struct AutopilotRunner {
 }
 
 /// The complete output of an autopilot run.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct AutopilotReport {
     pub timestamp: String,
     pub archive_summary: ArchiveSummarySnapshot,
@@ -52,11 +52,26 @@ pub struct AutopilotReport {
     pub recommendations: Vec<ExperimentRecommendation>,
     pub tz_directives: Vec<String>,
     pub artifacts_dir: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trends: Option<TrendData>,
+}
+
+/// Week-over-week trend deltas computed from previous autopilot reports.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TrendData {
+    /// Change in resolution rate (current - previous), e.g. +0.05 means +5%.
+    pub resolution_rate_delta: f64,
+    /// Change in average iterations to resolve.
+    pub avg_iterations_delta: f64,
+    /// Change in insight count (current - previous).
+    pub insights_count_delta: i32,
+    /// How many previous reports were available for comparison.
+    pub reports_compared: usize,
 }
 
 /// Serializable snapshot of archive stats (ArchiveSummary has HashMap which
 /// serializes fine, but we want a clean top-level view).
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArchiveSummarySnapshot {
     pub total_attempts: usize,
     pub resolved: usize,
@@ -80,6 +95,58 @@ impl From<ArchiveSummary> for ArchiveSummarySnapshot {
             avg_iterations: s.avg_iterations_to_resolve,
         }
     }
+}
+
+/// Load previous autopilot report JSON files from the artifacts directory.
+///
+/// Reads `report-*.json` files, parses each into an [`AutopilotReport`],
+/// sorts by timestamp descending, and returns at most `limit` entries.
+fn load_previous_reports(artifacts_dir: &Path, limit: usize) -> Vec<AutopilotReport> {
+    let entries = match std::fs::read_dir(artifacts_dir) {
+        Ok(rd) => rd,
+        Err(e) => {
+            warn!(error = %e, "Failed to read autopilot artifacts directory");
+            return Vec::new();
+        }
+    };
+
+    let mut reports: Vec<AutopilotReport> = entries
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            name.starts_with("report-") && name.ends_with(".json")
+        })
+        .filter_map(|entry| {
+            let path = entry.path();
+            let contents = std::fs::read_to_string(&path).ok()?;
+            serde_json::from_str::<AutopilotReport>(&contents)
+                .map_err(|e| {
+                    warn!(path = %path.display(), error = %e, "Failed to parse autopilot report");
+                    e
+                })
+                .ok()
+        })
+        .collect();
+
+    // Sort by timestamp descending (ISO 8601 / RFC 3339 sorts lexicographically)
+    reports.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+    reports.truncate(limit);
+    reports
+}
+
+/// Compute trend deltas between the current report and the most recent previous one.
+fn compute_trends(current: &AutopilotReport, previous: &[AutopilotReport]) -> Option<TrendData> {
+    let prev = previous.first()?;
+
+    Some(TrendData {
+        resolution_rate_delta: current.archive_summary.resolution_rate
+            - prev.archive_summary.resolution_rate,
+        avg_iterations_delta: current.archive_summary.avg_iterations
+            - prev.archive_summary.avg_iterations,
+        insights_count_delta: current.insights.len() as i32 - prev.insights.len() as i32,
+        reports_compared: previous.len(),
+    })
 }
 
 impl AutopilotRunner {
@@ -183,15 +250,30 @@ impl AutopilotRunner {
         let runner_path = artifacts_dir.join(format!("runner-inputs-{run_id}.json"));
         write_json(&runner_path, &runner_inputs)?;
 
-        // Write full report
-        let report = AutopilotReport {
+        // Write full report (trends computed from previous reports)
+        let mut report = AutopilotReport {
             timestamp: now.to_rfc3339(),
             archive_summary: summary,
             insights,
             recommendations,
             tz_directives,
             artifacts_dir: artifacts_dir.display().to_string(),
+            trends: None,
         };
+
+        // --- Stage 6: Compute weekly trends ---
+        let previous_reports = load_previous_reports(&artifacts_dir, 7);
+        if let Some(trends) = compute_trends(&report, &previous_reports) {
+            info!(
+                resolution_rate_delta = format!("{:+.1}%", trends.resolution_rate_delta * 100.0),
+                avg_iterations_delta = format!("{:+.1}", trends.avg_iterations_delta),
+                insights_delta = trends.insights_count_delta,
+                compared = trends.reports_compared,
+                "Autopilot: trend data computed"
+            );
+            report.trends = Some(trends);
+        }
+
         let report_path = artifacts_dir.join(format!("report-{run_id}.json"));
         write_json(&report_path, &report)?;
 
@@ -270,6 +352,35 @@ impl AutopilotReport {
             for d in &self.tz_directives {
                 lines.push(format!("    • {d}"));
             }
+            lines.push(String::new());
+        }
+
+        // Trends
+        if let Some(ref trends) = self.trends {
+            let prev_rate = s.resolution_rate - trends.resolution_rate_delta;
+            let prev_iters = s.avg_iterations - trends.avg_iterations_delta;
+            let prev_insights = self.insights.len() as i32 - trends.insights_count_delta;
+
+            lines.push(format!(
+                "  Trends (vs last report, {} compared):",
+                trends.reports_compared
+            ));
+            lines.push(format!(
+                "    Resolution rate: {:.0}% -> {:.0}% ({:+.0}%)",
+                prev_rate * 100.0,
+                s.resolution_rate * 100.0,
+                trends.resolution_rate_delta * 100.0,
+            ));
+            lines.push(format!(
+                "    Avg iterations:  {:.1} -> {:.1} ({:+.1})",
+                prev_iters, s.avg_iterations, trends.avg_iterations_delta,
+            ));
+            lines.push(format!(
+                "    Insights: {} -> {} ({:+})",
+                prev_insights,
+                self.insights.len(),
+                trends.insights_count_delta,
+            ));
             lines.push(String::new());
         }
 
@@ -369,6 +480,7 @@ mod tests {
             recommendations: Vec::new(),
             tz_directives: Vec::new(),
             artifacts_dir: "/tmp/test".to_string(),
+            trends: None,
         };
         let summary = report.operator_summary();
         assert!(summary.contains("Autopilot Report"));
@@ -404,6 +516,7 @@ mod tests {
             recommendations: recs,
             tz_directives: vec!["Variant A is 3x faster than B".into()],
             artifacts_dir: "/tmp/test".to_string(),
+            trends: None,
         };
         let summary = report.operator_summary();
         assert!(summary.contains("1 found"));
@@ -427,6 +540,7 @@ mod tests {
             recommendations: Vec::new(),
             tz_directives: Vec::new(),
             artifacts_dir: "/tmp/test".to_string(),
+            trends: None,
         };
         let summary = report.operator_summary();
         assert!(summary.contains("below 50%"));
@@ -449,5 +563,180 @@ mod tests {
         let autopilot_dir = swarm_dir.join("autopilot");
         assert!(autopilot_dir.exists());
         assert!(autopilot_dir.join("latest-report.json").exists());
+    }
+
+    #[test]
+    fn trend_computation_from_two_reports() {
+        let previous = AutopilotReport {
+            timestamp: "2026-03-23T12:00:00Z".to_string(),
+            archive_summary: ArchiveSummarySnapshot {
+                total_attempts: 80,
+                resolved: 48,
+                failed: 32,
+                resolution_rate: 0.6,
+                avg_iterations: 2.5,
+            },
+            insights: vec![],
+            recommendations: vec![],
+            tz_directives: vec![],
+            artifacts_dir: "/tmp/old".to_string(),
+            trends: None,
+        };
+
+        use crate::meta_reflection::InsightType;
+        let current_insights = vec![
+            MetaInsight {
+                timestamp: Utc::now(),
+                insight_type: InsightType::ModelPerformance,
+                description: "insight-1".into(),
+                recommendation: "rec".into(),
+                confidence: 0.8,
+                evidence: vec![],
+            },
+            MetaInsight {
+                timestamp: Utc::now(),
+                insight_type: InsightType::ErrorPattern,
+                description: "insight-2".into(),
+                recommendation: "rec".into(),
+                confidence: 0.7,
+                evidence: vec![],
+            },
+        ];
+
+        let current = AutopilotReport {
+            timestamp: "2026-03-30T12:00:00Z".to_string(),
+            archive_summary: ArchiveSummarySnapshot {
+                total_attempts: 100,
+                resolved: 65,
+                failed: 35,
+                resolution_rate: 0.65,
+                avg_iterations: 2.1,
+            },
+            insights: current_insights,
+            recommendations: vec![],
+            tz_directives: vec![],
+            artifacts_dir: "/tmp/new".to_string(),
+            trends: None,
+        };
+
+        let trends = compute_trends(&current, &[previous]).unwrap();
+
+        // resolution_rate: 0.65 - 0.6 = 0.05
+        assert!((trends.resolution_rate_delta - 0.05).abs() < 1e-9);
+        // avg_iterations: 2.1 - 2.5 = -0.4
+        assert!((trends.avg_iterations_delta - (-0.4)).abs() < 1e-9);
+        // insights: 2 - 0 = 2
+        assert_eq!(trends.insights_count_delta, 2);
+        assert_eq!(trends.reports_compared, 1);
+    }
+
+    #[test]
+    fn trend_summary_display() {
+        let report = AutopilotReport {
+            timestamp: "2026-03-30T12:00:00Z".to_string(),
+            archive_summary: ArchiveSummarySnapshot {
+                total_attempts: 100,
+                resolved: 65,
+                failed: 35,
+                resolution_rate: 0.65,
+                avg_iterations: 2.1,
+            },
+            insights: vec![],
+            recommendations: vec![],
+            tz_directives: vec![],
+            artifacts_dir: "/tmp/test".to_string(),
+            trends: Some(TrendData {
+                resolution_rate_delta: 0.05,
+                avg_iterations_delta: -0.4,
+                insights_count_delta: 2,
+                reports_compared: 1,
+            }),
+        };
+        let summary = report.operator_summary();
+        assert!(summary.contains("Trends (vs last report"));
+        assert!(summary.contains("Resolution rate:"));
+        assert!(summary.contains("+5%"));
+        assert!(summary.contains("-0.4"));
+    }
+
+    #[test]
+    fn no_trends_when_no_previous_reports() {
+        let current = AutopilotReport {
+            timestamp: "2026-03-30T12:00:00Z".to_string(),
+            archive_summary: ArchiveSummarySnapshot {
+                total_attempts: 10,
+                resolved: 5,
+                failed: 5,
+                resolution_rate: 0.5,
+                avg_iterations: 3.0,
+            },
+            insights: vec![],
+            recommendations: vec![],
+            tz_directives: vec![],
+            artifacts_dir: "/tmp/test".to_string(),
+            trends: None,
+        };
+        let trends = compute_trends(&current, &[]);
+        assert!(trends.is_none());
+    }
+
+    #[test]
+    fn load_previous_reports_from_disk() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+
+        // Write two mock report files
+        let report_old = AutopilotReport {
+            timestamp: "2026-03-16T12:00:00Z".to_string(),
+            archive_summary: ArchiveSummarySnapshot {
+                total_attempts: 50,
+                resolved: 25,
+                failed: 25,
+                resolution_rate: 0.5,
+                avg_iterations: 3.0,
+            },
+            insights: vec![],
+            recommendations: vec![],
+            tz_directives: vec![],
+            artifacts_dir: dir.display().to_string(),
+            trends: None,
+        };
+        let report_new = AutopilotReport {
+            timestamp: "2026-03-23T12:00:00Z".to_string(),
+            archive_summary: ArchiveSummarySnapshot {
+                total_attempts: 80,
+                resolved: 48,
+                failed: 32,
+                resolution_rate: 0.6,
+                avg_iterations: 2.5,
+            },
+            insights: vec![],
+            recommendations: vec![],
+            tz_directives: vec![],
+            artifacts_dir: dir.display().to_string(),
+            trends: None,
+        };
+
+        std::fs::write(
+            dir.join("report-20260316-120000.json"),
+            serde_json::to_string_pretty(&report_old).unwrap(),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("report-20260323-120000.json"),
+            serde_json::to_string_pretty(&report_new).unwrap(),
+        )
+        .unwrap();
+
+        let loaded = load_previous_reports(dir, 7);
+        assert_eq!(loaded.len(), 2);
+        // Most recent first
+        assert_eq!(loaded[0].timestamp, "2026-03-23T12:00:00Z");
+        assert_eq!(loaded[1].timestamp, "2026-03-16T12:00:00Z");
+
+        // Limit works
+        let loaded_1 = load_previous_reports(dir, 1);
+        assert_eq!(loaded_1.len(), 1);
+        assert_eq!(loaded_1[0].timestamp, "2026-03-23T12:00:00Z");
     }
 }

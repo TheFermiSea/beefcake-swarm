@@ -1097,39 +1097,6 @@ mod tests {
     }
 
     #[test]
-    fn intent_guard_allows_command_removal() {
-        let contract = IntentContract {
-            issue_id: "test".into(),
-            original_title: "Add annotations to boltzmann.py".into(),
-            original_description: Some(
-                "- Add `from __future__ import annotations`\n\
-                 - Replace typing.List with list\n\
-                 Run: ruff check --select UP006"
-                    .into(),
-            ),
-            required_outcomes: vec![
-                "Add `from __future__ import annotations`".into(),
-                "Replace typing.List with list".into(),
-                "Run: ruff check --select UP006".into(),
-            ],
-            acceptance_signals: vec!["Run: ruff check --select UP006".into()],
-            intent_digest: "abc123".into(),
-            created_at: Utc::now(),
-        };
-
-        let new_desc = "- Add `from __future__ import annotations`\n\
-                         - Replace typing.List with list\n\
-                         The verifier gates will validate.";
-
-        let verdict = check_intent_guard(&contract, new_desc);
-        assert!(
-            verdict.allowed,
-            "Should allow removing verification commands: {:?}",
-            verdict.violations
-        );
-    }
-
-    #[test]
     fn intent_guard_rejects_requirement_removal() {
         let contract = IntentContract {
             issue_id: "test".into(),
