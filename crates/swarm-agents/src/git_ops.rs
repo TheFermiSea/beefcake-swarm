@@ -360,9 +360,22 @@ pub(crate) fn collect_artifacts_from_diff(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        filter_meaningful_diff_output, filter_meaningful_status, is_operational_artifact_path,
-    };
+    use super::{filter_meaningful_diff_output, filter_meaningful_status};
+
+    #[test]
+    fn operational_artifact_detection_covers_beads_and_swarm_files() {
+        assert!(super::is_operational_artifact_path(".beads"));
+        assert!(super::is_operational_artifact_path(
+            ".beads/backup/issues.jsonl"
+        ));
+        assert!(super::is_operational_artifact_path(".swarm-metrics.json"));
+        assert!(super::is_operational_artifact_path(
+            ".swarm-artifacts/session-1/report.json"
+        ));
+        assert!(!super::is_operational_artifact_path(
+            "crates/swarm-agents/src/orchestrator.rs"
+        ));
+    }
 
     #[test]
     fn status_filter_drops_operational_artifacts() {

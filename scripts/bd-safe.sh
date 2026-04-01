@@ -12,7 +12,16 @@ if ! command -v git >/dev/null 2>&1; then
 fi
 
 resolve_common_root() {
-  local common_git_dir
+  local common_git_dir root_override
+  root_override="${BD_SAFE_REPO_ROOT:-}"
+  if [[ -n "$root_override" ]]; then
+    cd "$root_override" && pwd -P
+    return 0
+  fi
+  if ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    echo "error: bd-safe.sh must be run from inside a git worktree or with BD_SAFE_REPO_ROOT set" >&2
+    exit 1
+  fi
   common_git_dir="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null || git rev-parse --git-common-dir)"
   common_git_dir="$(cd "$common_git_dir" && pwd -P)"
   cd "$common_git_dir/.." && pwd -P
@@ -73,13 +82,20 @@ main() {
     fi
   fi
 
-  local tmp_output status
+  local tmp_output tmp_stdout tmp_stderr status
   tmp_output="$(mktemp)"
+  tmp_stdout="$(mktemp)"
+  tmp_stderr="$(mktemp)"
+  trap 'rm -f "$tmp_output" "$tmp_stdout" "$tmp_stderr"' EXIT
   status=0
-  if ! bd "$@" >"$tmp_output" 2>&1; then
+  if bd "$@" >"$tmp_stdout" 2>"$tmp_stderr"; then
+    status=0
+  else
     status=$?
   fi
-  cat "$tmp_output"
+  cat "$tmp_stdout"
+  cat "$tmp_stderr" >&2
+  cat "$tmp_stdout" "$tmp_stderr" >"$tmp_output"
 
   if shared_server_enabled; then
     if [[ $# -ge 1 && ( "$1" == "context" || "$1" == "where" || "$1" == "info" ) ]]; then
@@ -103,7 +119,8 @@ main() {
     fi
   fi
 
-  rm -f "$tmp_output"
+  rm -f "$tmp_output" "$tmp_stdout" "$tmp_stderr"
+  trap - EXIT
   exit "$status"
 }
 
