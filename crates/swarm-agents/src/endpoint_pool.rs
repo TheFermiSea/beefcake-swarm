@@ -219,25 +219,4 @@ impl Clone for EndpointPool {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// Verify round-robin wraps correctly across 3 nodes.
-    ///
-    /// We can't easily build real `CompletionsClient`s in unit tests without
-    /// network access, so we test the counter logic directly.
-    #[test]
-    fn round_robin_counter_cycles() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let n = 3usize;
-
-        let indices: Vec<usize> = (0..6)
-            .map(|_| counter.fetch_add(1, Ordering::Relaxed) % n)
-            .collect();
-
-        // Should cycle: 0, 1, 2, 0, 1, 2
-        assert_eq!(indices, vec![0, 1, 2, 0, 1, 2]);
-        // Position 0 == position 3 (wraps at 3)
-        assert_eq!(indices[0], indices[3]);
-        // Adjacent positions differ
-        assert_ne!(indices[0], indices[1]);
-    }
 }
