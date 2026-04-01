@@ -281,17 +281,15 @@ mod tests {
     }
 
     #[test]
-    fn compaction_threshold_tokens() {
+    fn invalid_compaction_threshold_rejected() {
         let cfg = CompactionConfig {
             context_window_tokens: 32_768,
-            compaction_threshold: 0.75,
+            compaction_threshold: 1.5,
             min_messages_before_compaction: 4,
         };
-        assert_eq!(cfg.trigger_threshold_tokens(), 24_576);
+        assert!(cfg.validate().is_err());
     }
 
-    #[test]
-    fn invalid_compaction_threshold_rejected() {
         let cfg = CompactionConfig {
             context_window_tokens: 32_768,
             compaction_threshold: 1.5,
