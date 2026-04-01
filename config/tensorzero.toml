@@ -121,8 +121,9 @@ tools = ["edit_file", "write_file", "proxy_edit_file", "proxy_write_file"]
 #   vasp-*:8082  — nomic-embed-text-v1.5 (CPU embedding service, all nodes)
 #
 # Active A/B: glm_flash vs qwen35_27b vs devstral_24b (Thompson Sampling on task_resolved).
-# SERA-14B and DICL removed from candidate_variants: SERA has 8K ctx + shared GPU;
-# DICL had 0 inferences (no demonstrations seeded). Both remain defined but inactive.
+# SERA-14B removed from candidate_variants: 8K context cap, shared GPU with GLM on vasp-03.
+# DICL removed entirely: no demonstrations seeded; TZ validates ALL defined variants,
+# so keeping DICL variant definitions caused startup failures on TZ 2026.3.2.
 
 # --- Scout/fast tier on vasp-03 (GLM-4.7-Flash, SOTA tool-calling) ---
 
@@ -266,7 +267,8 @@ update_period_s = 300
 # GLM-4.7-Flash (scout/fast), Qwen3.5-27B (coder), Devstral-24B (reasoning)
 # Thompson Sampling routes toward the model that maximizes task_resolved.
 # SERA-14B removed: shares GPU with GLM-4.7-Flash (VRAM contention), 8K context limit.
-# DICL removed: 0 inferences in 3 days (Thompson Sampling abandoned it — no demonstrations).
+# DICL removed: 0 inferences in 3 days (no demonstrations seeded). TZ 2026.3.2
+# validates ALL defined variants at startup — keeping the definition causes crashes.
 [functions.worker_code_edit]
 type = "chat"
 
@@ -356,9 +358,12 @@ type = "chat"
 type = "chat_completion"
 model = "qwen_coder"
 
-# ─── Embedding Models ──────────────────────────────────────────────────────
+# ─── Embedding Models (archived — nomic-embed for future DICL) ───────────────
 # nomic-embed-text-v1.5 runs on CPU across all vasp nodes (port 8082).
 # Used by DICL for semantic similarity retrieval of past successful fixes.
+# DICL variants removed from functions: TZ validates all defined variants even
+# if not in candidate_variants, and embedding model validation was failing.
+# Re-add DICL variants once demonstrations are seeded (see scripts/setup-dicl.py).
 
 [models.nomic_embed]
 routing = ["vasp_embed"]
@@ -368,22 +373,3 @@ type = "openai"
 model_name = "nomic-embed-text-v1.5"
 api_base = "http://10.0.0.22:8082/v1"
 api_key_location = "none"
-
-# ─── DICL Variants ─────────────────────────────────────────────────────────
-# Dynamic In-Context Learning: retrieves k most-similar past successful fixes
-# at inference time and injects them into the prompt. Requires demonstrations
-# to be posted and DICL optimization to be run (see scripts/setup-dicl.py).
-
-# --- DICL variant for worker_code_edit ---
-[functions.worker_code_edit.variants.dicl_worker]
-type = "experimental_dynamic_in_context_learning"
-embedding_model = "nomic_embed"
-k = 3
-model = "qwen_coder"
-
-# --- DICL variant for code_fixing ---
-[functions.code_fixing.variants.dicl_fixer]
-type = "experimental_dynamic_in_context_learning"
-embedding_model = "nomic_embed"
-k = 3
-model = "qwen_coder"
