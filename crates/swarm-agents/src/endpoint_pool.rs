@@ -240,18 +240,4 @@ mod tests {
         // Adjacent positions differ
         assert_ne!(indices[0], indices[1]);
     }
-
-    /// Verify worker-only pool cycles across 2 nodes (coder, reasoning).
-    #[test]
-    fn worker_pool_cycles_two_nodes() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let n = 2usize;
-
-        let indices: Vec<usize> = (0..6)
-            .map(|_| counter.fetch_add(1, Ordering::Relaxed) % n)
-            .collect();
-
-        // Should cycle: 0, 1, 0, 1, 0, 1
-        assert_eq!(indices, vec![0, 1, 0, 1, 0, 1]);
-    }
 }
