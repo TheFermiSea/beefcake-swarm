@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# train-lora.sh — QLoRA fine-tuning of Qwen2.5-Coder-14B on swarm production data.
+# train-lora.sh — QLoRA fine-tuning for local swarm models.
 #
 # Uses unsloth for 4x faster QLoRA training on V100S 32GB.
 # Reads chat-style JSONL produced by extract-training-data.py.
@@ -152,7 +152,7 @@ def load_config(config_path: str) -> dict:
     """Load TOML config with sensible defaults."""
     defaults = {
         "base_model": {
-            "source": "unsloth/Qwen2.5-Coder-14B-Instruct",
+            "source": "unsloth/Devstral-Small-2-24B-Instruct",
         },
         "qlora": {
             "rank": 32,
@@ -426,7 +426,13 @@ fi
 SAFETENSORS_DIR="${OUTPUT_DIR}/safetensors"
 GGUF_OUTPUT="${OUTPUT_DIR}/${ADAPTER_NAME}.gguf"
 
-log "Converting adapter to GGUF LoRA format..."
+# Read base model source from the metadata saved by the training script.
+METADATA_FILE="${OUTPUT_DIR}/training_metadata.json"
+BASE_MODEL_SOURCE=$(python3 -c "import json; print(json.load(open('${METADATA_FILE}'))['base_model'])" 2>/dev/null \
+  || python3 -c "import toml; c=toml.load('${CONFIG_FILE}'); print(c['base_model']['source'])" 2>/dev/null \
+  || echo "unsloth/Devstral-Small-2-24B-Instruct")
+
+log "Converting adapter to GGUF LoRA format (base: ${BASE_MODEL_SOURCE})..."
 
 # Try llama-export-lora first (llama.cpp native tool), fall back to Python converter.
 if command -v llama-export-lora &>/dev/null; then
@@ -438,7 +444,7 @@ if command -v llama-export-lora &>/dev/null; then
 elif [[ -f "/cluster/shared/llama-cpp/convert_lora_to_gguf.py" ]]; then
   log "Using convert_lora_to_gguf.py for GGUF conversion"
   python3 /cluster/shared/llama-cpp/convert_lora_to_gguf.py \
-    --base "unsloth/Qwen2.5-Coder-14B-Instruct" \
+    --base "${BASE_MODEL_SOURCE}" \
     "${SAFETENSORS_DIR}" \
     --outfile "${GGUF_OUTPUT}"
 else
@@ -447,7 +453,7 @@ else
   if [[ -n "$CONVERTER" ]]; then
     log "Using $CONVERTER for GGUF conversion"
     python3 "$CONVERTER" \
-      --base "unsloth/Qwen2.5-Coder-14B-Instruct" \
+      --base "${BASE_MODEL_SOURCE}" \
       "${SAFETENSORS_DIR}" \
       --outfile "${GGUF_OUTPUT}"
   else

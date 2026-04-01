@@ -3,23 +3,44 @@
 # Used by scripts/train-lora.sh to configure training hyperparameters.
 # Training data is produced by scripts/extract-training-data.py as JSONL
 # with chat-style messages: {system, user, assistant} per episode.
+#
+# Target nodes and their models:
+#   vasp-02 (recommended): Devstral-Small-2-24B — current TZ top performer, 32GB V100S, ~15GB VRAM headroom
+#   vasp-01 (alternative): Qwen3.5-27B         — highest ceiling, 32GB V100S, ~12GB VRAM headroom
+#
+# IMPORTANT: Stop inference on the target node before training:
+#   ssh root@vasp-02 "pkill -f llama-server"   # free ~19GB
+#   bash scripts/train-lora.sh --data training_data.jsonl --name devstral-swarm-v1
+#   ssh root@vasp-02 "bash /tmp/start-inference.sh"   # restart
 
+# --- Primary target: Devstral-Small-2-24B (vasp-02) ---
+# TZ best performer (100% bool_pass). Mistral architecture = reliable unsloth support.
+# HuggingFace source: mistralai/Devstral-Small-2-24B
+# V100S has no native bfloat16; unsloth uses float16 automatically — stable for LoRA.
 [base_model]
-name = "Qwen2.5-Coder-14B-Instruct"
-source = "unsloth/Qwen2.5-Coder-14B-Instruct"
+name = "Devstral-Small-2-24B"
+source = "unsloth/Devstral-Small-2-24B-Instruct"
+
+# --- Alternative: Qwen3.5-27B (vasp-01, tighter fit but highest ceiling) ---
+# Uncomment to switch target:
+# name = "Qwen3.5-27B-Instruct"
+# source = "unsloth/Qwen3.5-27B-Instruct"
 
 [qlora]
-rank = 32
+# rank=16 for 24B+ models: same expressive power as rank=32 on 14B, uses less VRAM.
+rank = 16
 alpha = 16
-dropout = 0.1
+dropout = 0.05
 target_modules = ["q_proj", "k_proj", "v_proj", "o_proj", "gate_proj", "up_proj", "down_proj"]
 
 [training]
 epochs = 2
-learning_rate = 2e-4
-batch_size = 4
-gradient_accumulation_steps = 4
-max_seq_length = 4096
+learning_rate = 1e-4
+# batch_size=2 + grad_accum=8 = effective batch 16; safer for 24B on V100S float16.
+batch_size = 2
+gradient_accumulation_steps = 8
+# 8192 captures multi-file tool call sequences; well within 32GB with gradient checkpointing.
+max_seq_length = 8192
 warmup_ratio = 0.05
 weight_decay = 0.01
 lr_scheduler = "cosine"
