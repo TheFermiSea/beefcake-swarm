@@ -394,7 +394,7 @@ impl CloudFallbackMatrix {
         }
     }
 
-    /// Default matrix: Claude Opus 4.6 → Gemini 3.1 Pro High → Sonnet 4.6 → Gemini 3.1 Flash Lite.
+    /// Default matrix: GPT-5.4-mini → Gemini 3.1 Pro High → Sonnet 4.6 → Gemini 3.1 Flash Lite.
     ///
     /// Gemini 3.1 Pro has 2M context for whole-codebase understanding. Sonnet 4.6
     /// is a stronger fallback when the OpenAI primary is unavailable. Gemini 3.1 Flash Lite is the
@@ -403,7 +403,7 @@ impl CloudFallbackMatrix {
         Self {
             entries: vec![
                 CloudFallbackEntry {
-                    model: "claude-opus-4-6".to_string(),
+                    model: "gpt-5.4-mini".to_string(),
                     tier_label: "primary".to_string(),
                     max_tokens: 4096,
                 },
@@ -887,7 +887,7 @@ impl SwarmConfig {
     fn cloud_from_env() -> Option<CloudEndpoint> {
         let url = std::env::var("SWARM_CLOUD_URL").ok()?;
         let api_key = std::env::var("SWARM_CLOUD_API_KEY").ok()?;
-        let model = std::env::var("SWARM_CLOUD_MODEL").unwrap_or_else(|_| "claude-opus-4-6".into());
+        let model = std::env::var("SWARM_CLOUD_MODEL").unwrap_or_else(|_| "gpt-5.4-mini".into());
         Some(CloudEndpoint {
             url,
             api_key,
@@ -930,14 +930,14 @@ impl SwarmConfig {
             },
             reasoning_endpoint: Endpoint {
                 url: proxy_url.clone(),
-                model: "claude-opus-4-6".into(),
+                model: "gpt-5.4-mini".into(),
                 tier: Tier::Reasoning,
                 api_key: proxy_key.clone(),
             },
             cloud_endpoint: Some(CloudEndpoint {
                 url: proxy_url.clone(),
                 api_key: proxy_key.clone(),
-                model: "claude-opus-4-6".into(),
+                model: "gpt-5.4-mini".into(),
             }),
             strategist_endpoint: Some(Endpoint {
                 url: proxy_url,
@@ -1324,7 +1324,7 @@ mod tests {
         assert_eq!(matrix.len(), 4);
         assert!(!matrix.is_empty());
         let primary = matrix.primary().unwrap();
-        assert_eq!(primary.model, "claude-opus-4-6");
+        assert_eq!(primary.model, "gpt-5.4-mini");
         assert_eq!(primary.tier_label, "primary");
         let fallbacks = matrix.fallbacks();
         assert_eq!(fallbacks.len(), 3);
@@ -1348,7 +1348,7 @@ mod tests {
         assert_eq!(config.cloud_fallback_matrix.len(), 4);
         assert_eq!(
             config.cloud_fallback_matrix.primary().unwrap().model,
-            "claude-opus-4-6"
+            "gpt-5.4-mini"
         );
     }
 }
