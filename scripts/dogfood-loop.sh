@@ -29,6 +29,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
+# Emergency stop sentinel: touch /tmp/beefcake-dogfood-stop to prevent all new starts.
+# This is checked before acquiring the lockfile so even parallel children abort immediately.
+if [[ -f "/tmp/beefcake-dogfood-stop" ]]; then
+    echo "[dogfood-loop] Stop sentinel /tmp/beefcake-dogfood-stop exists; aborting." >&2
+    exit 0
+fi
+
 # Source persistent env file if it exists (ensures API keys are available
 # in nohup/cron/systemd contexts where ~/.bashrc is not sourced).
 if [[ -f "$HOME/.swarm-env" ]]; then
