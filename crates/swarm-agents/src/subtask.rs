@@ -1004,7 +1004,7 @@ mod tests {
         // The integration file check prevents the SAME file in multiple subtasks,
         // which is already caught by the non-overlap check. The real value is as a
         // documentation/prompt constraint for the planner.
-        let plan = parse_subtask_plan(json).unwrap();
+        let _plan = parse_subtask_plan(json).unwrap();
     }
 
     #[test]
