@@ -198,7 +198,10 @@ impl WorkPacketGenerator {
             // Extract structs
             for cap in STRUCT_PATTERN.captures_iter(&content) {
                 if let Some(name) = cap.get(1) {
-                    let line = content[..cap.get(0).unwrap().start()].lines().count() + 1;
+                    let line = cap
+                        .get(0)
+                        .map(|m| content[..m.start()].lines().count() + 1)
+                        .unwrap_or(1);
                     symbols.push(KeySymbol {
                         name: name.as_str().to_string(),
                         kind: SymbolKind::Struct,
@@ -211,7 +214,10 @@ impl WorkPacketGenerator {
             // Extract traits
             for cap in TRAIT_PATTERN.captures_iter(&content) {
                 if let Some(name) = cap.get(1) {
-                    let line = content[..cap.get(0).unwrap().start()].lines().count() + 1;
+                    let line = cap
+                        .get(0)
+                        .map(|m| content[..m.start()].lines().count() + 1)
+                        .unwrap_or(1);
                     symbols.push(KeySymbol {
                         name: name.as_str().to_string(),
                         kind: SymbolKind::Trait,
@@ -224,7 +230,10 @@ impl WorkPacketGenerator {
             // Extract enums
             for cap in ENUM_PATTERN.captures_iter(&content) {
                 if let Some(name) = cap.get(1) {
-                    let line = content[..cap.get(0).unwrap().start()].lines().count() + 1;
+                    let line = cap
+                        .get(0)
+                        .map(|m| content[..m.start()].lines().count() + 1)
+                        .unwrap_or(1);
                     symbols.push(KeySymbol {
                         name: name.as_str().to_string(),
                         kind: SymbolKind::Enum,
@@ -241,7 +250,10 @@ impl WorkPacketGenerator {
                     break;
                 }
                 if let Some(name) = cap.get(1) {
-                    let line = content[..cap.get(0).unwrap().start()].lines().count() + 1;
+                    let line = cap
+                        .get(0)
+                        .map(|m| content[..m.start()].lines().count() + 1)
+                        .unwrap_or(1);
                     symbols.push(KeySymbol {
                         name: name.as_str().to_string(),
                         kind: SymbolKind::Function,
