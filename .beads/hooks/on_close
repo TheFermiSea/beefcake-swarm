@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# .beads/hooks/on_close — Log issue closure events for swarm observability.
+# Receives JSON issue data on stdin from beads.
+#
+# Appends a structured JSON line to $REPO_ROOT/.swarm-hook-events.jsonl
+# so the orchestrator can poll for lifecycle events.
+#
+# Fails silently — hooks must never block the beads CLI.
+
+set -o pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+EVENT_LOG="${REPO_ROOT}/.swarm-hook-events.jsonl"
+
+# Read stdin (beads pipes issue JSON)
+INPUT="$(cat)" || exit 0
+[ -z "$INPUT" ] && exit 0
+
+# Extract fields — prefer jq, fall back to simple grep/sed
+if command -v jq >/dev/null 2>&1; then
+  ISSUE_ID="$(printf '%s' "$INPUT" | jq -r '.id // .task_ref // "unknown"')"
+  TITLE="$(printf '%s' "$INPUT" | jq -r '.title // "untitled"')"
+  REASON="$(printf '%s' "$INPUT" | jq -r '.reason // .close_reason // "none"')"
+  TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  printf '%s\n' "$(jq -n \
+    --arg ts "$TIMESTAMP" \
+    --arg ev "issue.closed" \
+    --arg id "$ISSUE_ID" \
+    --arg title "$TITLE" \
+    --arg reason "$REASON" \
+    '{timestamp: $ts, event: $ev, issue_id: $id, title: $title, reason: $reason}')" \
+    >> "$EVENT_LOG" 2>/dev/null
+else
+  # Fallback: best-effort extraction without jq
+  ISSUE_ID="$(printf '%s' "$INPUT" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  [ -z "$ISSUE_ID" ] && ISSUE_ID="unknown"
+  TITLE="$(printf '%s' "$INPUT" | sed -n 's/.*"title"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  [ -z "$TITLE" ] && TITLE="untitled"
+  REASON="$(printf '%s' "$INPUT" | sed -n 's/.*"reason"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  [ -z "$REASON" ] && REASON="none"
+  TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+  printf '{"timestamp":"%s","event":"issue.closed","issue_id":"%s","title":"%s","reason":"%s"}\n' \
+    "$TIMESTAMP" "$ISSUE_ID" "$TITLE" "$REASON" \
+    >> "$EVENT_LOG" 2>/dev/null
+fi
+
+exit 0
