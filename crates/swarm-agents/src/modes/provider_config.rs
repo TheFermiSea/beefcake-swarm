@@ -289,12 +289,4 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
     }
-
-        let cfg = CompactionConfig {
-            context_window_tokens: 32_768,
-            compaction_threshold: 1.5,
-            min_messages_before_compaction: 4,
-        };
-        assert!(cfg.validate().is_err());
-    }
 }
