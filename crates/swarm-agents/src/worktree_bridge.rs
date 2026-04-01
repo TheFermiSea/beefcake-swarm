@@ -78,6 +78,42 @@ fn clean_git_locks(repo_root: &Path) {
     }
 }
 
+fn is_operational_artifact_path(path: &str) -> bool {
+    path == ".beads"
+        || path.starts_with(".beads/")
+        || path == ".beadhub"
+        || path.starts_with(".beadhub/")
+        || path.starts_with(".swarm-")
+        || matches!(
+            path,
+            ".swarm/intent-contracts.jsonl"
+                | ".swarm/reformulations.jsonl"
+                | ".swarm/mutation-archive.jsonl"
+                | ".swarm/session-handoff.json"
+                | ".swarm/session-handoff.md"
+                | ".swarm/skills.json"
+                | ".swarm/sprint-contracts.jsonl"
+        )
+        || path == ".swarm/autopilot"
+        || path.starts_with(".swarm/autopilot/")
+        || path == "logs/dogfood"
+        || path.starts_with("logs/dogfood/")
+}
+
+fn porcelain_status_path(line: &str) -> Option<&str> {
+    let payload = line.get(3..)?.trim();
+    if payload.is_empty() {
+        return None;
+    }
+
+    Some(
+        payload
+            .rsplit_once(" -> ")
+            .map(|(_, new_path)| new_path.trim())
+            .unwrap_or(payload),
+    )
+}
+
 fn tracked_changes(repo_root: &Path) -> Result<Vec<String>> {
     let output = Command::new("git")
         .args(["status", "--porcelain", "--untracked-files=no"])
@@ -91,12 +127,8 @@ fn tracked_changes(repo_root: &Path) -> Result<Vec<String>> {
 
     Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
-        .filter_map(|line| line.get(3..))
-        .filter(|path| {
-            !path.starts_with(".beads")
-                && !path.starts_with(".swarm-")
-                && !path.starts_with(".beadhub")
-        })
+        .filter_map(porcelain_status_path)
+        .filter(|path| !is_operational_artifact_path(path))
         .map(|path| path.to_string())
         .collect())
 }
@@ -348,7 +380,7 @@ impl WorktreeBridge {
                     .open(&exclude_file)
                 {
                     let _ = f.write_all(
-                        b"\n# Orchestrator artifacts\n.swarm-progress.txt\n.swarm-session.json\n.swarm-*\n.swarm-*/\n# Beads data (auto-modified by bd, not real code changes)\n# .beads (no slash) matches the symlink; .beads/ matches the directory fallback\n.beads\n.beads/\n",
+                        b"\n# Orchestrator artifacts\n.swarm-progress.txt\n.swarm-session.json\n.swarm-*\n.swarm-*/\n.swarm/intent-contracts.jsonl\n.swarm/reformulations.jsonl\n.swarm/mutation-archive.jsonl\n.swarm/session-handoff.json\n.swarm/session-handoff.md\n.swarm/skills.json\n.swarm/sprint-contracts.jsonl\n.swarm/autopilot/\nlogs/dogfood/\n# Beads data (auto-modified by bd, not real code changes)\n# .beads (no slash) matches the symlink; .beads/ matches the directory fallback\n.beads\n.beads/\n",
                     );
                 }
             }
@@ -525,16 +557,13 @@ impl WorktreeBridge {
 
             let status_text = String::from_utf8_lossy(&status.stdout);
             // Filter out operational artifacts — these are infrastructure noise,
-            // not real code changes. Includes .beads/ (beads DB), .swarm-* (telemetry,
-            // workpad, experiment ledger), and .beadhub (coordination config).
+            // not real code changes. Includes .beads/ (beads DB), generated
+            // `.swarm/*` runtime state, .beadhub (coordination config), and
+            // dogfood logs.
             let non_beads_changes: Vec<&str> = status_text
                 .lines()
-                .filter(|line| {
-                    let path = line.get(3..).unwrap_or("");
-                    !path.starts_with(".beads")
-                        && !path.starts_with(".swarm-")
-                        && !path.starts_with(".beadhub")
-                })
+                .filter_map(porcelain_status_path)
+                .filter(|path| !is_operational_artifact_path(path))
                 .collect();
 
             if !non_beads_changes.is_empty() {
@@ -661,42 +690,23 @@ impl WorktreeBridge {
             }
         }
 
-        // Auto-stash dirty tracked files (e.g. Cargo.lock dirtied by builds)
-        // so they don't block the merge. Pop the stash after merging.
+        // Merges must land from a clean integration checkout. Operational
+        // artifacts are filtered out by `tracked_changes()`, but any remaining
+        // tracked modifications are real source edits and must be resolved
+        // before the merge proceeds.
         let repo_root_changes = tracked_changes(&self.repo_root)?;
-        let did_stash = if !repo_root_changes.is_empty() {
+        if !repo_root_changes.is_empty() {
             let sample = repo_root_changes
                 .iter()
                 .take(5)
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(", ");
-            tracing::info!(
-                issue_id = %issue_id,
-                dirty_files = %sample,
-                "Auto-stashing dirty tracked files before merge"
+            bail!(
+                "Refusing to merge {issue_id}: repo root has dirty tracked files ({sample}). \
+                 Commit, stash, or discard those changes before retrying."
             );
-            let stash = Command::new("git")
-                .args([
-                    "stash",
-                    "push",
-                    "-m",
-                    &format!("swarm-auto-stash-{issue_id}"),
-                ])
-                .current_dir(&self.repo_root)
-                .output()
-                .context("Failed to auto-stash before merge")?;
-            if !stash.status.success() {
-                let stderr = String::from_utf8_lossy(&stash.stderr);
-                bail!(
-                    "Auto-stash failed for dirty files ({sample}): {stderr}. \
-                     Commit or stash those files manually before retrying."
-                );
-            }
-            true
-        } else {
-            false
-        };
+        }
 
         // Merge the branch into the main repo
         let merge_msg = format!("swarm: merge {issue_id}");
@@ -706,30 +716,6 @@ impl WorktreeBridge {
             3,
         )
         .context("Failed to merge worktree branch")?;
-
-        // Restore stash regardless of merge outcome
-        if did_stash {
-            let pop = Command::new("git")
-                .args(["stash", "pop"])
-                .current_dir(&self.repo_root)
-                .output();
-            match pop {
-                Ok(out) if out.status.success() => {
-                    tracing::debug!(issue_id = %issue_id, "Auto-stash restored after merge");
-                }
-                Ok(out) => {
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    tracing::warn!(
-                        issue_id = %issue_id,
-                        stderr = %stderr.trim(),
-                        "Auto-stash pop had conflicts — stash preserved, check manually"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(issue_id = %issue_id, error = %e, "Failed to pop auto-stash");
-                }
-            }
-        }
 
         if !merge.status.success() {
             let stderr = String::from_utf8_lossy(&merge.stderr);
@@ -791,25 +777,34 @@ impl WorktreeBridge {
 
         // --- Push to remote ---
         // Push merged changes to origin so they're not stranded on the local repo.
-        // Best-effort: push failure is non-fatal (the merge already succeeded locally).
+        // This is part of durability: if the push fails, the merge must not be
+        // reported as a success.
         let push = Command::new("git")
             .args(["push", "origin", "main"])
             .current_dir(&self.repo_root)
             .output();
+        let mut push_error: Option<String> = None;
         match push {
             Ok(output) if output.status.success() => {
                 tracing::info!(issue_id = %issue_id, "Pushed merge to origin/main");
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
+                let message = format!(
+                    "git push failed after merge — merge is not durable: {}",
+                    stderr.trim()
+                );
                 tracing::warn!(
                     issue_id = %issue_id,
                     stderr = %stderr.trim(),
-                    "git push failed (non-fatal) — merge is local only"
+                    "git push failed after merge — merge is not durable"
                 );
+                push_error = Some(message);
             }
             Err(e) => {
-                tracing::warn!(issue_id = %issue_id, error = %e, "git push failed (non-fatal)");
+                let message = format!("git push failed after merge — merge is not durable: {e}");
+                tracing::warn!(issue_id = %issue_id, error = %e, "git push failed after merge — merge is not durable");
+                push_error = Some(message);
             }
         }
 
@@ -845,6 +840,10 @@ impl WorktreeBridge {
         if !del.status.success() {
             let stderr = String::from_utf8_lossy(&del.stderr);
             tracing::warn!(stderr = %stderr.trim(), "git branch -D warning");
+        }
+
+        if let Some(message) = push_error {
+            bail!("Merge failed for {issue_id}: {message}");
         }
 
         Ok(())
@@ -1124,6 +1123,88 @@ mod tests {
             bridge.worktree_path("../../etc/passwd"),
             PathBuf::from("/tmp/test-wt/______etc_passwd")
         );
+    }
+
+    #[test]
+    fn test_operational_artifact_path_filter_matches_expected_paths() {
+        assert!(is_operational_artifact_path(".beads"));
+        assert!(is_operational_artifact_path(".beads/backup/state.json"));
+        assert!(is_operational_artifact_path(".beadhub"));
+        assert!(is_operational_artifact_path(".beadhub/config.toml"));
+        assert!(is_operational_artifact_path(
+            ".swarm/intent-contracts.jsonl"
+        ));
+        assert!(is_operational_artifact_path(".swarm/autopilot/result.json"));
+        assert!(is_operational_artifact_path(".swarm-progress.txt"));
+        assert!(is_operational_artifact_path("logs/dogfood"));
+        assert!(is_operational_artifact_path(
+            "logs/dogfood/dogfood-summary.jsonl"
+        ));
+        assert!(!is_operational_artifact_path(".swarm/profile.toml"));
+        assert!(!is_operational_artifact_path(".swarm/prompts/reviewer.md"));
+        assert!(!is_operational_artifact_path("src/main.rs"));
+        assert!(!is_operational_artifact_path("logs/app.log"));
+    }
+
+    #[test]
+    fn test_tracked_changes_ignores_operational_artifacts() {
+        let repo_dir = tempfile::tempdir().unwrap();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        std::fs::write(repo_dir.path().join("README.md"), "hello\n").unwrap();
+        std::fs::create_dir_all(repo_dir.path().join(".swarm")).unwrap();
+        std::fs::write(
+            repo_dir.path().join(".swarm/intent-contracts.jsonl"),
+            "{\"seed\":true}\n",
+        )
+        .unwrap();
+        std::fs::create_dir_all(repo_dir.path().join("logs/dogfood")).unwrap();
+        std::fs::write(
+            repo_dir.path().join("logs/dogfood/dogfood-summary.jsonl"),
+            "{\"run\":1}\n",
+        )
+        .unwrap();
+
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        std::fs::write(repo_dir.path().join("README.md"), "changed\n").unwrap();
+        std::fs::write(
+            repo_dir.path().join(".swarm/intent-contracts.jsonl"),
+            "{\"seed\":false}\n",
+        )
+        .unwrap();
+        std::fs::write(
+            repo_dir.path().join("logs/dogfood/dogfood-summary.jsonl"),
+            "{\"run\":2}\n",
+        )
+        .unwrap();
+
+        let changes = tracked_changes(repo_dir.path()).unwrap();
+        assert_eq!(changes, vec!["README.md".to_string()]);
     }
 
     #[test]
@@ -1496,7 +1577,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_and_remove_auto_stashes_dirty_target_repo() {
+    fn test_merge_and_remove_refuses_dirty_target_repo() {
         let repo_dir = tempfile::tempdir().unwrap();
         let wt_base = tempfile::tempdir().unwrap();
 
@@ -1548,26 +1629,107 @@ mod tests {
         // Dirty a different file in the main repo (like Cargo.lock from a build)
         std::fs::write(repo_dir.path().join("config.toml"), "value = 2\n").unwrap();
 
-        // Merge should succeed — auto-stash handles the dirty file
+        // Merge should fail instead of silently stashing tracked source edits.
         let result = bridge.merge_and_remove("dirty-target");
         assert!(
-            result.is_ok(),
-            "merge_and_remove should auto-stash dirty files, got: {:?}",
-            result.unwrap_err()
+            result.is_err(),
+            "merge_and_remove should refuse dirty tracked files"
+        );
+        assert_eq!(
+            std::fs::read_to_string(repo_dir.path().join("config.toml")).unwrap(),
+            "value = 2\n",
+            "dirty tracked file should remain untouched"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert_eq!(
+            std::fs::read_to_string(repo_dir.path().join("README.md")).unwrap(),
+            "hello",
+            "merge should not proceed while repo root is dirty"
+        );
+        assert!(
+            err_msg.contains("dirty tracked files"),
+            "error should explain why the merge was refused, got: {err_msg}"
+        );
+    }
+
+    #[test]
+    fn test_merge_and_remove_errors_when_push_fails() {
+        let repo_dir = tempfile::tempdir().unwrap();
+        let wt_base = tempfile::tempdir().unwrap();
+
+        Command::new("git")
+            .args(["init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        std::fs::write(repo_dir.path().join("README.md"), "hello").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "init"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["branch", "-M", "main"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+
+        let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
+            .expect("bridge creation");
+        let wt_path = bridge.create("push-failure").expect("create worktree");
+
+        std::fs::write(wt_path.join("README.md"), "worktree change").unwrap();
+        Command::new("git")
+            .args(["add", "."])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "worktree change"])
+            .current_dir(&wt_path)
+            .output()
+            .unwrap();
+
+        let result = bridge.merge_and_remove("push-failure");
+        assert!(
+            result.is_err(),
+            "merge_and_remove should fail when push fails"
+        );
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("Merge failed") && err_msg.contains("git push failed"),
+            "error should mention push failure, got: {err_msg}"
         );
 
-        // The dirty file should be restored after merge
-        let config = std::fs::read_to_string(repo_dir.path().join("config.toml")).unwrap();
-        assert_eq!(
-            config, "value = 2\n",
-            "auto-stash should restore the dirty file after merge"
+        assert!(
+            !wt_path.exists(),
+            "worktree should be cleaned up on push failure"
         );
 
-        // The worktree change should have landed
-        let readme = std::fs::read_to_string(repo_dir.path().join("README.md")).unwrap();
-        assert_eq!(
-            readme, "worktree change",
-            "worktree change should be merged"
+        let branches = Command::new("git")
+            .args(["branch", "--list", "swarm/push-failure"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        let branch_list = String::from_utf8_lossy(&branches.stdout);
+        assert!(
+            branch_list.trim().is_empty(),
+            "branch should be deleted after push failure"
         );
     }
 

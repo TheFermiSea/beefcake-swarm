@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export RUST_LOG="${RUST_LOG:-info}"
 # Native beads: swarm uses `bd` directly (BeadHub removed).
 # BD_ACTOR identifies this orchestrator instance for `bd mail` messaging.
@@ -47,6 +48,165 @@ probe_cloud_model() {
   return 0
 }
 
+trim_ascii_whitespace() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+default_cloud_fallback_models() {
+  printf '%s\n' "gemini-3.1-pro-high,claude-sonnet-4-6,gemini-3.1-flash-lite-preview"
+}
+
+cloud_provider_for_model() {
+  local lowered="${1,,}"
+  if [[ "$lowered" == *claude* || "$lowered" == *anthropic* ]]; then
+    echo "anthropic"
+  elif [[ "$lowered" == *gemini* ]]; then
+    echo "gemini"
+  elif [[ "$lowered" == *gpt* || "$lowered" == *openai* ]]; then
+    echo "openai"
+  else
+    echo ""
+  fi
+}
+
+provider_is_excluded() {
+  local provider="$1"
+  local excluded="${SWARM_CLOUD_EXCLUDED_PROVIDERS:-}"
+  [[ -n "$provider" && -n "$excluded" ]] || return 1
+
+  local raw normalized
+  IFS=',' read -r -a excluded_list <<<"$excluded"
+  for raw in "${excluded_list[@]}"; do
+    normalized="$(cloud_provider_for_model "$raw")"
+    [[ -n "$normalized" && "$normalized" == "$provider" ]] && return 0
+  done
+
+  return 1
+}
+
+append_excluded_provider() {
+  local provider="$1"
+  local normalized current
+  normalized="$(cloud_provider_for_model "$provider")"
+  [[ -n "$normalized" ]] || return 0
+
+  if provider_is_excluded "$normalized"; then
+    return 0
+  fi
+
+  current="${SWARM_CLOUD_EXCLUDED_PROVIDERS:-}"
+  if [[ -n "$current" ]]; then
+    export SWARM_CLOUD_EXCLUDED_PROVIDERS="${current},${normalized}"
+  else
+    export SWARM_CLOUD_EXCLUDED_PROVIDERS="$normalized"
+  fi
+}
+
+model_owner_for_candidate() {
+  local model="$1"
+  local models_resp
+  models_resp="$(mktemp)"
+  if ! curl -sS "${_PROXY_AUTH[@]}" \
+    "${SWARM_CLOUD_URL%/}/models" > "$models_resp"; then
+    rm -f "$models_resp"
+    return 1
+  fi
+  python3 - "$models_resp" "$model" <<'PY'
+import json, sys
+doc = json.load(open(sys.argv[1]))
+model = sys.argv[2]
+entry = next((m for m in doc.get("data", []) if m.get("id") == model), None)
+print((entry or {}).get("owned_by", ""))
+PY
+  rm -f "$models_resp"
+}
+
+model_passes_ownership_check() {
+  local model="$1"
+  local provider owner
+  [[ "${SWARM_REQUIRE_ANTHROPIC_OWNERSHIP:-1}" == "1" ]] || return 0
+
+  provider="$(cloud_provider_for_model "$model")"
+  [[ "$provider" == "anthropic" ]] || return 0
+
+  owner="$(model_owner_for_candidate "$model" || true)"
+  if [[ -n "$owner" && "$owner" != "anthropic" && "$owner" != "antigravity" && "$owner" != "openai" ]]; then
+    echo "Cloud model ${model} is owned_by=${owner}; skipping Anthropic-only slot"
+    return 1
+  fi
+
+  return 0
+}
+
+select_viable_cloud_model() {
+  local fallback_csv raw model provider chosen="" seen_candidates=","
+  local -a candidates=()
+  local -a remaining=()
+
+  candidates+=("$SWARM_CLOUD_MODEL")
+  fallback_csv="${SWARM_CLOUD_FALLBACK_MODELS:-}"
+  if [[ -z "$fallback_csv" ]]; then
+    fallback_csv="${SWARM_CLOUD_FALLBACK_MODEL:-gemini-3.1-pro-high},$(default_cloud_fallback_models)"
+  fi
+  IFS=',' read -r -a parsed_fallbacks <<<"$fallback_csv"
+  for raw in "${parsed_fallbacks[@]}"; do
+    candidates+=("$(trim_ascii_whitespace "$raw")")
+  done
+
+  for model in "${candidates[@]}"; do
+    model="$(trim_ascii_whitespace "$model")"
+    [[ -n "$model" ]] || continue
+    if [[ "$seen_candidates" == *",$model,"* ]]; then
+      continue
+    fi
+    seen_candidates="${seen_candidates}${model},"
+
+    provider="$(cloud_provider_for_model "$model")"
+    if provider_is_excluded "$provider"; then
+      echo "Skipping cloud candidate ${model}; provider ${provider} is excluded"
+      continue
+    fi
+
+    if ! model_passes_ownership_check "$model"; then
+      continue
+    fi
+
+    if [[ -z "$chosen" ]]; then
+      if [[ "${SWARM_CLOUD_PREFLIGHT:-1}" != "1" ]] || probe_cloud_model "$model"; then
+        chosen="$model"
+        continue
+      fi
+
+      if [[ "$provider" == "anthropic" ]]; then
+        append_excluded_provider "$provider"
+      fi
+      echo "Cloud model ${model} unavailable (http=${PROBE_HTTP}); trying next candidate"
+      continue
+    fi
+
+    remaining+=("$model")
+  done
+
+  if [[ -z "$chosen" ]]; then
+    echo "No viable cloud model remained after filtering/preflight; switching to worker-first local mode"
+    unset SWARM_CLOUD_URL
+    export SWARM_WORKER_FIRST_ENABLED="${SWARM_WORKER_FIRST_ENABLED:-1}"
+    return 1
+  fi
+
+  export SWARM_CLOUD_MODEL="$chosen"
+  if [[ ${#remaining[@]} -gt 0 ]]; then
+    export SWARM_CLOUD_FALLBACK_MODEL="${remaining[0]}"
+    export SWARM_CLOUD_FALLBACK_MODELS="$(IFS=,; echo "${remaining[*]}")"
+  fi
+
+  echo "Using cloud model ${SWARM_CLOUD_MODEL}"
+  return 0
+}
+
 if [[ -n "${SWARM_CLOUD_URL:-}" ]]; then
   # Cloud mode: require API key and run preflight checks
   : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
@@ -54,42 +214,14 @@ if [[ -n "${SWARM_CLOUD_URL:-}" ]]; then
   # Default primary cloud model routed via CLIAPIProxy; override SWARM_CLOUD_MODEL to switch.
   export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6}"
   export SWARM_CLOUD_FALLBACK_MODEL="${SWARM_CLOUD_FALLBACK_MODEL:-gemini-3.1-pro-high}"
+  export SWARM_CLOUD_FALLBACK_MODELS="${SWARM_CLOUD_FALLBACK_MODELS:-}"
   # CLIAPIProxy v6.8+ uses x-api-key header (not Authorization: Bearer)
   _PROXY_AUTH=(-H "x-api-key: $SWARM_CLOUD_API_KEY")
-  if [[ "${SWARM_REQUIRE_ANTHROPIC_OWNERSHIP:-1}" == "1" ]]; then
-    models_resp="$(mktemp)"
-    if curl -sS "${_PROXY_AUTH[@]}" \
-      "${SWARM_CLOUD_URL%/}/models" > "$models_resp"; then
-      model_owner="$(python3 - "$models_resp" "$SWARM_CLOUD_MODEL" <<'PY'
-import json, sys
-doc = json.load(open(sys.argv[1]))
-model = sys.argv[2]
-entry = next((m for m in doc.get("data", []) if m.get("id") == model), None)
-print((entry or {}).get("owned_by", ""))
-PY
-)"
-      if [[ -n "$model_owner" && "$model_owner" != "anthropic" && "$model_owner" != "antigravity" && "$model_owner" != "openai" ]]; then
-        echo "Cloud model ${SWARM_CLOUD_MODEL} is owned_by=${model_owner}; falling back to ${SWARM_CLOUD_FALLBACK_MODEL}"
-        export SWARM_CLOUD_MODEL="$SWARM_CLOUD_FALLBACK_MODEL"
-      fi
-    fi
-    rm -f "$models_resp"
-  fi
-  if [[ "${SWARM_CLOUD_PREFLIGHT:-1}" == "1" ]]; then
-    if ! probe_cloud_model "$SWARM_CLOUD_MODEL"; then
-      echo "Cloud model ${SWARM_CLOUD_MODEL} unavailable (http=${PROBE_HTTP}); probing fallback ${SWARM_CLOUD_FALLBACK_MODEL}"
-      export SWARM_CLOUD_MODEL="$SWARM_CLOUD_FALLBACK_MODEL"
-      if ! probe_cloud_model "$SWARM_CLOUD_MODEL"; then
-        echo "Cloud fallback ${SWARM_CLOUD_MODEL} also unavailable (http=${PROBE_HTTP}); switching to worker-first local mode"
-        unset SWARM_CLOUD_URL
-        export SWARM_WORKER_FIRST_ENABLED="${SWARM_WORKER_FIRST_ENABLED:-1}"
-      fi
-    fi
-  fi
+  select_viable_cloud_model
 else
   echo "Worker-first mode: SWARM_CLOUD_URL not set, using local models only"
 fi
-export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
+export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-$SCRIPT_DIR/bd-safe.sh}"
 
 # ── TensorZero feedback loop ──
 # Enable the inference → feedback → optimize loop by telling the orchestrator
@@ -114,8 +246,8 @@ fi
 # Export beads operational metrics (issue counts, storage ops) to OTLP collector.
 # Complements TensorZero inference metrics.
 if [[ -n "${SWARM_OTEL_ENDPOINT:-}" ]]; then
-    bd config set telemetry.endpoint "$SWARM_OTEL_ENDPOINT" 2>/dev/null || true
-    bd config set telemetry.enabled true 2>/dev/null || true
+    "$SWARM_BEADS_BIN" config set telemetry.endpoint "$SWARM_OTEL_ENDPOINT" 2>/dev/null || true
+    "$SWARM_BEADS_BIN" config set telemetry.enabled true 2>/dev/null || true
 fi
 
 # ── Detect target repo language ──

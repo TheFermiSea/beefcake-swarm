@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 use rig::providers::openai;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::Duration;
@@ -365,11 +366,22 @@ impl CloudFallbackMatrix {
         self.entries.is_empty()
     }
 
+    fn filtered_by_excluded_providers(mut self, excluded: &HashSet<String>) -> Self {
+        if excluded.is_empty() {
+            return self;
+        }
+
+        self.entries
+            .retain(|entry| !excluded.contains(cloud_provider_for_model(&entry.model)));
+        self
+    }
+
     /// Build from `SWARM_CLOUD_FALLBACK_MODELS` env var (comma-separated model names).
     ///
     /// Falls back to [`Self::default_matrix`] if the env var is unset or empty.
     pub fn from_env() -> Self {
-        match std::env::var("SWARM_CLOUD_FALLBACK_MODELS") {
+        let excluded = excluded_cloud_providers();
+        let matrix = match std::env::var("SWARM_CLOUD_FALLBACK_MODELS") {
             Ok(val) if !val.trim().is_empty() => {
                 let entries = val
                     .split(',')
@@ -391,13 +403,20 @@ impl CloudFallbackMatrix {
                 Self { entries }
             }
             _ => Self::default_matrix(),
+        };
+
+        let filtered = matrix.clone().filtered_by_excluded_providers(&excluded);
+        if filtered.is_empty() && std::env::var("SWARM_CLOUD_FALLBACK_MODELS").is_ok() {
+            Self::default_matrix().filtered_by_excluded_providers(&excluded)
+        } else {
+            filtered
         }
     }
 
     /// Default matrix: Claude Opus 4.6 → Gemini 3.1 Pro High → Sonnet 4.6 → Gemini 3.1 Flash Lite.
     ///
     /// Gemini 3.1 Pro has 2M context for whole-codebase understanding. Sonnet 4.6
-    /// is a stronger fallback when the OpenAI primary is unavailable. Gemini 3.1 Flash Lite is the
+    /// is a stronger fallback when the Anthropic primary is unavailable. Gemini 3.1 Flash Lite is the
     /// latest fast/cheap model for last-resort fallback.
     pub fn default_matrix() -> Self {
         Self {
@@ -424,6 +443,47 @@ impl CloudFallbackMatrix {
                 },
             ],
         }
+    }
+}
+
+fn cloud_provider_for_model(model: &str) -> &'static str {
+    let lowered = model.to_ascii_lowercase();
+    if lowered.contains("claude") || lowered.contains("anthropic") {
+        "anthropic"
+    } else if lowered.contains("gemini") {
+        "gemini"
+    } else if lowered.contains("gpt") || lowered.contains("openai") {
+        "openai"
+    } else {
+        "unknown"
+    }
+}
+
+fn excluded_cloud_providers() -> HashSet<String> {
+    std::env::var("SWARM_CLOUD_EXCLUDED_PROVIDERS")
+        .ok()
+        .map(|value| {
+            value
+                .split(',')
+                .filter_map(|raw| {
+                    let provider = normalize_cloud_provider(raw.trim());
+                    (!provider.is_empty()).then(|| provider.to_string())
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn normalize_cloud_provider(value: &str) -> &'static str {
+    let lowered = value.to_ascii_lowercase();
+    if lowered.contains("claude") || lowered.contains("anthropic") {
+        "anthropic"
+    } else if lowered.contains("gemini") {
+        "gemini"
+    } else if lowered.contains("gpt") || lowered.contains("openai") {
+        "openai"
+    } else {
+        ""
     }
 }
 
@@ -1350,5 +1410,37 @@ mod tests {
             config.cloud_fallback_matrix.primary().unwrap().model,
             "claude-opus-4-6"
         );
+    }
+
+    #[test]
+    fn test_cloud_fallback_matrix_excludes_anthropic_via_env() {
+        std::env::remove_var("SWARM_CLOUD_FALLBACK_MODELS");
+        std::env::set_var("SWARM_CLOUD_EXCLUDED_PROVIDERS", "anthropic");
+
+        let matrix = CloudFallbackMatrix::from_env();
+
+        std::env::remove_var("SWARM_CLOUD_EXCLUDED_PROVIDERS");
+
+        assert_eq!(matrix.len(), 2);
+        assert_eq!(matrix.primary().unwrap().model, "gemini-3.1-pro-high");
+        assert!(matrix
+            .entries
+            .iter()
+            .all(|entry| !entry.model.contains("claude")));
+    }
+
+    #[test]
+    fn test_cloud_fallback_matrix_env_falls_back_after_filtering() {
+        std::env::set_var("SWARM_CLOUD_FALLBACK_MODELS", "claude-opus-4-6");
+        std::env::set_var("SWARM_CLOUD_EXCLUDED_PROVIDERS", "anthropic");
+
+        let matrix = CloudFallbackMatrix::from_env();
+
+        std::env::remove_var("SWARM_CLOUD_FALLBACK_MODELS");
+        std::env::remove_var("SWARM_CLOUD_EXCLUDED_PROVIDERS");
+
+        assert_eq!(matrix.len(), 2);
+        assert_eq!(matrix.primary().unwrap().model, "gemini-3.1-pro-high");
+        assert_eq!(matrix.fallbacks()[0].model, "gemini-3.1-flash-lite-preview");
     }
 }
