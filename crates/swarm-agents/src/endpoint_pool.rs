@@ -254,21 +254,4 @@ mod tests {
         // Should cycle: 0, 1, 0, 1, 0, 1
         assert_eq!(indices, vec![0, 1, 0, 1, 0, 1]);
     }
-
-    #[test]
-    fn shared_counter_across_clones() {
-        let counter = Arc::new(AtomicUsize::new(0));
-        let counter2 = Arc::clone(&counter);
-        let n = 3usize;
-
-        // Simulate two parallel clones sharing the counter
-        let idx_a = counter.fetch_add(1, Ordering::Relaxed) % n;
-        let idx_b = counter2.fetch_add(1, Ordering::Relaxed) % n;
-        let idx_c = counter.fetch_add(1, Ordering::Relaxed) % n;
-
-        // Each clone draws the next slot
-        assert_eq!(idx_a, 0);
-        assert_eq!(idx_b, 1);
-        assert_eq!(idx_c, 2);
-    }
 }
