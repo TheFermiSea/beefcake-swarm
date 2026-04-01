@@ -473,8 +473,7 @@ impl MutationArchive {
         // Summary stats
         let summary = self.summary();
         parts.push(format!(
-            "Prior run history: {} attempts, {} resolved ({:.0}% success rate), \
-             avg {:.1} iterations when successful.",
+            "Prior run history: {} attempts, {} resolved ({:.0}% success rate), \n             avg {:.1} iterations when successful.",
             summary.total_attempts,
             summary.resolved,
             if summary.total_attempts > 0 {
@@ -492,14 +491,11 @@ impl MutationArchive {
                 / successful.len() as f64;
             if avg_iter <= 2.0 {
                 parts.push(
-                    "Strategy: past fixes resolved quickly (<=2 iterations). \
-                     Read the target file first, make a focused edit, and let the verifier confirm."
-                        .to_string(),
+                    "Strategy: past fixes resolved quickly (<=2 iterations). \n                     Read the target file first, make a focused edit, and let the verifier confirm.".to_string(),
                 );
             } else {
                 parts.push(format!(
-                    "Strategy: past fixes averaged {avg_iter:.0} iterations. \
-                     Consider reading the file structure carefully before editing.",
+                    "Strategy: past fixes averaged {avg_iter:.0} iterations. \n                     Consider reading the file structure carefully before editing.",
                 ));
             }
         }
@@ -511,9 +507,7 @@ impl MutationArchive {
             let timeout_count = failed.iter().filter(|r| r.iterations >= 10).count();
             if timeout_count > failed.len() / 2 {
                 parts.push(
-                    "WARNING: Most past failures exhausted all iterations. \
-                     Make your edits early — do not spend turns only reading files."
-                        .to_string(),
+                    "WARNING: Most past failures exhausted all iterations. \n                     Make your edits early — do not spend turns only reading files.".to_string(),
                 );
             }
         }
