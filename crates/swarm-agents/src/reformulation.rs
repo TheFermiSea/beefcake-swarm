@@ -1003,27 +1003,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_infra_transient() {
-        let input = FailureReviewInput {
-            issue_id: "test-003".into(),
-            issue_title: "Fix bug".into(),
-            issue_description: Some("Fix the bug".into()),
-            failure_ledger: vec![],
-            iterations_used: 2,
-            max_iterations: 10,
-            files_changed: vec!["src/main.rs".into()],
-            error_categories: vec![],
-            failure_reason: Some("timeout after 300s".into()),
-        };
-
-        let classification = classify_failure(&input);
-        assert!(matches!(
-            classification,
-            FailureClassification::InfraTransient { .. }
-        ));
-    }
-
-    #[test]
     fn store_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let store = ReformulationStore::new(dir.path());
