@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 export RUST_LOG="${RUST_LOG:-info}"
 # Native beads: swarm uses `bd` directly (BeadHub removed).
 # BD_ACTOR identifies this orchestrator instance for `bd mail` messaging.
@@ -89,7 +90,7 @@ PY
 else
   echo "Worker-first mode: SWARM_CLOUD_URL not set, using local models only"
 fi
-export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
+export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-$SCRIPT_DIR/bd-safe.sh}"
 
 # ── TensorZero feedback loop ──
 # Enable the inference → feedback → optimize loop by telling the orchestrator
@@ -114,8 +115,8 @@ fi
 # Export beads operational metrics (issue counts, storage ops) to OTLP collector.
 # Complements TensorZero inference metrics.
 if [[ -n "${SWARM_OTEL_ENDPOINT:-}" ]]; then
-    bd config set telemetry.endpoint "$SWARM_OTEL_ENDPOINT" 2>/dev/null || true
-    bd config set telemetry.enabled true 2>/dev/null || true
+    "$SWARM_BEADS_BIN" config set telemetry.endpoint "$SWARM_OTEL_ENDPOINT" 2>/dev/null || true
+    "$SWARM_BEADS_BIN" config set telemetry.enabled true 2>/dev/null || true
 fi
 
 # ── Detect target repo language ──

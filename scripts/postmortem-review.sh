@@ -15,7 +15,8 @@ LOG_FILE="${2:?Usage: postmortem-review.sh <issue-id> <log-file>}"
 CLOUD_URL="${SWARM_CLOUD_URL:-http://localhost:8317/v1}"
 CLOUD_KEY="${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY required}"
 MODEL="${SWARM_CLOUD_MODEL:-claude-sonnet-4-6}"
-BEADS_BIN="${SWARM_BEADS_BIN:-bd}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BEADS_BIN="${SWARM_BEADS_BIN:-${SCRIPT_DIR}/bd-safe.sh}"
 
 log() { echo "[postmortem $(date -Iseconds)] $*"; }
 
