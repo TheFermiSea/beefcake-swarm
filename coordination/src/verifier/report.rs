@@ -326,6 +326,40 @@ impl VerifierReport {
         reward.clamp(0.0, 1.0)
     }
 
+    /// Compute a weighted health score (0.0-1.0) from named gate outcomes.
+    ///
+    /// Gate weights: fmt=0.1, clippy=0.2, check=0.3, test=0.4.
+    /// Each gate contributes its full weight if Passed/Warning, half if Skipped,
+    /// zero if Failed/Timeout. Unrecognised gate names are ignored (weight 0.0).
+    /// Returns 0.0 if no gates ran.
+    pub fn health_score(&self) -> f64 {
+        if self.gates.is_empty() {
+            return 0.0;
+        }
+
+        let weight_for = |name: &str| -> f64 {
+            match name {
+                "fmt" => 0.1,
+                "clippy" => 0.2,
+                "check" => 0.3,
+                "test" => 0.4,
+                _ => 0.0,
+            }
+        };
+
+        self.gates
+            .iter()
+            .map(|g| {
+                let w = weight_for(&g.gate);
+                match g.outcome {
+                    GateOutcome::Passed | GateOutcome::Warning => w,
+                    GateOutcome::Skipped => w * 0.5,
+                    GateOutcome::Failed | GateOutcome::Timeout => 0.0,
+                }
+            })
+            .sum()
+    }
+
     /// Get a compact summary for logging
     pub fn summary(&self) -> String {
         let gate_statuses: Vec<String> = self
@@ -500,5 +534,79 @@ mod tests {
         assert_eq!(signal.gate, "check");
         assert_eq!(signal.category, ErrorCategory::BorrowChecker);
         assert_eq!(signal.code, Some("E0502".to_string()));
+    }
+
+    fn make_gate(name: &str, outcome: GateOutcome) -> GateResult {
+        GateResult {
+            gate: name.to_string(),
+            outcome,
+            duration_ms: 100,
+            exit_code: Some(0),
+            error_count: 0,
+            warning_count: 0,
+            errors: vec![],
+            stderr_excerpt: None,
+        }
+    }
+
+    #[test]
+    fn test_health_score_all_pass() {
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        for name in &["fmt", "clippy", "check", "test"] {
+            report.add_gate(make_gate(name, GateOutcome::Passed));
+        }
+        let score = report.health_score();
+        assert!(
+            (score - 1.0).abs() < f64::EPSILON,
+            "all pass should be 1.0, got {score}"
+        );
+    }
+
+    #[test]
+    fn test_health_score_all_fail() {
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        for name in &["fmt", "clippy", "check", "test"] {
+            report.add_gate(make_gate(name, GateOutcome::Failed));
+        }
+        assert!(
+            report.health_score().abs() < f64::EPSILON,
+            "all fail should be 0.0"
+        );
+    }
+
+    #[test]
+    fn test_health_score_mixed() {
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        report.add_gate(make_gate("fmt", GateOutcome::Passed));
+        report.add_gate(make_gate("clippy", GateOutcome::Failed));
+        report.add_gate(make_gate("check", GateOutcome::Skipped));
+        report.add_gate(make_gate("test", GateOutcome::Passed));
+        // weights: fmt=0.1, clippy=0.0, check=0.15 (half), test=0.4 => 0.65
+        let score = report.health_score();
+        assert!(
+            (score - 0.65).abs() < 1e-9,
+            "mixed should be 0.65, got {score}"
+        );
+    }
+
+    #[test]
+    fn test_health_score_no_gates() {
+        let report = VerifierReport::new("/tmp/test".to_string());
+        assert!(
+            report.health_score().abs() < f64::EPSILON,
+            "no gates should be 0.0"
+        );
+    }
+
+    #[test]
+    fn test_health_score_unknown_gate_ignored() {
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        report.add_gate(make_gate("fmt", GateOutcome::Passed)); // 0.1
+        report.add_gate(make_gate("unknown", GateOutcome::Passed)); // 0.0
+        let score = report.health_score();
+        assert!(
+            (score - 0.1).abs() < 1e-9,
+            "unknown gate should contribute 0, got {score}"
+        );
     }
 }

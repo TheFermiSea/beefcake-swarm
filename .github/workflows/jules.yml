@@ -40,7 +40,7 @@ jobs:
       contents: read
       issues: read
     steps:
-      - uses: google-labs-code/jules-invoke@v1
+      - uses: google-labs-code/jules-action@v1.0.0
         with:
           prompt: |
             Fix the following GitHub issue for the beefcake-swarm project.
@@ -77,7 +77,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: google-labs-code/jules-invoke@v1
+      - uses: google-labs-code/jules-action@v1.0.0
         with:
           prompt: |
             ${{ inputs.prompt }}

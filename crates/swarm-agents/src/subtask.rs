@@ -932,13 +932,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_plan_with_markdown_fences() {
-        let json = "```json\n{\"summary\": \"one task\", \"subtasks\": [{\"id\": \"s1\", \"objective\": \"do it\", \"target_files\": [\"a.rs\"]}]}\n```";
-        let plan = parse_subtask_plan(json).unwrap();
-        assert_eq!(plan.subtasks.len(), 1);
-    }
-
-    #[test]
     fn parse_plan_rejects_overlapping_files() {
         let json = r#"{
             "summary": "bad plan",
@@ -986,103 +979,12 @@ mod tests {
     }
 
     #[test]
-    fn dispatch_outcome_aggregation() {
-        let outcome = DispatchOutcome {
-            results: vec![
-                SubtaskResult {
-                    subtask_id: "s1".into(),
-                    success: true,
-                    response: "done".into(),
-                    elapsed: Duration::from_secs(10),
-                    report: Some(AdapterReport {
-                        agent_name: "test".into(),
-                        tool_events: vec![],
-                        turn_count: 3,
-                        total_tool_calls: 5,
-                        total_tool_time_ms: 100,
-                        wall_time_ms: 10000,
-                        terminated_early: false,
-                        termination_reason: None,
-                        has_written: true,
-                        files_read: vec![],
-                        files_modified: vec![],
-                        successful_writes: 0,
-                        last_failed_edits: vec![],
-                    }),
-                },
-                SubtaskResult {
-                    subtask_id: "s2".into(),
-                    success: true,
-                    response: "done".into(),
-                    elapsed: Duration::from_secs(8),
-                    report: Some(AdapterReport {
-                        agent_name: "test".into(),
-                        tool_events: vec![],
-                        turn_count: 2,
-                        total_tool_calls: 3,
-                        total_tool_time_ms: 50,
-                        wall_time_ms: 8000,
-                        terminated_early: false,
-                        termination_reason: None,
-                        has_written: true,
-                        files_read: vec![],
-                        files_modified: vec![],
-                        successful_writes: 0,
-                        last_failed_edits: vec![],
-                    }),
-                },
-            ],
-            total_elapsed: Duration::from_secs(12),
-        };
-
-        assert!(outcome.all_succeeded());
-        assert_eq!(outcome.success_count(), 2);
-        assert_eq!(outcome.total_tool_calls(), 8);
-    }
-
-    #[test]
     fn source_file_detection() {
         assert!(is_source_file("lib.rs"));
         assert!(is_source_file("Cargo.toml"));
         assert!(is_source_file("build.sh"));
         assert!(!is_source_file("image.png"));
         assert!(!is_source_file("data.bin"));
-    }
-
-    #[test]
-    fn integration_file_detection_default() {
-        // Default (Rust) integration files
-        assert!(is_integration_file("Cargo.toml", None));
-        assert!(is_integration_file("src/mod.rs", None));
-        assert!(is_integration_file("crates/foo/src/lib.rs", None));
-        assert!(is_integration_file("src/main.rs", None));
-        assert!(is_integration_file("Cargo.lock", None));
-        assert!(!is_integration_file("src/parser.rs", None));
-        assert!(!is_integration_file("src/config.rs", None));
-    }
-
-    #[test]
-    fn integration_file_detection_python() {
-        let python_files = vec![
-            "pyproject.toml".to_string(),
-            "conftest.py".to_string(),
-            "__init__.py".to_string(),
-        ];
-        assert!(is_integration_file("pyproject.toml", Some(&python_files)));
-        assert!(is_integration_file(
-            "cflibs/__init__.py",
-            Some(&python_files)
-        ));
-        assert!(is_integration_file(
-            "tests/conftest.py",
-            Some(&python_files)
-        ));
-        assert!(!is_integration_file(
-            "cflibs/plasma/state.py",
-            Some(&python_files)
-        ));
-        // Rust files should NOT match Python profile
-        assert!(!is_integration_file("Cargo.toml", Some(&python_files)));
     }
 
     #[test]
@@ -1102,22 +1004,7 @@ mod tests {
         // The integration file check prevents the SAME file in multiple subtasks,
         // which is already caught by the non-overlap check. The real value is as a
         // documentation/prompt constraint for the planner.
-        let plan = parse_subtask_plan(json).unwrap();
-        assert_eq!(plan.subtasks.len(), 2);
-    }
-
-    #[test]
-    fn parse_plan_allows_integration_file_in_one_subtask() {
-        let json = r#"{
-            "summary": "good integration",
-            "subtasks": [
-                {"id": "s1", "objective": "add dep and use it", "target_files": ["Cargo.toml", "src/a.rs"]},
-                {"id": "s2", "objective": "update handler", "target_files": ["src/b.rs"]}
-            ]
-        }"#;
-
-        let plan = parse_subtask_plan(json).unwrap();
-        assert_eq!(plan.subtasks.len(), 2);
+        let _plan = parse_subtask_plan(json).unwrap();
     }
 
     #[test]

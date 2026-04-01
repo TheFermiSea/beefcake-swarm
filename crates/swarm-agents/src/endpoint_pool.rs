@@ -218,7 +218,10 @@ impl Clone for EndpointPool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
 
     /// Verify round-robin wraps correctly across 3 nodes.
     ///

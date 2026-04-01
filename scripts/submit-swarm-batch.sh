@@ -15,6 +15,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SLURM_SCRIPT="${SCRIPT_DIR}/run-swarm-sandbox.slurm"
+BEADS_BIN="${SWARM_BEADS_BIN:-${SCRIPT_DIR}/bd-safe.sh}"
 DRY_RUN="${DRY_RUN:-0}"
 PARALLEL="${PARALLEL:-0}"
 
@@ -24,7 +25,7 @@ if [ $# -gt 0 ]; then
 else
     # Auto-discover swarm-ready issues via beads label
     mapfile -t ISSUES < <(
-        bd list --status=open --label=swarm-ready 2>/dev/null \
+        "$BEADS_BIN" list --status=open --label=swarm-ready 2>/dev/null \
             | python3 -c "import sys,json; [print(i['id'].split('-')[-1]) for i in json.load(sys.stdin)]" 2>/dev/null \
             || echo ""
     )
@@ -47,7 +48,7 @@ for issue_id in "${ISSUES[@]}"; do
     full_id="beefcake-swarm-${issue_id}"
 
     # Fetch title for logging and objective context
-    title=$(bd show "$full_id" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)[0].get('title','?'))" 2>/dev/null || echo "?")
+    title=$("$BEADS_BIN" show "$full_id" 2>/dev/null | python3 -c "import sys,json; print(json.load(sys.stdin)[0].get('title','?'))" 2>/dev/null || echo "?")
     objective_b64=$(printf "%s" "$title" | base64 | tr -d '\n')
 
     echo "[$full_id] $title"
@@ -72,7 +73,7 @@ for issue_id in "${ISSUES[@]}"; do
         SUBMITTED+=("$JOB_ID")
 
         # Mark issue as in_progress
-        bd update "$full_id" --status=in_progress 2>/dev/null || true
+        "$BEADS_BIN" update "$full_id" --status=in_progress 2>/dev/null || true
     fi
 done
 

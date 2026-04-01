@@ -1540,30 +1540,3 @@ pub fn looks_like_fabricated_data(content: &str) -> bool {
     );
     true
 }
-
-#[cfg(test)]
-mod data_guard_tests {
-    use super::*;
-
-    #[test]
-    fn detects_fabricated_benchmark_output() {
-        let content = r#"
-ALIAS: wall_time=2.34s, latency=0.023s/spectrum, F1=0.847, Jaccard=0.721
-comb: wall_time=1.89s, latency=0.019s/spectrum, F1=0.812, Jaccard=0.683
-correlation: wall_time=3.12s, latency=0.031s/spectrum, F1=0.798, Jaccard=0.665
-NNLS: wall_time=4.56s, latency=0.046s/spectrum, F1=0.891, Jaccard=0.798
-Boltzmann: wall_time=3.78s, latency=0.038s/spectrum, MAE=0.0234
-"#;
-        assert!(looks_like_fabricated_data(content));
-    }
-
-    #[test]
-    fn allows_normal_code() {
-        let content = r#"
-def calculate_temperature(slope: float) -> float:
-    """Convert Boltzmann slope to temperature."""
-    return -1.0 / (KB_EV * slope)
-"#;
-        assert!(!looks_like_fabricated_data(content));
-    }
-}

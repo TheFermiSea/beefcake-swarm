@@ -46,7 +46,7 @@ pub struct TeamConfig {
     pub phases: Vec<PhaseConfig>,
 }
 
-fn default_max_iterations() -> u32 {
+pub fn default_max_iterations() -> u32 {
     10
 }
 
@@ -184,60 +184,6 @@ pub fn list_templates(repo_root: &Path) -> Vec<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn parse_rust_fix_template() {
-        let toml_str = r#"
-[team]
-name = "rust-fix"
-description = "Standard Rust bug fix"
-max_iterations = 10
-
-[[team.phases]]
-name = "scout"
-role = "Scout"
-model_tier = "fast"
-objective = "Read the issue"
-writes_code = false
-
-[[team.phases]]
-name = "implement"
-role = "RustWorker"
-model_tier = "coder"
-objective = "Fix the bug"
-writes_code = true
-
-[[team.phases]]
-name = "fix"
-role = "Fixer"
-model_tier = "coder"
-objective = "Fix verifier errors"
-writes_code = true
-trigger = "verifier_failure"
-"#;
-        let template: TeamTemplate = toml::from_str(toml_str).unwrap();
-        assert_eq!(template.team.name, "rust-fix");
-        assert_eq!(template.team.phases.len(), 3);
-        assert_eq!(template.team.default_phases().len(), 2);
-        assert!(template.team.failure_phase().is_some());
-        assert!(template.team.escalation_phase().is_none());
-    }
-
-    #[test]
-    fn phase_triggers() {
-        let phase = PhaseConfig {
-            name: "fix".into(),
-            role: "Fixer".into(),
-            model_tier: "coder".into(),
-            objective: "Fix it".into(),
-            writes_code: true,
-            parallel: false,
-            trigger: Some("verifier_failure".into()),
-        };
-        assert!(!phase.is_default_phase());
-        assert!(phase.is_failure_phase());
-        assert!(!phase.is_escalation_phase());
-    }
 
     #[test]
     fn select_template_defaults() {

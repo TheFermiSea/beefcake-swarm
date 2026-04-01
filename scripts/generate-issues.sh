@@ -17,7 +17,7 @@ REPO_ROOT="${1:?Usage: generate-issues.sh <repo-root>}"
 REPO_ROOT="$(cd "$REPO_ROOT" && pwd)"  # absolute path
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BD="${SWARM_BEADS_BIN:-bd}"
+BD="${SWARM_BEADS_BIN:-${SCRIPT_DIR}/bd-safe.sh}"
 MAX_ISSUES="${MAX_ISSUES:-30}"  # cap to avoid flooding
 
 log() { echo "[generate-issues $(date -Iseconds)] $*"; }
