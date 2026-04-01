@@ -113,14 +113,16 @@ tools = ["edit_file", "write_file", "proxy_edit_file", "proxy_write_file"]
 # Gateway runs with network_mode: host so it can reach vasp nodes directly
 # by IP and CLIAPIProxy on localhost:8317.
 #
-# Cluster layout (2026-03-29, 5-model zoo for autoresearch):
+# Cluster layout (active — 3-model A/B experiment):
 #   vasp-01:8081 — Qwen3.5-27B Q4_K_M (coder champion, ~27 tok/s, SWE-bench 72.4%)
-#   vasp-02:8081 — Devstral-Small-2-24B Q4_K_M (agentic challenger, ~30 tok/s, SWE-bench 68.0%)
+#   vasp-02:8081 — Devstral-Small-2-24B Q4_K_M (TZ #1 bool_pass, ~30 tok/s, SWE-bench 68.0%)
 #   vasp-03:8081 — GLM-4.7-Flash Q4_K_M (SOTA tool-calling, 3B active, ~50 tok/s, tau2 84.7)
-#   vasp-03:8083 — Qwen2.5-Coder-14B Q4_K_M (code specialist, ~45 tok/s, HumanEval 88.4%)
+#   vasp-03:8083 — SERA-14B (Qwen3 backbone, 8K ctx; defined but not in A/B rotation — shared VRAM)
 #   vasp-*:8082  — nomic-embed-text-v1.5 (CPU embedding service, all nodes)
 #
-# Total: 5 local models + embedding. TZ adaptive routing experiments across all 5.
+# Active A/B: glm_flash vs qwen35_27b vs devstral_24b (Thompson Sampling on task_resolved).
+# SERA-14B and DICL removed from candidate_variants: SERA has 8K ctx + shared GPU;
+# DICL had 0 inferences (no demonstrations seeded). Both remain defined but inactive.
 
 # --- Scout/fast tier on vasp-03 (GLM-4.7-Flash, SOTA tool-calling) ---
 
@@ -260,13 +262,15 @@ candidate_variants = ["qwen_coder", "qwen_reasoning"]
 metric = "task_resolved"
 update_period_s = 300
 
-# --- Worker Code Edit: 4-model autoresearch experiment ---
-# TZ adaptively routes across all 4 local models to discover which
-# resolves issues best for each task complexity class.
+# --- Worker Code Edit: 3-model A/B experiment ---
+# GLM-4.7-Flash (scout/fast), Qwen3.5-27B (coder), Devstral-24B (reasoning)
+# Thompson Sampling routes toward the model that maximizes task_resolved.
+# SERA-14B removed: shares GPU with GLM-4.7-Flash (VRAM contention), 8K context limit.
+# DICL removed: 0 inferences in 3 days (Thompson Sampling abandoned it — no demonstrations).
 [functions.worker_code_edit]
 type = "chat"
 
-[functions.worker_code_edit.variants.omnicoder_9b]
+[functions.worker_code_edit.variants.glm_flash]
 type = "chat_completion"
 model = "qwen_fast"
 
@@ -278,16 +282,10 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
-[functions.worker_code_edit.variants.sera_14b_worker]
-type = "chat_completion"
-model = "sera_14b"
-
-# Adaptive: TZ converges on the best model per task type via Thompson Sampling.
-# 4 models × diverse codebases = rich parameter space for autoresearch.
-# SERA-14B replaces generic Qwen2.5-Coder-14B — purpose-built SWE agent.
+# Adaptive: TZ routes via Thompson Sampling across the 3 dedicated-GPU models.
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
-candidate_variants = ["omnicoder_9b", "qwen35_27b", "devstral_24b", "sera_14b_worker", "dicl_worker"]
+candidate_variants = ["glm_flash", "qwen35_27b", "devstral_24b"]
 metric = "task_resolved"
 update_period_s = 300
 
@@ -331,7 +329,7 @@ update_period_s = 300
 [functions.code_fixing]
 type = "chat"
 
-[functions.code_fixing.variants.omnicoder_fixer]
+[functions.code_fixing.variants.glm_flash_fixer]
 type = "chat_completion"
 model = "qwen_fast"
 
@@ -343,13 +341,10 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
-[functions.code_fixing.variants.sera_14b_fixer]
-type = "chat_completion"
-model = "sera_14b"
-
+# SERA-14B fixer removed (same structural disadvantages as sera_14b_worker).
 [functions.code_fixing.experimentation]
 type = "adaptive"
-candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer", "dicl_fixer"]
+candidate_variants = ["glm_flash_fixer", "qwen35_fixer", "devstral_fixer"]
 metric = "task_resolved"
 update_period_s = 300
 
