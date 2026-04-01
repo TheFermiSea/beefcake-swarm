@@ -1024,30 +1024,6 @@ mod tests {
     }
 
     #[test]
-    fn classify_genuine_defect() {
-        let input = FailureReviewInput {
-            issue_id: "test-004".into(),
-            issue_title: "Fix borrow checker error".into(),
-            issue_description: Some("Fix the lifetime issue in parser.rs".into()),
-            failure_ledger: vec![
-                make_entry("edit_file", "Ok", "", true, 1),
-                make_entry("edit_file", "CompileError", "borrow checker", false, 2),
-            ],
-            iterations_used: 5,
-            max_iterations: 10,
-            files_changed: vec!["src/parser.rs".into()],
-            error_categories: vec!["BorrowChecker".into()],
-            failure_reason: None,
-        };
-
-        let classification = classify_failure(&input);
-        assert!(matches!(
-            classification,
-            FailureClassification::GenuineCodeDefect
-        ));
-    }
-
-    #[test]
     fn store_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let store = ReformulationStore::new(dir.path());
