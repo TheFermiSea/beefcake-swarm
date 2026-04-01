@@ -226,7 +226,7 @@ impl BeadsBridge {
         for (i, (objective, target_files)) in subtasks.iter().enumerate() {
             // Create child issue with a compact title.
             let title = if objective.len() > 80 {
-                format!("subtask-{}: {}...", i + 1, &objective[..77])
+                format!("subtask-{}: {}...", i + 1, &objective[..objective.floor_char_boundary(77)])
             } else {
                 format!("subtask-{}: {}", i + 1, objective)
             };

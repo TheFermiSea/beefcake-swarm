@@ -671,7 +671,7 @@ impl Tool for EditFileTool {
                     }
                     None => {
                         let preview = if content.len() > 500 {
-                            format!("{}...", &content[..500])
+                            format!("{}...", &content[..content.floor_char_boundary(500)])
                         } else {
                             content.clone()
                         };

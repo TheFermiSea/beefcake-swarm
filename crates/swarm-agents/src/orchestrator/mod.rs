@@ -2077,7 +2077,7 @@ async fn process_issue_core(
         let response = match agent_future {
             Ok(r) => {
                 // Log the actual response text for debugging (truncated to 500 chars)
-                let preview = if r.len() > 500 { &r[..500] } else { &r };
+                let preview = &r[..r.floor_char_boundary(500)];
                 info!(
                     iteration,
                     response_len = r.len(),

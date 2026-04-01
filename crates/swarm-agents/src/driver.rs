@@ -893,7 +893,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     ctx.span_summary.record_agent(0);
     let response = match agent_future {
         Ok(r) => {
-            let preview = if r.len() > 500 { &r[..500] } else { &r };
+            let preview = &r[..r.floor_char_boundary(500)];
             info!(iteration, response_len = r.len(), response_preview = %preview, "Agent responded (state driver)");
             r
         }
