@@ -89,7 +89,7 @@ ssh "$PROXY_HOST" "
     export SWARM_CLOUD_URL=http://localhost:8317/v1
     export SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0
     export RUST_LOG=debug,hyper=info,reqwest=info,h2=info,rustls=info,tower=info
-    export DOGFOOD_BEADS_BIN=/usr/local/bin/bd
+    export DOGFOOD_BEADS_BIN=$REPO_DIR/scripts/bd-safe.sh
     ./scripts/dogfood-loop.sh --issue-list \"$ISSUES\" --cooldown $COOLDOWN
   ' > ~/dogfood-\$(date +%Y%m%d-%H%M).log 2>&1 &
   sleep 3

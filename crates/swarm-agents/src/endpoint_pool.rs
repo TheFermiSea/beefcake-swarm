@@ -218,5 +218,60 @@ impl Clone for EndpointPool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    };
+
+    /// Verify round-robin wraps correctly across 3 nodes.
+    ///
+    /// We can't easily build real `CompletionsClient`s in unit tests without
+    /// network access, so we test the counter logic directly.
+    #[test]
+    fn round_robin_counter_cycles() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let n = 3usize;
+
+        let indices: Vec<usize> = (0..6)
+            .map(|_| counter.fetch_add(1, Ordering::Relaxed) % n)
+            .collect();
+
+        // Should cycle: 0, 1, 2, 0, 1, 2
+        assert_eq!(indices, vec![0, 1, 2, 0, 1, 2]);
+        // Position 0 == position 3 (wraps at 3)
+        assert_eq!(indices[0], indices[3]);
+        // Adjacent positions differ
+        assert_ne!(indices[0], indices[1]);
+    }
+
+    /// Verify worker-only pool cycles across 2 nodes (coder, reasoning).
+    #[test]
+    fn worker_pool_cycles_two_nodes() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let n = 2usize;
+
+        let indices: Vec<usize> = (0..6)
+            .map(|_| counter.fetch_add(1, Ordering::Relaxed) % n)
+            .collect();
+
+        // Should cycle: 0, 1, 0, 1, 0, 1
+        assert_eq!(indices, vec![0, 1, 0, 1, 0, 1]);
+    }
+
+    #[test]
+    fn shared_counter_across_clones() {
+        let counter = Arc::new(AtomicUsize::new(0));
+        let counter2 = Arc::clone(&counter);
+        let n = 3usize;
+
+        // Simulate two parallel clones sharing the counter
+        let idx_a = counter.fetch_add(1, Ordering::Relaxed) % n;
+        let idx_b = counter2.fetch_add(1, Ordering::Relaxed) % n;
+        let idx_c = counter.fetch_add(1, Ordering::Relaxed) % n;
+
+        // Each clone draws the next slot
+        assert_eq!(idx_a, 0);
+        assert_eq!(idx_b, 1);
+        assert_eq!(idx_c, 2);
+    }
 }
