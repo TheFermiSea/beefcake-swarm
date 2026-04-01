@@ -117,13 +117,9 @@ tools = ["edit_file", "write_file", "proxy_edit_file", "proxy_write_file"]
 #   vasp-01:8081 — Qwen3.5-27B Q4_K_M (coder champion, ~27 tok/s, SWE-bench 72.4%)
 #   vasp-02:8081 — Devstral-Small-2-24B Q4_K_M (TZ #1 bool_pass, ~30 tok/s, SWE-bench 68.0%)
 #   vasp-03:8081 — GLM-4.7-Flash Q4_K_M (SOTA tool-calling, 3B active, ~50 tok/s, tau2 84.7)
-#   vasp-03:8083 — SERA-14B (Qwen3 backbone, 8K ctx; defined but not in A/B rotation — shared VRAM)
 #   vasp-*:8082  — nomic-embed-text-v1.5 (CPU embedding service, all nodes)
 #
 # Active A/B: glm_flash vs qwen35_27b vs devstral_24b (Thompson Sampling on task_resolved).
-# SERA-14B removed from candidate_variants: 8K context cap, shared GPU with GLM on vasp-03.
-# DICL removed entirely: no demonstrations seeded; TZ validates ALL defined variants,
-# so keeping DICL variant definitions caused startup failures on TZ 2026.3.2.
 
 # --- Scout/fast tier on vasp-03 (GLM-4.7-Flash, SOTA tool-calling) ---
 
@@ -156,20 +152,6 @@ routing = ["vasp02"]
 type = "openai"
 model_name = "Devstral-Small-2-24B"
 api_base = "http://10.0.0.21:8081/v1"
-api_key_location = "none"
-
-# --- SWE specialist: SERA-14B on vasp-03 port 8083 ---
-# Allen AI's SERA-14B: Qwen3 backbone, SFT on synthetic SWE trajectories (SVG method).
-# 8K context (VRAM-constrained, shares GPU with GLM-4.7-Flash on 8081).
-# A/B test: purpose-built SWE agent vs general coder models.
-
-[models.sera_14b]
-routing = ["vasp03_sera"]
-
-[models.sera_14b.providers.vasp03_sera]
-type = "openai"
-model_name = "SERA-14B"
-api_base = "http://10.0.0.22:8083/v1"
 api_key_location = "none"
 
 # --- Reasoning tier: alias to Devstral (same node, replaces duplicate 27B) ---
@@ -266,9 +248,8 @@ update_period_s = 300
 # --- Worker Code Edit: 3-model A/B experiment ---
 # GLM-4.7-Flash (scout/fast), Qwen3.5-27B (coder), Devstral-24B (reasoning)
 # Thompson Sampling routes toward the model that maximizes task_resolved.
-# SERA-14B removed: shares GPU with GLM-4.7-Flash (VRAM contention), 8K context limit.
-# DICL removed: 0 inferences in 3 days (no demonstrations seeded). TZ 2026.3.2
-# validates ALL defined variants at startup — keeping the definition causes crashes.
+# SERA-14B removed: 8K context cap, shared GPU with GLM-4.7-Flash on vasp-03.
+# DICL removed: no demonstrations seeded; TZ 2026.3.2 validates all defined variants at startup.
 [functions.worker_code_edit]
 type = "chat"
 
@@ -343,7 +324,7 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
-# SERA-14B fixer removed (same structural disadvantages as sera_14b_worker).
+# SERA-14B removed (8K context cap, shared GPU with GLM on vasp-03).
 [functions.code_fixing.experimentation]
 type = "adaptive"
 candidate_variants = ["glm_flash_fixer", "qwen35_fixer", "devstral_fixer"]
