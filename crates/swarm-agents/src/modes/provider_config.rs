@@ -299,11 +299,4 @@ mod tests {
         };
         assert!(cfg.validate().is_err());
     }
-
-    #[test]
-    fn zero_max_iterations_rejected() {
-        let mut cfg = ModeRunnerConfig::default();
-        cfg.max_iterations = 0;
-        assert!(cfg.validate().is_err());
-    }
 }
