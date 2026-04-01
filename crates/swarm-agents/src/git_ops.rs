@@ -405,6 +405,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(dead_code)]
     fn name_only_diff_filter_drops_operational_artifacts() {
         let output = "\
 .beads
