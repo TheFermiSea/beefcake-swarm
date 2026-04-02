@@ -394,31 +394,32 @@ impl CloudFallbackMatrix {
         }
     }
 
-    /// Default matrix: GPT-5.4-mini → Gemini 3.1 Pro High → Sonnet 4.6 → Gemini 3.1 Flash Lite.
+    /// Default matrix: GPT-5.4 → GPT-5.2-Codex → GPT-5.1-Codex → Claude Sonnet 4.6.
     ///
-    /// Gemini 3.1 Pro has 2M context for whole-codebase understanding. Sonnet 4.6
-    /// is a stronger fallback when the OpenAI primary is unavailable. Gemini 3.1 Flash Lite is the
-    /// latest fast/cheap model for last-resort fallback.
+    /// The first three entries route through OpenAI/ChatGPT-Plus credentials in CLIAPIProxy and
+    /// are independent of Anthropic quota. Claude Sonnet 4.6 is kept as a last-resort fallback
+    /// for when Anthropic credits are available. This ordering ensures the cascade survives
+    /// Anthropic rate-limit cooldowns without stalling.
     pub fn default_matrix() -> Self {
         Self {
             entries: vec![
                 CloudFallbackEntry {
-                    model: "gpt-5.4-mini".to_string(),
+                    model: "gpt-5.4".to_string(),
                     tier_label: "primary".to_string(),
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "gemini-3.1-pro-high".to_string(),
+                    model: "gpt-5.2-codex".to_string(),
                     tier_label: "fallback-1".to_string(),
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "claude-sonnet-4-6".to_string(),
+                    model: "gpt-5.1-codex".to_string(),
                     tier_label: "fallback-2".to_string(),
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "gemini-3.1-flash-lite-preview".to_string(),
+                    model: "claude-sonnet-4-6".to_string(),
                     tier_label: "fallback-3".to_string(),
                     max_tokens: 4096,
                 },
@@ -887,7 +888,7 @@ impl SwarmConfig {
     fn cloud_from_env() -> Option<CloudEndpoint> {
         let url = std::env::var("SWARM_CLOUD_URL").ok()?;
         let api_key = std::env::var("SWARM_CLOUD_API_KEY").ok()?;
-        let model = std::env::var("SWARM_CLOUD_MODEL").unwrap_or_else(|_| "gpt-5.4-mini".into());
+        let model = std::env::var("SWARM_CLOUD_MODEL").unwrap_or_else(|_| "gpt-5.4".into());
         Some(CloudEndpoint {
             url,
             api_key,
@@ -1324,13 +1325,13 @@ mod tests {
         assert_eq!(matrix.len(), 4);
         assert!(!matrix.is_empty());
         let primary = matrix.primary().unwrap();
-        assert_eq!(primary.model, "gpt-5.4-mini");
+        assert_eq!(primary.model, "gpt-5.4");
         assert_eq!(primary.tier_label, "primary");
         let fallbacks = matrix.fallbacks();
         assert_eq!(fallbacks.len(), 3);
-        assert_eq!(fallbacks[0].model, "gemini-3.1-pro-high");
-        assert_eq!(fallbacks[1].model, "claude-sonnet-4-6");
-        assert_eq!(fallbacks[2].model, "gemini-3.1-flash-lite-preview");
+        assert_eq!(fallbacks[0].model, "gpt-5.2-codex");
+        assert_eq!(fallbacks[1].model, "gpt-5.1-codex");
+        assert_eq!(fallbacks[2].model, "claude-sonnet-4-6");
     }
 
     #[test]
@@ -1348,7 +1349,7 @@ mod tests {
         assert_eq!(config.cloud_fallback_matrix.len(), 4);
         assert_eq!(
             config.cloud_fallback_matrix.primary().unwrap().model,
-            "gpt-5.4-mini"
+            "gpt-5.4"
         );
     }
 }
