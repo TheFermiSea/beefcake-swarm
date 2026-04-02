@@ -48,6 +48,94 @@ use crate::beads_bridge::IssueTracker;
 use crate::endpoint_pool::EndpointPool;
 use crate::runtime_adapter::{AdapterConfig, AdapterReport, RuntimeAdapter};
 use crate::tools::bundles::{self, WorkerRole};
+use crate::triage::Complexity;
+
+// ── Write-deadline helpers ─────────────────────────────────────────────────────
+
+/// Keywords that indicate an exploration-heavy task needing more read turns
+/// before the first write.
+const HEAVY_READ_KEYWORDS: &[&str] = &[
+    "audit",
+    "refactor",
+    "analyze",
+    "standardize",
+    "review",
+    "port",
+    "migrate",
+    "cleanup",
+    "consolidate",
+    "restructure",
+];
+
+/// Compute the maximum LLM turns a worker may spend before it *must* produce
+/// its first `edit_file` or `write_file` call.
+///
+/// The deadline adapts to three signals:
+///
+/// 1. **Complexity** — more complex issues need deeper exploration before writing.
+/// 2. **Objective keywords** — "audit", "refactor", "standardize", etc. signal
+///    that significant read-only exploration is expected before any edits.
+/// 3. **File counts** — each target file needs ~3 read turns; each context file
+///    needs ~1 read turn (capped at 6).
+///
+/// When `SWARM_MAX_TURNS_WITHOUT_WRITE` is set in the environment it acts as a
+/// hard operator override and is returned directly, bypassing the heuristic.
+pub fn dynamic_write_deadline(
+    complexity: Complexity,
+    objective: &str,
+    target_files: &[String],
+    context_files: &[String],
+) -> usize {
+    // Operator override takes precedence.
+    if let Ok(s) = std::env::var("SWARM_MAX_TURNS_WITHOUT_WRITE") {
+        if let Ok(v) = s.parse::<usize>() {
+            if v > 0 {
+                return v;
+            }
+        }
+    }
+
+    let obj_lower = objective.to_lowercase();
+    let is_heavy_read = HEAVY_READ_KEYWORDS.iter().any(|kw| obj_lower.contains(kw));
+
+    // Base exploration budget varies by (complexity, task type).
+    let base: usize = match (complexity, is_heavy_read) {
+        (Complexity::Simple, false) => 5,
+        (Complexity::Simple, true) => 8,
+        (Complexity::Medium, false) => 10,
+        (Complexity::Medium, true) => 16,
+        (Complexity::Complex | Complexity::Critical, false) => 15,
+        (Complexity::Complex | Complexity::Critical, true) => 22,
+    };
+
+    // Each target file needs ~3 read turns before an edit is possible.
+    let target_bonus = target_files.len() * 3;
+
+    // Context files contribute 1 read turn each (capped to prevent runaway budgets).
+    let context_bonus = context_files.len().min(6);
+
+    base + target_bonus + context_bonus
+}
+
+/// Scale the total worker turn budget for the given task.
+///
+/// Complex/audit tasks need more total turns because the exploration phase is
+/// deeper. The scale factor is applied on top of the file-count-based base and
+/// the result is clamped to `[30, 200]`.
+fn scale_dynamic_turns(base: usize, complexity: Complexity, objective: &str) -> usize {
+    let obj_lower = objective.to_lowercase();
+    let is_heavy_read = HEAVY_READ_KEYWORDS.iter().any(|kw| obj_lower.contains(kw));
+
+    let scale: f64 = match (complexity, is_heavy_read) {
+        (Complexity::Simple, _) => 1.0,
+        (Complexity::Medium, false) => 1.2,
+        (Complexity::Medium, true) => 1.5,
+        (Complexity::Complex | Complexity::Critical, false) => 1.5,
+        (Complexity::Complex | Complexity::Critical, true) => 2.0,
+    };
+
+    ((base as f64 * scale) as usize).clamp(30, 200)
+}
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -455,6 +543,7 @@ fn validate_integration_files(plan: &SubtaskPlan, profile_files: Option<&[String
 ///
 /// Concurrency is bounded by `max_concurrent` (typically the number of
 /// available inference slots across the cluster).
+#[allow(clippy::too_many_arguments)]
 pub async fn dispatch_subtasks(
     plan: &SubtaskPlan,
     endpoint_pool: &EndpointPool,
@@ -462,6 +551,8 @@ pub async fn dispatch_subtasks(
     issue_id: &str,
     max_concurrent: usize,
     timeout_secs: u64,
+    complexity: Complexity,
+    issue_objective: &str,
 ) -> DispatchOutcome {
     let start = Instant::now();
     let max_concurrent = max_concurrent.min(plan.subtasks.len()).max(1);
@@ -469,6 +560,7 @@ pub async fn dispatch_subtasks(
     let wt_path = Arc::new(wt_path.to_path_buf());
     let issue_id = Arc::new(issue_id.to_string());
     let timeout_secs = Arc::new(timeout_secs);
+    let issue_objective = Arc::new(issue_objective.to_string());
 
     // Log plan details for observability.
     let file_assignments: Vec<String> = plan
@@ -491,6 +583,7 @@ pub async fn dispatch_subtasks(
         let issue_id = issue_id.clone();
         let subtask = subtask.clone();
         let timeout_secs = timeout_secs.clone();
+        let issue_objective = issue_objective.clone();
         // Select the next endpoint via round-robin BEFORE spawning, so the
         // borrow of endpoint_pool doesn't cross the spawn boundary.
         let (client, model) = endpoint_pool.next();
@@ -512,6 +605,8 @@ pub async fn dispatch_subtasks(
                 &issue_id,
                 &subtask,
                 *timeout_secs,
+                complexity,
+                &issue_objective,
             )
             .await
         });
@@ -658,6 +753,7 @@ fn build_subtask_system_prompt(subtask: &Subtask, wt_path: &Path) -> String {
 /// Public entry point for running a single subtask worker.
 ///
 /// Used by the orchestrator for serial retry of failed subtasks.
+#[allow(clippy::too_many_arguments)]
 pub async fn run_subtask_worker_public(
     client: &openai::CompletionsClient,
     model: &str,
@@ -665,8 +761,10 @@ pub async fn run_subtask_worker_public(
     issue_id: &str,
     subtask: &Subtask,
     timeout_secs: u64,
+    complexity: Complexity,
+    issue_objective: &str,
 ) -> SubtaskResult {
-    run_subtask_worker(client, model, wt_path, issue_id, subtask, timeout_secs).await
+    run_subtask_worker(client, model, wt_path, issue_id, subtask, timeout_secs, complexity, issue_objective).await
 }
 
 /// Run a single subtask worker.
@@ -674,6 +772,7 @@ pub async fn run_subtask_worker_public(
 /// Builds a fresh agent scoped to the subtask's files, runs it with budget
 /// tracking, and returns the result. The agent is constructed INSIDE the
 /// spawned task to avoid `!Send` issues with Rig's agent type.
+#[allow(clippy::too_many_arguments)]
 async fn run_subtask_worker(
     client: &openai::CompletionsClient,
     model: &str,
@@ -681,6 +780,8 @@ async fn run_subtask_worker(
     issue_id: &str,
     subtask: &Subtask,
     timeout_secs: u64,
+    complexity: Complexity,
+    issue_objective: &str,
 ) -> SubtaskResult {
     let start = Instant::now();
 
@@ -693,16 +794,18 @@ async fn run_subtask_worker(
     // Build tools scoped to the worktree with file allowlist enforcement.
     let tools = bundles::subtask_worker_tools(wt_path, role, &subtask.target_files, &subtask.id);
 
-    // Scale turn budget dynamically based on task complexity:
-    //   - Each target file adds 15 turns (need to read + understand + edit)
-    //   - NEW files (don't exist yet) add 10 extra each (more design work)
-    //   - Minimum of 30 turns, maximum of 150
+    // Scale turn budget dynamically based on task complexity and file counts:
     //
-    // Examples:
-    //   1 existing file  → 30 turns
-    //   2 existing files → 45 turns
-    //   1 new file       → 40 turns
-    //   3 files (1 new)  → 65 turns
+    //   base     = (target_files * 15) + (new_files * 10)
+    //   total    = scale_dynamic_turns(base, complexity, objective)
+    //            → Simple: 1.0×, Medium: 1.2–1.5×, Complex/audit: 1.5–2.0×
+    //            → clamped to [30, 200]
+    //
+    // Examples (2 existing files):
+    //   Simple               → 30 turns
+    //   Medium               → 36 turns
+    //   Complex (no audit)   → 45 turns
+    //   Complex + "audit"    → 60 turns
     let (new_count, existing_count) =
         subtask
             .target_files
@@ -714,7 +817,19 @@ async fn run_subtask_worker(
                     (n + 1, e)
                 }
             });
-    let dynamic_turns = ((existing_count + new_count) * 15 + new_count * 10).clamp(30, 150);
+    let base_turns = (existing_count + new_count) * 15 + new_count * 10;
+    let dynamic_turns = scale_dynamic_turns(base_turns, complexity, issue_objective);
+
+    // Write deadline: how many turns the worker may spend before its first edit.
+    // Computed from complexity + objective keywords + file counts; capped so at
+    // least 6 turns remain for actual writing.
+    let write_deadline = dynamic_write_deadline(
+        complexity,
+        issue_objective,
+        &subtask.target_files,
+        &subtask.context_files,
+    )
+    .min(dynamic_turns.saturating_sub(6));
 
     // Build the agent with a subtask-specific system prompt.
     let system_prompt = build_subtask_system_prompt(subtask, wt_path);
@@ -731,8 +846,10 @@ async fn run_subtask_worker(
     tracing::debug!(
         subtask_id = %subtask.id,
         dynamic_turns,
+        write_deadline,
         new_files = new_count,
         existing_files = existing_count,
+        complexity = %complexity,
         "Subtask turn budget calculated"
     );
 
@@ -767,12 +884,12 @@ async fn run_subtask_worker(
 
     // Runtime adapter for budget tracking.
     // The deadline (wall-clock timeout) is the primary constraint — not turn counts.
-    // max_turns_without_write scales proportionally; max_tool_calls is generous.
+    // max_turns_without_write is computed dynamically; max_tool_calls is generous.
     let adapter = RuntimeAdapter::new(AdapterConfig {
         agent_name: format!("{}-{}", subtask.worker_type, subtask.id),
         max_tool_calls: Some(dynamic_turns * 3),
         deadline: Some(Instant::now() + Duration::from_secs(timeout_secs)),
-        max_turns_without_write: Some((dynamic_turns * 3) / 4), // 75% of budget without a write
+        max_turns_without_write: Some(write_deadline),
         ..Default::default()
     });
 

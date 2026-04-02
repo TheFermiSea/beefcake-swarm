@@ -374,6 +374,13 @@ async fn process_issue_core(
         "Triage complete"
     );
 
+    // Combined issue objective (title + description) used for write-deadline
+    // computation and routing hints throughout the issue lifecycle.
+    let issue_objective: String = match &issue.description {
+        Some(desc) if !desc.is_empty() => format!("{} {}", issue.title, desc),
+        _ => issue.title.clone(),
+    };
+
     // Build the phase-based model selector for this issue.
     let phase_selector = PhaseModelSelector::new(
         config.cloud_model_catalog.clone(),
@@ -844,6 +851,8 @@ async fn process_issue_core(
                     &issue.id,
                     max_concurrent,
                     timeout,
+                    triage_result.complexity,
+                    &issue_objective,
                 )
                 .await;
 
@@ -915,6 +924,8 @@ async fn process_issue_core(
                                 &issue.id,
                                 &retry_subtask,
                                 timeout,
+                                triage_result.complexity,
+                                &issue_objective,
                             )
                             .await;
                             info!(
@@ -1683,11 +1694,17 @@ async fn process_issue_core(
                         info!(iteration, "Routing to rust_coder (Qwen3.5-Implementer)");
                         metrics.record_coder_route("RustCoder");
                         metrics.record_agent_metrics("Qwen3.5-RustCoder", 0, 0);
+                        let seq_write_deadline = crate::subtask::dynamic_write_deadline(
+                            triage_result.complexity,
+                            &issue_objective,
+                            &[],
+                            &[],
+                        );
                         let adapter = RuntimeAdapter::new(AdapterConfig {
                             agent_name: "Qwen3.5-RustCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(config.max_worker_tool_calls),
-                            max_turns_without_write: Some(config.max_turns_without_write),
+                            max_turns_without_write: Some(seq_write_deadline),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1717,11 +1734,17 @@ async fn process_issue_core(
                         info!(iteration, "Routing to general_coder (Qwen3.5-Implementer)");
                         metrics.record_coder_route("GeneralCoder");
                         metrics.record_agent_metrics("Qwen3.5-GeneralCoder", 0, 0);
+                        let seq_write_deadline = crate::subtask::dynamic_write_deadline(
+                            triage_result.complexity,
+                            &issue_objective,
+                            &[],
+                            &[],
+                        );
                         let adapter = RuntimeAdapter::new(AdapterConfig {
                             agent_name: "Qwen3.5-GeneralCoder".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(config.max_worker_tool_calls),
-                            max_turns_without_write: Some(config.max_turns_without_write),
+                            max_turns_without_write: Some(seq_write_deadline),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1932,6 +1955,8 @@ async fn process_issue_core(
                     &issue.id,
                     max_concurrent,
                     timeout,
+                    triage_result.complexity,
+                    &issue_objective,
                 )
                 .await;
 
