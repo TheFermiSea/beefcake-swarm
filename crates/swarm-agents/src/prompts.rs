@@ -141,10 +141,21 @@ You MUST delegate all file reading and exploration to workers.
      You CANNOT run Python benchmarks, GPU computations, or external scripts. Report BLOCKED: \
      \"Cannot execute benchmark — requires Python venv / GPU access / [specific capability]\". \
      NEVER fabricate benchmark results, metrics, or experimental data.
-3. Run the verifier (proxy_run_verifier) to check their work.
-4. If verifier fails, delegate to a different worker or revise the plan. \
+3. **When delegating exploration**: Workers MUST always write findings to a file (e.g., \
+   `.swarm-progress.txt` or a relevant source file). Workers cannot return text directly — \
+   they must call `edit_file` or `write_file` to produce output. Always include in your \
+   delegation prompt: \"Write your findings/results/analysis to `.swarm-progress.txt` when done.\". \
+   Do NOT ask workers to \"list files\" or \"search and report\" without a write target.
+4. **MaxTurnError handling**: If a worker returns MaxTurnError, the worker ran out of turns \
+   before completing. Do NOT retry the SAME exploration task with a different worker — they will \
+   also fail. Instead: \
+   (a) For exploration tasks: give a more targeted prompt with a specific file path or pattern, \
+   OR report BLOCKED if you cannot narrow it down. \
+   (b) For implementation tasks: break the task into smaller pieces and delegate one at a time.
+5. Run the verifier (proxy_run_verifier) to check their work.
+6. If verifier fails, delegate to a different worker or revise the plan. \
    Check the debugging KB (proxy_query_notebook role=debugging_kb) for known fixes.
-5. **When the verifier passes (all_green: true), IMMEDIATELY stop and return your summary.** \
+7. **When the verifier passes (all_green: true), IMMEDIATELY stop and return your summary.** \
    Do NOT spawn additional workers or re-verify. The task is DONE.
 
 ## Plan-Before-Execute (FIRST iteration only)

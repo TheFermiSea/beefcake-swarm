@@ -166,28 +166,27 @@ impl CloudModelCatalog {
                 capability_score: 40,
             },
             // --- Antigravity / Google (via CLIAPIProxy) ---
+            // Note: gemini-3.1-pro-high is often unreliable (auth_unavailable). No "plan"
+            // capability to avoid it being selected as subtask planner.
             CloudModelEntry {
                 model: "gemini-3.1-pro-high".into(),
                 label: "Gemini 3.1 Pro".into(),
                 cost_input_per_m: 1.25,
                 cost_output_per_m: 10.0,
                 context_window: 2_000_000,
-                capabilities: vec![
-                    "explore".into(),
-                    "plan".into(),
-                    "review".into(),
-                    "architect".into(),
-                ],
+                capabilities: vec!["explore".into(), "review".into(), "architect".into()],
                 provider: "cliapi".into(),
                 capability_score: 85,
             },
+            // gemini-3-flash-preview: reliable, cheap, used as planning fallback when
+            // Anthropic models are unavailable.
             CloudModelEntry {
                 model: "gemini-3-flash-preview".into(),
                 label: "Gemini 3 Flash".into(),
                 cost_input_per_m: 0.10,
                 cost_output_per_m: 0.40,
                 context_window: 1_000_000,
-                capabilities: vec!["triage".into(), "explore".into(), "scout".into()],
+                capabilities: vec!["triage".into(), "explore".into(), "scout".into(), "plan".into()],
                 provider: "cliapi".into(),
                 capability_score: 35,
             },
