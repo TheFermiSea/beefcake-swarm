@@ -21,7 +21,7 @@ use crate::tools::submit_plan_tool::{SubmitPlanTool, WorkPlanSlot};
 
 use super::coder::OaiAgent;
 
-const DEFAULT_MANAGER_MAX_TURNS: usize = 15;
+const DEFAULT_MANAGER_MAX_TURNS: usize = 60;
 
 fn manager_max_turns() -> usize {
     std::env::var("SWARM_MANAGER_MAX_TURNS")

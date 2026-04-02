@@ -168,11 +168,18 @@ api_key_location = "none"
 # --- Cloud models (via CLIAPIProxy on ai-proxy localhost) ---
 
 [models.claude_opus]
-routing = ["cliapiproxy"]
+routing = ["cliapiproxy", "cliapiproxy_gemini_flash_fallback"]
 
 [models.claude_opus.providers.cliapiproxy]
 type = "openai"
 model_name = "claude-opus-4-6"
+api_base = "http://localhost:8317/v1"
+api_key_location = "env::SWARM_CLOUD_API_KEY"
+
+# Gemini Flash fallback: TZ automatically tries this when Anthropic rate-limits
+[models.claude_opus.providers.cliapiproxy_gemini_flash_fallback]
+type = "openai"
+model_name = "gemini-3-flash-preview"
 api_base = "http://localhost:8317/v1"
 api_key_location = "env::SWARM_CLOUD_API_KEY"
 
