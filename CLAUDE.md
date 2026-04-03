@@ -419,6 +419,27 @@ Worktrees are created locally at `/tmp/beefcake-wt/<issue-id>` (not on NFS). Bea
 - `#![allow(dead_code)]` in `coordination/src/main.rs` — rmcp `#[tool_router]` macro triggers false positives. Targeted `#[allow]` used elsewhere after refactor (PR #20).
 - `CLIAPIProxy ownership check` — Reports `owned_by=antigravity`. run-swarm.sh now accepts both "anthropic" and "antigravity", so ownership check passes normally.
 
+## Worktree Agent Rules
+
+**CRITICAL**: When launching subagents with `isolation: "worktree"`, follow these rules:
+
+1. **Agents MUST commit**: Every agent prompt MUST include this instruction:
+   ```
+   IMPORTANT: Before finishing, you MUST commit all your changes:
+   git add -A && git commit -m "description of changes"
+   Do NOT finish without committing. Uncommitted changes are lost when the worktree is cleaned up.
+   ```
+
+2. **Never clean worktrees early**: Do NOT run `rm -rf .claude/worktrees/` or `git worktree prune` until ALL background agents have completed and their changes have been merged.
+
+3. **Merge workflow**: After an agent completes:
+   - Check if `worktreeBranch` is in the result metadata
+   - `git diff main..<branch>` to see committed changes
+   - Cherry-pick or merge the branch
+   - THEN clean up the worktree
+
+4. **If changes were lost**: Check the agent's branch with `git log <branch>`. If no commits, the agent failed to commit — the changes are gone and the work must be redone.
+
 ## Agent Teams
 
 Enabled via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`.
