@@ -15,7 +15,7 @@
 use std::path::Path;
 
 /// Prompt version. Bump on any preamble content change.
-pub const PROMPT_VERSION: &str = "9.1.0";
+pub const PROMPT_VERSION: &str = "9.2.0";
 
 /// Shared coordination block appended to all worker preambles.
 ///
@@ -357,6 +357,20 @@ without calling the tool in the same response.
 3. FALLBACK: old_content must match raw file exactly — no line numbers, no hashes.
 4. If file was truncated, use start_line/end_line to read exact range first.
 
+## ANTI-STALL POLICY
+You MUST produce a file modification quickly. Follow this exact sequence:
+
+ALLOWED SEQUENCE:
+1. read_file on ONE assigned target file
+2. OPTIONAL: one additional read_file on a context file
+3. edit_file or write_file — YOUR PRIMARY GOAL
+
+IF BLOCKED (tool fails, file missing, unclear task):
+- Do NOT keep exploring with more reads/searches
+- Do NOT call more than 3 read/list/search tools total before writing
+- Produce your best edit attempt, or explain the exact blocker in 1-2 sentences
+- NEVER loop through files hoping to find something useful
+
 ## Rules
 - Always read the file BEFORE editing it (unless content is provided in the task).
 - Use edit_file for targeted changes. Never rewrite an entire file to change a few lines.
@@ -438,6 +452,20 @@ without calling the tool in the same response.
    old_content is OPTIONAL when using anchors.
 3. FALLBACK: old_content must match raw file exactly — no line numbers, no hashes.
 4. If file was truncated, use start_line/end_line to read exact range first.
+
+## ANTI-STALL POLICY
+You MUST produce a file modification quickly. Follow this exact sequence:
+
+ALLOWED SEQUENCE:
+1. read_file on ONE assigned target file
+2. OPTIONAL: one additional read_file on a context file
+3. edit_file or write_file — YOUR PRIMARY GOAL
+
+IF BLOCKED (tool fails, file missing, unclear task):
+- Do NOT keep exploring with more reads/searches
+- Do NOT call more than 3 read/list/search tools total before writing
+- Produce your best edit attempt, or explain the exact blocker in 1-2 sentences
+- NEVER loop through files hoping to find something useful
 
 ## Rules
 - Always read before editing (unless content is provided in the task).
@@ -586,6 +614,20 @@ Do NOT run cargo check/test. Query related issues with `bd show <id>`.
 3. FALLBACK: old_content must match raw file exactly — no line numbers, no hashes.
 4. If file was truncated, use start_line/end_line to read exact range first.
 
+## ANTI-STALL POLICY
+You MUST produce a file modification quickly. Follow this exact sequence:
+
+ALLOWED SEQUENCE:
+1. read_file on ONE assigned target file
+2. OPTIONAL: one additional read_file on a context file
+3. edit_file or write_file — YOUR PRIMARY GOAL
+
+IF BLOCKED (tool fails, file missing, unclear task):
+- Do NOT keep exploring with more reads/searches
+- Do NOT call more than 3 read/list/search tools total before writing
+- Produce your best edit attempt, or explain the exact blocker in 1-2 sentences
+- NEVER loop through files hoping to find something useful
+
 ## Rules
 - Read files before editing. Use edit_file for targeted changes.
 - You MUST call edit_file or write_file when you can make progress. If blocked, \
@@ -672,6 +714,16 @@ Only modify files specified in the plan. Do NOT run cargo check/test or commit.
    old_content is OPTIONAL when using anchors.
 3. FALLBACK: old_content must match raw file exactly — no line numbers, no hashes.
 4. If file was truncated, use start_line/end_line to read exact range first.
+
+## ANTI-STALL POLICY FOR FIXERS
+You receive compiler errors and must fix them efficiently:
+
+1. Read the error message carefully — classify the ROOT CAUSE
+2. Read at most ONE file mentioned in the error
+3. Make the MINIMAL edit that fixes the root cause
+4. Do NOT fix symptoms — fix the source (e.g., fix the type definition, not every usage)
+5. Do NOT refactor surrounding code
+6. If multiple errors cascade from one root cause, fix only the root cause
 
 ## Rules
 - Read files before editing. Follow the plan steps in order.

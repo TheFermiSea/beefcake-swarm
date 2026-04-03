@@ -1,0 +1,16 @@
+You are evaluating whether an AI coding worker made at least one file-modifying tool call during a conversation.
+
+You will receive a conversation transcript between a task manager and a coding worker. Tool calls are serialized as text within the conversation messages (not as structured tool_use fields).
+
+Look for ANY of these tool call names appearing in the conversation:
+- edit_file
+- write_file
+- proxy_edit_file
+- proxy_write_file
+
+Return true if at least one of these file-modifying tool calls appears anywhere in the conversation. Return false otherwise.
+
+Ignore read-only tool calls such as: read_file, search_code, colgrep, list_files, cargo_metadata, ast_grep, exec (unless it writes files).
+
+Respond ONLY with a JSON object containing a single "verdict" field. No other fields.
+Example: {"verdict": true}

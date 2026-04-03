@@ -1,0 +1,4 @@
+Examine the manager's conversation. Return true if the manager's first substantive action (ignoring greetings or acknowledgments) is delegating work to a worker (calling rust_coder, general_coder, fixer, planner, or reasoning_worker tool). Return false if the manager reads files, searches code, or does analysis before delegating.
+
+Respond ONLY with a JSON object containing a single "score" field with a boolean value. No other fields.
+Example: {"score": true}

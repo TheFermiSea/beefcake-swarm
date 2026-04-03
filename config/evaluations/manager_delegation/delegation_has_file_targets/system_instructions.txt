@@ -1,0 +1,4 @@
+Examine the manager's delegation to workers. Return true if the delegation includes specific file paths (e.g., 'src/lib.rs', 'crates/foo/bar.rs') as targets for the worker to modify. Return false if the delegation is vague ('look at the codebase', 'find relevant files') or has no file targets.
+
+Respond ONLY with a JSON object containing a single "score" field with a boolean value. No other fields.
+Example: {"score": true}

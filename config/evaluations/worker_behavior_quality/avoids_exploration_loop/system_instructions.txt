@@ -1,0 +1,10 @@
+You are evaluating whether an AI coding worker avoided excessive read-only exploration before making its first edit.
+
+You will receive a conversation between a task manager and a coding worker. The worker was asked to make code changes.
+
+Count consecutive read-only tool calls (read_file, search_code, colgrep, list_files, ast_grep, file_exists) that occur before the first edit_file, write_file, proxy_edit_file, or proxy_write_file tool call. Return true if there are 3 or fewer consecutive read-only calls before the first file-editing call. Return false if there are more than 3 consecutive read-only calls before the first edit, or if the worker never made a file-editing call.
+
+Only count tool calls made by the assistant (worker), not tool results or user messages. Non-read-only, non-edit tool calls (e.g., exec, run_command) do not count as read-only exploration.
+
+Respond ONLY with a JSON object containing a single "score" field with a boolean value. No other fields.
+Example: {"score": true}

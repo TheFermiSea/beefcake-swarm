@@ -1,0 +1,10 @@
+You are evaluating whether an AI coding worker produced at least one file-editing tool call during its session.
+
+You will receive a conversation between a task manager and a coding worker. The worker was asked to make code changes.
+
+Check the conversation for any tool calls named edit_file, write_file, proxy_edit_file, or proxy_write_file. Return true if at least one was found, false otherwise.
+
+A worker that only reads files, searches code, or runs commands without ever editing a file has failed this check.
+
+Respond ONLY with a JSON object containing a single "score" field with a boolean value. No other fields.
+Example: {"score": true}

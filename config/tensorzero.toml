@@ -72,10 +72,60 @@ system_instructions = "evaluations/worker_code_quality/code_correctness/system_i
 json_mode = "strict"
 
 # Check that workers actually use edit_file/write_file tools (not just read).
+# LLM judge: tool calls are serialized in chat transcripts, not structured tool_use fields.
 [evaluations.worker_code_quality.evaluators.uses_edit_tools]
-type = "tool_use"
-behavior = "any_of"
-tools = ["edit_file", "write_file", "proxy_edit_file", "proxy_write_file"]
+type = "llm_judge"
+output_type = "boolean"
+optimize = "max"
+
+[evaluations.worker_code_quality.evaluators.uses_edit_tools.variants.claude_judge]
+active = true
+type = "chat_completion"
+model = "claude_sonnet"
+system_instructions = "evaluations/worker_code_quality/uses_edit_tools/system_instructions.txt"
+json_mode = "strict"
+
+# Evaluate worker behavioral patterns (edit speed, exploration discipline).
+[evaluations.worker_behavior_quality]
+type = "inference"
+function_name = "worker_code_edit"
+description = "Evaluates whether workers edit files promptly and avoid excessive read-only exploration loops."
+
+[evaluations.worker_behavior_quality.evaluators.made_edit]
+type = "llm_judge"
+output_type = "boolean"
+optimize = "max"
+
+[evaluations.worker_behavior_quality.evaluators.made_edit.variants.claude_judge]
+active = true
+type = "chat_completion"
+model = "claude_sonnet"
+system_instructions = "evaluations/worker_behavior_quality/made_edit/system_instructions.txt"
+json_mode = "strict"
+
+[evaluations.worker_behavior_quality.evaluators.first_edit_early]
+type = "llm_judge"
+output_type = "boolean"
+optimize = "max"
+
+[evaluations.worker_behavior_quality.evaluators.first_edit_early.variants.claude_judge]
+active = true
+type = "chat_completion"
+model = "claude_sonnet"
+system_instructions = "evaluations/worker_behavior_quality/first_edit_early/system_instructions.txt"
+json_mode = "strict"
+
+[evaluations.worker_behavior_quality.evaluators.avoids_exploration_loop]
+type = "llm_judge"
+output_type = "boolean"
+optimize = "max"
+
+[evaluations.worker_behavior_quality.evaluators.avoids_exploration_loop.variants.claude_judge]
+active = true
+type = "chat_completion"
+model = "claude_sonnet"
+system_instructions = "evaluations/worker_behavior_quality/avoids_exploration_loop/system_instructions.txt"
+json_mode = "strict"
 
 # Evaluate manager delegation quality across Opus vs Sonnet.
 [evaluations.manager_delegation]
@@ -95,16 +145,63 @@ model = "claude_sonnet"
 system_instructions = "evaluations/manager_delegation/delegation_quality/system_instructions.txt"
 json_mode = "strict"
 
+# Boolean: did the manager delegate as its first action (not read/search first)?
+[evaluations.manager_delegation.evaluators.first_action_is_delegation]
+type = "llm_judge"
+output_type = "boolean"
+optimize = "max"
+
+[evaluations.manager_delegation.evaluators.first_action_is_delegation.variants.claude_judge]
+active = true
+type = "chat_completion"
+model = "claude_sonnet"
+system_instructions = "evaluations/manager_delegation/first_action_is_delegation/system_instructions.txt"
+json_mode = "strict"
+
+# Boolean: did the delegation include specific file paths for the worker?
+[evaluations.manager_delegation.evaluators.delegation_has_file_targets]
+type = "llm_judge"
+output_type = "boolean"
+optimize = "max"
+
+[evaluations.manager_delegation.evaluators.delegation_has_file_targets.variants.claude_judge]
+active = true
+type = "chat_completion"
+model = "claude_sonnet"
+system_instructions = "evaluations/manager_delegation/delegation_has_file_targets/system_instructions.txt"
+json_mode = "strict"
+
+# Boolean: did the delegation include an explicit done/completion condition?
+[evaluations.manager_delegation.evaluators.delegation_has_done_condition]
+type = "llm_judge"
+output_type = "boolean"
+optimize = "max"
+
+[evaluations.manager_delegation.evaluators.delegation_has_done_condition.variants.claude_judge]
+active = true
+type = "chat_completion"
+model = "claude_sonnet"
+system_instructions = "evaluations/manager_delegation/delegation_has_done_condition/system_instructions.txt"
+json_mode = "strict"
+
 # Evaluate code fixing quality (fixer agent after verifier failure).
 [evaluations.code_fixing_quality]
 type = "inference"
 function_name = "code_fixing"
 description = "Evaluates whether the fixer agent successfully resolves compilation errors."
 
+# LLM judge: tool calls are serialized in chat transcripts, not structured tool_use fields.
 [evaluations.code_fixing_quality.evaluators.uses_edit_tools]
-type = "tool_use"
-behavior = "any_of"
-tools = ["edit_file", "write_file", "proxy_edit_file", "proxy_write_file"]
+type = "llm_judge"
+output_type = "boolean"
+optimize = "max"
+
+[evaluations.code_fixing_quality.evaluators.uses_edit_tools.variants.claude_judge]
+active = true
+type = "chat_completion"
+model = "claude_sonnet"
+system_instructions = "evaluations/code_fixing_quality/uses_edit_tools/system_instructions.txt"
+json_mode = "strict"
 
 # ─── Models ──────────────────────────────────────────────────────────────────
 # Local HPC endpoints use OpenAI-compatible protocol (llama.cpp).
@@ -271,11 +368,21 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
-# Adaptive: Thompson Sampling between the two competitive models.
-# GLM-4.7-Flash retired from candidate_variants per Autopilot analysis.
+# A/B: qwen35 with direct-write prompt (blunt, action-oriented — skip exploration)
+[functions.worker_code_edit.variants.qwen35_direct]
+type = "chat_completion"
+model = "qwen_coder"
+
+# A/B: devstral with structured-minimal prompt (2-step plan-then-execute)
+[functions.worker_code_edit.variants.devstral_structured]
+type = "chat_completion"
+model = "devstral"
+
+# Adaptive: Thompson Sampling across baseline + prompt-variant pairs.
+# Tests whether prompt strategy matters more than model choice.
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
-candidate_variants = ["qwen35_27b", "devstral_24b"]
+candidate_variants = ["qwen35_27b", "devstral_24b", "qwen35_direct", "devstral_structured"]
 metric = "task_resolved"
 update_period_s = 300
 

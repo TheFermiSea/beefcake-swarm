@@ -279,11 +279,7 @@ impl Verifier {
             let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
             if failed && !config.comprehensive {
-                self.skip_remaining_with(
-                    &mut report,
-                    &["check", "test", "deny", "doc"],
-                    &config,
-                );
+                self.skip_remaining_with(&mut report, &["check", "test", "deny", "doc"], &config);
                 report.finalize(start.elapsed());
                 return report;
             }

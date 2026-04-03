@@ -186,7 +186,12 @@ impl CloudModelCatalog {
                 cost_input_per_m: 0.10,
                 cost_output_per_m: 0.40,
                 context_window: 1_000_000,
-                capabilities: vec!["triage".into(), "explore".into(), "scout".into(), "plan".into()],
+                capabilities: vec![
+                    "triage".into(),
+                    "explore".into(),
+                    "scout".into(),
+                    "plan".into(),
+                ],
                 provider: "cliapi".into(),
                 capability_score: 35,
             },

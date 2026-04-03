@@ -1,0 +1,10 @@
+You are evaluating whether an AI coding worker made its first file edit early in the session.
+
+You will receive a conversation between a task manager and a coding worker. The worker was asked to make code changes.
+
+Count the tool calls in order. Return true if the first edit_file, write_file, proxy_edit_file, or proxy_write_file tool call appears as the 1st, 2nd, or 3rd tool call in the conversation. Return false if the first file-editing tool call appears later than the 3rd position, or if no file-editing tool call was made at all.
+
+Only count tool calls made by the assistant (worker), not tool results or user messages.
+
+Respond ONLY with a JSON object containing a single "score" field with a boolean value. No other fields.
+Example: {"score": true}

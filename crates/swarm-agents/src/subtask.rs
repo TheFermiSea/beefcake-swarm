@@ -766,7 +766,17 @@ pub async fn run_subtask_worker_public(
     complexity: Complexity,
     issue_objective: &str,
 ) -> SubtaskResult {
-    run_subtask_worker(client, model, wt_path, issue_id, subtask, timeout_secs, complexity, issue_objective).await
+    run_subtask_worker(
+        client,
+        model,
+        wt_path,
+        issue_id,
+        subtask,
+        timeout_secs,
+        complexity,
+        issue_objective,
+    )
+    .await
 }
 
 /// Run a single subtask worker.
@@ -1147,12 +1157,30 @@ mod tests {
     fn dynamic_write_deadline_baselines() {
         // Minimum exploration budgets per (complexity, heavy_read) tier.
         // Workers need ~6-7 turns to explore before writing.
-        assert_eq!(dynamic_write_deadline(Complexity::Simple, "fix bug", &[], &[]), 8);
-        assert_eq!(dynamic_write_deadline(Complexity::Simple, "audit module", &[], &[]), 10);
-        assert_eq!(dynamic_write_deadline(Complexity::Medium, "add feature", &[], &[]), 15);
-        assert_eq!(dynamic_write_deadline(Complexity::Medium, "refactor auth", &[], &[]), 20);
-        assert_eq!(dynamic_write_deadline(Complexity::Complex, "implement api", &[], &[]), 18);
-        assert_eq!(dynamic_write_deadline(Complexity::Complex, "migrate database", &[], &[]), 25);
+        assert_eq!(
+            dynamic_write_deadline(Complexity::Simple, "fix bug", &[], &[]),
+            8
+        );
+        assert_eq!(
+            dynamic_write_deadline(Complexity::Simple, "audit module", &[], &[]),
+            10
+        );
+        assert_eq!(
+            dynamic_write_deadline(Complexity::Medium, "add feature", &[], &[]),
+            15
+        );
+        assert_eq!(
+            dynamic_write_deadline(Complexity::Medium, "refactor auth", &[], &[]),
+            20
+        );
+        assert_eq!(
+            dynamic_write_deadline(Complexity::Complex, "implement api", &[], &[]),
+            18
+        );
+        assert_eq!(
+            dynamic_write_deadline(Complexity::Complex, "migrate database", &[], &[]),
+            25
+        );
     }
 
     #[test]
@@ -1160,16 +1188,19 @@ mod tests {
         // Each target file adds 3 turns, each context file adds 1 (capped at 6).
         let base = dynamic_write_deadline(Complexity::Medium, "fix", &[], &[]);
         let with_targets = dynamic_write_deadline(
-            Complexity::Medium, "fix",
-            &["a.rs".into(), "b.rs".into()], &[],
+            Complexity::Medium,
+            "fix",
+            &["a.rs".into(), "b.rs".into()],
+            &[],
         );
         assert_eq!(with_targets, base + 6); // 2 files * 3 turns
 
         let with_context = dynamic_write_deadline(
-            Complexity::Medium, "fix", &[],
+            Complexity::Medium,
+            "fix",
+            &[],
             &["c.rs".into(), "d.rs".into(), "e.rs".into()],
         );
         assert_eq!(with_context, base + 3); // 3 context files * 1 turn
     }
-
 }

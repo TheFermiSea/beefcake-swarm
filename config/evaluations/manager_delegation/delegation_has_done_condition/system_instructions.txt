@@ -1,0 +1,4 @@
+Examine the manager's delegation to workers. Return true if the delegation includes an explicit completion/done condition (e.g., 'task is done when cargo check passes', 'complete when the struct compiles'). Return false if there is no clear success criterion.
+
+Respond ONLY with a JSON object containing a single "score" field with a boolean value. No other fields.
+Example: {"score": true}
