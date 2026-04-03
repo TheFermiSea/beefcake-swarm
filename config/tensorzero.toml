@@ -225,12 +225,11 @@ model = "claude_opus"
 type = "chat_completion"
 model = "claude_sonnet"
 
-# Adaptive: TZ shifts traffic to the variant that maximizes task_resolved.
+# Static weights: opus_verbose has a modest but real edge (52.8% vs 51.6%, n=5.2K).
+# Bias 70/30 toward opus_verbose per Autopilot analysis.
 [functions.architect_plan.experimentation]
-type = "adaptive"
-candidate_variants = ["opus_verbose", "sonnet_concise"]
-metric = "task_resolved"
-update_period_s = 300
+type = "static_weights"
+candidate_variants = { opus_verbose = 0.7, sonnet_concise = 0.3 }
 
 # --- Editor: applies Architect's SEARCH/REPLACE blocks ---
 # A/B test between vasp-01 (coder) and vasp-02 (reasoning) — same model,
@@ -252,14 +251,14 @@ candidate_variants = ["qwen_coder", "qwen_reasoning"]
 metric = "task_resolved"
 update_period_s = 300
 
-# --- Worker Code Edit: 3-model A/B experiment ---
-# GLM-4.7-Flash (scout/fast), Qwen3.5-27B (coder), Devstral-24B (reasoning)
-# Thompson Sampling routes toward the model that maximizes task_resolved.
-# SERA-14B removed: 8K context cap, shared GPU with GLM-4.7-Flash on vasp-03.
-# DICL removed: no demonstrations seeded; TZ 2026.3.2 validates all defined variants at startup.
+# --- Worker Code Edit: 2-model A/B experiment ---
+# Qwen3.5-27B (coder) vs Devstral-24B (reasoning) — both ~64% task_resolved.
+# GLM-4.7-Flash retired: 7% task_resolved (catastrophically dominated).
+# Data: 40K inferences, qwen35=0.640 (n=4422), devstral=0.634 (n=5518), glm=0.070 (n=330).
 [functions.worker_code_edit]
 type = "chat"
 
+# Kept for config validation but removed from candidate_variants
 [functions.worker_code_edit.variants.glm_flash]
 type = "chat_completion"
 model = "qwen_fast"
@@ -272,10 +271,11 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
-# Adaptive: TZ routes via Thompson Sampling across the 3 dedicated-GPU models.
+# Adaptive: Thompson Sampling between the two competitive models.
+# GLM-4.7-Flash retired from candidate_variants per Autopilot analysis.
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
-candidate_variants = ["glm_flash", "qwen35_27b", "devstral_24b"]
+candidate_variants = ["qwen35_27b", "devstral_24b"]
 metric = "task_resolved"
 update_period_s = 300
 
@@ -331,10 +331,10 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
-# SERA-14B removed (8K context cap, shared GPU with GLM on vasp-03).
+# GLM-4.7-Flash fixer retired: 0% task_resolved (n=18) vs 71%/70% for qwen35/devstral.
 [functions.code_fixing.experimentation]
 type = "adaptive"
-candidate_variants = ["glm_flash_fixer", "qwen35_fixer", "devstral_fixer"]
+candidate_variants = ["qwen35_fixer", "devstral_fixer"]
 metric = "task_resolved"
 update_period_s = 300
 
