@@ -1,0 +1,22 @@
+# LLM anti-pattern: #[cfg(test)] on a function instead of a module.
+#
+# LLMs confuse #[cfg(test)] (conditional compilation for test modules) with
+# #[test] (marks a test function). Putting #[cfg(test)] on a function makes
+# the function invisible in test builds unless it's inside a test module.
+#
+# Run: sg scan --rule rules/ast-grep/rules/cfg-test-on-function.yml <file>
+
+id: cfg-test-on-function
+language: rust
+message: |
+  `#[cfg(test)]` on function — did you mean `#[test]`?
+  `#[cfg(test)]` conditionally compiles a module. Use `#[test]` to mark test functions.
+severity: error
+rule:
+  pattern: '#[cfg(test)]'
+  precedes:
+    kind: function_item
+fix: "#[test]"
+note: |
+  - `#[cfg(test)]` → put on `mod tests { ... }` to conditionally compile the module
+  - `#[test]`      → put on `fn test_something()` to mark it as a test function

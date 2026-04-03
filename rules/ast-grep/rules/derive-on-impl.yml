@@ -19,3 +19,9 @@ rule:
   pattern: "#[derive($$$ARGS)]"
   precedes:
     pattern: "impl $TYPE { $$$BODY }"
+fix: ""
+note: |
+  The `#[derive]` attribute was removed. You still need to add a struct/enum
+  definition above the impl block. Example:
+    #[derive($$$ARGS)]
+    pub struct $TYPE { /* fields */ }

@@ -1,0 +1,27 @@
+# LLM anti-pattern: todo!() / unimplemented!() as placeholder code.
+#
+# Workers often leave todo!() or unimplemented!() as placeholders when they
+# run out of turns or can't figure out the implementation. This causes panics
+# at runtime and should be replaced with proper error handling.
+#
+# Note: This will match todo!() inside inline #[cfg(test)] modules.
+# That's an acceptable false positive — workers shouldn't be adding todo!()
+# in test modules either.
+#
+# Run: sg scan --rule rules/ast-grep/rules/placeholder-macro.yml <file>
+
+id: placeholder-macro
+language: rust
+message: |
+  `todo!()`/`unimplemented!()` placeholder — implement the actual logic
+  or use `anyhow::bail!("not implemented: <reason>")` for proper error handling.
+severity: warning
+rule:
+  any:
+    - pattern: todo!($$$ARGS)
+    - pattern: unimplemented!($$$ARGS)
+ignores:
+  - "**/tests/**"
+  - "**/*_test.rs"
+  - "**/test_*.rs"
+  - "**/benches/**"

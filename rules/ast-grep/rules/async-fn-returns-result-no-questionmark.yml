@@ -1,0 +1,30 @@
+# LLM anti-pattern: async fn that calls .unwrap() instead of using ? operator.
+#
+# Workers often use .unwrap() in async functions that return Result, when they
+# should use ? for proper error propagation. This causes panics instead of
+# returning errors to the caller.
+#
+# Run: sg scan --rule rules/ast-grep/rules/async-fn-returns-result-no-questionmark.yml <file>
+
+id: unwrap-in-async-fn
+language: rust
+message: |
+  `.unwrap()` in async function — use `?` operator for error propagation instead.
+  Async functions should propagate errors, not panic on failure.
+severity: warning
+rule:
+  pattern: $EXPR.unwrap()
+  inside:
+    kind: function_item
+    has:
+      kind: function_modifiers
+      regex: "^async$"
+    stopBy: end
+ignores:
+  - "patches/**"
+  - "**/tests/**"
+  - "**/*_test.rs"
+note: |
+  Replace `.unwrap()` with `?` when the function returns Result:
+    let value = expr.unwrap();    // panics on error
+    let value = expr?;            // propagates error to caller

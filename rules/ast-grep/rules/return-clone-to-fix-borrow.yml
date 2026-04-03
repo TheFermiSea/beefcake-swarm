@@ -1,0 +1,17 @@
+# LLM anti-pattern: .clone() on method return to avoid borrow checker errors.
+#
+# Workers commonly add `.clone()` to every return value to "fix" borrow checker
+# errors. This is a shotgun approach that wastes allocations and hides the real
+# ownership issue. Particularly suspicious when chained: x.clone().clone()
+#
+# Run: sg scan --rule rules/ast-grep/rules/return-clone-to-fix-borrow.yml <file>
+
+id: double-clone
+language: rust
+message: |
+  `.clone().clone()` — double clone is always redundant.
+  FIX: Remove one `.clone()` call.
+severity: error
+rule:
+  pattern: $EXPR.clone().clone()
+fix: $EXPR.clone()
