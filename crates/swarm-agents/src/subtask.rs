@@ -99,13 +99,15 @@ pub fn dynamic_write_deadline(
     let is_heavy_read = HEAVY_READ_KEYWORDS.iter().any(|kw| obj_lower.contains(kw));
 
     // Base exploration budget varies by (complexity, task type).
+    // Workers typically need 6-7 turns to locate and read relevant code before
+    // writing, so the baselines must accommodate that exploration phase.
     let base: usize = match (complexity, is_heavy_read) {
-        (Complexity::Simple, false) => 5,
-        (Complexity::Simple, true) => 8,
-        (Complexity::Medium, false) => 10,
-        (Complexity::Medium, true) => 16,
-        (Complexity::Complex | Complexity::Critical, false) => 15,
-        (Complexity::Complex | Complexity::Critical, true) => 22,
+        (Complexity::Simple, false) => 8,
+        (Complexity::Simple, true) => 10,
+        (Complexity::Medium, false) => 15,
+        (Complexity::Medium, true) => 20,
+        (Complexity::Complex | Complexity::Critical, false) => 18,
+        (Complexity::Complex | Complexity::Critical, true) => 25,
     };
 
     // Each target file needs ~3 read turns before an edit is possible.
@@ -1140,4 +1142,34 @@ mod tests {
             "Should mention check_announcements tool"
         );
     }
+
+    #[test]
+    fn dynamic_write_deadline_baselines() {
+        // Minimum exploration budgets per (complexity, heavy_read) tier.
+        // Workers need ~6-7 turns to explore before writing.
+        assert_eq!(dynamic_write_deadline(Complexity::Simple, "fix bug", &[], &[]), 8);
+        assert_eq!(dynamic_write_deadline(Complexity::Simple, "audit module", &[], &[]), 10);
+        assert_eq!(dynamic_write_deadline(Complexity::Medium, "add feature", &[], &[]), 15);
+        assert_eq!(dynamic_write_deadline(Complexity::Medium, "refactor auth", &[], &[]), 20);
+        assert_eq!(dynamic_write_deadline(Complexity::Complex, "implement api", &[], &[]), 18);
+        assert_eq!(dynamic_write_deadline(Complexity::Complex, "migrate database", &[], &[]), 25);
+    }
+
+    #[test]
+    fn dynamic_write_deadline_file_bonuses() {
+        // Each target file adds 3 turns, each context file adds 1 (capped at 6).
+        let base = dynamic_write_deadline(Complexity::Medium, "fix", &[], &[]);
+        let with_targets = dynamic_write_deadline(
+            Complexity::Medium, "fix",
+            &["a.rs".into(), "b.rs".into()], &[],
+        );
+        assert_eq!(with_targets, base + 6); // 2 files * 3 turns
+
+        let with_context = dynamic_write_deadline(
+            Complexity::Medium, "fix", &[],
+            &["c.rs".into(), "d.rs".into(), "e.rs".into()],
+        );
+        assert_eq!(with_context, base + 3); // 3 context files * 1 turn
+    }
+
 }
