@@ -262,6 +262,20 @@ model_name = "Devstral-Small-2-24B"
 api_base = "http://10.0.0.21:8081/v1"
 api_key_location = "none"
 
+# --- SERA-14B SWE specialist: Allen AI model on Qwen3 backbone, vasp-03:8083 ---
+# Shares vasp-03 GPU with GLM-4.7-Flash. 8K context (VRAM-constrained).
+# Re-added per Autopilot analysis: 77.4% task_resolved (worker, n=944),
+# 92.1% task_resolved (fixer, n=165) — best fixer in the fleet.
+
+[models.sera_14b]
+routing = ["vasp03_sera"]
+
+[models.sera_14b.providers.vasp03_sera]
+type = "openai"
+model_name = "SERA-14B-RustV1"
+api_base = "http://10.0.0.22:8083/v1"
+api_key_location = "none"
+
 # --- Cloud models (via CLIAPIProxy on ai-proxy localhost) ---
 
 [models.claude_opus]
@@ -378,11 +392,17 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
-# Adaptive: Thompson Sampling across baseline + prompt-variant pairs.
-# Tests whether prompt strategy matters more than model choice.
+# SERA-14B: Allen AI SWE specialist on Qwen3 backbone (vasp-03:8083, 8K context)
+# Re-added per Autopilot: 77.4% task_resolved (n=944), fastest wall_time.
+[functions.worker_code_edit.variants.sera_14b_worker]
+type = "chat_completion"
+model = "sera_14b"
+
+# Adaptive: Thompson Sampling across 5 worker variants.
+# sera_14b_worker re-added per Autopilot finding (77.4% task_resolved, n=944).
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
-candidate_variants = ["qwen35_27b", "devstral_24b", "qwen35_direct", "devstral_structured"]
+candidate_variants = ["qwen35_27b", "devstral_24b", "qwen35_direct", "devstral_structured", "sera_14b_worker"]
 metric = "task_resolved"
 update_period_s = 300
 
@@ -438,10 +458,16 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
-# GLM-4.7-Flash fixer retired: 0% task_resolved (n=18) vs 71%/70% for qwen35/devstral.
+# SERA-14B fixer: re-added per Autopilot (92.1% task_resolved, n=165, fastest wall_time).
+[functions.code_fixing.variants.sera_14b_fixer]
+type = "chat_completion"
+model = "sera_14b"
+
+# GLM-4.7-Flash fixer retired: 0% task_resolved.
+# sera_14b_fixer re-added: 92.1% task_resolved (n=165) — best fixer in fleet.
 [functions.code_fixing.experimentation]
 type = "adaptive"
-candidate_variants = ["qwen35_fixer", "devstral_fixer"]
+candidate_variants = ["qwen35_fixer", "devstral_fixer", "sera_14b_fixer"]
 metric = "task_resolved"
 update_period_s = 300
 
