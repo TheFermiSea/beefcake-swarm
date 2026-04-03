@@ -23,6 +23,8 @@ services:
       SWARM_CLOUD_API_KEY: ${SWARM_CLOUD_API_KEY:?Set SWARM_CLOUD_API_KEY in .env or environment}
       # Gateway on host network reaches postgres via localhost:5433 (mapped port)
       TENSORZERO_POSTGRES_URL: postgres://tensorzero:tensorzero@localhost:5433/tensorzero
+      # TensorZero Autopilot — cloud-based prompt optimization, A/B testing, eval management
+      TENSORZERO_AUTOPILOT_API_KEY: ${TENSORZERO_AUTOPILOT_API_KEY:-}
     # No ports: needed — host network binds directly to :3000
     healthcheck:
       test:
@@ -46,6 +48,10 @@ services:
 
   ui:
     image: tensorzero/ui
+    # Mount config read-write so Autopilot "Apply changes" can edit tensorzero.toml
+    volumes:
+      - ../../config:/app/config
+    command: --config-file /app/config/tensorzero.toml
     environment:
       # UI reaches gateway via host IP (gateway is on host network)
       TENSORZERO_GATEWAY_URL: http://host.docker.internal:3000
