@@ -393,32 +393,30 @@ impl CloudFallbackMatrix {
         }
     }
 
-    /// Default matrix: GPT-5.4 → GPT-5.2-Codex → GPT-5.1-Codex → Claude Sonnet 4.6.
+    /// Default matrix: Claude Opus 4.6 → Claude Sonnet 4.6 → GPT-5.4 → Gemini 3.1 Flash Lite.
     ///
-    /// The first three entries route through OpenAI/ChatGPT-Plus credentials in CLIAPIProxy and
-    /// are independent of Anthropic quota. Claude Sonnet 4.6 is kept as a last-resort fallback
-    /// for when Anthropic credits are available. This ordering ensures the cascade survives
-    /// Anthropic rate-limit cooldowns without stalling.
+    /// Anthropic models are primary; OpenAI and Google are fallbacks for when
+    /// Anthropic credits are exhausted or rate-limited.
     pub fn default_matrix() -> Self {
         Self {
             entries: vec![
                 CloudFallbackEntry {
-                    model: "gpt-5.4".to_string(),
+                    model: "claude-opus-4-6".to_string(),
                     tier_label: "primary".to_string(),
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "gpt-5.2-codex".to_string(),
+                    model: "claude-sonnet-4-6".to_string(),
                     tier_label: "fallback-1".to_string(),
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "gpt-5.1-codex".to_string(),
+                    model: "gpt-5.4".to_string(),
                     tier_label: "fallback-2".to_string(),
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "claude-sonnet-4-6".to_string(),
+                    model: "gemini-3.1-flash-lite-preview".to_string(),
                     tier_label: "fallback-3".to_string(),
                     max_tokens: 4096,
                 },
@@ -930,14 +928,14 @@ impl SwarmConfig {
             },
             reasoning_endpoint: Endpoint {
                 url: proxy_url.clone(),
-                model: "gpt-5.4-mini".into(),
+                model: "claude-opus-4-6".into(),
                 tier: Tier::Reasoning,
                 api_key: proxy_key.clone(),
             },
             cloud_endpoint: Some(CloudEndpoint {
                 url: proxy_url.clone(),
                 api_key: proxy_key.clone(),
-                model: "gpt-5.4-mini".into(),
+                model: "claude-opus-4-6".into(),
             }),
             strategist_endpoint: Some(Endpoint {
                 url: proxy_url,
@@ -1324,13 +1322,13 @@ mod tests {
         assert_eq!(matrix.len(), 4);
         assert!(!matrix.is_empty());
         let primary = matrix.primary().unwrap();
-        assert_eq!(primary.model, "gpt-5.4");
+        assert_eq!(primary.model, "claude-opus-4-6");
         assert_eq!(primary.tier_label, "primary");
         let fallbacks = matrix.fallbacks();
         assert_eq!(fallbacks.len(), 3);
-        assert_eq!(fallbacks[0].model, "gpt-5.2-codex");
-        assert_eq!(fallbacks[1].model, "gpt-5.1-codex");
-        assert_eq!(fallbacks[2].model, "claude-sonnet-4-6");
+        assert_eq!(fallbacks[0].model, "claude-sonnet-4-6");
+        assert_eq!(fallbacks[1].model, "gpt-5.4");
+        assert_eq!(fallbacks[2].model, "gemini-3.1-flash-lite-preview");
     }
 
     #[test]
@@ -1348,7 +1346,7 @@ mod tests {
         assert_eq!(config.cloud_fallback_matrix.len(), 4);
         assert_eq!(
             config.cloud_fallback_matrix.primary().unwrap().model,
-            "gpt-5.4"
+            "claude-opus-4-6"
         );
     }
 }
