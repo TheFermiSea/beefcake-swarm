@@ -267,13 +267,21 @@ api_key_location = "none"
 # Re-added per Autopilot analysis: 77.4% task_resolved (worker, n=944),
 # 92.1% task_resolved (fixer, n=165) — best fixer in the fleet.
 
+# SERA-14B tries vasp-03:8083 first (8K context). When prompt exceeds 8K,
+# falls through to Qwen3.5-27B on vasp-01 (32K context) as a safety net.
 [models.sera_14b]
-routing = ["vasp03_sera"]
+routing = ["vasp03_sera", "vasp01_fallback"]
 
 [models.sera_14b.providers.vasp03_sera]
 type = "openai"
 model_name = "SERA-14B-RustV1"
 api_base = "http://10.0.0.22:8083/v1"
+api_key_location = "none"
+
+[models.sera_14b.providers.vasp01_fallback]
+type = "openai"
+model_name = "Qwen3.5-27B"
+api_base = "http://10.0.0.20:8081/v1"
 api_key_location = "none"
 
 # --- Cloud models (via CLIAPIProxy on ai-proxy localhost) ---
