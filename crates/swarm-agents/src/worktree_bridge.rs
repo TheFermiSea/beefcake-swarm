@@ -853,10 +853,16 @@ impl WorktreeBridge {
     /// Cleanup a worktree for merge failure recovery.
     ///
     /// Best-effort cleanup that:
-    /// 1. Aborts any in-progress merge
-    /// 2. Force-removes the worktree (with fallback to remove_dir_all)
-    /// 3. Prunes worktree bookkeeping
-    /// 4. Force-deletes the branch
+    /// 1. **Salvages uncommitted work** by committing to the branch before removal
+    /// 2. Aborts any in-progress merge
+    /// 3. Force-removes the worktree (with fallback to remove_dir_all)
+    /// 4. Prunes worktree bookkeeping
+    /// 5. Force-deletes the branch
+    ///
+    /// The salvage commit (step 1) ensures that even when cleanup is called in
+    /// failure paths, agent work is preserved on the branch and can be recovered
+    /// with `git log swarm/<issue-id>`. Without this, uncommitted changes are
+    /// permanently lost when the worktree is removed.
     ///
     /// Always returns `Ok(())` regardless of individual step failures.
     #[tracing::instrument(skip(self), fields(issue_id = %issue_id))]
@@ -864,6 +870,49 @@ impl WorktreeBridge {
         let safe_id = Self::sanitize_id(issue_id);
         let wt_path = self.base_dir.join(&safe_id);
         let branch = format!("swarm/{safe_id}");
+
+        // Salvage: commit any uncommitted changes before destroying the worktree.
+        // This preserves agent work on the branch even when cleanup is called
+        // from failure paths (merge conflict, shutdown signal, circuit breaker).
+        if wt_path.exists() {
+            let status = Command::new("git")
+                .args(["status", "--porcelain"])
+                .current_dir(&wt_path)
+                .output();
+
+            let has_changes = status
+                .as_ref()
+                .map(|o| {
+                    String::from_utf8_lossy(&o.stdout)
+                        .lines()
+                        .any(|line| {
+                            let path = line.get(3..).unwrap_or("");
+                            !path.starts_with(".beads")
+                                && !path.starts_with(".swarm-")
+                                && !path.starts_with(".beadhub")
+                        })
+                })
+                .unwrap_or(false);
+
+            if has_changes {
+                tracing::info!(
+                    issue_id,
+                    "Salvaging uncommitted changes before cleanup"
+                );
+                let _ = Command::new("git")
+                    .args(["add", "-A"])
+                    .current_dir(&wt_path)
+                    .output();
+                let _ = Command::new("git")
+                    .args([
+                        "commit",
+                        "-m",
+                        &format!("salvage: uncommitted work before cleanup ({issue_id})"),
+                    ])
+                    .current_dir(&wt_path)
+                    .output();
+            }
+        }
 
         // Abort any in-progress merge (may have left repo in conflicted state)
         let _ = Command::new("git")
