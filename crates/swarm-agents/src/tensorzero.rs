@@ -53,6 +53,9 @@ pub struct FeedbackTags {
     /// Prevents TZ feedback from one project contaminating routing for another.
     /// Set from `SWARM_REPO_ID` env var (auto-populated from `--repo-root` basename).
     pub repo_id: Option<String>,
+    /// Primary error category from the verifier report (e.g. `borrow_checker`, `type_mismatch`).
+    /// Enables per-error-type analysis of which fixer variant handles which error types best.
+    pub error_category: Option<String>,
 }
 
 impl FeedbackTags {
@@ -74,6 +77,9 @@ impl FeedbackTags {
         }
         if let Some(v) = self.repo_id {
             map.insert("repo_id".to_string(), v);
+        }
+        if let Some(v) = self.error_category {
+            map.insert("error_category".to_string(), v);
         }
         map
     }
@@ -405,6 +411,7 @@ pub async fn post_resolved_feedback(
             triage_complexity: m.get("triage_complexity").cloned(),
             model: m.get("model").cloned(),
             repo_id: m.get("repo_id").cloned(),
+            error_category: m.get("error_category").cloned(),
         });
         post_episode_feedback(
             gateway_url,

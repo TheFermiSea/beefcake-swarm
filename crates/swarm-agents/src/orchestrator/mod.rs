@@ -3615,6 +3615,14 @@ async fn process_issue_core(
         let wall_secs = session_metrics.elapsed_ms as f64 / 1000.0;
 
         // Build segmentation tags for slice-based analysis in TZ.
+        // Extract the primary error category from the final verifier report so
+        // TZ can slice code_fixing feedback by error type (e.g. borrow_checker vs type_mismatch).
+        let primary_error_category = last_report.as_ref().and_then(|r| {
+            r.unique_error_categories()
+                .into_iter()
+                .next()
+                .map(|c| c.to_string())
+        });
         let tz_tags = crate::tensorzero::FeedbackTags {
             issue_id: Some(issue.id.clone()),
             language: Some(triage_result.language.to_string()),
@@ -3623,6 +3631,7 @@ async fn process_issue_core(
             repo_id: std::env::var("SWARM_REPO_ID")
                 .ok()
                 .filter(|s| !s.is_empty()),
+            error_category: primary_error_category,
         };
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {
