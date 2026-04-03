@@ -1,0 +1,19 @@
+# LLM anti-pattern: #![allow(warnings)] to suppress all compiler warnings.
+#
+# Workers sometimes add blanket allow(warnings) to make the code "compile"
+# without actually fixing the underlying issues. This hides real problems
+# and will be rejected by clippy in the verifier pipeline.
+#
+# Fix: Remove the blanket allow and fix individual warnings.
+#
+# Run: sg scan --rule rules/ast-grep/rules/blanket-allow-warnings.yml <file>
+
+id: blanket-allow-warnings
+language: rust
+message: |
+  `#![allow(warnings)]` suppresses ALL compiler warnings including real bugs.
+  FIX: Remove this and fix individual warnings. Use targeted `#[allow(dead_code)]`
+  only where justified (e.g., rmcp macro-generated code).
+severity: error
+rule:
+  pattern: '#![allow(warnings)]'

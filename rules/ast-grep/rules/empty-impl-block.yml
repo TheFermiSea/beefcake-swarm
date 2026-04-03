@@ -1,0 +1,17 @@
+# LLM anti-pattern: empty impl block as a placeholder.
+#
+# Workers sometimes create a struct and an empty impl {} intending to add
+# methods later, but then never do. This is dead code that adds noise.
+# In the swarm context it usually means the worker ran out of turns before
+# filling in the methods.
+#
+# Run: sg scan --rule rules/ast-grep/rules/empty-impl-block.yml <file>
+
+id: empty-impl-block
+language: rust
+message: |
+  Empty `impl $TYPE {}` block — add methods or remove the empty impl.
+  This usually means the struct methods were not implemented.
+severity: warning
+rule:
+  pattern: "impl $TYPE {}"

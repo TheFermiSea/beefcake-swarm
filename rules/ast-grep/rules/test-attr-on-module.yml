@@ -1,0 +1,21 @@
+# LLM anti-pattern: #[test] applied to a module instead of a function.
+#
+# LLMs confuse #[test] (marks a single test function) with #[cfg(test)]
+# (conditionally compiles a test module). This produces a confusing compiler
+# error that wastes an iteration to diagnose.
+#
+# Fix: Replace #[test] with #[cfg(test)] on the module.
+#
+# Run: sg scan --rule rules/ast-grep/rules/test-attr-on-module.yml <file>
+
+id: test-attr-on-module
+language: rust
+message: |
+  `#[test]` on module — use `#[cfg(test)]` for test modules.
+  FIX: Replace `#[test]` with `#[cfg(test)]` on this `mod` block.
+  `#[test]` is only valid on individual test functions inside the module.
+severity: error
+rule:
+  pattern: "#[test]"
+  precedes:
+    kind: mod_item

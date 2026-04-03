@@ -257,8 +257,8 @@ pub fn broken() -> &str {
 
     println!("Comprehensive report: {}", report.summary());
 
-    // All 4 gates should have run (none skipped)
-    assert_eq!(report.gates_total, 4, "Expected 4 gates");
+    // All 5 gates should have run (none skipped): fmt, sg, clippy, check, test
+    assert_eq!(report.gates_total, 5, "Expected 5 gates");
     let skipped = report
         .gates
         .iter()

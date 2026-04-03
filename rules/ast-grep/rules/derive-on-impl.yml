@@ -1,0 +1,21 @@
+# LLM anti-pattern: #[derive(...)] placed on an impl block instead of a struct.
+#
+# This is the #1 structural mistake LLM workers make — they write the impl
+# block and methods first, then slap a derive on it. derive() only works on
+# struct/enum/union definitions.
+#
+# Fix: Move the #[derive] to the struct definition, or add a struct definition
+# above the impl block if one is missing.
+#
+# Run: sg scan --rule rules/ast-grep/rules/derive-on-impl.yml <file>
+
+id: derive-on-impl
+language: rust
+message: |
+  `#[derive($$$ARGS)]` on `impl` block — derive only works on struct/enum/union.
+  FIX: Add `struct $TYPE { ... }` before this impl block and move the derive there.
+severity: error
+rule:
+  pattern: "#[derive($$$ARGS)]"
+  precedes:
+    pattern: "impl $TYPE { $$$BODY }"

@@ -1,0 +1,19 @@
+# LLM anti-pattern: string literal concatenation with + operator.
+#
+# LLMs trained on Python/JS often try `"foo" + "bar"` which doesn't compile
+# in Rust (&str has no Add impl). This produces a confusing type error.
+#
+# Fix: Use format!(), concat!(), or String methods.
+#
+# Run: sg scan --rule rules/ast-grep/rules/string-literal-add.yml <file>
+
+id: string-literal-add
+language: rust
+message: |
+  String literal `+` concatenation — `&str + &str` doesn't compile in Rust.
+  FIX: Use `format!("{}{}", a, b)` or `concat!("a", "b")` for literals.
+severity: error
+rule:
+  any:
+    - pattern: '"$A" + "$B"'
+    - pattern: '"$A" + $EXPR'

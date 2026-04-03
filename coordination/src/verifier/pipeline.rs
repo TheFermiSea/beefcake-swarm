@@ -77,7 +77,7 @@ impl Default for VerifierConfig {
             stderr_max_bytes: 4096,
             extra_cargo_args: Vec::new(),
             packages: Vec::new(),
-            check_sg: false,
+            check_sg: true,
             check_deny: false,
             check_doc: false,
             use_nextest: false,
@@ -136,6 +136,7 @@ impl VerifierConfig {
             check_clippy: false,
             check_compile: false,
             check_test: false,
+            check_sg: false,
             ..Default::default()
         }
     }
@@ -246,7 +247,7 @@ impl Verifier {
             if failed && !config.comprehensive {
                 self.skip_remaining_with(
                     &mut report,
-                    &["clippy", "sg", "check", "test", "deny", "doc"],
+                    &["sg", "clippy", "check", "test", "deny", "doc"],
                     &config,
                 );
                 report.finalize(start.elapsed());
@@ -254,7 +255,25 @@ impl Verifier {
             }
         }
 
-        // Gate 2: cargo clippy -D warnings
+        // Gate 2: sg scan (ast-grep) — catches LLM structural anti-patterns
+        // (<1s) before wasting a clippy/check cycle (10-30s each).
+        // Error-level rules (derive-on-impl, etc.) fail-fast.
+        if config.check_sg {
+            let result = self.run_sg_gate().await;
+            let failed = result.outcome == GateOutcome::Failed;
+            report.add_gate(result);
+            if failed && !config.comprehensive {
+                self.skip_remaining_with(
+                    &mut report,
+                    &["clippy", "check", "test", "deny", "doc"],
+                    &config,
+                );
+                report.finalize(start.elapsed());
+                return report;
+            }
+        }
+
+        // Gate 3: cargo clippy -D warnings
         if config.check_clippy {
             let result = self.run_clippy_gate().await;
             let failed = result.outcome == GateOutcome::Failed;
@@ -262,7 +281,7 @@ impl Verifier {
             if failed && !config.comprehensive {
                 self.skip_remaining_with(
                     &mut report,
-                    &["sg", "check", "test", "deny", "doc"],
+                    &["check", "test", "deny", "doc"],
                     &config,
                 );
                 report.finalize(start.elapsed());
@@ -270,14 +289,7 @@ impl Verifier {
             }
         }
 
-        // Gate 2.5: sg scan (ast-grep) — warning-only, never blocks pipeline
-        if config.check_sg {
-            let result = self.run_sg_gate().await;
-            report.add_gate(result);
-            // Never fail-fast on warnings — always continue to check gate
-        }
-
-        // Gate 3: cargo check --message-format=json
+        // Gate 4: cargo check --message-format=json
         if config.check_compile {
             let result = self.run_check_gate().await;
             let failed = result.outcome == GateOutcome::Failed;
@@ -471,10 +483,14 @@ impl Verifier {
         }
     }
 
-    /// Run `sg scan` (ast-grep) as a warning-only gate.
+    /// Run `sg scan` (ast-grep) as a pre-compilation guard gate.
     ///
     /// Scans the working directory against project rules in `rules/`.
-    /// Produces `GateOutcome::Warning` when diagnostics are found — never blocks the pipeline.
+    /// Rules with `severity: error` (LLM structural anti-patterns) cause
+    /// `GateOutcome::Failed` — saving a wasted cargo check cycle.
+    /// Rules with `severity: warning` produce `GateOutcome::Warning` only.
+    ///
+    /// `sg scan` exits 0 (clean), 1 (error-level diagnostics), or other (crash).
     async fn run_sg_gate(&self) -> GateResult {
         let start = Instant::now();
 
@@ -509,19 +525,27 @@ impl Verifier {
                 // Count diagnostic lines (non-empty lines from stdout that contain file paths)
                 let diagnostic_count = stdout.lines().filter(|l| !l.trim().is_empty()).count();
 
-                let has_diagnostics = !output.status.success() || diagnostic_count > 0;
+                // sg exits 1 when error-severity rules fire (structural anti-patterns).
+                // Exit 0 = clean or warnings only.
+                let has_errors = output.status.code() == Some(1);
+                let has_diagnostics = has_errors || diagnostic_count > 0;
+
+                let error_count = if has_errors { diagnostic_count } else { 0 };
+                let warning_count = if has_errors { 0 } else { diagnostic_count };
 
                 GateResult {
                     gate: "sg".to_string(),
-                    outcome: if has_diagnostics {
+                    outcome: if has_errors {
+                        GateOutcome::Failed
+                    } else if has_diagnostics {
                         GateOutcome::Warning
                     } else {
                         GateOutcome::Passed
                     },
                     duration_ms: start.elapsed().as_millis() as u64,
                     exit_code: output.status.code(),
-                    error_count: 0,
-                    warning_count: diagnostic_count,
+                    error_count,
+                    warning_count,
                     errors: vec![],
                     stderr_excerpt: if has_diagnostics {
                         let details = if stdout.is_empty() {
@@ -1139,7 +1163,7 @@ mod tests {
         assert!(config.check_clippy);
         assert!(config.check_compile);
         assert!(config.check_test);
-        assert!(!config.check_sg);
+        assert!(config.check_sg);
         assert!(!config.comprehensive);
     }
 
@@ -1251,11 +1275,12 @@ test result: FAILED. 9 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out";
     }
 
     #[test]
-    fn test_sg_config_off_by_default_in_named_constructors() {
-        assert!(!VerifierConfig::quick().check_sg);
-        assert!(!VerifierConfig::full().check_sg);
-        assert!(!VerifierConfig::compile_only().check_sg);
-        assert!(!VerifierConfig::docs().check_sg);
+    fn test_sg_config_on_by_default_in_named_constructors() {
+        assert!(VerifierConfig::quick().check_sg);
+        assert!(VerifierConfig::full().check_sg);
+        assert!(VerifierConfig::compile_only().check_sg);
+        assert!(VerifierConfig::docs().check_sg);
+        // none() disables everything
         assert!(!VerifierConfig::none().check_sg);
     }
 
