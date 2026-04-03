@@ -3632,6 +3632,7 @@ async fn process_issue_core(
                 .ok()
                 .filter(|s| !s.is_empty()),
             error_category: primary_error_category,
+            prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
         };
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {

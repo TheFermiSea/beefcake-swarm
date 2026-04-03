@@ -56,6 +56,9 @@ pub struct FeedbackTags {
     /// Primary error category from the verifier report (e.g. `borrow_checker`, `type_mismatch`).
     /// Enables per-error-type analysis of which fixer variant handles which error types best.
     pub error_category: Option<String>,
+    /// Prompt version string (e.g. `9.2.0`) from `prompts::PROMPT_VERSION`.
+    /// Enables clean pre/post cohort analysis when prompt content changes.
+    pub prompt_version: Option<String>,
 }
 
 impl FeedbackTags {
@@ -80,6 +83,9 @@ impl FeedbackTags {
         }
         if let Some(v) = self.error_category {
             map.insert("error_category".to_string(), v);
+        }
+        if let Some(v) = self.prompt_version {
+            map.insert("prompt_version".to_string(), v);
         }
         map
     }
@@ -411,6 +417,7 @@ pub async fn post_resolved_feedback(
             triage_complexity: m.get("triage_complexity").cloned(),
             model: m.get("model").cloned(),
             repo_id: m.get("repo_id").cloned(),
+            prompt_version: m.get("prompt_version").cloned(),
             error_category: m.get("error_category").cloned(),
         });
         post_episode_feedback(
