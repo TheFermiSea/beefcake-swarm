@@ -8,6 +8,7 @@ pub mod beads_bridge;
 pub mod cluster_health;
 pub mod confidence;
 pub mod config;
+pub mod context_firewall;
 pub mod contracts;
 pub mod dashboard;
 pub mod driver;

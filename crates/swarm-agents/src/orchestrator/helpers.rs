@@ -416,6 +416,9 @@ mod tests {
             fn add_source_file(&self, _role: &str, _file_path: &str) -> Result<()> {
                 Ok(())
             }
+            fn source_count(&self, _role: &str) -> Option<usize> {
+                None
+            }
             fn is_available(&self) -> bool {
                 false
             }
@@ -442,6 +445,9 @@ mod tests {
             }
             fn add_source_file(&self, _role: &str, _file_path: &str) -> Result<()> {
                 Ok(())
+            }
+            fn source_count(&self, _role: &str) -> Option<usize> {
+                Some(10)
             }
             fn is_available(&self) -> bool {
                 true

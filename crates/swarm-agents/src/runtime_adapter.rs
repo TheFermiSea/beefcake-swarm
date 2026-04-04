@@ -53,6 +53,10 @@ pub struct AdapterConfig {
     /// Max LLM turns without an edit_file/write_file call before termination.
     /// For workers only (not planner/manager).
     pub max_turns_without_write: Option<usize>,
+    /// Turn after which search tools are unlocked (0 = always available).
+    /// In early turns, search tools are blocked to enforce edit-first behavior
+    /// since task prompts inline target file content.
+    pub search_unlock_turn: Option<usize>,
 }
 
 impl Default for AdapterConfig {
@@ -64,6 +68,7 @@ impl Default for AdapterConfig {
             preview_len: 200,
             max_reads_without_action: None,
             max_turns_without_write: None,
+            search_unlock_turn: None,
         }
     }
 }
@@ -110,6 +115,8 @@ pub struct AdapterReport {
     pub termination_reason: Option<String>,
     /// Whether edit_file or write_file was called at least once during this session.
     pub has_written: bool,
+    /// Total read-only calls before first write (0 if wrote on first try).
+    pub total_reads_before_write: usize,
     /// Files successfully read during this session.
     pub files_read: Vec<String>,
     /// Files successfully modified during this session.
@@ -140,6 +147,9 @@ struct AdapterState {
     consecutive_reads: usize,
     /// Whether edit_file or write_file has been called at least once.
     has_written: bool,
+    /// Total read-only tool calls before first successful write.
+    /// Unlike consecutive_reads, this never resets until has_written is true.
+    total_reads_before_write: usize,
     /// Consecutive edit_file failure count per file path.
     /// Resets on successful edit or different file.
     edit_failure_counts: HashMap<String, u32>,
@@ -155,6 +165,10 @@ struct AdapterState {
     repeat_call_counts: HashMap<u64, u32>,
     /// The most recent (tool_name, args_hash) — used to detect consecutive repeats.
     last_call_key: Option<u64>,
+    /// Pending write-deadline reminder to inject into the next tool result.
+    /// Set by `on_completion_call` when the worker is approaching the write deadline;
+    /// consumed (taken) by `on_tool_result` and prepended to the tool output.
+    pending_reminder: Option<String>,
 }
 
 /// Rig [`PromptHook`] implementation for tool-event visibility and budget control.
@@ -183,12 +197,14 @@ impl RuntimeAdapter {
                 termination_reason: None,
                 consecutive_reads: 0,
                 has_written: false,
+                total_reads_before_write: 0,
                 edit_failure_counts: HashMap::new(),
                 files_read_set: std::collections::HashSet::new(),
                 successful_writes: 0,
                 validator_state: ValidatorState::new(),
                 repeat_call_counts: HashMap::new(),
                 last_call_key: None,
+                pending_reminder: None,
             })),
             config: Arc::new(config),
             validators: Arc::new(Vec::new()),
@@ -212,12 +228,14 @@ impl RuntimeAdapter {
                 termination_reason: None,
                 consecutive_reads: 0,
                 has_written: false,
+                total_reads_before_write: 0,
                 edit_failure_counts: HashMap::new(),
                 files_read_set: std::collections::HashSet::new(),
                 successful_writes: 0,
                 validator_state: ValidatorState::new(),
                 repeat_call_counts: HashMap::new(),
                 last_call_key: None,
+                pending_reminder: None,
             })),
             config: Arc::new(config),
             validators: Arc::new(validators),
@@ -243,6 +261,7 @@ impl RuntimeAdapter {
             terminated_early: state.terminated_early,
             termination_reason: state.termination_reason.clone(),
             has_written: state.has_written,
+            total_reads_before_write: state.total_reads_before_write,
             files_read: state.files_read_set.iter().cloned().collect(),
             files_modified: state
                 .validator_state
@@ -269,6 +288,19 @@ impl RuntimeAdapter {
                 })
                 .collect(),
         })
+    }
+
+    /// Take the pending write-deadline reminder (if any) from the adapter state.
+    ///
+    /// Returns `Some(reminder)` exactly once per reminder — subsequent calls
+    /// return `None` until the next `on_completion_call` sets a new one.
+    /// The orchestrator can call this after each tool result to surface the
+    /// reminder in the next prompt context.
+    pub fn take_pending_reminder(&self) -> Option<String> {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|mut s| s.pending_reminder.take())
     }
 
     /// Classify a tool as read-only, action, or neutral for anti-stall tracking.
@@ -351,6 +383,36 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                         None
                     };
 
+                    // Progressive write deadline reminders (research: "More with Less" arxiv:2510.16786)
+                    // Injecting "X turns left" improves edit rates by inducing focused behavior.
+                    if terminate.is_none() {
+                        let reminder = if let Some(max_turns) = config.max_turns_without_write {
+                            if !s.has_written && config.max_turns_without_write.is_some() {
+                                let remaining = max_turns.saturating_sub(turn);
+                                if remaining <= 2 && remaining > 0 {
+                                    Some(format!(
+                                        "\u{26a0} WRITE DEADLINE IN {} TURN{}. \
+                                             Your next call MUST be edit_file or write_file.",
+                                        remaining,
+                                        if remaining == 1 { "" } else { "S" }
+                                    ))
+                                } else if turn > max_turns / 2 {
+                                    Some(format!(
+                                        "Turn {}/{}: {} turns remaining before write deadline.",
+                                        turn, max_turns, remaining
+                                    ))
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        };
+                        s.pending_reminder = reminder;
+                    }
+
                     (turn, terminate)
                 }
                 Err(e) => {
@@ -414,6 +476,31 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                         "Validation failed: {msg}"
                     );
                     return ToolCallHookAction::skip(msg);
+                }
+            }
+
+            // Phase-gated tool access: block search tools in early turns to enforce edit-first behavior.
+            // Research: ALARA (arxiv:2603.20380) — restricting tools produces "guaranteed behavioral change."
+            if let Some(unlock_turn) = config.search_unlock_turn {
+                if !s.has_written && s.turn_count <= unlock_turn {
+                    let base = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
+                    let is_search_tool = matches!(
+                        base,
+                        "search_code" | "colgrep" | "ast_grep" | "list_files" | "file_exists"
+                    );
+                    if is_search_tool {
+                        debug!(
+                            agent = %config.agent_name,
+                            tool = %tool_name,
+                            turn = s.turn_count,
+                            unlock_turn,
+                            "Phase gate: search tool blocked in early turns"
+                        );
+                        return ToolCallHookAction::skip(format!(
+                            "Tool '{tool_name}' is not available until turn {unlock_turn} or after your first edit. \
+                             The target file content is already in your task prompt. Use edit_file or write_file now."
+                        ));
+                    }
                 }
             }
 
@@ -487,6 +574,40 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
             match tool_class {
                 ToolClass::ReadOnly => {
                     s.consecutive_reads += 1;
+
+                    // Track total pre-write reads (never resets until first write)
+                    if !s.has_written && config.max_turns_without_write.is_some() {
+                        s.total_reads_before_write += 1;
+
+                        // Hard budget: terminate after too many reads without writing
+                        const PRE_WRITE_READ_BUDGET: usize = 8;
+                        const PRE_WRITE_READ_WARN: usize = 5;
+
+                        if s.total_reads_before_write >= PRE_WRITE_READ_BUDGET {
+                            s.terminated_early = true;
+                            let reason = format!(
+                                "Pre-write read budget exhausted: {} read-only calls with no \
+                                 edit_file/write_file. Stop exploring and write your edit now.",
+                                s.total_reads_before_write
+                            );
+                            s.termination_reason = Some(reason.clone());
+                            warn!(
+                                agent = %config.agent_name,
+                                total_reads = s.total_reads_before_write,
+                                "Anti-stall: pre-write read budget exceeded"
+                            );
+                            return ToolCallHookAction::terminate(format!(
+                                "Runtime adapter: {reason}"
+                            ));
+                        } else if s.total_reads_before_write == PRE_WRITE_READ_WARN {
+                            info!(
+                                agent = %config.agent_name,
+                                total_reads = s.total_reads_before_write,
+                                budget = PRE_WRITE_READ_BUDGET,
+                                "Pre-write read warning: approaching budget limit"
+                            );
+                        }
+                    }
 
                     // Post-write read stall detection: if the agent already wrote files
                     // and is now just reading, it's likely done but doesn't know it.
@@ -647,7 +768,24 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 outcome,
             });
 
-            // Track edit failures for repeated-failure early termination
+            // Inject pending write-deadline reminder into tool result logging.
+            // Rig's HookAction only supports Continue/Terminate — no result modification.
+            // We emit the reminder via warn! for operator visibility and store it in the
+            // report so the orchestrator can surface it in future prompt context.
+            if let Some(reminder) = s.pending_reminder.take() {
+                warn!(
+                    agent = %config.agent_name,
+                    tool = %tool_name,
+                    "[SYSTEM] {}",
+                    reminder,
+                );
+            }
+
+            // Anti-pattern detection: consecutive edit failures on the same file.
+            // Research: Graphectory (arxiv:2512.02393) — StrNotFound is the strongest
+            // predictor of task failure. One case: 183 consecutive failed str_replace calls.
+            const MAX_EDIT_FAILURES_PER_FILE: u32 = 3;
+
             let base_name = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
             if base_name == "edit_file" {
                 if let Some(path) = extract_path_from_args(&args_for_path) {
@@ -655,21 +793,22 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                         let count = s.edit_failure_counts.entry(path.clone()).or_insert(0);
                         *count += 1;
                         let count_val = *count;
-                        if count_val >= 2 {
+                        if count_val >= MAX_EDIT_FAILURES_PER_FILE {
                             warn!(
                                 agent = %config.agent_name,
-                                path = %path,
-                                consecutive_failures = count_val,
-                                "Repeated edit_file failure on same file — terminating"
+                                file = %path,
+                                failures = count_val,
+                                "Anti-pattern: consecutive edit failures — terminating"
                             );
                             s.terminated_early = true;
-                            s.termination_reason = Some(format!(
-                                "Repeated edit_file failure: {count_val} consecutive failures on '{path}'. \
-                                 Re-read the file with start_line/end_line to see exact content, \
-                                 then use anchor_start/anchor_end for reliable edits."
-                            ));
+                            let reason = format!(
+                                "Edit anti-pattern: {count_val} consecutive edit_file failures on '{path}'. \
+                                 The old_content does not match the file. Use read_file to verify \
+                                 exact current content before retrying."
+                            );
+                            s.termination_reason = Some(reason);
                             return HookAction::terminate(format!(
-                                "Runtime adapter: repeated edit failure on {path}"
+                                "Runtime adapter: edit anti-pattern on {path}"
                             ));
                         }
                     } else {
@@ -701,10 +840,14 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
     }
 }
 
-/// Best-effort extraction of "path" field from JSON args for validator state tracking.
+/// Best-effort extraction of file path from JSON args.
+/// Checks "path" first (standard), then "file_path" as fallback.
 fn extract_path_from_args(json: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    v.get("path")?.as_str().map(|s| s.to_string())
+    v.get("path")
+        .or_else(|| v.get("file_path"))
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string())
 }
 
 #[cfg(test)]
@@ -731,6 +874,7 @@ mod tests {
             preview_len: 100,
             max_reads_without_action: Some(8),
             max_turns_without_write: Some(3),
+            search_unlock_turn: Some(3),
         };
         let adapter = RuntimeAdapter::new(config);
         let report = adapter.report().unwrap();
@@ -941,6 +1085,7 @@ mod tests {
             files_modified: vec![],
             successful_writes: 0,
             last_failed_edits: vec![],
+            total_reads_before_write: 0,
         };
 
         let json = serde_json::to_string(&report).unwrap();
@@ -1306,7 +1451,7 @@ mod tests {
             "First failure should not terminate"
         );
 
-        // Second failed edit on same file → terminate
+        // Second failed edit on same file → still continue (threshold is 3)
         let _ = <RuntimeAdapter as PromptHook<
             rig::providers::openai::completion::CompletionModel,
         >>::on_tool_call(
@@ -1328,10 +1473,46 @@ mod tests {
             "Error: old_content not found in src/main.rs",
         )
         .await;
-        assert!(
-            matches!(action2, HookAction::Terminate { .. }),
-            "Expected terminate after 2 consecutive failures, got {action2:?}"
+        assert_eq!(
+            action2,
+            HookAction::cont(),
+            "Second failure should not terminate (threshold is 3)"
         );
+
+        // Third failed edit on same file → terminate (anti-pattern detected)
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(
+            &adapter,
+            "edit_file",
+            None,
+            "e-2",
+            r#"{"path":"src/main.rs"}"#,
+        )
+        .await;
+        let action3 = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_result(
+            &adapter,
+            "edit_file",
+            None,
+            "e-2",
+            r#"{"path":"src/main.rs"}"#,
+            "Error: old_content not found in src/main.rs",
+        )
+        .await;
+        assert!(
+            matches!(action3, HookAction::Terminate { .. }),
+            "Expected terminate after 3 consecutive failures, got {action3:?}"
+        );
+
+        let report = adapter.report().unwrap();
+        assert!(report.terminated_early);
+        assert!(report
+            .termination_reason
+            .as_ref()
+            .unwrap()
+            .contains("Edit anti-pattern"));
     }
 
     #[tokio::test]

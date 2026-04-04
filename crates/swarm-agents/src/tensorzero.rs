@@ -59,6 +59,19 @@ pub struct FeedbackTags {
     /// Prompt version string (e.g. `9.2.0`) from `prompts::PROMPT_VERSION`.
     /// Enables clean pre/post cohort analysis when prompt content changes.
     pub prompt_version: Option<String>,
+    /// Retry tier routing decision: `"fast"`, `"coder"`, or `None` (first iteration).
+    /// Enables measuring the impact of the reasoning sandwich optimization.
+    pub retry_tier: Option<String>,
+
+    // ── Harness parameters for Meta-Harness optimization via TZ Autopilot ──
+    // These allow Autopilot to correlate parameter settings with worker
+    // behavior outcomes (made_edit, first_edit_early, avoids_exploration_loop).
+    /// Base write deadline value (max turns before a file edit is required).
+    /// Corresponds to `SWARM_MAX_TURNS_WITHOUT_WRITE` (default: 8).
+    pub write_deadline: Option<String>,
+    /// Maximum tool calls per worker session.
+    /// Corresponds to `SWARM_MAX_WORKER_TOOL_CALLS` (default: 15).
+    pub max_tool_calls: Option<String>,
 }
 
 impl FeedbackTags {
@@ -86,6 +99,15 @@ impl FeedbackTags {
         }
         if let Some(v) = self.prompt_version {
             map.insert("prompt_version".to_string(), v);
+        }
+        if let Some(v) = self.retry_tier {
+            map.insert("retry_tier".to_string(), v);
+        }
+        if let Some(v) = self.write_deadline {
+            map.insert("write_deadline".to_string(), v);
+        }
+        if let Some(v) = self.max_tool_calls {
+            map.insert("max_tool_calls".to_string(), v);
         }
         map
     }
@@ -419,6 +441,9 @@ pub async fn post_resolved_feedback(
             repo_id: m.get("repo_id").cloned(),
             prompt_version: m.get("prompt_version").cloned(),
             error_category: m.get("error_category").cloned(),
+            retry_tier: m.get("retry_tier").cloned(),
+            write_deadline: m.get("write_deadline").cloned(),
+            max_tool_calls: m.get("max_tool_calls").cloned(),
         });
         post_episode_feedback(
             gateway_url,

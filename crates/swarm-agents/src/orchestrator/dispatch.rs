@@ -5,10 +5,11 @@
 
 use std::path::Path;
 
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::file_targeting::find_target_files_by_grep;
 use coordination::feedback::ErrorCategory;
+use coordination::verifier::report::{GateOutcome, VerifierReport};
 use coordination::WorkPacket;
 
 /// Coder routing decision with confidence level.
@@ -18,9 +19,12 @@ pub enum CoderRoute {
     RustCoder,
     /// Qwen3.5-122B-A10B with general coder system prompt (multi-file scaffolding)
     GeneralCoder,
+    /// GLM-4.7-Flash fast tier for simple errors on retry iterations
+    /// (reasoning sandwich: save coder budget for first attempts and complex errors)
+    FastFixer,
 }
 
-/// Route to the appropriate coder based on error category distribution.
+/// Route to the appropriate coder based on error category distribution and iteration.
 ///
 /// Uses a weighted scoring system rather than a simple `any()` check:
 /// - Rust-specific categories (borrow checker, lifetimes, traits) score toward RustCoder system prompt
@@ -28,13 +32,32 @@ pub enum CoderRoute {
 /// - Mixed errors with majority Rust → RustCoder; majority structural → GeneralCoder
 /// - No errors (first iteration) → general coder for scaffolding
 ///
-/// Rust-centric repair loops can route to the 27B specialist for faster,
-/// more reliable tool use, while broader scaffolding stays on the 122B
-/// integrator tier.
-pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
+/// **Reasoning sandwich** (iteration > 1): On retry iterations, simple errors
+/// (type mismatch, imports, syntax) route to the fast tier (GLM-4.7-Flash)
+/// instead of burning coder budget. Complex errors (borrow checker, lifetimes,
+/// trait bounds, async) still use the coder tier on retry.
+///
+/// Research: LangChain found 63.6% vs 53.9% with targeted reasoning budget
+/// allocation (high for planning/first attempt, low for simple fixes).
+pub fn route_to_coder(error_cats: &[ErrorCategory], iteration: u32) -> CoderRoute {
     if error_cats.is_empty() {
         // First iteration — use general coder for scaffolding/multi-file work
         return CoderRoute::GeneralCoder;
+    }
+
+    // Reasoning sandwich: on retries with only simple errors, use the fast tier.
+    // Complex errors (borrow checker, lifetimes, trait bounds, async) require
+    // the coder tier's deeper expertise even on retry.
+    if iteration > 1 {
+        let all_simple = error_cats.iter().all(is_simple_error);
+        if all_simple {
+            info!(
+                iteration,
+                errors = ?error_cats,
+                "Reasoning sandwich: routing retry to fast tier (simple errors)"
+            );
+            return CoderRoute::FastFixer;
+        }
     }
 
     let mut rust_score: i32 = 0;
@@ -64,6 +87,19 @@ pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
     } else {
         CoderRoute::GeneralCoder
     }
+}
+
+/// Whether an error category is "simple" — fixable by the fast tier without
+/// deep Rust expertise. These are typically mechanical fixes: wrong type,
+/// missing import, syntax typo, unused variable, etc.
+fn is_simple_error(cat: &ErrorCategory) -> bool {
+    matches!(
+        cat,
+        ErrorCategory::TypeMismatch
+            | ErrorCategory::ImportResolution
+            | ErrorCategory::Syntax
+            | ErrorCategory::Other
+    )
 }
 
 /// Format a WorkPacket into a structured prompt for agent consumption.
@@ -475,6 +511,58 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
     prompt
 }
 
+/// Condense a `VerifierReport` into a short summary suitable for retry prompts.
+///
+/// Outputs gate statuses on one line, followed by up to 3 key errors (each
+/// truncated to 150 chars). Keeps total output well under 500 chars so it
+/// fits in compact worker prompts without suppressing tool-call generation.
+pub fn condense_verifier_report(report: &VerifierReport) -> String {
+    let mut lines = Vec::new();
+
+    // Gate status line: "fmt PASS, clippy FAIL, check SKIP, test SKIP"
+    let gates: Vec<String> = report
+        .gates
+        .iter()
+        .map(|g| {
+            let icon = match g.outcome {
+                GateOutcome::Passed => "PASS",
+                GateOutcome::Warning => "WARN",
+                GateOutcome::Failed => "FAIL",
+                GateOutcome::Skipped => "SKIP",
+                GateOutcome::Timeout => "TIMEOUT",
+            };
+            format!("{} {}", g.gate, icon)
+        })
+        .collect();
+    lines.push(format!("Gates: {}", gates.join(", ")));
+
+    // Top 3 failure signals (most actionable)
+    let errors: Vec<&str> = report
+        .failure_signals
+        .iter()
+        .take(3)
+        .map(|s| s.message.as_str())
+        .collect();
+    if !errors.is_empty() {
+        lines.push("Key errors:".to_string());
+        for e in errors {
+            // Safe truncation: rustc diagnostics may contain Unicode (quotes, arrows).
+            let truncated = if e.len() > 150 {
+                let mut end = 150;
+                while end > 0 && !e.is_char_boundary(end) {
+                    end -= 1;
+                }
+                &e[..end]
+            } else {
+                e
+            };
+            lines.push(format!("  - {truncated}"));
+        }
+    }
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -516,13 +604,13 @@ mod tests {
 
     #[test]
     fn test_route_empty_errors_to_general() {
-        assert_eq!(route_to_coder(&[]), CoderRoute::GeneralCoder);
+        assert_eq!(route_to_coder(&[], 1), CoderRoute::GeneralCoder);
     }
 
     #[test]
     fn test_route_borrow_checker_to_rust() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::BorrowChecker]),
+            route_to_coder(&[ErrorCategory::BorrowChecker], 1),
             CoderRoute::RustCoder
         );
     }
@@ -530,7 +618,7 @@ mod tests {
     #[test]
     fn test_route_lifetime_to_rust() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::Lifetime]),
+            route_to_coder(&[ErrorCategory::Lifetime], 1),
             CoderRoute::RustCoder
         );
     }
@@ -538,7 +626,7 @@ mod tests {
     #[test]
     fn test_route_trait_bound_to_rust() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::TraitBound]),
+            route_to_coder(&[ErrorCategory::TraitBound], 1),
             CoderRoute::RustCoder
         );
     }
@@ -546,7 +634,7 @@ mod tests {
     #[test]
     fn test_route_async_to_rust() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::Async]),
+            route_to_coder(&[ErrorCategory::Async], 1),
             CoderRoute::RustCoder
         );
     }
@@ -570,7 +658,7 @@ mod tests {
     #[test]
     fn test_route_import_to_general() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::ImportResolution]),
+            route_to_coder(&[ErrorCategory::ImportResolution], 1),
             CoderRoute::GeneralCoder
         );
     }
@@ -578,7 +666,7 @@ mod tests {
     #[test]
     fn test_route_macro_to_general() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::Macro]),
+            route_to_coder(&[ErrorCategory::Macro], 1),
             CoderRoute::GeneralCoder
         );
     }
@@ -586,7 +674,7 @@ mod tests {
     #[test]
     fn test_route_syntax_to_general() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::Syntax]),
+            route_to_coder(&[ErrorCategory::Syntax], 1),
             CoderRoute::GeneralCoder
         );
     }
@@ -594,7 +682,7 @@ mod tests {
     #[test]
     fn test_route_other_to_general() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::Other]),
+            route_to_coder(&[ErrorCategory::Other], 1),
             CoderRoute::GeneralCoder
         );
     }
@@ -602,7 +690,7 @@ mod tests {
     #[test]
     fn test_route_type_mismatch_alone_to_rust() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::TypeMismatch]),
+            route_to_coder(&[ErrorCategory::TypeMismatch], 1),
             CoderRoute::RustCoder
         );
     }
@@ -611,20 +699,118 @@ mod tests {
     fn test_route_mixed_rust_heavy() {
         // BorrowChecker(+3) + Import(+3) → tie → general wins (>= check)
         assert_eq!(
-            route_to_coder(&[
-                ErrorCategory::BorrowChecker,
-                ErrorCategory::ImportResolution
-            ]),
+            route_to_coder(
+                &[
+                    ErrorCategory::BorrowChecker,
+                    ErrorCategory::ImportResolution
+                ],
+                1
+            ),
             CoderRoute::GeneralCoder
         );
         // BorrowChecker(+3) + Lifetime(+3) + Import(+3) → 6 vs 3 → rust
         assert_eq!(
-            route_to_coder(&[
-                ErrorCategory::BorrowChecker,
-                ErrorCategory::Lifetime,
-                ErrorCategory::ImportResolution
-            ]),
+            route_to_coder(
+                &[
+                    ErrorCategory::BorrowChecker,
+                    ErrorCategory::Lifetime,
+                    ErrorCategory::ImportResolution
+                ],
+                1
+            ),
             CoderRoute::RustCoder
+        );
+    }
+
+    // ── Reasoning sandwich tests ────────────────────────────────────────
+
+    #[test]
+    fn test_retry_simple_errors_route_to_fast_fixer() {
+        // Type mismatch on retry → fast tier
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::TypeMismatch], 2),
+            CoderRoute::FastFixer
+        );
+        // Import errors on retry → fast tier
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::ImportResolution], 3),
+            CoderRoute::FastFixer
+        );
+        // Syntax errors on retry → fast tier
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::Syntax], 2),
+            CoderRoute::FastFixer
+        );
+        // Other errors on retry → fast tier
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::Other], 4),
+            CoderRoute::FastFixer
+        );
+    }
+
+    #[test]
+    fn test_retry_complex_errors_stay_on_coder() {
+        // Borrow checker on retry → still coder (complex)
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::BorrowChecker], 2),
+            CoderRoute::RustCoder
+        );
+        // Lifetime on retry → still coder
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::Lifetime], 3),
+            CoderRoute::RustCoder
+        );
+        // Trait bound on retry → still coder
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::TraitBound], 2),
+            CoderRoute::RustCoder
+        );
+        // Async on retry → still coder
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::Async], 2),
+            CoderRoute::RustCoder
+        );
+    }
+
+    #[test]
+    fn test_retry_mixed_errors_with_complex_stay_on_coder() {
+        // TypeMismatch + BorrowChecker on retry → not all simple → coder
+        assert_eq!(
+            route_to_coder(
+                &[ErrorCategory::TypeMismatch, ErrorCategory::BorrowChecker],
+                2
+            ),
+            CoderRoute::RustCoder
+        );
+    }
+
+    #[test]
+    fn test_first_iteration_simple_errors_use_coder_not_fast() {
+        // TypeMismatch on iteration 1 → coder (not fast), even though simple
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::TypeMismatch], 1),
+            CoderRoute::RustCoder
+        );
+        // ImportResolution on iteration 1 → general coder (not fast)
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::ImportResolution], 1),
+            CoderRoute::GeneralCoder
+        );
+    }
+
+    #[test]
+    fn test_retry_multiple_simple_errors_route_to_fast() {
+        // Multiple simple errors on retry → all simple → fast tier
+        assert_eq!(
+            route_to_coder(
+                &[
+                    ErrorCategory::TypeMismatch,
+                    ErrorCategory::ImportResolution,
+                    ErrorCategory::Syntax
+                ],
+                2
+            ),
+            CoderRoute::FastFixer
         );
     }
 
@@ -666,5 +852,123 @@ mod tests {
         assert!(prompt.contains("lines 10-20"));
         assert!(prompt.contains("Add early return"));
         assert!(prompt.contains("No bounds checking"));
+    }
+
+    #[test]
+    fn test_condense_verifier_report_mixed_gates() {
+        use coordination::feedback::error_parser::ParsedError;
+        use coordination::verifier::report::GateResult;
+        use std::time::Duration;
+
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        report.add_gate(GateResult {
+            gate: "fmt".to_string(),
+            outcome: GateOutcome::Passed,
+            duration_ms: 50,
+            exit_code: Some(0),
+            error_count: 0,
+            warning_count: 0,
+            errors: vec![],
+            stderr_excerpt: None,
+        });
+        report.add_gate(GateResult {
+            gate: "clippy".to_string(),
+            outcome: GateOutcome::Failed,
+            duration_ms: 200,
+            exit_code: Some(1),
+            error_count: 1,
+            warning_count: 0,
+            errors: vec![ParsedError {
+                category: ErrorCategory::Other,
+                code: Some("clippy::needless_return".to_string()),
+                message: "unneeded `return` statement".to_string(),
+                file: Some("src/lib.rs".to_string()),
+                line: Some(10),
+                column: Some(5),
+                suggestion: None,
+                rendered: String::new(),
+                labels: vec![],
+            }],
+            stderr_excerpt: None,
+        });
+        report.add_gate(GateResult {
+            gate: "check".to_string(),
+            outcome: GateOutcome::Skipped,
+            duration_ms: 0,
+            exit_code: None,
+            error_count: 0,
+            warning_count: 0,
+            errors: vec![],
+            stderr_excerpt: None,
+        });
+        report.finalize(Duration::from_millis(250));
+
+        let summary = condense_verifier_report(&report);
+        assert!(summary.contains("fmt PASS"));
+        assert!(summary.contains("clippy FAIL"));
+        assert!(summary.contains("check SKIP"));
+        assert!(summary.contains("Key errors:"));
+        assert!(summary.contains("unneeded `return` statement"));
+    }
+
+    #[test]
+    fn test_condense_verifier_report_all_green() {
+        use std::time::Duration;
+
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        for name in &["fmt", "clippy", "check", "test"] {
+            report.add_gate(coordination::verifier::report::GateResult {
+                gate: name.to_string(),
+                outcome: GateOutcome::Passed,
+                duration_ms: 100,
+                exit_code: Some(0),
+                error_count: 0,
+                warning_count: 0,
+                errors: vec![],
+                stderr_excerpt: None,
+            });
+        }
+        report.finalize(Duration::from_millis(400));
+
+        let summary = condense_verifier_report(&report);
+        assert!(summary.contains("fmt PASS"));
+        assert!(summary.contains("test PASS"));
+        assert!(!summary.contains("Key errors:"));
+    }
+
+    #[test]
+    fn test_condense_verifier_report_truncates_long_errors() {
+        use coordination::feedback::error_parser::ParsedError;
+        use coordination::verifier::report::GateResult;
+        use std::time::Duration;
+
+        let long_msg = "a".repeat(200);
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        report.add_gate(GateResult {
+            gate: "check".to_string(),
+            outcome: GateOutcome::Failed,
+            duration_ms: 100,
+            exit_code: Some(1),
+            error_count: 1,
+            warning_count: 0,
+            errors: vec![ParsedError {
+                category: ErrorCategory::TypeMismatch,
+                code: Some("E0308".to_string()),
+                message: long_msg.clone(),
+                file: Some("src/main.rs".to_string()),
+                line: Some(1),
+                column: Some(1),
+                suggestion: None,
+                rendered: String::new(),
+                labels: vec![],
+            }],
+            stderr_excerpt: None,
+        });
+        report.finalize(Duration::from_millis(100));
+
+        let summary = condense_verifier_report(&report);
+        // Should truncate to 150 chars, not include full 200
+        assert!(!summary.contains(&long_msg));
+        assert!(summary.contains(&"a".repeat(150)));
     }
 }

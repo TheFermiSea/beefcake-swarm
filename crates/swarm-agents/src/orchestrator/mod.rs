@@ -17,7 +17,10 @@ pub mod validation;
 // orchestrator.rs are re-exported here so downstream code (driver.rs, etc.)
 // continues to compile without changes.
 
-pub use dispatch::{format_compact_task_prompt, format_task_prompt, route_to_coder, CoderRoute};
+pub use dispatch::{
+    condense_verifier_report, format_compact_task_prompt, format_task_prompt, route_to_coder,
+    CoderRoute,
+};
 pub use helpers::try_scaffold_fallback;
 pub(crate) use helpers::{
     bool_from_env, create_stuck_intervention, default_initial_tier, detect_failure_patterns,
@@ -1511,6 +1514,22 @@ async fn process_issue_core(
             format_task_prompt(&packet)
         };
 
+        // --- Condensed verifier summary injection (PreCompletionChecklist pattern) ---
+        // On retries, prepend a structured summary of the previous verifier failure
+        // so workers fix the specific reported error instead of re-exploring.
+        if iteration > 1 {
+            if let Some(ref prev_report) = last_report {
+                if !prev_report.all_green {
+                    // Prepend so workers see the failure context first.
+                    task_prompt = format!(
+                        "## Previous Attempt Failed\n{}\n\nFix ONLY the reported errors. Do NOT re-explore the codebase.\n\n{}",
+                        condense_verifier_report(prev_report),
+                        task_prompt,
+                    );
+                }
+            }
+        }
+
         // --- Edit nudge: remind workers they MUST call edit_file ---
         // When a previous iteration ended without writes, append a strong
         // system reminder. This implements OpenDev's "Event-Driven System
@@ -1689,7 +1708,7 @@ async fn process_issue_core(
                     None
                 };
 
-                match ucb_coder_route.unwrap_or_else(|| route_to_coder(&recent_cats)) {
+                match ucb_coder_route.unwrap_or_else(|| route_to_coder(&recent_cats, iteration)) {
                     CoderRoute::RustCoder => {
                         info!(iteration, "Routing to rust_coder (Qwen3.5-Implementer)");
                         metrics.record_coder_route("RustCoder");
@@ -1705,6 +1724,7 @@ async fn process_issue_core(
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(config.max_worker_tool_calls),
                             max_turns_without_write: Some(seq_write_deadline),
+                            search_unlock_turn: Some(3),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1745,6 +1765,7 @@ async fn process_issue_core(
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(config.max_worker_tool_calls),
                             max_turns_without_write: Some(seq_write_deadline),
+                            search_unlock_turn: Some(3),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1764,6 +1785,40 @@ async fn process_issue_core(
                                     iteration,
                                     timeout_secs = worker_timeout.as_secs(),
                                     "general_coder exceeded timeout — proceeding with changes on disk"
+                                );
+                                Ok(TIMEOUT_RESPONSE.to_string())
+                            }
+                        };
+                        (result, adapter)
+                    }
+                    CoderRoute::FastFixer => {
+                        info!(
+                            iteration,
+                            "Reasoning sandwich: routing to fast_fixer (GLM-4.7-Flash)"
+                        );
+                        metrics.record_coder_route("FastFixer");
+                        metrics.record_agent_metrics("GLM-FastFixer", 0, 0);
+                        let fixer = factory.build_fixer(&wt_path);
+                        let adapter = RuntimeAdapter::new(AdapterConfig {
+                            agent_name: "GLM-FastFixer".into(),
+                            deadline: Some(Instant::now() + worker_timeout),
+                            max_tool_calls: Some(config.max_worker_tool_calls),
+                            max_turns_without_write: Some(5),
+                            search_unlock_turn: Some(3),
+                            ..Default::default()
+                        });
+                        let result = match tokio::time::timeout(
+                            worker_timeout,
+                            prompt_with_hook_and_retry(&fixer, &task_prompt, 2, adapter.clone()),
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(_elapsed) => {
+                                warn!(
+                                    iteration,
+                                    timeout_secs = worker_timeout.as_secs(),
+                                    "fast_fixer exceeded timeout — proceeding with changes on disk"
                                 );
                                 Ok(TIMEOUT_RESPONSE.to_string())
                             }
@@ -3623,6 +3678,19 @@ async fn process_issue_core(
                 .next()
                 .map(|c| c.to_string())
         });
+        // Derive retry_tier tag from the last iteration's coder route.
+        // "fast" = reasoning sandwich activated (FastFixer), "coder" = stayed on coder tier.
+        let retry_tier = session_metrics
+            .iterations
+            .last()
+            .and_then(|i| i.coder_route.as_ref())
+            .map(|route| {
+                if route == "FastFixer" {
+                    "fast".to_string()
+                } else {
+                    "coder".to_string()
+                }
+            });
         let tz_tags = crate::tensorzero::FeedbackTags {
             issue_id: Some(issue.id.clone()),
             language: Some(triage_result.language.to_string()),
@@ -3633,6 +3701,9 @@ async fn process_issue_core(
                 .filter(|s| !s.is_empty()),
             error_category: primary_error_category,
             prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
+            retry_tier,
+            write_deadline: Some(config.max_turns_without_write.to_string()),
+            max_tool_calls: Some(config.max_worker_tool_calls.to_string()),
         };
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {

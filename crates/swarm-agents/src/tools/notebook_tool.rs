@@ -118,6 +118,10 @@ mod tests {
             Ok(())
         }
 
+        fn source_count(&self, _role: &str) -> Option<usize> {
+            None
+        }
+
         fn is_available(&self) -> bool {
             false
         }

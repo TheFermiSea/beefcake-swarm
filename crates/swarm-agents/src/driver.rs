@@ -663,7 +663,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                 .cloned()
                 .unwrap_or_default();
 
-            match route_to_coder(&recent_cats) {
+            match route_to_coder(&recent_cats, iteration) {
                 CoderRoute::RustCoder => {
                     info!(iteration, "Routing to rust_coder (state driver)");
                     ctx.metrics.record_coder_route("RustCoder");
@@ -673,6 +673,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                         deadline: Some(Instant::now() + ctx.worker_timeout),
                         max_tool_calls: Some(30),
                         max_turns_without_write: Some(5),
+                        search_unlock_turn: Some(3),
                         ..Default::default()
                     });
                     let result = match tokio::time::timeout(
@@ -704,6 +705,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                         deadline: Some(Instant::now() + ctx.worker_timeout),
                         max_tool_calls: Some(30),
                         max_turns_without_write: Some(5),
+                        search_unlock_turn: Some(3),
                         ..Default::default()
                     });
                     let result = match tokio::time::timeout(
@@ -721,6 +723,41 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                         Err(_) => {
                             warn!(iteration, "general_coder timed out (state driver)");
                             Ok("general_coder timed out. Changes on disk.".into())
+                        }
+                    };
+                    (result, adapter)
+                }
+                CoderRoute::FastFixer => {
+                    info!(
+                        iteration,
+                        "Reasoning sandwich: routing to fast_fixer (state driver)"
+                    );
+                    ctx.metrics.record_coder_route("FastFixer");
+                    ctx.metrics.record_agent_metrics("GLM-FastFixer", 0, 0);
+                    let fixer = ctx.factory.build_fixer(&ctx.wt_path);
+                    let adapter = RuntimeAdapter::new(AdapterConfig {
+                        agent_name: "GLM-FastFixer".into(),
+                        deadline: Some(Instant::now() + ctx.worker_timeout),
+                        max_tool_calls: Some(30),
+                        max_turns_without_write: Some(5),
+                        search_unlock_turn: Some(3),
+                        ..Default::default()
+                    });
+                    let result = match tokio::time::timeout(
+                        ctx.worker_timeout,
+                        crate::orchestrator::prompt_with_hook_and_retry(
+                            &fixer,
+                            &task_prompt,
+                            2,
+                            adapter.clone(),
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => {
+                            warn!(iteration, "fast_fixer timed out (state driver)");
+                            Ok("fast_fixer timed out. Changes on disk.".into())
                         }
                     };
                     (result, adapter)

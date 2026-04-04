@@ -100,7 +100,7 @@ fn reexport_coder_route_variants() {
 #[test]
 fn reexport_route_to_coder_function() {
     // Must be callable through the re-export path
-    let result = orchestrator::route_to_coder(&[]);
+    let result = orchestrator::route_to_coder(&[], 1);
     assert_eq!(result, CoderRoute::GeneralCoder);
 }
 
@@ -138,7 +138,7 @@ fn routing_rust_errors_to_rust_coder() {
     ];
     for cat in &rust_categories {
         assert_eq!(
-            route_to_coder(&[cat.clone()]),
+            route_to_coder(&[cat.clone()], 1),
             CoderRoute::RustCoder,
             "{cat:?} should route to RustCoder"
         );
@@ -155,7 +155,7 @@ fn routing_general_errors_to_general_coder() {
     ];
     for cat in &general_categories {
         assert_eq!(
-            route_to_coder(&[cat.clone()]),
+            route_to_coder(&[cat.clone()], 1),
             CoderRoute::GeneralCoder,
             "{cat:?} should route to GeneralCoder"
         );
@@ -164,7 +164,7 @@ fn routing_general_errors_to_general_coder() {
 
 #[test]
 fn routing_empty_errors_to_general() {
-    assert_eq!(route_to_coder(&[]), CoderRoute::GeneralCoder);
+    assert_eq!(route_to_coder(&[], 1), CoderRoute::GeneralCoder);
 }
 
 // ── 3. Prompt formatting contracts ───────────────────────────────────

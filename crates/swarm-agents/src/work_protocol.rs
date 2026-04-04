@@ -820,6 +820,7 @@ mod tests {
             files_modified: vec!["src/a.rs".into()],
             successful_writes: 2,
             last_failed_edits: vec![],
+            total_reads_before_write: 0,
         };
 
         let result = WorkResult::from_adapter_report("o1", &report, WorkStatus::Complete, "done")
