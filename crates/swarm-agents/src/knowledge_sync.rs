@@ -83,7 +83,7 @@ const TRICKY_BUG_THRESHOLD: u32 = 3;
 /// appropriate NotebookLM notebooks.
 ///
 /// Wraps a [`KnowledgeBase`] backend and applies routing rules:
-/// - All successful resolutions → Project Brain
+/// - All successful resolutions → Debugging KB (moved from Project Brain to avoid 300-source limit)
 /// - Tricky bugs (3+ iterations) → also Debugging KB
 /// - Observations and recommendations → Project Brain
 pub struct KnowledgeSyncService<'a> {
@@ -109,7 +109,7 @@ impl<'a> KnowledgeSyncService<'a> {
     /// Process a session retrospective and route captures to the appropriate notebooks.
     ///
     /// Routing rules:
-    /// 1. Successful sessions → resolution summary to Project Brain
+    /// 1. Successful sessions → resolution summary to Debugging KB
     /// 2. Sessions with 3+ iterations → error pattern to Debugging KB
     /// 3. Observations and recommendations → Project Brain
     ///
@@ -122,11 +122,12 @@ impl<'a> KnowledgeSyncService<'a> {
     ) -> Vec<KnowledgeCapture> {
         let mut uploaded = Vec::new();
 
-        // Rule 1: Successful resolutions → Project Brain
+        // Rule 1: Successful resolutions → Debugging KB (was Project Brain; moved to
+        // avoid filling the 300-source limit with resolution spam)
         if retro.status == coordination::SessionStatus::Completed {
             let capture = KnowledgeCapture {
                 source: CaptureSource::Retrospective,
-                target: NotebookTarget::ProjectBrain,
+                target: NotebookTarget::DebuggingKb,
                 title: format!("Retrospective: {issue_id}"),
                 content: format_resolution_retrospective(retro, issue_id, issue_title),
                 tags: vec![
@@ -362,10 +363,13 @@ fn format_insights(retro: &SessionRetrospective, issue_id: &str) -> String {
 // Low-level capture functions (called directly by orchestrator)
 // ---------------------------------------------------------------------------
 
-/// Generate and upload a resolution summary to the Project Brain notebook.
+/// Generate and upload a resolution summary to the Debugging KB notebook.
 ///
 /// Called after a successful issue resolution. Includes issue metadata
 /// and implementation details for future context.
+///
+/// Previously targeted Project Brain, but that notebook hit its 300-source
+/// limit from auto-uploaded resolution summaries.
 pub fn capture_resolution(
     kb: &dyn KnowledgeBase,
     issue_id: &str,
@@ -389,9 +393,9 @@ pub fn capture_resolution(
     );
 
     let title = format!("Resolution: {issue_id}");
-    match kb.add_source_text("project_brain", &title, &summary) {
+    match kb.add_source_text("debugging_kb", &title, &summary) {
         Ok(()) => {
-            info!(issue_id, "Captured resolution to Project Brain");
+            info!(issue_id, "Captured resolution to Debugging KB");
             Ok(())
         }
         Err(e) => {
@@ -597,7 +601,7 @@ mod tests {
 
         let uploads = mock.captured_uploads.lock().unwrap();
         assert_eq!(uploads.len(), 1);
-        assert_eq!(uploads[0].0, "project_brain");
+        assert_eq!(uploads[0].0, "debugging_kb");
         assert!(uploads[0].2.contains("beads-abc123"));
         assert!(uploads[0].2.contains("3"));
         assert!(uploads[0].2.contains("src/lib.rs"));
@@ -636,7 +640,7 @@ mod tests {
     // --- KnowledgeSyncService tests ---
 
     #[test]
-    fn test_service_successful_session_routes_to_project_brain() {
+    fn test_service_successful_session_routes_to_debugging_kb() {
         let mock = MockKnowledgeBase::new();
         let svc = KnowledgeSyncService::new(&mock).without_dedup();
 
@@ -644,9 +648,9 @@ mod tests {
 
         let captures = svc.capture_from_retrospective(&retro, "beads-001", "Simple fix");
 
-        // 1 iteration < 3, so only project_brain capture
+        // 2 iterations < 3, so only debugging_kb capture (resolutions route there)
         assert_eq!(captures.len(), 1);
-        assert_eq!(captures[0].target, NotebookTarget::ProjectBrain);
+        assert_eq!(captures[0].target, NotebookTarget::DebuggingKb);
         assert_eq!(captures[0].source, CaptureSource::Retrospective);
         assert!(captures[0].content.contains("beads-001"));
         assert!(captures[0].content.contains("Simple fix"));
@@ -666,19 +670,20 @@ mod tests {
 
         let captures = svc.capture_from_retrospective(&retro, "beads-002", "Tricky bug");
 
-        // Should get: project_brain (resolution), debugging_kb (pattern), project_brain (insights)
+        // Should get: debugging_kb (resolution), debugging_kb (pattern), project_brain (insights)
         assert_eq!(captures.len(), 3);
 
         let targets: Vec<_> = captures.iter().map(|c| c.target.clone()).collect();
-        assert!(targets.contains(&NotebookTarget::ProjectBrain));
-        assert!(targets.contains(&NotebookTarget::DebuggingKb));
+        assert!(targets.contains(&NotebookTarget::ProjectBrain)); // insights
+        assert!(targets.contains(&NotebookTarget::DebuggingKb)); // resolution + pattern
 
-        // Debugging KB capture should mention iterations
-        let debug_capture = captures
+        // Debugging KB captures should include the tricky-bug pattern with iterations
+        let debug_captures: Vec<_> = captures
             .iter()
-            .find(|c| c.target == NotebookTarget::DebuggingKb)
-            .unwrap();
-        assert!(debug_capture.content.contains("5 / 10"));
+            .filter(|c| c.target == NotebookTarget::DebuggingKb)
+            .collect();
+        assert_eq!(debug_captures.len(), 2);
+        assert!(debug_captures.iter().any(|c| c.content.contains("5 / 10")));
     }
 
     #[test]
@@ -740,7 +745,7 @@ mod tests {
     #[test]
     fn test_dedup_skips_existing_title() {
         let mock = MockKnowledgeBase::new()
-            .with_response("project_brain", "Found source: Retrospective: beads-006");
+            .with_response("debugging_kb", "Found source: Retrospective: beads-006");
         let svc = KnowledgeSyncService::new(&mock);
 
         let retro = test_retrospective(SessionStatus::Completed, 1, vec![], vec![]);
@@ -759,7 +764,7 @@ mod tests {
 
     #[test]
     fn test_dedup_allows_new_title() {
-        let mock = MockKnowledgeBase::new().with_response("project_brain", "No matching sources.");
+        let mock = MockKnowledgeBase::new().with_response("debugging_kb", "No matching sources.");
         let svc = KnowledgeSyncService::new(&mock);
 
         let retro = test_retrospective(SessionStatus::Completed, 1, vec![], vec![]);
@@ -773,7 +778,7 @@ mod tests {
     #[test]
     fn test_dedup_disabled_always_uploads() {
         let mock = MockKnowledgeBase::new()
-            .with_response("project_brain", "Found source: Retrospective: beads-008");
+            .with_response("debugging_kb", "Found source: Retrospective: beads-008");
         let svc = KnowledgeSyncService::new(&mock).without_dedup();
 
         let retro = test_retrospective(SessionStatus::Completed, 1, vec![], vec![]);

@@ -352,7 +352,7 @@ nlm source add "<ID>" --file "doc.md"
 **Orchestrator integration points:**
 1. Pre-task: queries Project Brain for architectural context; on retries queries Debugging KB
 2. Pre-escalation: checks Debugging KB for known fixes before escalating tier
-3. Post-success: uploads resolution summary to Project Brain; tricky bugs (3+ iterations) also go to Debugging KB
+3. Post-success: uploads resolution summary to Debugging KB (moved from Project Brain to avoid 300-source limit); tricky bugs (3+ iterations) also go to Debugging KB
 4. Manager tool: `query_notebook` Rig tool available to cloud and local managers
 
 **Complementary tool boundaries:**

@@ -22,6 +22,11 @@ const AUTH_RETRY_DELAY_SECS: u64 = 2;
 /// Queries normally finish in <30s; anything beyond this is hung.
 const NLM_TIMEOUT_SECS: u64 = 120;
 
+/// Safety threshold: skip uploads when a notebook is near the 300-source limit.
+/// NotebookLM hard-caps at 300 sources; we stop at 290 to leave headroom for
+/// manual additions and avoid hitting the wall during a burst of closes.
+const MAX_NOTEBOOK_SOURCES: usize = 290;
+
 /// A single notebook entry in the registry.
 #[derive(Debug, Clone, Deserialize)]
 pub struct NotebookEntry {
@@ -86,6 +91,10 @@ pub trait KnowledgeBase: Send + Sync {
 
     /// Add a file source to a notebook by role.
     fn add_source_file(&self, role: &str, file_path: &str) -> Result<()>;
+
+    /// Count the number of sources in a notebook by role.
+    /// Returns `None` if the count cannot be determined (CLI unavailable, etc.).
+    fn source_count(&self, role: &str) -> Option<usize>;
 
     /// Check if the knowledge base CLI is available.
     fn is_available(&self) -> bool;
@@ -216,6 +225,20 @@ impl KnowledgeBase for NotebookBridge {
             }
         };
 
+        // Safety: skip upload if notebook is near the 300-source capacity
+        if let Some(count) = self.source_count(role) {
+            if count >= MAX_NOTEBOOK_SOURCES {
+                warn!(
+                    role,
+                    count,
+                    limit = MAX_NOTEBOOK_SOURCES,
+                    title,
+                    "Notebook near capacity — skipping source upload"
+                );
+                return Ok(());
+            }
+        }
+
         self.run_command(&[
             "source",
             "add",
@@ -237,8 +260,37 @@ impl KnowledgeBase for NotebookBridge {
             }
         };
 
+        // Safety: skip upload if notebook is near the 300-source capacity
+        if let Some(count) = self.source_count(role) {
+            if count >= MAX_NOTEBOOK_SOURCES {
+                warn!(
+                    role,
+                    count,
+                    limit = MAX_NOTEBOOK_SOURCES,
+                    "Notebook near capacity — skipping file upload"
+                );
+                return Ok(());
+            }
+        }
+
         self.run_command(&["source", "add", notebook_id, "--file", file_path])
             .map(|_| ())
+    }
+
+    fn source_count(&self, role: &str) -> Option<usize> {
+        let notebook_id = self.registry.id_for_role(role)?;
+
+        match self.run_command(&["source", "list", notebook_id]) {
+            Ok(output) => {
+                // `nlm source list` outputs one line per source; count non-empty lines
+                let count = output.lines().filter(|l| !l.trim().is_empty()).count();
+                Some(count)
+            }
+            Err(e) => {
+                warn!(role, "Failed to count sources (non-fatal): {e}");
+                None
+            }
+        }
     }
 
     fn is_available(&self) -> bool {
@@ -266,6 +318,10 @@ impl KnowledgeBase for NoOpKnowledgeBase {
 
     fn add_source_file(&self, _role: &str, _file_path: &str) -> Result<()> {
         Ok(())
+    }
+
+    fn source_count(&self, _role: &str) -> Option<usize> {
+        None
     }
 
     fn is_available(&self) -> bool {
@@ -330,6 +386,10 @@ pub mod tests {
 
         fn add_source_file(&self, _role: &str, _file_path: &str) -> Result<()> {
             Ok(())
+        }
+
+        fn source_count(&self, _role: &str) -> Option<usize> {
+            Some(0) // Mock always reports empty
         }
 
         fn is_available(&self) -> bool {
