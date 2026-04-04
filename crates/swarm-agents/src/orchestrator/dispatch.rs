@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use tracing::debug;
+use tracing::{debug, info};
 
 use crate::file_targeting::find_target_files_by_grep;
 use coordination::feedback::ErrorCategory;
@@ -18,9 +18,12 @@ pub enum CoderRoute {
     RustCoder,
     /// Qwen3.5-122B-A10B with general coder system prompt (multi-file scaffolding)
     GeneralCoder,
+    /// GLM-4.7-Flash fast tier for simple errors on retry iterations
+    /// (reasoning sandwich: save coder budget for first attempts and complex errors)
+    FastFixer,
 }
 
-/// Route to the appropriate coder based on error category distribution.
+/// Route to the appropriate coder based on error category distribution and iteration.
 ///
 /// Uses a weighted scoring system rather than a simple `any()` check:
 /// - Rust-specific categories (borrow checker, lifetimes, traits) score toward RustCoder system prompt
@@ -28,13 +31,32 @@ pub enum CoderRoute {
 /// - Mixed errors with majority Rust → RustCoder; majority structural → GeneralCoder
 /// - No errors (first iteration) → general coder for scaffolding
 ///
-/// Rust-centric repair loops can route to the 27B specialist for faster,
-/// more reliable tool use, while broader scaffolding stays on the 122B
-/// integrator tier.
-pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
+/// **Reasoning sandwich** (iteration > 1): On retry iterations, simple errors
+/// (type mismatch, imports, syntax) route to the fast tier (GLM-4.7-Flash)
+/// instead of burning coder budget. Complex errors (borrow checker, lifetimes,
+/// trait bounds, async) still use the coder tier on retry.
+///
+/// Research: LangChain found 63.6% vs 53.9% with targeted reasoning budget
+/// allocation (high for planning/first attempt, low for simple fixes).
+pub fn route_to_coder(error_cats: &[ErrorCategory], iteration: u32) -> CoderRoute {
     if error_cats.is_empty() {
         // First iteration — use general coder for scaffolding/multi-file work
         return CoderRoute::GeneralCoder;
+    }
+
+    // Reasoning sandwich: on retries with only simple errors, use the fast tier.
+    // Complex errors (borrow checker, lifetimes, trait bounds, async) require
+    // the coder tier's deeper expertise even on retry.
+    if iteration > 1 {
+        let all_simple = error_cats.iter().all(is_simple_error);
+        if all_simple {
+            info!(
+                iteration,
+                errors = ?error_cats,
+                "Reasoning sandwich: routing retry to fast tier (simple errors)"
+            );
+            return CoderRoute::FastFixer;
+        }
     }
 
     let mut rust_score: i32 = 0;
@@ -64,6 +86,19 @@ pub fn route_to_coder(error_cats: &[ErrorCategory]) -> CoderRoute {
     } else {
         CoderRoute::GeneralCoder
     }
+}
+
+/// Whether an error category is "simple" — fixable by the fast tier without
+/// deep Rust expertise. These are typically mechanical fixes: wrong type,
+/// missing import, syntax typo, unused variable, etc.
+fn is_simple_error(cat: &ErrorCategory) -> bool {
+    matches!(
+        cat,
+        ErrorCategory::TypeMismatch
+            | ErrorCategory::ImportResolution
+            | ErrorCategory::Syntax
+            | ErrorCategory::Other
+    )
 }
 
 /// Format a WorkPacket into a structured prompt for agent consumption.
@@ -516,13 +551,13 @@ mod tests {
 
     #[test]
     fn test_route_empty_errors_to_general() {
-        assert_eq!(route_to_coder(&[]), CoderRoute::GeneralCoder);
+        assert_eq!(route_to_coder(&[], 1), CoderRoute::GeneralCoder);
     }
 
     #[test]
     fn test_route_borrow_checker_to_rust() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::BorrowChecker]),
+            route_to_coder(&[ErrorCategory::BorrowChecker], 1),
             CoderRoute::RustCoder
         );
     }
@@ -530,7 +565,7 @@ mod tests {
     #[test]
     fn test_route_lifetime_to_rust() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::Lifetime]),
+            route_to_coder(&[ErrorCategory::Lifetime], 1),
             CoderRoute::RustCoder
         );
     }
@@ -538,7 +573,7 @@ mod tests {
     #[test]
     fn test_route_trait_bound_to_rust() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::TraitBound]),
+            route_to_coder(&[ErrorCategory::TraitBound], 1),
             CoderRoute::RustCoder
         );
     }
@@ -546,7 +581,7 @@ mod tests {
     #[test]
     fn test_route_async_to_rust() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::Async]),
+            route_to_coder(&[ErrorCategory::Async], 1),
             CoderRoute::RustCoder
         );
     }
@@ -570,7 +605,7 @@ mod tests {
     #[test]
     fn test_route_import_to_general() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::ImportResolution]),
+            route_to_coder(&[ErrorCategory::ImportResolution], 1),
             CoderRoute::GeneralCoder
         );
     }
@@ -578,7 +613,7 @@ mod tests {
     #[test]
     fn test_route_macro_to_general() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::Macro]),
+            route_to_coder(&[ErrorCategory::Macro], 1),
             CoderRoute::GeneralCoder
         );
     }
@@ -586,7 +621,7 @@ mod tests {
     #[test]
     fn test_route_syntax_to_general() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::Syntax]),
+            route_to_coder(&[ErrorCategory::Syntax], 1),
             CoderRoute::GeneralCoder
         );
     }
@@ -594,7 +629,7 @@ mod tests {
     #[test]
     fn test_route_other_to_general() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::Other]),
+            route_to_coder(&[ErrorCategory::Other], 1),
             CoderRoute::GeneralCoder
         );
     }
@@ -602,7 +637,7 @@ mod tests {
     #[test]
     fn test_route_type_mismatch_alone_to_rust() {
         assert_eq!(
-            route_to_coder(&[ErrorCategory::TypeMismatch]),
+            route_to_coder(&[ErrorCategory::TypeMismatch], 1),
             CoderRoute::RustCoder
         );
     }
@@ -611,20 +646,118 @@ mod tests {
     fn test_route_mixed_rust_heavy() {
         // BorrowChecker(+3) + Import(+3) → tie → general wins (>= check)
         assert_eq!(
-            route_to_coder(&[
-                ErrorCategory::BorrowChecker,
-                ErrorCategory::ImportResolution
-            ]),
+            route_to_coder(
+                &[
+                    ErrorCategory::BorrowChecker,
+                    ErrorCategory::ImportResolution
+                ],
+                1
+            ),
             CoderRoute::GeneralCoder
         );
         // BorrowChecker(+3) + Lifetime(+3) + Import(+3) → 6 vs 3 → rust
         assert_eq!(
-            route_to_coder(&[
-                ErrorCategory::BorrowChecker,
-                ErrorCategory::Lifetime,
-                ErrorCategory::ImportResolution
-            ]),
+            route_to_coder(
+                &[
+                    ErrorCategory::BorrowChecker,
+                    ErrorCategory::Lifetime,
+                    ErrorCategory::ImportResolution
+                ],
+                1
+            ),
             CoderRoute::RustCoder
+        );
+    }
+
+    // ── Reasoning sandwich tests ────────────────────────────────────────
+
+    #[test]
+    fn test_retry_simple_errors_route_to_fast_fixer() {
+        // Type mismatch on retry → fast tier
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::TypeMismatch], 2),
+            CoderRoute::FastFixer
+        );
+        // Import errors on retry → fast tier
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::ImportResolution], 3),
+            CoderRoute::FastFixer
+        );
+        // Syntax errors on retry → fast tier
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::Syntax], 2),
+            CoderRoute::FastFixer
+        );
+        // Other errors on retry → fast tier
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::Other], 4),
+            CoderRoute::FastFixer
+        );
+    }
+
+    #[test]
+    fn test_retry_complex_errors_stay_on_coder() {
+        // Borrow checker on retry → still coder (complex)
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::BorrowChecker], 2),
+            CoderRoute::RustCoder
+        );
+        // Lifetime on retry → still coder
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::Lifetime], 3),
+            CoderRoute::RustCoder
+        );
+        // Trait bound on retry → still coder
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::TraitBound], 2),
+            CoderRoute::RustCoder
+        );
+        // Async on retry → still coder
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::Async], 2),
+            CoderRoute::RustCoder
+        );
+    }
+
+    #[test]
+    fn test_retry_mixed_errors_with_complex_stay_on_coder() {
+        // TypeMismatch + BorrowChecker on retry → not all simple → coder
+        assert_eq!(
+            route_to_coder(
+                &[ErrorCategory::TypeMismatch, ErrorCategory::BorrowChecker],
+                2
+            ),
+            CoderRoute::RustCoder
+        );
+    }
+
+    #[test]
+    fn test_first_iteration_simple_errors_use_coder_not_fast() {
+        // TypeMismatch on iteration 1 → coder (not fast), even though simple
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::TypeMismatch], 1),
+            CoderRoute::RustCoder
+        );
+        // ImportResolution on iteration 1 → general coder (not fast)
+        assert_eq!(
+            route_to_coder(&[ErrorCategory::ImportResolution], 1),
+            CoderRoute::GeneralCoder
+        );
+    }
+
+    #[test]
+    fn test_retry_multiple_simple_errors_route_to_fast() {
+        // Multiple simple errors on retry → all simple → fast tier
+        assert_eq!(
+            route_to_coder(
+                &[
+                    ErrorCategory::TypeMismatch,
+                    ErrorCategory::ImportResolution,
+                    ErrorCategory::Syntax
+                ],
+                2
+            ),
+            CoderRoute::FastFixer
         );
     }
 
