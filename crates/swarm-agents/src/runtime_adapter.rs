@@ -155,6 +155,10 @@ struct AdapterState {
     repeat_call_counts: HashMap<u64, u32>,
     /// The most recent (tool_name, args_hash) — used to detect consecutive repeats.
     last_call_key: Option<u64>,
+    /// Pending write-deadline reminder to inject into the next tool result.
+    /// Set by `on_completion_call` when the worker is approaching the write deadline;
+    /// consumed (taken) by `on_tool_result` and prepended to the tool output.
+    pending_reminder: Option<String>,
 }
 
 /// Rig [`PromptHook`] implementation for tool-event visibility and budget control.
@@ -189,6 +193,7 @@ impl RuntimeAdapter {
                 validator_state: ValidatorState::new(),
                 repeat_call_counts: HashMap::new(),
                 last_call_key: None,
+                pending_reminder: None,
             })),
             config: Arc::new(config),
             validators: Arc::new(Vec::new()),
@@ -218,6 +223,7 @@ impl RuntimeAdapter {
                 validator_state: ValidatorState::new(),
                 repeat_call_counts: HashMap::new(),
                 last_call_key: None,
+                pending_reminder: None,
             })),
             config: Arc::new(config),
             validators: Arc::new(validators),
@@ -269,6 +275,19 @@ impl RuntimeAdapter {
                 })
                 .collect(),
         })
+    }
+
+    /// Take the pending write-deadline reminder (if any) from the adapter state.
+    ///
+    /// Returns `Some(reminder)` exactly once per reminder — subsequent calls
+    /// return `None` until the next `on_completion_call` sets a new one.
+    /// The orchestrator can call this after each tool result to surface the
+    /// reminder in the next prompt context.
+    pub fn take_pending_reminder(&self) -> Option<String> {
+        self.state
+            .lock()
+            .ok()
+            .and_then(|mut s| s.pending_reminder.take())
     }
 
     /// Classify a tool as read-only, action, or neutral for anti-stall tracking.
@@ -350,6 +369,37 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                     } else {
                         None
                     };
+
+                    // Progressive write deadline reminders (research: "More with Less" arxiv:2510.16786)
+                    // Injecting "X turns left" improves edit rates by inducing focused behavior.
+                    if terminate.is_none() {
+                        let reminder =
+                            if let Some(max_turns) = config.max_turns_without_write {
+                                if !s.has_written {
+                                    let remaining = max_turns.saturating_sub(turn);
+                                    if remaining <= 2 && remaining > 0 {
+                                        Some(format!(
+                                            "\u{26a0} WRITE DEADLINE IN {} TURN{}. \
+                                             Your next call MUST be edit_file or write_file.",
+                                            remaining,
+                                            if remaining == 1 { "" } else { "S" }
+                                        ))
+                                    } else if turn > max_turns / 2 {
+                                        Some(format!(
+                                            "Turn {}/{}: {} turns remaining before write deadline.",
+                                            turn, max_turns, remaining
+                                        ))
+                                    } else {
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            };
+                        s.pending_reminder = reminder;
+                    }
 
                     (turn, terminate)
                 }
@@ -646,6 +696,19 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 duration_ms,
                 outcome,
             });
+
+            // Inject pending write-deadline reminder into tool result logging.
+            // Rig's HookAction only supports Continue/Terminate — no result modification.
+            // We emit the reminder via warn! for operator visibility and store it in the
+            // report so the orchestrator can surface it in future prompt context.
+            if let Some(reminder) = s.pending_reminder.take() {
+                warn!(
+                    agent = %config.agent_name,
+                    tool = %tool_name,
+                    "[SYSTEM] {}",
+                    reminder,
+                );
+            }
 
             // Track edit failures for repeated-failure early termination
             let base_name = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
