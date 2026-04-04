@@ -49,6 +49,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: Install ast-grep (for sg gate tests)
+        run: npm install -g @ast-grep/cli
       - run: cargo test -p coordination
 
   test-swarm-agents:
@@ -61,4 +63,6 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Install ripgrep (for search_code_tool tests)
         run: sudo apt-get install -y ripgrep
+      - name: Install ast-grep (for verifier sg gate tests)
+        run: npm install -g @ast-grep/cli
       - run: cargo test -p swarm-agents
