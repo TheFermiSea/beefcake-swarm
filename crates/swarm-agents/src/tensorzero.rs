@@ -59,6 +59,9 @@ pub struct FeedbackTags {
     /// Prompt version string (e.g. `9.2.0`) from `prompts::PROMPT_VERSION`.
     /// Enables clean pre/post cohort analysis when prompt content changes.
     pub prompt_version: Option<String>,
+    /// Retry tier routing decision: `"fast"`, `"coder"`, or `None` (first iteration).
+    /// Enables measuring the impact of the reasoning sandwich optimization.
+    pub retry_tier: Option<String>,
 }
 
 impl FeedbackTags {
@@ -86,6 +89,9 @@ impl FeedbackTags {
         }
         if let Some(v) = self.prompt_version {
             map.insert("prompt_version".to_string(), v);
+        }
+        if let Some(v) = self.retry_tier {
+            map.insert("retry_tier".to_string(), v);
         }
         map
     }
@@ -419,6 +425,7 @@ pub async fn post_resolved_feedback(
             repo_id: m.get("repo_id").cloned(),
             prompt_version: m.get("prompt_version").cloned(),
             error_category: m.get("error_category").cloned(),
+            retry_tier: m.get("retry_tier").cloned(),
         });
         post_episode_feedback(
             gateway_url,
