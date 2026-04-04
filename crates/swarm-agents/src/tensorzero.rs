@@ -66,7 +66,6 @@ pub struct FeedbackTags {
     // ── Harness parameters for Meta-Harness optimization via TZ Autopilot ──
     // These allow Autopilot to correlate parameter settings with worker
     // behavior outcomes (made_edit, first_edit_early, avoids_exploration_loop).
-
     /// Base write deadline value (max turns before a file edit is required).
     /// Corresponds to `SWARM_MAX_TURNS_WITHOUT_WRITE` (default: 8).
     pub write_deadline: Option<String>,

@@ -386,31 +386,30 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                     // Progressive write deadline reminders (research: "More with Less" arxiv:2510.16786)
                     // Injecting "X turns left" improves edit rates by inducing focused behavior.
                     if terminate.is_none() {
-                        let reminder =
-                            if let Some(max_turns) = config.max_turns_without_write {
-                                if !s.has_written && config.max_turns_without_write.is_some() {
-                                    let remaining = max_turns.saturating_sub(turn);
-                                    if remaining <= 2 && remaining > 0 {
-                                        Some(format!(
-                                            "\u{26a0} WRITE DEADLINE IN {} TURN{}. \
+                        let reminder = if let Some(max_turns) = config.max_turns_without_write {
+                            if !s.has_written && config.max_turns_without_write.is_some() {
+                                let remaining = max_turns.saturating_sub(turn);
+                                if remaining <= 2 && remaining > 0 {
+                                    Some(format!(
+                                        "\u{26a0} WRITE DEADLINE IN {} TURN{}. \
                                              Your next call MUST be edit_file or write_file.",
-                                            remaining,
-                                            if remaining == 1 { "" } else { "S" }
-                                        ))
-                                    } else if turn > max_turns / 2 {
-                                        Some(format!(
-                                            "Turn {}/{}: {} turns remaining before write deadline.",
-                                            turn, max_turns, remaining
-                                        ))
-                                    } else {
-                                        None
-                                    }
+                                        remaining,
+                                        if remaining == 1 { "" } else { "S" }
+                                    ))
+                                } else if turn > max_turns / 2 {
+                                    Some(format!(
+                                        "Turn {}/{}: {} turns remaining before write deadline.",
+                                        turn, max_turns, remaining
+                                    ))
                                 } else {
                                     None
                                 }
                             } else {
                                 None
-                            };
+                            }
+                        } else {
+                            None
+                        };
                         s.pending_reminder = reminder;
                     }
 
