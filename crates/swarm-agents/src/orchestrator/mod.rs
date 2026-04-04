@@ -1520,10 +1520,12 @@ async fn process_issue_core(
         if iteration > 1 {
             if let Some(ref prev_report) = last_report {
                 if !prev_report.all_green {
-                    task_prompt.push_str(&format!(
-                        "\n## Previous Attempt Failed\n{}\n\nFix ONLY the reported errors. Do NOT re-explore the codebase.\n\n",
-                        condense_verifier_report(prev_report)
-                    ));
+                    // Prepend so workers see the failure context first.
+                    task_prompt = format!(
+                        "## Previous Attempt Failed\n{}\n\nFix ONLY the reported errors. Do NOT re-explore the codebase.\n\n{}",
+                        condense_verifier_report(prev_report),
+                        task_prompt,
+                    );
                 }
             }
         }
@@ -1802,6 +1804,7 @@ async fn process_issue_core(
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(config.max_worker_tool_calls),
                             max_turns_without_write: Some(5),
+                            search_unlock_turn: Some(3),
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(

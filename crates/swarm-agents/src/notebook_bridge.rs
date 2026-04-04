@@ -235,7 +235,12 @@ impl KnowledgeBase for NotebookBridge {
                     title,
                     "Notebook near capacity — skipping source upload"
                 );
-                return Ok(());
+                return Err(anyhow::anyhow!(
+                    "notebook '{}' at capacity ({}/{}) — upload skipped",
+                    role,
+                    count,
+                    MAX_NOTEBOOK_SOURCES
+                ));
             }
         }
 

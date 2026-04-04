@@ -546,7 +546,16 @@ pub fn condense_verifier_report(report: &VerifierReport) -> String {
     if !errors.is_empty() {
         lines.push("Key errors:".to_string());
         for e in errors {
-            let truncated = if e.len() > 150 { &e[..150] } else { e };
+            // Safe truncation: rustc diagnostics may contain Unicode (quotes, arrows).
+            let truncated = if e.len() > 150 {
+                let mut end = 150;
+                while end > 0 && !e.is_char_boundary(end) {
+                    end -= 1;
+                }
+                &e[..end]
+            } else {
+                e
+            };
             lines.push(format!("  - {truncated}"));
         }
     }

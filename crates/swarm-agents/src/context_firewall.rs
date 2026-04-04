@@ -25,6 +25,28 @@ use serde::{Deserialize, Serialize};
 
 use crate::runtime_adapter::AdapterReport;
 
+/// Truncate a string at a char boundary. Safe for multi-byte UTF-8
+/// (e.g., em dash, Unicode quotes in rustc output).
+fn safe_truncate(s: &str, max_len: usize) -> &str {
+    if s.len() <= max_len {
+        return s;
+    }
+    let mut end = max_len;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
+/// Snap a byte offset forward to the nearest char boundary.
+fn snap_to_char_boundary(s: &str, byte_offset: usize) -> usize {
+    let mut pos = byte_offset;
+    while pos < s.len() && !s.is_char_boundary(pos) {
+        pos += 1;
+    }
+    pos
+}
+
 /// Condensed worker result for manager consumption.
 /// Strips raw tool call logs to prevent context bloat.
 ///
@@ -82,7 +104,7 @@ impl CondensedWorkerResult {
         if !self.last_failed_edits.is_empty() {
             lines.push("Last failed edits:".to_string());
             for (path, err) in &self.last_failed_edits {
-                let err_short = if err.len() > 100 { &err[..100] } else { err };
+                let err_short = safe_truncate(err, 100);
                 lines.push(format!("  {} — {}", path, err_short));
             }
         }
@@ -115,13 +137,15 @@ fn condense_agent_response(raw: &str) -> String {
     }
 
     // Take the last RESPONSE_TAIL_BUDGET chars, snapped to a sentence boundary.
-    let tail_start = trimmed.len().saturating_sub(RESPONSE_TAIL_BUDGET);
+    let tail_start =
+        snap_to_char_boundary(trimmed, trimmed.len().saturating_sub(RESPONSE_TAIL_BUDGET));
     // Find the nearest sentence boundary (`. ` or `\n`) after tail_start.
     let snap_pos = trimmed[tail_start..]
         .find(". ")
         .or_else(|| trimmed[tail_start..].find('\n'))
         .map(|offset| tail_start + offset + 1)
         .unwrap_or(tail_start);
+    let snap_pos = snap_to_char_boundary(trimmed, snap_pos);
 
     let tail = trimmed[snap_pos..].trim();
 
@@ -183,7 +207,7 @@ impl<M: CompletionModel> Tool for CondensedAgentTool<M> {
             name: self.name(),
             description,
             parameters: serde_json::to_value(schemars::schema_for!(CondensedAgentToolArgs))
-                .expect("converting JSON schema to JSON value should never fail"),
+                .unwrap_or_default(),
         }
     }
 
