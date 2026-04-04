@@ -3699,6 +3699,8 @@ async fn process_issue_core(
             error_category: primary_error_category,
             prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
             retry_tier,
+            write_deadline: Some(config.max_turns_without_write.to_string()),
+            max_tool_calls: Some(config.max_worker_tool_calls.to_string()),
         };
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {

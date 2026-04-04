@@ -48,6 +48,15 @@ type = "float"
 optimize = "min"
 level = "episode"
 
+# ─── Harness Parameter Tags (Meta-Harness) ─────────────────────────────────
+# Tags submitted with worker_code_edit episodes for Autopilot correlation:
+#   write_deadline: Base write deadline value used for this episode
+#   max_tool_calls: Maximum tool calls per worker session
+#   (Future: search_unlock_turn, pre_write_read_budget, retry_tier)
+# These enable Autopilot to correlate harness settings with outcomes
+# (made_edit, first_edit_early, avoids_exploration_loop) and suggest
+# optimal parameter ranges.
+
 # ─── Evaluations ─────────────────────────────────────────────────────────────
 # Offline evaluations that compare variant performance on curated datasets.
 # Create datasets via the UI (http://localhost:4000/datasets/builder),
