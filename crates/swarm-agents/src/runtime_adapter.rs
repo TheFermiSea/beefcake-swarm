@@ -110,6 +110,8 @@ pub struct AdapterReport {
     pub termination_reason: Option<String>,
     /// Whether edit_file or write_file was called at least once during this session.
     pub has_written: bool,
+    /// Total read-only calls before first write (0 if wrote on first try).
+    pub total_reads_before_write: usize,
     /// Files successfully read during this session.
     pub files_read: Vec<String>,
     /// Files successfully modified during this session.
@@ -140,6 +142,9 @@ struct AdapterState {
     consecutive_reads: usize,
     /// Whether edit_file or write_file has been called at least once.
     has_written: bool,
+    /// Total read-only tool calls before first successful write.
+    /// Unlike consecutive_reads, this never resets until has_written is true.
+    total_reads_before_write: usize,
     /// Consecutive edit_file failure count per file path.
     /// Resets on successful edit or different file.
     edit_failure_counts: HashMap<String, u32>,
@@ -183,6 +188,7 @@ impl RuntimeAdapter {
                 termination_reason: None,
                 consecutive_reads: 0,
                 has_written: false,
+                total_reads_before_write: 0,
                 edit_failure_counts: HashMap::new(),
                 files_read_set: std::collections::HashSet::new(),
                 successful_writes: 0,
@@ -212,6 +218,7 @@ impl RuntimeAdapter {
                 termination_reason: None,
                 consecutive_reads: 0,
                 has_written: false,
+                total_reads_before_write: 0,
                 edit_failure_counts: HashMap::new(),
                 files_read_set: std::collections::HashSet::new(),
                 successful_writes: 0,
@@ -243,6 +250,7 @@ impl RuntimeAdapter {
             terminated_early: state.terminated_early,
             termination_reason: state.termination_reason.clone(),
             has_written: state.has_written,
+            total_reads_before_write: state.total_reads_before_write,
             files_read: state.files_read_set.iter().cloned().collect(),
             files_modified: state
                 .validator_state
@@ -487,6 +495,40 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
             match tool_class {
                 ToolClass::ReadOnly => {
                     s.consecutive_reads += 1;
+
+                    // Track total pre-write reads (never resets until first write)
+                    if !s.has_written {
+                        s.total_reads_before_write += 1;
+
+                        // Hard budget: terminate after too many reads without writing
+                        const PRE_WRITE_READ_BUDGET: usize = 8;
+                        const PRE_WRITE_READ_WARN: usize = 5;
+
+                        if s.total_reads_before_write >= PRE_WRITE_READ_BUDGET {
+                            s.terminated_early = true;
+                            let reason = format!(
+                                "Pre-write read budget exhausted: {} read-only calls with no \
+                                 edit_file/write_file. Stop exploring and write your edit now.",
+                                s.total_reads_before_write
+                            );
+                            s.termination_reason = Some(reason.clone());
+                            warn!(
+                                agent = %config.agent_name,
+                                total_reads = s.total_reads_before_write,
+                                "Anti-stall: pre-write read budget exceeded"
+                            );
+                            return ToolCallHookAction::terminate(format!(
+                                "Runtime adapter: {reason}"
+                            ));
+                        } else if s.total_reads_before_write == PRE_WRITE_READ_WARN {
+                            info!(
+                                agent = %config.agent_name,
+                                total_reads = s.total_reads_before_write,
+                                budget = PRE_WRITE_READ_BUDGET,
+                                "Pre-write read warning: approaching budget limit"
+                            );
+                        }
+                    }
 
                     // Post-write read stall detection: if the agent already wrote files
                     // and is now just reading, it's likely done but doesn't know it.
