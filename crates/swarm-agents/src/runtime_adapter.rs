@@ -752,7 +752,11 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 );
             }
 
-            // Track edit failures for repeated-failure early termination
+            // Anti-pattern detection: consecutive edit failures on the same file.
+            // Research: Graphectory (arxiv:2512.02393) — StrNotFound is the strongest
+            // predictor of task failure. One case: 183 consecutive failed str_replace calls.
+            const MAX_EDIT_FAILURES_PER_FILE: u32 = 3;
+
             let base_name = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
             if base_name == "edit_file" {
                 if let Some(path) = extract_path_from_args(&args_for_path) {
@@ -760,21 +764,22 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                         let count = s.edit_failure_counts.entry(path.clone()).or_insert(0);
                         *count += 1;
                         let count_val = *count;
-                        if count_val >= 2 {
+                        if count_val >= MAX_EDIT_FAILURES_PER_FILE {
                             warn!(
                                 agent = %config.agent_name,
-                                path = %path,
-                                consecutive_failures = count_val,
-                                "Repeated edit_file failure on same file — terminating"
+                                file = %path,
+                                failures = count_val,
+                                "Anti-pattern: consecutive edit failures — terminating"
                             );
                             s.terminated_early = true;
-                            s.termination_reason = Some(format!(
-                                "Repeated edit_file failure: {count_val} consecutive failures on '{path}'. \
-                                 Re-read the file with start_line/end_line to see exact content, \
-                                 then use anchor_start/anchor_end for reliable edits."
-                            ));
+                            let reason = format!(
+                                "Edit anti-pattern: {count_val} consecutive edit_file failures on '{path}'. \
+                                 The old_content does not match the file. Use read_file to verify \
+                                 exact current content before retrying."
+                            );
+                            s.termination_reason = Some(reason);
                             return HookAction::terminate(format!(
-                                "Runtime adapter: repeated edit failure on {path}"
+                                "Runtime adapter: edit anti-pattern on {path}"
                             ));
                         }
                     } else {
@@ -806,10 +811,14 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
     }
 }
 
-/// Best-effort extraction of "path" field from JSON args for validator state tracking.
+/// Best-effort extraction of file path from JSON args.
+/// Checks "path" first (standard), then "file_path" as fallback.
 fn extract_path_from_args(json: &str) -> Option<String> {
     let v: serde_json::Value = serde_json::from_str(json).ok()?;
-    v.get("path")?.as_str().map(|s| s.to_string())
+    v.get("path")
+        .or_else(|| v.get("file_path"))
+        .and_then(|p| p.as_str())
+        .map(|s| s.to_string())
 }
 
 #[cfg(test)]
@@ -1411,7 +1420,7 @@ mod tests {
             "First failure should not terminate"
         );
 
-        // Second failed edit on same file → terminate
+        // Second failed edit on same file → still continue (threshold is 3)
         let _ = <RuntimeAdapter as PromptHook<
             rig::providers::openai::completion::CompletionModel,
         >>::on_tool_call(
@@ -1433,10 +1442,46 @@ mod tests {
             "Error: old_content not found in src/main.rs",
         )
         .await;
-        assert!(
-            matches!(action2, HookAction::Terminate { .. }),
-            "Expected terminate after 2 consecutive failures, got {action2:?}"
+        assert_eq!(
+            action2,
+            HookAction::cont(),
+            "Second failure should not terminate (threshold is 3)"
         );
+
+        // Third failed edit on same file → terminate (anti-pattern detected)
+        let _ = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_call(
+            &adapter,
+            "edit_file",
+            None,
+            "e-2",
+            r#"{"path":"src/main.rs"}"#,
+        )
+        .await;
+        let action3 = <RuntimeAdapter as PromptHook<
+            rig::providers::openai::completion::CompletionModel,
+        >>::on_tool_result(
+            &adapter,
+            "edit_file",
+            None,
+            "e-2",
+            r#"{"path":"src/main.rs"}"#,
+            "Error: old_content not found in src/main.rs",
+        )
+        .await;
+        assert!(
+            matches!(action3, HookAction::Terminate { .. }),
+            "Expected terminate after 3 consecutive failures, got {action3:?}"
+        );
+
+        let report = adapter.report().unwrap();
+        assert!(report.terminated_early);
+        assert!(report
+            .termination_reason
+            .as_ref()
+            .unwrap()
+            .contains("Edit anti-pattern"));
     }
 
     #[tokio::test]
