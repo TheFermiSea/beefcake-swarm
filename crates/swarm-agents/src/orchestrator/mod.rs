@@ -17,7 +17,10 @@ pub mod validation;
 // orchestrator.rs are re-exported here so downstream code (driver.rs, etc.)
 // continues to compile without changes.
 
-pub use dispatch::{format_compact_task_prompt, format_task_prompt, route_to_coder, CoderRoute};
+pub use dispatch::{
+    condense_verifier_report, format_compact_task_prompt, format_task_prompt, route_to_coder,
+    CoderRoute,
+};
 pub use helpers::try_scaffold_fallback;
 pub(crate) use helpers::{
     bool_from_env, create_stuck_intervention, default_initial_tier, detect_failure_patterns,
@@ -1510,6 +1513,20 @@ async fn process_issue_core(
         } else {
             format_task_prompt(&packet)
         };
+
+        // --- Condensed verifier summary injection (PreCompletionChecklist pattern) ---
+        // On retries, prepend a structured summary of the previous verifier failure
+        // so workers fix the specific reported error instead of re-exploring.
+        if iteration > 1 {
+            if let Some(ref prev_report) = last_report {
+                if !prev_report.all_green {
+                    task_prompt.push_str(&format!(
+                        "\n## Previous Attempt Failed\n{}\n\nFix ONLY the reported errors. Do NOT re-explore the codebase.\n\n",
+                        condense_verifier_report(prev_report)
+                    ));
+                }
+            }
+        }
 
         // --- Edit nudge: remind workers they MUST call edit_file ---
         // When a previous iteration ended without writes, append a strong

@@ -9,6 +9,7 @@ use tracing::debug;
 
 use crate::file_targeting::find_target_files_by_grep;
 use coordination::feedback::ErrorCategory;
+use coordination::verifier::report::{GateOutcome, VerifierReport};
 use coordination::WorkPacket;
 
 /// Coder routing decision with confidence level.
@@ -475,6 +476,49 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
     prompt
 }
 
+/// Condense a `VerifierReport` into a short summary suitable for retry prompts.
+///
+/// Outputs gate statuses on one line, followed by up to 3 key errors (each
+/// truncated to 150 chars). Keeps total output well under 500 chars so it
+/// fits in compact worker prompts without suppressing tool-call generation.
+pub fn condense_verifier_report(report: &VerifierReport) -> String {
+    let mut lines = Vec::new();
+
+    // Gate status line: "fmt PASS, clippy FAIL, check SKIP, test SKIP"
+    let gates: Vec<String> = report
+        .gates
+        .iter()
+        .map(|g| {
+            let icon = match g.outcome {
+                GateOutcome::Passed => "PASS",
+                GateOutcome::Warning => "WARN",
+                GateOutcome::Failed => "FAIL",
+                GateOutcome::Skipped => "SKIP",
+                GateOutcome::Timeout => "TIMEOUT",
+            };
+            format!("{} {}", g.gate, icon)
+        })
+        .collect();
+    lines.push(format!("Gates: {}", gates.join(", ")));
+
+    // Top 3 failure signals (most actionable)
+    let errors: Vec<&str> = report
+        .failure_signals
+        .iter()
+        .take(3)
+        .map(|s| s.message.as_str())
+        .collect();
+    if !errors.is_empty() {
+        lines.push("Key errors:".to_string());
+        for e in errors {
+            let truncated = if e.len() > 150 { &e[..150] } else { e };
+            lines.push(format!("  - {truncated}"));
+        }
+    }
+
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -666,5 +710,123 @@ mod tests {
         assert!(prompt.contains("lines 10-20"));
         assert!(prompt.contains("Add early return"));
         assert!(prompt.contains("No bounds checking"));
+    }
+
+    #[test]
+    fn test_condense_verifier_report_mixed_gates() {
+        use coordination::feedback::error_parser::ParsedError;
+        use coordination::verifier::report::GateResult;
+        use std::time::Duration;
+
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        report.add_gate(GateResult {
+            gate: "fmt".to_string(),
+            outcome: GateOutcome::Passed,
+            duration_ms: 50,
+            exit_code: Some(0),
+            error_count: 0,
+            warning_count: 0,
+            errors: vec![],
+            stderr_excerpt: None,
+        });
+        report.add_gate(GateResult {
+            gate: "clippy".to_string(),
+            outcome: GateOutcome::Failed,
+            duration_ms: 200,
+            exit_code: Some(1),
+            error_count: 1,
+            warning_count: 0,
+            errors: vec![ParsedError {
+                category: ErrorCategory::Other,
+                code: Some("clippy::needless_return".to_string()),
+                message: "unneeded `return` statement".to_string(),
+                file: Some("src/lib.rs".to_string()),
+                line: Some(10),
+                column: Some(5),
+                suggestion: None,
+                rendered: String::new(),
+                labels: vec![],
+            }],
+            stderr_excerpt: None,
+        });
+        report.add_gate(GateResult {
+            gate: "check".to_string(),
+            outcome: GateOutcome::Skipped,
+            duration_ms: 0,
+            exit_code: None,
+            error_count: 0,
+            warning_count: 0,
+            errors: vec![],
+            stderr_excerpt: None,
+        });
+        report.finalize(Duration::from_millis(250));
+
+        let summary = condense_verifier_report(&report);
+        assert!(summary.contains("fmt PASS"));
+        assert!(summary.contains("clippy FAIL"));
+        assert!(summary.contains("check SKIP"));
+        assert!(summary.contains("Key errors:"));
+        assert!(summary.contains("unneeded `return` statement"));
+    }
+
+    #[test]
+    fn test_condense_verifier_report_all_green() {
+        use std::time::Duration;
+
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        for name in &["fmt", "clippy", "check", "test"] {
+            report.add_gate(coordination::verifier::report::GateResult {
+                gate: name.to_string(),
+                outcome: GateOutcome::Passed,
+                duration_ms: 100,
+                exit_code: Some(0),
+                error_count: 0,
+                warning_count: 0,
+                errors: vec![],
+                stderr_excerpt: None,
+            });
+        }
+        report.finalize(Duration::from_millis(400));
+
+        let summary = condense_verifier_report(&report);
+        assert!(summary.contains("fmt PASS"));
+        assert!(summary.contains("test PASS"));
+        assert!(!summary.contains("Key errors:"));
+    }
+
+    #[test]
+    fn test_condense_verifier_report_truncates_long_errors() {
+        use coordination::feedback::error_parser::ParsedError;
+        use coordination::verifier::report::GateResult;
+        use std::time::Duration;
+
+        let long_msg = "a".repeat(200);
+        let mut report = VerifierReport::new("/tmp/test".to_string());
+        report.add_gate(GateResult {
+            gate: "check".to_string(),
+            outcome: GateOutcome::Failed,
+            duration_ms: 100,
+            exit_code: Some(1),
+            error_count: 1,
+            warning_count: 0,
+            errors: vec![ParsedError {
+                category: ErrorCategory::TypeMismatch,
+                code: Some("E0308".to_string()),
+                message: long_msg.clone(),
+                file: Some("src/main.rs".to_string()),
+                line: Some(1),
+                column: Some(1),
+                suggestion: None,
+                rendered: String::new(),
+                labels: vec![],
+            }],
+            stderr_excerpt: None,
+        });
+        report.finalize(Duration::from_millis(100));
+
+        let summary = condense_verifier_report(&report);
+        // Should truncate to 150 chars, not include full 200
+        assert!(!summary.contains(&long_msg));
+        assert!(summary.contains(&"a".repeat(150)));
     }
 }
