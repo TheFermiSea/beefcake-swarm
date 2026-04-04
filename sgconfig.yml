@@ -1,2 +1,6 @@
+# ast-grep project config for beefcake-swarm
+# Consolidated: all rules live under rules/ast-grep/rules/
+# Run: sg scan (auto-discovers this file)
+# Or:  sg scan --config sgconfig.yml
 ruleDirs:
-  - rules
+  - rules/ast-grep/rules

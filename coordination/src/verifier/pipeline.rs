@@ -490,17 +490,25 @@ impl Verifier {
     async fn run_sg_gate(&self) -> GateResult {
         let start = Instant::now();
 
-        // Locate rules directory: try working_dir/rules/ first, then repo root
-        let rules_dir = if self.working_dir.join("rules").is_dir() {
-            Some(self.working_dir.join("rules"))
-        } else {
-            // Walk up to find rules/ (worktrees may be nested)
-            let mut candidate = self.working_dir.as_path();
+        // Locate sgconfig.yml — sg needs --config pointing to a config file,
+        // not --rule pointing to a directory (--rule only accepts single files).
+        // Search: working_dir first, then walk up for worktrees.
+        let sg_config = {
             let mut found = None;
+            let mut candidate = self.working_dir.as_path();
             loop {
-                let rules_path = candidate.join("rules");
-                if rules_path.is_dir() {
-                    found = Some(rules_path);
+                let config_path = candidate.join("sgconfig.yml");
+                if config_path.is_file() {
+                    found = Some(config_path);
+                    break;
+                }
+                // Also check rules/ast-grep/sgconfig.yml
+                let nested = candidate
+                    .join("rules")
+                    .join("ast-grep")
+                    .join("sgconfig.yml");
+                if nested.is_file() {
+                    found = Some(nested);
                     break;
                 }
                 match candidate.parent() {
@@ -511,8 +519,8 @@ impl Verifier {
             found
         };
 
-        // No rules directory found — skip with Warning (nothing to scan against)
-        let Some(rules_dir) = rules_dir else {
+        // No sgconfig.yml found — skip with Warning (nothing to scan against)
+        let Some(sg_config) = sg_config else {
             return GateResult {
                 gate: "sg".to_string(),
                 outcome: GateOutcome::Warning,
@@ -521,13 +529,13 @@ impl Verifier {
                 error_count: 0,
                 warning_count: 0,
                 errors: vec![],
-                stderr_excerpt: Some("no rules/ directory found — sg gate skipped".into()),
+                stderr_excerpt: Some("no sgconfig.yml found — sg gate skipped".into()),
             };
         };
 
         let mut cmd = tokio::process::Command::new("sg");
-        cmd.args(["scan", "--rule"]);
-        cmd.arg(&rules_dir);
+        cmd.args(["scan", "--config"]);
+        cmd.arg(&sg_config);
         cmd.arg(&self.working_dir);
 
         match self.run_with_timeout(&mut cmd).await {
