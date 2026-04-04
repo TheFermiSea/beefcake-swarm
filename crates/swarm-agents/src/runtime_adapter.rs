@@ -53,6 +53,10 @@ pub struct AdapterConfig {
     /// Max LLM turns without an edit_file/write_file call before termination.
     /// For workers only (not planner/manager).
     pub max_turns_without_write: Option<usize>,
+    /// Turn after which search tools are unlocked (0 = always available).
+    /// In early turns, search tools are blocked to enforce edit-first behavior
+    /// since task prompts inline target file content.
+    pub search_unlock_turn: Option<usize>,
 }
 
 impl Default for AdapterConfig {
@@ -64,6 +68,7 @@ impl Default for AdapterConfig {
             preview_len: 200,
             max_reads_without_action: None,
             max_turns_without_write: None,
+            search_unlock_turn: None,
         }
     }
 }
@@ -417,6 +422,31 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 }
             }
 
+            // Phase-gated tool access: block search tools in early turns to enforce edit-first behavior.
+            // Research: ALARA (arxiv:2603.20380) — restricting tools produces "guaranteed behavioral change."
+            if let Some(unlock_turn) = config.search_unlock_turn {
+                if !s.has_written && s.turn_count <= unlock_turn {
+                    let base = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
+                    let is_search_tool = matches!(
+                        base,
+                        "search_code" | "colgrep" | "ast_grep" | "list_files" | "file_exists"
+                    );
+                    if is_search_tool {
+                        debug!(
+                            agent = %config.agent_name,
+                            tool = %tool_name,
+                            turn = s.turn_count,
+                            unlock_turn,
+                            "Phase gate: search tool blocked in early turns"
+                        );
+                        return ToolCallHookAction::skip(format!(
+                            "Tool '{tool_name}' is not available until turn {unlock_turn} or after your first edit. \
+                             The target file content is already in your task prompt. Use edit_file or write_file now."
+                        ));
+                    }
+                }
+            }
+
             // Anti-loop: detect consecutive identical tool calls.
             // Hash (tool_name, args) to detect the same call repeated.
             const MAX_REPEAT_CALLS: u32 = 3;
@@ -731,6 +761,7 @@ mod tests {
             preview_len: 100,
             max_reads_without_action: Some(8),
             max_turns_without_write: Some(3),
+            search_unlock_turn: Some(3),
         };
         let adapter = RuntimeAdapter::new(config);
         let report = adapter.report().unwrap();

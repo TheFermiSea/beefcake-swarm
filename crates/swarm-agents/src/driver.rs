@@ -673,6 +673,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                         deadline: Some(Instant::now() + ctx.worker_timeout),
                         max_tool_calls: Some(30),
                         max_turns_without_write: Some(5),
+                        search_unlock_turn: Some(3),
                         ..Default::default()
                     });
                     let result = match tokio::time::timeout(
@@ -704,6 +705,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                         deadline: Some(Instant::now() + ctx.worker_timeout),
                         max_tool_calls: Some(30),
                         max_turns_without_write: Some(5),
+                        search_unlock_turn: Some(3),
                         ..Default::default()
                     });
                     let result = match tokio::time::timeout(
