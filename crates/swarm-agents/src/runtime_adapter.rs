@@ -388,7 +388,7 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                     if terminate.is_none() {
                         let reminder =
                             if let Some(max_turns) = config.max_turns_without_write {
-                                if !s.has_written {
+                                if !s.has_written && config.max_turns_without_write.is_some() {
                                     let remaining = max_turns.saturating_sub(turn);
                                     if remaining <= 2 && remaining > 0 {
                                         Some(format!(
@@ -577,7 +577,7 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                     s.consecutive_reads += 1;
 
                     // Track total pre-write reads (never resets until first write)
-                    if !s.has_written {
+                    if !s.has_written && config.max_turns_without_write.is_some() {
                         s.total_reads_before_write += 1;
 
                         // Hard budget: terminate after too many reads without writing
@@ -1086,6 +1086,7 @@ mod tests {
             files_modified: vec![],
             successful_writes: 0,
             last_failed_edits: vec![],
+            total_reads_before_write: 0,
         };
 
         let json = serde_json::to_string(&report).unwrap();

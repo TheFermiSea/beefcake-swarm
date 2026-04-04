@@ -312,6 +312,7 @@ mod tests {
             files_modified: vec!["src/parser.rs".into()],
             successful_writes: 2,
             last_failed_edits: vec![],
+            total_reads_before_write: 0,
         };
         let condensed = CondensedWorkerResult::from_adapter_report(&report, 15);
         assert_eq!(condensed.turns_used, 5);
