@@ -13,6 +13,7 @@ use std::sync::Arc;
 use rig::client::CompletionClient;
 use rig::providers::openai;
 
+use crate::context_firewall::CondensedAgentTool;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::prompts;
 use crate::tools::bundles;
@@ -79,26 +80,31 @@ pub fn build_cloud_manager(
     verifier_packages: &[String],
 ) -> OaiAgent {
     let preamble = prompts::load_prompt("manager", wt_path, prompts::CLOUD_MANAGER_PREAMBLE);
+    // Context firewalls: wrap worker agents so their raw tool call logs
+    // are condensed before the manager sees them. The manager receives only
+    // a compact summary (files modified, write count, termination reason).
+    // Research: NLAH (arxiv:2603.25723) — sub-agent isolation is the
+    // "most impactful structural decision" for multi-agent harnesses.
     let mut builder = client
         .agent(model)
         .name("manager")
         .description("Cloud-backed orchestrator that delegates to local HPC model workers")
         .preamble(&preamble)
         .temperature(0.3)
-        // Agent-as-Tool: specialists
-        .tool(workers.planner)
-        .tool(workers.fixer)
-        // Agent-as-Tool: workers
-        .tool(workers.rust_coder)
-        .tool(workers.general_coder)
-        .tool(workers.reviewer);
+        // Agent-as-Tool: specialists (wrapped with context firewall)
+        .tool(CondensedAgentTool::new(workers.planner))
+        .tool(CondensedAgentTool::new(workers.fixer))
+        // Agent-as-Tool: workers (wrapped with context firewall)
+        .tool(CondensedAgentTool::new(workers.rust_coder))
+        .tool(CondensedAgentTool::new(workers.general_coder))
+        .tool(CondensedAgentTool::new(workers.reviewer));
 
     // Architect/Editor pattern (cloud manager only — Aider-inspired split)
     if let Some(architect) = workers.architect {
-        builder = builder.tool(architect);
+        builder = builder.tool(CondensedAgentTool::new(architect));
     }
     if let Some(editor) = workers.editor {
-        builder = builder.tool(editor);
+        builder = builder.tool(CondensedAgentTool::new(editor));
     }
 
     // Direct plan application — instant alternative to proxy_editor.
@@ -107,14 +113,14 @@ pub fn build_cloud_manager(
     // the Editor agent (15 turns, ~10 min on local models).
     builder = builder.tool(crate::tools::apply_plan_tool::ApplyPlanTool::new(wt_path));
 
-    // Reasoning worker only present in cloud manager
+    // Reasoning worker only present in cloud manager (context firewall applied)
     if let Some(rw) = workers.reasoning_worker {
-        builder = builder.tool(rw);
+        builder = builder.tool(CondensedAgentTool::new(rw));
     }
 
-    // Strategist advisor (read-only)
+    // Strategist advisor (read-only, context firewall applied)
     if let Some(st) = workers.strategist {
-        builder = builder.tool(st);
+        builder = builder.tool(CondensedAgentTool::new(st));
     }
 
     // Strategy tools — proxy-prefixed for CLIAPIProxy compatibility.
@@ -161,23 +167,25 @@ pub fn build_local_manager(
     verifier_packages: &[String],
 ) -> OaiAgent {
     let preamble = prompts::load_prompt("local_manager", wt_path, prompts::LOCAL_MANAGER_PREAMBLE);
+    // Context firewalls: wrap worker agents so their raw tool call logs
+    // are condensed before the local manager sees them.
     let mut builder = client
         .agent(model)
         .name("manager")
         .description("Orchestrator that decomposes tasks and delegates to specialized workers")
         .preamble(&preamble)
         .temperature(crate::agents::coder::worker_temperature())
-        // Agent-as-Tool: specialists
-        .tool(workers.planner)
-        .tool(workers.fixer)
-        // Agent-as-Tool: workers
-        .tool(workers.rust_coder)
-        .tool(workers.general_coder)
-        .tool(workers.reviewer);
+        // Agent-as-Tool: specialists (wrapped with context firewall)
+        .tool(CondensedAgentTool::new(workers.planner))
+        .tool(CondensedAgentTool::new(workers.fixer))
+        // Agent-as-Tool: workers (wrapped with context firewall)
+        .tool(CondensedAgentTool::new(workers.rust_coder))
+        .tool(CondensedAgentTool::new(workers.general_coder))
+        .tool(CondensedAgentTool::new(workers.reviewer));
 
-    // Strategist advisor (read-only)
+    // Strategist advisor (read-only, context firewall applied)
     if let Some(st) = workers.strategist {
-        builder = builder.tool(st);
+        builder = builder.tool(CondensedAgentTool::new(st));
     }
 
     // Strategy tools — no proxy prefix for local models.

@@ -883,22 +883,17 @@ impl WorktreeBridge {
             let has_changes = status
                 .as_ref()
                 .map(|o| {
-                    String::from_utf8_lossy(&o.stdout)
-                        .lines()
-                        .any(|line| {
-                            let path = line.get(3..).unwrap_or("");
-                            !path.starts_with(".beads")
-                                && !path.starts_with(".swarm-")
-                                && !path.starts_with(".beadhub")
-                        })
+                    String::from_utf8_lossy(&o.stdout).lines().any(|line| {
+                        let path = line.get(3..).unwrap_or("");
+                        !path.starts_with(".beads")
+                            && !path.starts_with(".swarm-")
+                            && !path.starts_with(".beadhub")
+                    })
                 })
                 .unwrap_or(false);
 
             if has_changes {
-                tracing::info!(
-                    issue_id,
-                    "Salvaging uncommitted changes before cleanup"
-                );
+                tracing::info!(issue_id, "Salvaging uncommitted changes before cleanup");
                 let _ = Command::new("git")
                     .args(["add", "-A"])
                     .current_dir(&wt_path)
