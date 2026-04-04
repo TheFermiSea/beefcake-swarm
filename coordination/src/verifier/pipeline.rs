@@ -492,20 +492,37 @@ impl Verifier {
 
         // Locate rules directory: try working_dir/rules/ first, then repo root
         let rules_dir = if self.working_dir.join("rules").is_dir() {
-            self.working_dir.join("rules")
+            Some(self.working_dir.join("rules"))
         } else {
             // Walk up to find rules/ (worktrees may be nested)
             let mut candidate = self.working_dir.as_path();
+            let mut found = None;
             loop {
                 let rules_path = candidate.join("rules");
                 if rules_path.is_dir() {
-                    break rules_path;
+                    found = Some(rules_path);
+                    break;
                 }
                 match candidate.parent() {
                     Some(parent) => candidate = parent,
-                    None => break self.working_dir.join("rules"),
+                    None => break,
                 }
             }
+            found
+        };
+
+        // No rules directory found — skip with Warning (nothing to scan against)
+        let Some(rules_dir) = rules_dir else {
+            return GateResult {
+                gate: "sg".to_string(),
+                outcome: GateOutcome::Warning,
+                duration_ms: start.elapsed().as_millis() as u64,
+                exit_code: None,
+                error_count: 0,
+                warning_count: 0,
+                errors: vec![],
+                stderr_excerpt: Some("no rules/ directory found — sg gate skipped".into()),
+            };
         };
 
         let mut cmd = tokio::process::Command::new("sg");
