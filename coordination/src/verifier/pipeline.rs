@@ -1051,8 +1051,13 @@ impl Verifier {
             .current_dir(&self.working_dir)
             .output()
             .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
     }
 
     /// Get current git commit SHA
@@ -1062,8 +1067,13 @@ impl Verifier {
             .current_dir(&self.working_dir)
             .output()
             .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
     }
 
     /// Parse test summary from cargo test stdout
