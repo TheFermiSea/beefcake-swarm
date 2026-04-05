@@ -64,5 +64,5 @@ jobs:
       - name: Install ripgrep (for search_code_tool tests)
         run: sudo apt-get install -y ripgrep
       - name: Install ast-grep (for verifier sg gate tests)
-        run: npm install -g @ast-grep/cli
+        run: npm install -g @ast-grep/cli@0.41.1
       - run: cargo test -p swarm-agents
