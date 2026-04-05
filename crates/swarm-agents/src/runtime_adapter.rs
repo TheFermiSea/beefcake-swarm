@@ -506,7 +506,9 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
 
             // Anti-loop: detect consecutive identical tool calls.
             // Hash (tool_name, args) to detect the same call repeated.
+            // After 3 repeats, we start skipping. After 6 consecutive skips (10th attempt), terminate.
             const MAX_REPEAT_CALLS: u32 = 3;
+            const MAX_CONSECUTIVE_SKIPS: u32 = 6;
             let call_key = {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 tool_name.hash(&mut hasher);
@@ -514,28 +516,55 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 hasher.finish()
             };
 
-            if s.last_call_key == Some(call_key) {
-                let count = s.repeat_call_counts.entry(call_key).or_insert(1);
-                *count += 1;
-                if *count > MAX_REPEAT_CALLS {
-                    warn!(
-                        agent = %config.agent_name,
-                        tool = %tool_name,
-                        repeat_count = *count,
-                        "Anti-loop: identical tool call repeated {} times — skipping",
-                        *count
-                    );
-                    return ToolCallHookAction::skip(format!(
-                        "You have called {tool_name} with identical arguments {count} times. \
-                         The results will not change. Stop repeating this call and move on: \
-                         either run the verifier, delegate to a different worker, or report \
-                         completion."
-                    ));
-                }
-            } else {
+            if Some(call_key) != s.last_call_key {
                 // Different call — reset tracking
                 s.repeat_call_counts.clear();
                 s.repeat_call_counts.insert(call_key, 1);
+            } else {
+                // Same call as last time — increment and check threshold
+                let count_val = {
+                    let count = s.repeat_call_counts.entry(call_key).or_insert(1);
+                    *count += 1;
+                    *count
+                };
+                if count_val > MAX_REPEAT_CALLS {
+                    // We're in skip territory. Check if we've skipped too many times.
+                    if count_val > MAX_REPEAT_CALLS + MAX_CONSECUTIVE_SKIPS {
+                        // 10th attempt (3 allowed + 6 skips) — terminate
+                        s.terminated_early = true;
+                        s.termination_reason = Some(format!(
+                            "identical tool call repeated {} times — terminating",
+                            count_val
+                        ));
+                        warn!(
+                            agent = %config.agent_name,
+                            tool = %tool_name,
+                            repeat_count = count_val,
+                            "Anti-loop: identical tool call repeated {} times — terminating",
+                            count_val
+                        );
+                        return ToolCallHookAction::terminate(format!(
+                            "Runtime adapter: identical tool call repeated {} times. \
+                             This indicates a stuck loop. Terminating to prevent infinite repetition.",
+                            count_val
+                        ));
+                    } else {
+                        // Skip but continue tracking
+                        warn!(
+                            agent = %config.agent_name,
+                            tool = %tool_name,
+                            repeat_count = count_val,
+                            "Anti-loop: identical tool call repeated {} times — skipping",
+                            count_val
+                        );
+                        return ToolCallHookAction::skip(format!(
+                            "You have called {tool_name} with identical arguments {count_val} times. \
+                             The results will not change. Stop repeating this call and move on: \
+                             either run the verifier, delegate to a different worker, or report \
+                             completion."
+                        ));
+                    }
+                }
             }
             s.last_call_key = Some(call_key);
 
