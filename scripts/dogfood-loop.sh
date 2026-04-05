@@ -192,6 +192,39 @@ maybe_run_stringer() {
   fi
 }
 
+# --- Reconciliation: fix zombie issues between batches ---
+# Runs periodically to close issues with merged PRs and reset stale in_progress.
+RECONCILE_STAMP_FILE="/tmp/dogfood-loop${_LOCK_SUFFIX}.reconcile.last_run"
+RECONCILE_INTERVAL="${DOGFOOD_RECONCILE_INTERVAL:-600}"  # every 10 minutes
+
+maybe_reconcile() {
+  local reconcile_script="$SCRIPT_DIR/reconcile-issues.sh"
+  [[ -x "$reconcile_script" ]] || return 0
+
+  local now last_run elapsed
+  now=$(date +%s)
+  last_run=0
+  if [[ -f "$RECONCILE_STAMP_FILE" ]]; then
+    last_run=$(cat "$RECONCILE_STAMP_FILE" 2>/dev/null || echo "0")
+  fi
+
+  if [[ "$last_run" =~ ^[0-9]+$ ]]; then
+    elapsed=$((now - last_run))
+    if (( elapsed < RECONCILE_INTERVAL )); then
+      return 0
+    fi
+  fi
+
+  log "  [reconcile] Running reconcile-issues.sh..."
+  local extra_args=()
+  if [[ -n "$TARGET_REPO" ]]; then
+    extra_args+=(--repo-root "$TARGET_REPO")
+  fi
+  if bash "$reconcile_script" "${extra_args[@]}" 2>&1 | sed 's/^/    /'; then
+    printf '%s\n' "$now" > "$RECONCILE_STAMP_FILE"
+  fi
+}
+
 # --- Circuit breaker: defer issues that fail too many times ---
 # Counts consecutive recent failures for an issue in the summary JSONL.
 # Returns 0 (true) if the issue has exceeded MAX_ISSUE_FAILURES.
@@ -570,6 +603,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
     if [[ "$MAX_RUNS" -gt 0 && "$RUN_COUNT" -ge "$MAX_RUNS" ]]; then break; fi
     if [[ ${#ISSUES[@]} -gt 0 && $RUN_COUNT -ge ${#ISSUES[@]} && "$DISCOVER" -eq 0 ]]; then break; fi
 
+    maybe_reconcile
     log "  Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
   done
@@ -711,8 +745,9 @@ else
       fi
     done
 
-    # Pool drained — refresh backlog on a coarse cadence, then cooldown.
+    # Pool drained — refresh backlog and reconcile zombie issues, then cooldown.
     maybe_run_stringer || true
+    maybe_reconcile
     log "  Pool drained. Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
 
