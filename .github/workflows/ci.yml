@@ -50,7 +50,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install ast-grep (for sg gate tests)
-        run: npm install -g @ast-grep/cli
+        run: npm install -g @ast-grep/cli@0.41.1
       - run: cargo test -p coordination
 
   test-swarm-agents:
