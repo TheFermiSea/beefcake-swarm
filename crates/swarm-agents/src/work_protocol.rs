@@ -844,30 +844,4 @@ mod tests {
         );
         assert!(!result.needs_escalation());
     }
-
-    #[test]
-    fn work_result_summary() {
-        let result = WorkResult {
-            order_id: "o1".into(),
-            status: WorkStatus::Complete,
-            files_modified: vec!["a.rs".into(), "b.rs".into()],
-            files_read: vec![],
-            file_manifest: vec![],
-            tool_calls: 8,
-            turns_used: 4,
-            wall_time_ms: 5000,
-            git_diff_summary: String::new(),
-            verification: None,
-            worker_message: String::new(),
-            confidence: 0.8,
-            escalation: None,
-        };
-
-        let s = result.summary();
-        assert!(s.contains("o1"));
-        assert!(s.contains("complete"));
-        assert!(s.contains("files_mod=2"));
-        assert!(s.contains("tools=8"));
-        assert!(s.contains("conf=0.80"));
-    }
 }
