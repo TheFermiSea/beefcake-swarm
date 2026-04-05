@@ -781,8 +781,6 @@ pub fn prune_task_prompt(
 mod tests {
     use super::*;
 
-
-
     #[test]
     fn test_metrics_collector_basic_flow() {
         let mut collector = MetricsCollector::new(

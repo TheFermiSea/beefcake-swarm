@@ -424,7 +424,6 @@ mod tests {
     use super::*;
     use crate::telemetry::*;
 
-
     #[test]
     fn test_execution_artifact_default() {
         let artifact = ExecutionArtifact::new();

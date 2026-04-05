@@ -3,7 +3,6 @@ mod tests {
 
     use crate::telemetry::*;
 
-
     #[test]
     fn test_prune_task_prompt_no_prune() {
         let prompt = "Task description\n---\nIteration 1\n---\nIteration 2";

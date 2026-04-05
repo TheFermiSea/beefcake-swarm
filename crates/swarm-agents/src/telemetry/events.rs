@@ -244,8 +244,6 @@ impl SwarmEventEmitter {
 mod tests {
     use super::*;
 
-
-
     #[test]
     fn test_swarm_event_serialization() {
         let event = SwarmEvent {

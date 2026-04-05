@@ -191,8 +191,6 @@ fn prune_artifact_sessions(artifacts_root: &Path, max_sessions: usize) {
 mod tests {
     use super::*;
 
-
-
     #[test]
     fn test_write_session_metrics_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
