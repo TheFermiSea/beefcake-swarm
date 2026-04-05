@@ -42,8 +42,9 @@ use coordination::router::task_classifier::{DynamicRouter, ModelTier};
 use coordination::save_session_state;
 use coordination::TieredCorrectionLoop;
 use coordination::{
-    ContextPacker, EscalationEngine, EscalationState, GitManager, ProgressTracker, SessionManager,
-    SwarmTier, TierBudget, TurnPolicy, ValidatorFeedback, Verifier, VerifierConfig, VerifierReport,
+    ContextPacker, EscalationDecision, EscalationEngine, EscalationState, GitManager,
+    ProgressTracker, SessionManager, SwarmTier, TierBudget, TurnPolicy, ValidatorFeedback,
+    Verifier, VerifierConfig, VerifierReport,
 };
 
 // ---------------------------------------------------------------------------
