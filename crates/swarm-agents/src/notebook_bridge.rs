@@ -200,6 +200,28 @@ impl NotebookBridge {
 
         unreachable!()
     }
+
+    /// Check if a notebook role is at capacity. Returns Ok(()) if there's room,
+    /// Err if at capacity (fail-open: missing count = Ok).
+    fn check_capacity(&self, role: &str) -> Result<()> {
+        if let Some(count) = self.source_count(role) {
+            if count >= MAX_NOTEBOOK_SOURCES {
+                warn!(
+                    role,
+                    count,
+                    limit = MAX_NOTEBOOK_SOURCES,
+                    "Notebook near capacity — skipping upload"
+                );
+                return Err(anyhow::anyhow!(
+                    "notebook '{}' at capacity ({}/{})",
+                    role,
+                    count,
+                    MAX_NOTEBOOK_SOURCES
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl KnowledgeBase for NotebookBridge {
@@ -225,24 +247,7 @@ impl KnowledgeBase for NotebookBridge {
             }
         };
 
-        // Safety: skip upload if notebook is near the 300-source capacity
-        if let Some(count) = self.source_count(role) {
-            if count >= MAX_NOTEBOOK_SOURCES {
-                warn!(
-                    role,
-                    count,
-                    limit = MAX_NOTEBOOK_SOURCES,
-                    title,
-                    "Notebook near capacity — skipping source upload"
-                );
-                return Err(anyhow::anyhow!(
-                    "notebook '{}' at capacity ({}/{}) — upload skipped",
-                    role,
-                    count,
-                    MAX_NOTEBOOK_SOURCES
-                ));
-            }
-        }
+        self.check_capacity(role)?;
 
         self.run_command(&[
             "source",
@@ -265,18 +270,7 @@ impl KnowledgeBase for NotebookBridge {
             }
         };
 
-        // Safety: skip upload if notebook is near the 300-source capacity
-        if let Some(count) = self.source_count(role) {
-            if count >= MAX_NOTEBOOK_SOURCES {
-                warn!(
-                    role,
-                    count,
-                    limit = MAX_NOTEBOOK_SOURCES,
-                    "Notebook near capacity — skipping file upload"
-                );
-                return Ok(());
-            }
-        }
+        self.check_capacity(role)?;
 
         self.run_command(&["source", "add", notebook_id, "--file", file_path])
             .map(|_| ())

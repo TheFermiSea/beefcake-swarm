@@ -9,7 +9,9 @@ use tracing::{debug, info};
 
 use crate::file_targeting::find_target_files_by_grep;
 use coordination::feedback::ErrorCategory;
-use coordination::verifier::report::{GateOutcome, VerifierReport};
+#[cfg(test)]
+use coordination::verifier::report::GateOutcome;
+use coordination::verifier::report::VerifierReport;
 use coordination::WorkPacket;
 
 /// Coder routing decision with confidence level.
@@ -523,16 +525,7 @@ pub fn condense_verifier_report(report: &VerifierReport) -> String {
     let gates: Vec<String> = report
         .gates
         .iter()
-        .map(|g| {
-            let icon = match g.outcome {
-                GateOutcome::Passed => "PASS",
-                GateOutcome::Warning => "WARN",
-                GateOutcome::Failed => "FAIL",
-                GateOutcome::Skipped => "SKIP",
-                GateOutcome::Timeout => "TIMEOUT",
-            };
-            format!("{} {}", g.gate, icon)
-        })
+        .map(|g| format!("{} {}", g.gate, g.outcome))
         .collect();
     lines.push(format!("Gates: {}", gates.join(", ")));
 
@@ -546,16 +539,7 @@ pub fn condense_verifier_report(report: &VerifierReport) -> String {
     if !errors.is_empty() {
         lines.push("Key errors:".to_string());
         for e in errors {
-            // Safe truncation: rustc diagnostics may contain Unicode (quotes, arrows).
-            let truncated = if e.len() > 150 {
-                let mut end = 150;
-                while end > 0 && !e.is_char_boundary(end) {
-                    end -= 1;
-                }
-                &e[..end]
-            } else {
-                e
-            };
+            let truncated = crate::str_util::safe_truncate(e, 150);
             lines.push(format!("  - {truncated}"));
         }
     }

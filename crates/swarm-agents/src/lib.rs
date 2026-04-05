@@ -31,6 +31,7 @@ pub mod recommendations;
 pub mod reformulation;
 pub mod runtime_adapter;
 pub mod state_machine;
+pub mod str_util;
 pub mod subtask;
 pub mod team_template;
 pub mod telemetry;
