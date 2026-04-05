@@ -1492,7 +1492,7 @@ fn handle_escalating_decision(
 
 /// Handle the escalation event if the tier changed.
 fn handle_escalation_event(
-    ctx: &OrchestratorContext<'_>,
+    ctx: &mut OrchestratorContext<'_>,
     decision: &EscalationDecision,
     iteration: u32,
 ) {
