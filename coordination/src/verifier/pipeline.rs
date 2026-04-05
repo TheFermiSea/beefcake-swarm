@@ -493,6 +493,7 @@ impl Verifier {
         // Locate sgconfig.yml — sg needs --config pointing to a config file,
         // not --rule pointing to a directory (--rule only accepts single files).
         // Search: working_dir first, then walk up for worktrees.
+        // There is a single sgconfig.yml at the repo root (no nested copies).
         let sg_config = {
             let mut found = None;
             let mut candidate = self.working_dir.as_path();
@@ -500,15 +501,6 @@ impl Verifier {
                 let config_path = candidate.join("sgconfig.yml");
                 if config_path.is_file() {
                     found = Some(config_path);
-                    break;
-                }
-                // Also check rules/ast-grep/sgconfig.yml
-                let nested = candidate
-                    .join("rules")
-                    .join("ast-grep")
-                    .join("sgconfig.yml");
-                if nested.is_file() {
-                    found = Some(nested);
                     break;
                 }
                 match candidate.parent() {
