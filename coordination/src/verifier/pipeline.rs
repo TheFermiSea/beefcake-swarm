@@ -1151,7 +1151,11 @@ impl Verifier {
         if s.len() <= self.config.stderr_max_bytes {
             s.to_string()
         } else {
-            let truncated = &s[..self.config.stderr_max_bytes];
+            let mut limit = self.config.stderr_max_bytes;
+            while limit > 0 && !s.is_char_boundary(limit) {
+                limit -= 1;
+            }
+            let truncated = &s[..limit];
             format!("{}...\n[truncated at {} bytes]", truncated, s.len())
         }
     }
