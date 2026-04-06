@@ -6,6 +6,7 @@ pub mod auto_fix;
 pub mod autopilot;
 pub mod beads_bridge;
 pub mod cluster_health;
+pub mod cognition;
 pub mod confidence;
 pub mod config;
 pub mod context_firewall;
