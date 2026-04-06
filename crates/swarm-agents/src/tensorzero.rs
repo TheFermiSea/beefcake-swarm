@@ -72,6 +72,9 @@ pub struct FeedbackTags {
     /// Maximum tool calls per worker session.
     /// Corresponds to `SWARM_MAX_WORKER_TOOL_CALLS` (default: 15).
     pub max_tool_calls: Option<String>,
+    /// Governance tier applied to this run: `"core"`, `"standard"`, or `"enhanced"`.
+    /// Correlates adapter check intensity with task outcomes.
+    pub governance_tier: Option<String>,
 }
 
 impl FeedbackTags {
@@ -108,6 +111,9 @@ impl FeedbackTags {
         }
         if let Some(v) = self.max_tool_calls {
             map.insert("max_tool_calls".to_string(), v);
+        }
+        if let Some(v) = self.governance_tier {
+            map.insert("governance_tier".to_string(), v);
         }
         map
     }
@@ -444,6 +450,7 @@ pub async fn post_resolved_feedback(
             retry_tier: m.get("retry_tier").cloned(),
             write_deadline: m.get("write_deadline").cloned(),
             max_tool_calls: m.get("max_tool_calls").cloned(),
+            governance_tier: m.get("governance_tier").cloned(),
         });
         post_episode_feedback(
             gateway_url,

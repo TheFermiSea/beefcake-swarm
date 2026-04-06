@@ -62,7 +62,7 @@ pub(crate) use crate::auto_fix::{should_reject_auto_fix, try_auto_fix};
 use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
-use crate::config::{SwarmConfig, SwarmRole};
+use crate::config::{GovernanceTier, SwarmConfig, SwarmRole};
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
@@ -719,6 +719,19 @@ async fn process_issue_core(
         worker_first = feature_flags.worker_first_enabled,
         "Initial tier selected"
     );
+    // Derive governance tier from triage complexity. Simple issues get minimal
+    // RuntimeAdapter overhead (fast path); complex/critical get maximum validation.
+    let governance_tier = match triage_result.complexity {
+        triage::Complexity::Simple => GovernanceTier::Core,
+        triage::Complexity::Medium => GovernanceTier::Standard,
+        triage::Complexity::Complex | triage::Complexity::Critical => GovernanceTier::Enhanced,
+    };
+    info!(
+        %governance_tier,
+        triage_complexity = %triage_result.complexity,
+        "Governance tier selected from triage complexity"
+    );
+
     let engine = EscalationEngine::new();
     let mut escalation = EscalationState::new(&issue.id)
         .with_initial_tier(initial_tier)
@@ -1725,6 +1738,7 @@ async fn process_issue_core(
                             max_tool_calls: Some(config.max_worker_tool_calls),
                             max_turns_without_write: Some(seq_write_deadline),
                             search_unlock_turn: Some(3),
+                            governance_tier,
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1766,6 +1780,7 @@ async fn process_issue_core(
                             max_tool_calls: Some(config.max_worker_tool_calls),
                             max_turns_without_write: Some(seq_write_deadline),
                             search_unlock_turn: Some(3),
+                            governance_tier,
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -1805,6 +1820,7 @@ async fn process_issue_core(
                             max_tool_calls: Some(config.max_worker_tool_calls),
                             max_turns_without_write: Some(5),
                             search_unlock_turn: Some(3),
+                            governance_tier,
                             ..Default::default()
                         });
                         let result = match tokio::time::timeout(
@@ -3704,6 +3720,7 @@ async fn process_issue_core(
             retry_tier,
             write_deadline: Some(config.max_turns_without_write.to_string()),
             max_tool_calls: Some(config.max_worker_tool_calls.to_string()),
+            governance_tier: Some(governance_tier.to_string()),
         };
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {
