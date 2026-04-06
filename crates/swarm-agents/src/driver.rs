@@ -1571,6 +1571,30 @@ pub async fn handle_merging(ctx: &mut OrchestratorContext<'_>) -> Result<StateTr
         "Issue resolved — merging worktree (state driver)"
     );
 
+    // --- Pre-merge verifier guarantee (RepoProver pattern) ---
+    //
+    // Run compile_only() verification IN THE WORKTREE before merging to main.
+    // Only merge branches where all gates pass.
+    if ctx.config.verify_before_merge {
+        let pre_merge_config = VerifierConfig::compile_only();
+        let pre_merge_report = Verifier::new(&ctx.wt_path, pre_merge_config)
+            .run_pipeline()
+            .await;
+        if !pre_merge_report.all_green {
+            warn!(
+                id = %ctx.issue.id,
+                summary = %pre_merge_report.summary(),
+                "Pre-merge verifier failed in worktree (state driver) — not merging"
+            );
+            ctx.last_report = Some(pre_merge_report);
+            ctx.success = false;
+            return Ok(StateTransition::Advance {
+                to: OrchestratorState::Planning,
+                reason: "pre-merge verification failed — retrying".into(),
+            });
+        }
+    }
+
     if let Err(e) = ctx.worktree_bridge.merge_and_remove(&ctx.issue.id) {
         error!(id = %ctx.issue.id, "Merge failed (state driver): {e}");
         if let Err(cleanup_err) = ctx.worktree_bridge.cleanup(&ctx.issue.id) {

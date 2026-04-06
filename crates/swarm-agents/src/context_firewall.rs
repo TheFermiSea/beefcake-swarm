@@ -337,6 +337,8 @@ mod tests {
             successful_writes: 2,
             last_failed_edits: vec![],
             total_reads_before_write: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
         };
         let condensed = CondensedWorkerResult::from_adapter_report(&report, 15);
         assert_eq!(condensed.turns_used, 5);
