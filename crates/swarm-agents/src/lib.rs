@@ -12,6 +12,7 @@ pub mod context_firewall;
 pub mod contracts;
 pub mod dashboard;
 pub mod driver;
+pub mod embedding;
 pub mod endpoint_pool;
 pub mod file_targeting;
 pub mod fix_templates;
