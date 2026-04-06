@@ -105,6 +105,10 @@ pub struct ToolEvent {
     pub result_preview: String,
     pub duration_ms: u64,
     pub outcome: ToolOutcome,
+    /// Input tokens consumed by this tool call (if available from provider).
+    pub input_tokens: Option<u64>,
+    /// Output tokens consumed by this tool call (if available from provider).
+    pub output_tokens: Option<u64>,
 }
 
 /// Summary report extracted from the adapter after a prompt completes.
@@ -130,6 +134,10 @@ pub struct AdapterReport {
     pub successful_writes: u32,
     /// Last failed edit attempts: (file_path, error_snippet).
     pub last_failed_edits: Vec<(String, String)>,
+    /// Total input tokens across all tool calls in this session.
+    pub total_input_tokens: u64,
+    /// Total output tokens across all tool calls in this session.
+    pub total_output_tokens: u64,
 }
 
 /// In-flight tool call tracking.
@@ -292,6 +300,16 @@ impl RuntimeAdapter {
                     (path, e.result_preview.clone())
                 })
                 .collect(),
+            total_input_tokens: state
+                .tool_events
+                .iter()
+                .filter_map(|e| e.input_tokens)
+                .sum(),
+            total_output_tokens: state
+                .tool_events
+                .iter()
+                .filter_map(|e| e.output_tokens)
+                .sum(),
         })
     }
 
@@ -392,7 +410,7 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                     // Injecting "X turns left" improves edit rates by inducing focused behavior.
                     if terminate.is_none() {
                         let reminder = if let Some(max_turns) = config.max_turns_without_write {
-                            if !s.has_written && config.max_turns_without_write.is_some() {
+                            if !s.has_written {
                                 let remaining = max_turns.saturating_sub(turn);
                                 if remaining <= 2 && remaining > 0 {
                                     Some(format!(
@@ -515,7 +533,9 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
 
             // Anti-loop: detect consecutive identical tool calls.
             // Hash (tool_name, args) to detect the same call repeated.
+            // After 3 repeats, we start skipping. After 6 consecutive skips (10th attempt), terminate.
             const MAX_REPEAT_CALLS: u32 = 3;
+            const MAX_CONSECUTIVE_SKIPS: u32 = 6;
             let call_key = {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 tool_name.hash(&mut hasher);
@@ -523,28 +543,55 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 hasher.finish()
             };
 
-            if s.last_call_key == Some(call_key) {
-                let count = s.repeat_call_counts.entry(call_key).or_insert(1);
-                *count += 1;
-                if *count > MAX_REPEAT_CALLS {
-                    warn!(
-                        agent = %config.agent_name,
-                        tool = %tool_name,
-                        repeat_count = *count,
-                        "Anti-loop: identical tool call repeated {} times — skipping",
-                        *count
-                    );
-                    return ToolCallHookAction::skip(format!(
-                        "You have called {tool_name} with identical arguments {count} times. \
-                         The results will not change. Stop repeating this call and move on: \
-                         either run the verifier, delegate to a different worker, or report \
-                         completion."
-                    ));
-                }
-            } else {
+            if Some(call_key) != s.last_call_key {
                 // Different call — reset tracking
                 s.repeat_call_counts.clear();
                 s.repeat_call_counts.insert(call_key, 1);
+            } else {
+                // Same call as last time — increment and check threshold
+                let count_val = {
+                    let count = s.repeat_call_counts.entry(call_key).or_insert(1);
+                    *count += 1;
+                    *count
+                };
+                if count_val > MAX_REPEAT_CALLS {
+                    // We're in skip territory. Check if we've skipped too many times.
+                    if count_val > MAX_REPEAT_CALLS + MAX_CONSECUTIVE_SKIPS {
+                        // 10th attempt (3 allowed + 6 skips) — terminate
+                        s.terminated_early = true;
+                        s.termination_reason = Some(format!(
+                            "identical tool call repeated {} times — terminating",
+                            count_val
+                        ));
+                        warn!(
+                            agent = %config.agent_name,
+                            tool = %tool_name,
+                            repeat_count = count_val,
+                            "Anti-loop: identical tool call repeated {} times — terminating",
+                            count_val
+                        );
+                        return ToolCallHookAction::terminate(format!(
+                            "Runtime adapter: identical tool call repeated {} times. \
+                             This indicates a stuck loop. Terminating to prevent infinite repetition.",
+                            count_val
+                        ));
+                    } else {
+                        // Skip but continue tracking
+                        warn!(
+                            agent = %config.agent_name,
+                            tool = %tool_name,
+                            repeat_count = count_val,
+                            "Anti-loop: identical tool call repeated {} times — skipping",
+                            count_val
+                        );
+                        return ToolCallHookAction::skip(format!(
+                            "You have called {tool_name} with identical arguments {count_val} times. \
+                             The results will not change. Stop repeating this call and move on: \
+                             either run the verifier, delegate to a different worker, or report \
+                             completion."
+                        ));
+                    }
+                }
             }
             s.last_call_key = Some(call_key);
 
@@ -784,6 +831,11 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 result_preview,
                 duration_ms,
                 outcome,
+                // Token counts are not available from the tool result itself;
+                // callers can back-fill via the ToolEvent after the prompt completes
+                // if the provider response includes usage metadata.
+                input_tokens: None,
+                output_tokens: None,
             });
 
             // Inject pending write-deadline reminder into tool result logging.
@@ -1092,6 +1144,8 @@ mod tests {
                 result_preview: "fn main() {}".into(),
                 duration_ms: 42,
                 outcome: ToolOutcome::Success,
+                input_tokens: None,
+                output_tokens: None,
             }],
             turn_count: 3,
             total_tool_calls: 1,
@@ -1105,6 +1159,8 @@ mod tests {
             successful_writes: 0,
             last_failed_edits: vec![],
             total_reads_before_write: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
         };
 
         let json = serde_json::to_string(&report).unwrap();

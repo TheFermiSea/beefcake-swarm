@@ -42,8 +42,9 @@ use coordination::router::task_classifier::{DynamicRouter, ModelTier};
 use coordination::save_session_state;
 use coordination::TieredCorrectionLoop;
 use coordination::{
-    ContextPacker, EscalationEngine, EscalationState, GitManager, ProgressTracker, SessionManager,
-    SwarmTier, TierBudget, TurnPolicy, ValidatorFeedback, Verifier, VerifierConfig, VerifierReport,
+    ContextPacker, EscalationDecision, EscalationEngine, EscalationState, GitManager,
+    ProgressTracker, SessionManager, SwarmTier, TierBudget, TurnPolicy, ValidatorFeedback,
+    Verifier, VerifierConfig, VerifierReport,
 };
 
 // ---------------------------------------------------------------------------
@@ -1432,6 +1433,36 @@ pub async fn handle_escalating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
         .ok_or_else(|| anyhow::anyhow!("No verifier report available in Escalating state"))?;
 
     // Pre-escalation KB check
+    handle_escalating_kb_check(ctx, &report, iteration);
+
+    // Escalation decision
+    let decision = handle_escalating_decision(ctx, &report);
+
+    // Handle escalation event if tier changed
+    handle_escalation_event(ctx, &decision, iteration);
+
+    // Finish iteration metrics
+    ctx.metrics.finish_iteration();
+
+    // Handle stuck detection
+    if decision.stuck {
+        return handle_escalating_stuck(ctx, &decision, iteration);
+    }
+
+    // Back to Planning for next iteration
+    Ok(StateTransition::Advance {
+        to: OrchestratorState::Planning,
+        reason: format!("escalation → {:?}", decision.target_tier),
+    })
+}
+
+/// Pre-escalation knowledge base check.
+/// Queries the KB for known fixes based on error categories.
+fn handle_escalating_kb_check(
+    ctx: &OrchestratorContext<'_>,
+    report: &VerifierReport,
+    iteration: u32,
+) {
     if let Some(kb) = ctx.knowledge_base {
         let error_cats: Vec<String> = report
             .unique_error_categories()
@@ -1446,12 +1477,25 @@ pub async fn handle_escalating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
             }
         }
     }
+}
 
-    // Escalation decision
+/// Make the escalation decision using the EscalationEngine.
+fn handle_escalating_decision(
+    ctx: &mut OrchestratorContext<'_>,
+    report: &VerifierReport,
+) -> EscalationDecision {
     let engine = EscalationEngine::new();
-    let decision = engine.decide(&mut ctx.escalation, &report);
-    ctx.last_report = Some(report);
+    let decision = engine.decide(&mut ctx.escalation, report);
+    ctx.last_report = Some(report.clone());
+    decision
+}
 
+/// Handle the escalation event if the tier changed.
+fn handle_escalation_event(
+    ctx: &mut OrchestratorContext<'_>,
+    decision: &EscalationDecision,
+    iteration: u32,
+) {
     if decision.escalated {
         ctx.metrics.record_escalation();
         ctx.span_summary.record_escalation();
@@ -1463,27 +1507,24 @@ pub async fn handle_escalating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
             "Tier escalated (state driver)"
         );
     }
+}
 
-    ctx.metrics.finish_iteration();
-
-    if decision.stuck {
-        error!(iteration, reason = %decision.reason, "Stuck (state driver)");
-        create_stuck_intervention(
-            &mut ctx.session,
-            &ctx.progress,
-            &ctx.wt_path,
-            iteration,
-            &decision.reason,
-        );
-        return Ok(StateTransition::Fail {
-            reason: format!("Stuck: {}", decision.reason),
-        });
-    }
-
-    // Back to Planning for next iteration
-    Ok(StateTransition::Advance {
-        to: OrchestratorState::Planning,
-        reason: format!("escalation → {:?}", decision.target_tier),
+/// Handle stuck detection and return a Fail transition.
+fn handle_escalating_stuck(
+    ctx: &mut OrchestratorContext<'_>,
+    decision: &EscalationDecision,
+    iteration: u32,
+) -> Result<StateTransition> {
+    error!(iteration, reason = %decision.reason, "Stuck (state driver)");
+    create_stuck_intervention(
+        &mut ctx.session,
+        &ctx.progress,
+        &ctx.wt_path,
+        iteration,
+        &decision.reason,
+    );
+    Ok(StateTransition::Fail {
+        reason: format!("Stuck: {}", decision.reason),
     })
 }
 
@@ -1529,6 +1570,30 @@ pub async fn handle_merging(ctx: &mut OrchestratorContext<'_>) -> Result<StateTr
         iterations = ctx.session.iteration(),
         "Issue resolved — merging worktree (state driver)"
     );
+
+    // --- Pre-merge verifier guarantee (RepoProver pattern) ---
+    //
+    // Run compile_only() verification IN THE WORKTREE before merging to main.
+    // Only merge branches where all gates pass.
+    if ctx.config.verify_before_merge {
+        let pre_merge_config = VerifierConfig::compile_only();
+        let pre_merge_report = Verifier::new(&ctx.wt_path, pre_merge_config)
+            .run_pipeline()
+            .await;
+        if !pre_merge_report.all_green {
+            warn!(
+                id = %ctx.issue.id,
+                summary = %pre_merge_report.summary(),
+                "Pre-merge verifier failed in worktree (state driver) — not merging"
+            );
+            ctx.last_report = Some(pre_merge_report);
+            ctx.success = false;
+            return Ok(StateTransition::Advance {
+                to: OrchestratorState::Planning,
+                reason: "pre-merge verification failed — retrying".into(),
+            });
+        }
+    }
 
     if let Err(e) = ctx.worktree_bridge.merge_and_remove(&ctx.issue.id) {
         error!(id = %ctx.issue.id, "Merge failed (state driver): {e}");

@@ -301,8 +301,6 @@ mod tests {
 +    x + 1
 +}
 +
- fn private_helper() {
- }
 "#;
 
     const LARGE_DIFF: &str = r#"diff --git a/src/a.rs b/src/a.rs

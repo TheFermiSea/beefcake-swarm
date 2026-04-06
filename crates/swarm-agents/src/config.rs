@@ -585,6 +585,11 @@ pub struct SwarmConfig {
     /// Derived from `cloud_model_catalog` and `max_cost_per_issue` at construction time.
     /// Selects the best-fit cloud model for each workflow phase (Triage/Explore/Plan/Implement/Review).
     pub phase_selector: PhaseModelSelector,
+    /// Run the verifier in the worktree BEFORE merging to main (RepoProver pattern).
+    /// When true, only branches that pass compile_only() gates (clippy + check + sg)
+    /// are merged. When false, merge proceeds without pre-verification.
+    /// Populated from `SWARM_VERIFY_BEFORE_MERGE` env var (default: true).
+    pub verify_before_merge: bool,
 }
 
 impl Default for SwarmConfig {
@@ -749,6 +754,9 @@ impl Default for SwarmConfig {
                 .and_then(|s| s.parse().ok())
                 .filter(|v: &usize| *v > 0)
                 .unwrap_or(15),
+            verify_before_merge: std::env::var("SWARM_VERIFY_BEFORE_MERGE")
+                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                .unwrap_or(true),
         }
     }
 }
@@ -1017,6 +1025,7 @@ impl SwarmConfig {
             phase_selector: PhaseModelSelector::new(CloudModelCatalog::default_catalog(), 0.0),
             max_turns_without_write: 8,
             max_worker_tool_calls: 15,
+            verify_before_merge: true,
         }
     }
 }
