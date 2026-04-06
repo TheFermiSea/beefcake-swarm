@@ -547,6 +547,30 @@ pub fn condense_verifier_report(report: &VerifierReport) -> String {
     lines.join("\n")
 }
 
+/// Build a review prompt for the pre-merge quality check.
+///
+/// The reviewer sees the issue context and an abbreviated diff, then decides
+/// whether the change should merge. Response is expected as JSON with
+/// `{"approve": true/false, "reason": "..."}`.
+pub fn build_review_prompt(
+    issue_title: &str,
+    issue_description: &str,
+    diff_summary: &str,
+) -> String {
+    format!(
+        "## Pre-Merge Review\n\n\
+         You are reviewing a code change before it merges to main.\n\n\
+         **Issue:** {issue_title}\n\
+         **Description:** {issue_description}\n\n\
+         **Diff:**\n```\n{diff_summary}\n```\n\n\
+         Check:\n\
+         1. Does the diff address the issue? (yes/no + brief reason)\n\
+         2. Are there unrelated changes? (yes/no)\n\
+         3. Any obvious bugs or problems? (yes/no + what)\n\n\
+         Respond with JSON only: {{\"approve\": true/false, \"reason\": \"...\"}}"
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

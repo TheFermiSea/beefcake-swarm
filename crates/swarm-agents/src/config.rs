@@ -53,6 +53,34 @@ pub enum SwarmRole {
     Council,
 }
 
+/// Governance tier controls how many RuntimeAdapter checks fire per tool call.
+/// Source: NeoSigma AutoHarness — Core/Standard/Enhanced pipeline tiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernanceTier {
+    /// Minimal checks: write deadline only, no phase gate, no read budget.
+    /// For P3-P4 simple fixes (dead code, unused imports).
+    Core,
+    /// Standard checks: phase gate + read budget + anti-pattern detection.
+    /// Default for P2 medium-complexity issues.
+    #[default]
+    Standard,
+    /// Maximum validation: all Standard checks + tighter deadlines +
+    /// mandatory read-before-write + post-edit syntax check.
+    /// For P0-P1 complex issues (borrow checker, multi-file).
+    Enhanced,
+}
+
+impl std::fmt::Display for GovernanceTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GovernanceTier::Core => write!(f, "core"),
+            GovernanceTier::Standard => write!(f, "standard"),
+            GovernanceTier::Enhanced => write!(f, "enhanced"),
+        }
+    }
+}
+
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
 pub enum Tier {
@@ -538,6 +566,11 @@ pub struct SwarmConfig {
     /// worker dispatch and the recommendation is logged for analysis.
     /// Populated from `SWARM_ADAPTIVE_ROUTING` env var (default: false).
     pub adaptive_routing: bool,
+    /// Run a fast-tier reviewer as a pre-merge quality gate.
+    /// After the verifier passes, a lightweight LLM review checks that the diff
+    /// addresses the issue, contains no unrelated changes, and has no obvious bugs.
+    /// Populated from `SWARM_REVIEW_BEFORE_MERGE` env var (default: true).
+    pub review_before_merge: bool,
     /// Maximum LLM turns a worker may take before making any file edit.
     /// Fires a PromptCancelled termination and escalates to Council if exceeded.
     /// Calibrated for Rust tasks (8); raise for large Python/Go files.
@@ -706,6 +739,9 @@ impl Default for SwarmConfig {
             cloud_model_catalog,
             adaptive_routing: std::env::var("SWARM_ADAPTIVE_ROUTING")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(true),
+            review_before_merge: std::env::var("SWARM_REVIEW_BEFORE_MERGE")
+                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
                 .unwrap_or(true),
             phase_selector,
             max_turns_without_write: std::env::var("SWARM_MAX_TURNS_WITHOUT_WRITE")
@@ -985,6 +1021,7 @@ impl SwarmConfig {
                 .filter(|s| !s.trim().is_empty()),
             cloud_model_catalog: CloudModelCatalog::default_catalog(),
             adaptive_routing: true,
+            review_before_merge: true,
             phase_selector: PhaseModelSelector::new(CloudModelCatalog::default_catalog(), 0.0),
             max_turns_without_write: 8,
             max_worker_tool_calls: 15,
