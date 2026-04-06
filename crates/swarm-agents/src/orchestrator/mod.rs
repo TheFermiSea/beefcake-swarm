@@ -4184,13 +4184,14 @@ fn parse_review_response(response: &str) -> bool {
         }
     }
 
-    // Fallback: regex-like substring match
+    // Fallback: substring match — check false FIRST to avoid false positives
+    // when the model echoes the schema example containing both "true" and "false".
     let lower = response.to_lowercase();
-    if lower.contains("\"approve\": true") || lower.contains("\"approve\":true") {
-        return true;
-    }
     if lower.contains("\"approve\": false") || lower.contains("\"approve\":false") {
         return false;
+    }
+    if lower.contains("\"approve\": true") || lower.contains("\"approve\":true") {
+        return true;
     }
 
     // Can't determine — default to approve to avoid blocking

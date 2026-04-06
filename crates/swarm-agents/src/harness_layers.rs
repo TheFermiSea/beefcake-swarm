@@ -29,18 +29,10 @@ pub enum LayerAction {
     Terminate(String),
 }
 
-/// Governance tier — controls how aggressively harness layers enforce constraints.
-/// Higher tiers apply stricter budgets and faster termination.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub enum GovernanceTier {
-    /// Minimal enforcement: only hard deadline and tool budget.
-    Permissive,
-    /// Standard enforcement: all layers active with default thresholds.
-    #[default]
-    Standard,
-    /// Strict enforcement: tighter budgets, faster termination on anti-patterns.
-    Strict,
-}
+// Re-export the shared GovernanceTier from config to avoid duplicate enums.
+// Mapping: config::Core ↔ "Permissive", config::Standard ↔ "Standard",
+// config::Enhanced ↔ "Strict". Using the canonical enum from config.rs.
+pub use crate::config::GovernanceTier;
 
 /// Shared state across all harness layers.
 ///
@@ -126,14 +118,16 @@ pub trait HarnessLayer: Send + Sync {
     ) -> LayerAction;
 
     /// Inspect a tool result after execution (optional).
-    /// Layers can update state based on outcomes (e.g., tracking edit failures).
+    /// Layers can update state and return Terminate to stop the agent
+    /// (e.g., after too many consecutive edit failures).
     fn on_tool_result(
         &self,
         _tool_name: &str,
         _success: bool,
         _state: &mut HarnessState,
         _config: &HarnessConfig,
-    ) {
+    ) -> LayerAction {
+        LayerAction::Continue
     }
 }
 
@@ -295,27 +289,30 @@ impl HarnessLayer for EditFailureVerifier {
         success: bool,
         state: &mut HarnessState,
         _config: &HarnessConfig,
-    ) {
+    ) -> LayerAction {
         let base = tool_name.strip_prefix("proxy_").unwrap_or(tool_name);
         if base != "edit_file" {
-            return;
+            return LayerAction::Continue;
         }
 
-        // We don't have access to the file path in on_tool_result's current signature,
-        // so we track a single "current edit target" counter. When migrating RuntimeAdapter,
-        // the full path-keyed tracking from AdapterState.edit_failure_counts will be used.
-        // For now, use the tool_name as a proxy key.
         let key = "edit_file_global".to_string();
         if success {
             state.edit_failure_counts.remove(&key);
             state.has_written = true;
             state.successful_writes += 1;
+            LayerAction::Continue
         } else {
-            let count = state.edit_failure_counts.entry(key).or_insert(0);
+            let count = state.edit_failure_counts.entry(key.clone()).or_insert(0);
             *count += 1;
-            // Note: termination based on failure count is checked in check_edit_failures().
-            // The on_tool_result trait method has no return value, so the caller
-            // must check state after calling this.
+            if *count >= self.max_failures {
+                LayerAction::Terminate(format!(
+                    "Edit anti-pattern: {} consecutive edit_file failures. \
+                     Use read_file to verify exact content before retrying.",
+                    count
+                ))
+            } else {
+                LayerAction::Continue
+            }
         }
     }
 }
@@ -563,16 +560,21 @@ pub fn run_layers(
 }
 
 /// Execute post-tool-result hooks on all layers.
+/// Returns `Terminate` if any layer signals termination, `Continue` otherwise.
 pub fn run_result_layers(
     layers: &[Box<dyn HarnessLayer>],
     tool_name: &str,
     success: bool,
     state: &mut HarnessState,
     config: &HarnessConfig,
-) {
+) -> LayerAction {
     for layer in layers {
-        layer.on_tool_result(tool_name, success, state, config);
+        let action = layer.on_tool_result(tool_name, success, state, config);
+        if matches!(action, LayerAction::Terminate(_)) {
+            return action;
+        }
     }
+    LayerAction::Continue
 }
 
 /// Build the default layer pipeline: filters first, then verifiers, then policies.
