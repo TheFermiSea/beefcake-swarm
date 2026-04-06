@@ -262,6 +262,9 @@ pub struct FeedbackTags {
     /// Number of cognition base items injected into the worker task prompt.
     /// Enables measuring whether cognition context improves resolution rates.
     pub cognition_items_retrieved: Option<usize>,
+    /// Fix mode: `"fresh"` (iteration 1) or `"diff_evolution"` (iteration > 1 with
+    /// previous diff injected). Tracks the ASI-Evolve diff-based evolution pattern.
+    pub fix_mode: Option<String>,
 }
 
 impl FeedbackTags {
@@ -313,6 +316,8 @@ impl FeedbackTags {
         }
         if let Some(v) = self.cognition_items_retrieved {
             map.insert("cognition_items_retrieved".to_string(), v.to_string());
+        if let Some(v) = self.fix_mode {
+            map.insert("fix_mode".to_string(), v);
         }
         map
     }
@@ -656,6 +661,7 @@ pub async fn post_resolved_feedback(
             cognition_items_retrieved: m
                 .get("cognition_items_retrieved")
                 .and_then(|v| v.parse().ok()),
+            fix_mode: m.get("fix_mode").cloned(),
         });
         post_episode_feedback(
             gateway_url,

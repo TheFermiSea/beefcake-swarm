@@ -783,6 +783,9 @@ async fn process_issue_core(
     // Tracks whether the previous iteration's agent called edit_file/write_file.
     // Used to inject an edit nudge into the next iteration's task prompt.
     let mut agent_has_written_prev = true; // assume true for first iteration
+    // Diff-based evolution (ASI-Evolve pattern): store the previous worker's
+    // full diff so retries can refine rather than rewrite from scratch.
+    let mut last_worker_diff: Option<String> = None;
                                            // Hill-climbing: track the best (lowest) error count seen across all iterations.
                                            // Changes are only kept when they improve on the best — otherwise rolled back.
     let mut best_error_count: Option<usize> = None;
@@ -1630,6 +1633,23 @@ async fn process_issue_core(
             }
         }
 
+        // --- Diff-based evolution (ASI-Evolve pattern) ---
+        // On retry iterations, inject the previous worker's actual diff so the
+        // next worker can refine the changes instead of starting from scratch.
+        if iteration > 1 {
+            if let Some(ref prev_diff) = last_worker_diff {
+                let diff_preview = crate::str_util::safe_truncate(prev_diff, 2000);
+                task_prompt = format!(
+                    "## Previous Attempt's Changes\n\
+                     The previous worker made these changes (which failed verification):\n\
+                     ```diff\n{diff_preview}\n```\n\n\
+                     Refine these changes to fix the verification errors. \
+                     Do NOT start from scratch — build on the previous attempt.\n\n\
+                     {task_prompt}"
+                );
+            }
+        }
+
         // --- Edit nudge: remind workers they MUST call edit_file ---
         // When a previous iteration ended without writes, append a strong
         // system reminder. This implements OpenDev's "Event-Driven System
@@ -2226,6 +2246,9 @@ async fn process_issue_core(
                 }
 
                 agent_has_written_prev = outcome.success_count() > 0;
+                // Clear diff for concurrent dispatch — multiple workers contributed,
+                // so a single diff is less useful for targeted refinement.
+                last_worker_diff = None;
                 continue;
             }
         }
@@ -2589,6 +2612,16 @@ async fn process_issue_core(
                 }
             }
         }
+
+        // --- Diff-based evolution: capture worker diff for next iteration ---
+        // Store the full diff between pre-worker and post-agent commits so the
+        // next retry can show the previous attempt's changes.
+        last_worker_diff = match (&pre_worker_commit, &post_agent_commit) {
+            (Some(pre), Some(post)) if pre != post => {
+                crate::git_ops::diff_between(&wt_path, pre, post)
+            }
+            _ => None,
+        };
 
         // Detect false-positive: git has changes (e.g. from cargo fmt) but agent
         // never called edit_file/write_file. Treat as no-progress to avoid the
@@ -3927,6 +3960,13 @@ async fn process_issue_core(
                     "coder".to_string()
                 }
             });
+        // Diff-based evolution tag: "fresh" for single-iteration runs,
+        // "diff_evolution" when a previous worker's diff was injected.
+        let fix_mode = if session_metrics.total_iterations > 1 && last_worker_diff.is_some() {
+            "diff_evolution"
+        } else {
+            "fresh"
+        };
         let tz_tags = crate::tensorzero::FeedbackTags {
             issue_id: Some(issue.id.clone()),
             language: Some(triage_result.language.to_string()),
@@ -3949,6 +3989,7 @@ async fn process_issue_core(
             } else {
                 None
             },
+            fix_mode: Some(fix_mode.to_string()),
         };
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {

@@ -305,6 +305,31 @@ pub(crate) fn diff_stat_summary(wt_path: &Path) -> String {
     }
 }
 
+/// Get the diff content between two commits in the worktree.
+///
+/// Used by the diff-based evolution mode (ASI-Evolve pattern): on retry
+/// iterations the previous worker's diff is injected into the task prompt
+/// so the next worker refines rather than rewrites from scratch.
+///
+/// Returns `None` if there are no changes, either ref is missing, or git fails.
+pub(crate) fn diff_between(wt_path: &Path, from: &str, to: &str) -> Option<String> {
+    let output = std::process::Command::new("git")
+        .args(["diff", from, to])
+        .current_dir(wt_path)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
 /// Collect artifact records from the git diff between two commits.
 ///
 /// Parses `git diff --numstat` to determine which files were added, modified,
