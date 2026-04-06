@@ -405,7 +405,7 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                     // Injecting "X turns left" improves edit rates by inducing focused behavior.
                     if terminate.is_none() {
                         let reminder = if let Some(max_turns) = config.max_turns_without_write {
-                            if !s.has_written && config.max_turns_without_write.is_some() {
+                            if !s.has_written {
                                 let remaining = max_turns.saturating_sub(turn);
                                 if remaining <= 2 && remaining > 0 {
                                     Some(format!(
