@@ -461,6 +461,20 @@ async fn process_issue_core(
         .map(|p| p.language.clone())
         .unwrap_or_else(|| "rust".to_string());
 
+    // --- Cognition base (ASI-Evolve pattern: knowledge retrieval) ---
+    // Load persistent knowledge items from `.swarm/cognition/` and seed from
+    // wiki pages. Retrieved items are injected into worker task prompts.
+    let cognition_base = crate::cognition::CognitionBase::load_or_create(
+        &worktree_bridge.repo_root().join(".swarm/cognition"),
+    )
+    .ok()
+    .map(|mut base| {
+        if let Err(e) = crate::cognition::seed_from_wiki(&mut base, worktree_bridge.repo_root()) {
+            warn!(error = %e, "Failed to seed cognition base from wiki");
+        }
+        base
+    });
+
     // --- Intent contract (reformulation engine: Phase 1) ---
     // Capture the original task goal on first pickup so reformulations can't
     // silently weaken it. The contract is append-only (first attempt only).
@@ -1281,6 +1295,9 @@ async fn process_issue_core(
     let skill_library =
         coordination::analytics::skills::SkillLibrary::load(&skills_path).unwrap_or_default();
 
+    // Track cognition items retrieved across iterations for TZ feedback.
+    let mut last_cognition_items_retrieved: usize = 0;
+
     // --- Main loop: implement → verify → review → escalate ---
     loop {
         let iteration = match session.next_iteration() {
@@ -1574,6 +1591,28 @@ async fn process_issue_core(
         } else {
             format_task_prompt(&packet)
         };
+
+        // --- Cognition context injection (ASI-Evolve pattern) ---
+        // Query the cognition base for relevant knowledge items and prepend
+        // them to the task prompt so workers have institutional context.
+        if let Some(ref cog_base) = cognition_base {
+            let error_cat_strs: Vec<String> = packet
+                .failure_signals
+                .iter()
+                .map(|s| format!("{}", s.category))
+                .collect();
+            let query = format!("{} {}", issue.title, error_cat_strs.join(" "));
+            let results = crate::cognition::retrieve_by_keywords(cog_base, &query, 5);
+            last_cognition_items_retrieved = results.len();
+            let cognition_context = crate::cognition::RetrievalResult::format_context(&results);
+            if !cognition_context.is_empty() {
+                task_prompt = format!("{cognition_context}\n{task_prompt}");
+                debug!(
+                    items = last_cognition_items_retrieved,
+                    "Injected cognition context into task prompt"
+                );
+            }
+        }
 
         // --- Condensed verifier summary injection (PreCompletionChecklist pattern) ---
         // On retries, prepend a structured summary of the previous verifier failure
@@ -3905,6 +3944,11 @@ async fn process_issue_core(
             pre_write_read_budget: None,
             max_tool_calls: Some(config.max_worker_tool_calls),
             governance_tier: Some(governance_tier.to_string()),
+            cognition_items_retrieved: if last_cognition_items_retrieved > 0 {
+                Some(last_cognition_items_retrieved)
+            } else {
+                None
+            },
         };
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {

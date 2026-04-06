@@ -259,6 +259,9 @@ pub struct FeedbackTags {
     /// Governance tier applied to this run: `"core"`, `"standard"`, or `"enhanced"`.
     /// Correlates adapter check intensity with task outcomes.
     pub governance_tier: Option<String>,
+    /// Number of cognition base items injected into the worker task prompt.
+    /// Enables measuring whether cognition context improves resolution rates.
+    pub cognition_items_retrieved: Option<usize>,
 }
 
 impl FeedbackTags {
@@ -307,6 +310,9 @@ impl FeedbackTags {
         }
         if let Some(v) = self.governance_tier {
             map.insert("governance_tier".to_string(), v);
+        }
+        if let Some(v) = self.cognition_items_retrieved {
+            map.insert("cognition_items_retrieved".to_string(), v.to_string());
         }
         map
     }
@@ -647,6 +653,9 @@ pub async fn post_resolved_feedback(
             pre_write_read_budget: m.get("pre_write_read_budget").and_then(|v| v.parse().ok()),
             max_tool_calls: m.get("max_tool_calls").and_then(|v| v.parse().ok()),
             governance_tier: m.get("governance_tier").cloned(),
+            cognition_items_retrieved: m
+                .get("cognition_items_retrieved")
+                .and_then(|v| v.parse().ok()),
         });
         post_episode_feedback(
             gateway_url,
