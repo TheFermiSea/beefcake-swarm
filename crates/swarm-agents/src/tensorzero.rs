@@ -316,6 +316,7 @@ impl FeedbackTags {
         }
         if let Some(v) = self.cognition_items_retrieved {
             map.insert("cognition_items_retrieved".to_string(), v.to_string());
+        }
         if let Some(v) = self.fix_mode {
             map.insert("fix_mode".to_string(), v);
         }

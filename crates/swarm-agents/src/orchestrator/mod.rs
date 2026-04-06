@@ -783,11 +783,11 @@ async fn process_issue_core(
     // Tracks whether the previous iteration's agent called edit_file/write_file.
     // Used to inject an edit nudge into the next iteration's task prompt.
     let mut agent_has_written_prev = true; // assume true for first iteration
-    // Diff-based evolution (ASI-Evolve pattern): store the previous worker's
-    // full diff so retries can refine rather than rewrite from scratch.
+                                           // Diff-based evolution (ASI-Evolve pattern): store the previous worker's
+                                           // full diff so retries can refine rather than rewrite from scratch.
     let mut last_worker_diff: Option<String> = None;
-                                           // Hill-climbing: track the best (lowest) error count seen across all iterations.
-                                           // Changes are only kept when they improve on the best — otherwise rolled back.
+    // Hill-climbing: track the best (lowest) error count seen across all iterations.
+    // Changes are only kept when they improve on the best — otherwise rolled back.
     let mut best_error_count: Option<usize> = None;
     // Minimum error reduction required to keep changes (env: SWARM_MIN_ERROR_DELTA).
     let min_error_delta: usize = std::env::var("SWARM_MIN_ERROR_DELTA")
