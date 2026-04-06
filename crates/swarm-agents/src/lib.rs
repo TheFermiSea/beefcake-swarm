@@ -38,5 +38,6 @@ pub mod tensorzero;
 pub mod tools;
 pub mod triage;
 pub mod tz_insights;
+pub mod wiki;
 pub mod work_protocol;
 pub mod worktree_bridge;
