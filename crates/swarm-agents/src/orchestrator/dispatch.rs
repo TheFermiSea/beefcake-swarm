@@ -38,9 +38,6 @@ pub enum CoderRoute {
 /// (type mismatch, imports, syntax) route to the fast tier (GLM-4.7-Flash)
 /// instead of burning coder budget. Complex errors (borrow checker, lifetimes,
 /// trait bounds, async) still use the coder tier on retry.
-///
-/// Research: LangChain found 63.6% vs 53.9% with targeted reasoning budget
-/// allocation (high for planning/first attempt, low for simple fixes).
 pub fn route_to_coder(error_cats: &[ErrorCategory], iteration: u32) -> CoderRoute {
     if error_cats.is_empty() {
         // First iteration — use general coder for scaffolding/multi-file work
@@ -475,13 +472,8 @@ pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String
         let target_path = wt_root.join(&target_files[0]);
         if let Ok(content) = std::fs::read_to_string(&target_path) {
             let truncated = if content.len() > 4000 {
-                // Find the nearest char boundary at or before 4000 to avoid
-                // panicking on multi-byte UTF-8 (e.g. em dash '─' is 3 bytes).
-                let mut end = 4000;
-                while end > 0 && !content.is_char_boundary(end) {
-                    end -= 1;
-                }
-                format!("{}...\n[truncated at {end} chars]", &content[..end])
+                let cut = crate::str_util::safe_truncate(&content, 4000);
+                format!("{cut}...\n[truncated at {} chars]", cut.len())
             } else {
                 content
             };

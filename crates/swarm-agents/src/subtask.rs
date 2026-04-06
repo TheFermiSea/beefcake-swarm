@@ -881,13 +881,9 @@ async fn run_subtask_worker(
             cap = MAX_OBJECTIVE_CHARS,
             "Subtask objective truncated to avoid context overflow"
         );
-        let mut end = MAX_OBJECTIVE_CHARS;
-        while end > 0 && !subtask.objective.is_char_boundary(end) {
-            end -= 1;
-        }
         format!(
             "{}... [truncated — see issue for full context]",
-            &subtask.objective[..end]
+            crate::str_util::safe_truncate(&subtask.objective, MAX_OBJECTIVE_CHARS)
         )
     } else {
         subtask.objective.clone()

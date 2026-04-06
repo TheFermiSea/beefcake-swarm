@@ -3900,10 +3900,10 @@ async fn process_issue_core(
             prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
             retry_tier,
             harness_preset: None,
-            write_deadline: Some(config.max_turns_without_write.to_string()),
+            write_deadline: Some(config.max_turns_without_write),
             search_unlock_turn: None,
             pre_write_read_budget: None,
-            max_tool_calls: Some(config.max_worker_tool_calls.to_string()),
+            max_tool_calls: Some(config.max_worker_tool_calls),
             governance_tier: Some(governance_tier.to_string()),
         };
 
