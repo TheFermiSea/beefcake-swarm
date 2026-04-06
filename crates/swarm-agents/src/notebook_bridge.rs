@@ -201,9 +201,10 @@ impl NotebookBridge {
         unreachable!()
     }
 
-    /// Check if a notebook role is at capacity. Returns Ok(()) if there's room,
-    /// Err if at capacity (fail-open: missing count = Ok).
-    fn check_capacity(&self, role: &str) -> Result<()> {
+    /// Check if a notebook role is at capacity. Returns `true` if there's room
+    /// to upload, `false` if at capacity (with a warning log). Fail-open on
+    /// errors: if we can't determine the count, allow the upload.
+    fn has_capacity(&self, role: &str) -> bool {
         if let Some(count) = self.source_count(role) {
             if count >= MAX_NOTEBOOK_SOURCES {
                 warn!(
@@ -212,15 +213,10 @@ impl NotebookBridge {
                     limit = MAX_NOTEBOOK_SOURCES,
                     "Notebook near capacity — skipping upload"
                 );
-                return Err(anyhow::anyhow!(
-                    "notebook '{}' at capacity ({}/{})",
-                    role,
-                    count,
-                    MAX_NOTEBOOK_SOURCES
-                ));
+                return false;
             }
         }
-        Ok(())
+        true
     }
 }
 
@@ -247,7 +243,9 @@ impl KnowledgeBase for NotebookBridge {
             }
         };
 
-        self.check_capacity(role)?;
+        if !self.has_capacity(role) {
+            return Ok(());
+        }
 
         self.run_command(&[
             "source",
@@ -270,7 +268,9 @@ impl KnowledgeBase for NotebookBridge {
             }
         };
 
-        self.check_capacity(role)?;
+        if !self.has_capacity(role) {
+            return Ok(());
+        }
 
         self.run_command(&["source", "add", notebook_id, "--file", file_path])
             .map(|_| ())
