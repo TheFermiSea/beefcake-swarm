@@ -18,8 +18,8 @@ pub mod validation;
 // continues to compile without changes.
 
 pub use dispatch::{
-    condense_verifier_report, format_compact_task_prompt, format_task_prompt, route_to_coder,
-    CoderRoute,
+    build_review_prompt, condense_verifier_report, format_compact_task_prompt, format_task_prompt,
+    route_to_coder, CoderRoute,
 };
 pub use helpers::try_scaffold_fallback;
 pub(crate) use helpers::{
@@ -982,36 +982,51 @@ async fn process_issue_core(
                             ),
                         );
 
-                        info!(
-                            id = %issue.id,
-                            session_id = session.short_id(),
-                            elapsed = %session.elapsed_human(),
-                            "Issue resolved — merging worktree"
-                        );
-
-                        // Try to merge and close.
-                        merge_close_or_reopen(
-                            worktree_bridge,
-                            beads,
-                            &issue.id,
-                            "Resolved by concurrent subtask dispatch",
-                        )?;
-                        clear_resume_file(worktree_bridge.repo_root());
-                        // Record successful resolution in the mutation archive.
-                        // Must happen before returning so early-exit paths are tracked.
-                        let mut record = crate::mutation_archive::build_record(
-                            &issue.id,
+                        // --- Pre-merge reviewer gate ---
+                        let issue_desc_review =
+                            issue.description.as_deref().unwrap_or(&issue.title);
+                        if !run_pre_merge_review(
+                            config,
+                            &factory,
+                            &wt_path,
                             &issue.title,
-                            &archive_language,
-                            true,
-                            session.iteration(),
-                            &format!("{:?}", escalation.current_tier),
-                            &config.resolve_role_model(SwarmRole::Planner),
-                            process_start.elapsed().as_secs(),
-                        );
-                        record.files_changed = helpers::list_changed_files(&wt_path);
-                        archive.record(&record);
-                        return Ok(true);
+                            issue_desc_review,
+                        )
+                        .await
+                        {
+                            warn!(id = %issue.id, "Pre-merge review REJECTED concurrent dispatch — falling through to retry");
+                        } else {
+                            info!(
+                                id = %issue.id,
+                                session_id = session.short_id(),
+                                elapsed = %session.elapsed_human(),
+                                "Issue resolved — merging worktree"
+                            );
+
+                            // Try to merge and close.
+                            merge_close_or_reopen(
+                                worktree_bridge,
+                                beads,
+                                &issue.id,
+                                "Resolved by concurrent subtask dispatch",
+                            )?;
+                            clear_resume_file(worktree_bridge.repo_root());
+                            // Record successful resolution in the mutation archive.
+                            // Must happen before returning so early-exit paths are tracked.
+                            let mut record = crate::mutation_archive::build_record(
+                                &issue.id,
+                                &issue.title,
+                                &archive_language,
+                                true,
+                                session.iteration(),
+                                &format!("{:?}", escalation.current_tier),
+                                &config.resolve_role_model(SwarmRole::Planner),
+                                process_start.elapsed().as_secs(),
+                            );
+                            record.files_changed = helpers::list_changed_files(&wt_path);
+                            archive.record(&record);
+                            return Ok(true);
+                        }
                     }
 
                     // Verifier failed — attempt serial fixer post-pass on integration files
@@ -1060,34 +1075,49 @@ async fn process_issue_core(
                                 ),
                                 );
 
-                                info!(
-                                    id = %issue.id,
-                                    session_id = session.short_id(),
-                                    elapsed = %session.elapsed_human(),
-                                    "Issue resolved — merging worktree"
-                                );
-
-                                merge_close_or_reopen(
-                                    worktree_bridge,
-                                    beads,
-                                    &issue.id,
-                                    "Resolved by concurrent dispatch + fixer post-pass",
-                                )?;
-                                clear_resume_file(worktree_bridge.repo_root());
-                                // Record successful resolution in the mutation archive.
-                                let mut record = crate::mutation_archive::build_record(
-                                    &issue.id,
+                                // --- Pre-merge reviewer gate ---
+                                let issue_desc_review =
+                                    issue.description.as_deref().unwrap_or(&issue.title);
+                                if !run_pre_merge_review(
+                                    config,
+                                    &factory,
+                                    &wt_path,
                                     &issue.title,
-                                    &archive_language,
-                                    true,
-                                    session.iteration(),
-                                    &format!("{:?}", escalation.current_tier),
-                                    &config.resolve_role_model(SwarmRole::Planner),
-                                    process_start.elapsed().as_secs(),
-                                );
-                                record.files_changed = helpers::list_changed_files(&wt_path);
-                                archive.record(&record);
-                                return Ok(true);
+                                    issue_desc_review,
+                                )
+                                .await
+                                {
+                                    warn!(id = %issue.id, "Pre-merge review REJECTED fixer post-pass — falling through");
+                                } else {
+                                    info!(
+                                        id = %issue.id,
+                                        session_id = session.short_id(),
+                                        elapsed = %session.elapsed_human(),
+                                        "Issue resolved — merging worktree"
+                                    );
+
+                                    merge_close_or_reopen(
+                                        worktree_bridge,
+                                        beads,
+                                        &issue.id,
+                                        "Resolved by concurrent dispatch + fixer post-pass",
+                                    )?;
+                                    clear_resume_file(worktree_bridge.repo_root());
+                                    // Record successful resolution in the mutation archive.
+                                    let mut record = crate::mutation_archive::build_record(
+                                        &issue.id,
+                                        &issue.title,
+                                        &archive_language,
+                                        true,
+                                        session.iteration(),
+                                        &format!("{:?}", escalation.current_tier),
+                                        &config.resolve_role_model(SwarmRole::Planner),
+                                        process_start.elapsed().as_secs(),
+                                    );
+                                    record.files_changed = helpers::list_changed_files(&wt_path);
+                                    archive.record(&record);
+                                    return Ok(true);
+                                }
                             }
 
                             // Fixer post-pass didn't fix everything — fall through
@@ -2064,6 +2094,23 @@ async fn process_issue_core(
                                 issue.id
                             ),
                         );
+
+                        // --- Pre-merge reviewer gate ---
+                        let issue_desc_review =
+                            issue.description.as_deref().unwrap_or(&issue.title);
+                        if !run_pre_merge_review(
+                            config,
+                            &factory,
+                            &wt_path,
+                            &issue.title,
+                            issue_desc_review,
+                        )
+                        .await
+                        {
+                            warn!(id = %issue.id, "Pre-merge review REJECTED manager-guided dispatch — will retry");
+                            last_report = Some(report);
+                            continue;
+                        }
 
                         info!(
                             id = %issue.id,
@@ -3371,83 +3418,98 @@ async fn process_issue_core(
             }
         }
 
-        info!(
-            id = %issue.id,
-            session_id = session.short_id(),
-            elapsed = %session.elapsed_human(),
-            iterations = session.iteration(),
-            "Issue resolved — merging worktree"
-        );
-
-        merge_close_or_reopen(
-            worktree_bridge,
-            beads,
-            &issue.id,
-            "Resolved by swarm orchestrator",
-        )?;
-        clear_resume_file(worktree_bridge.repo_root());
-
-        // --- Post-merge CI watcher: verify main still compiles after merge ---
-        //
-        // Run a lightweight check (fmt + clippy + check, skip tests) on the
-        // repo root after merge. If the merge introduced a regression (e.g.
-        // interacting changes from parallel merges), reopen the issue.
-        {
-            let post_merge_config = VerifierConfig {
-                check_fmt: true,
-                check_clippy: true,
-                check_compile: true,
-                check_test: false, // skip tests — only check compilation
-                ..verifier_config.clone()
-            };
-            let scan_report = run_verifier_opts(
-                worktree_bridge.repo_root(),
-                &post_merge_config,
-                &language_profile,
-                true,
-            )
-            .await;
-
-            // Append quality metrics to trend file
-            let trend_path = worktree_bridge
-                .repo_root()
-                .join(".swarm")
-                .join("quality-trend.jsonl");
-            if let Ok(json) = serde_json::to_string(&serde_json::json!({
-                "timestamp": chrono::Utc::now().to_rfc3339(),
-                "issue_resolved": issue.id,
-                "gates_passed": scan_report.gates_passed,
-                "gates_total": scan_report.gates_total,
-                "all_green": scan_report.all_green,
-                "summary": scan_report.summary(),
-            })) {
-                let _ = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&trend_path)
-                    .and_then(|mut f| {
-                        use std::io::Write;
-                        writeln!(f, "{json}")
-                    });
-            }
-
-            if scan_report.all_green {
-                info!(
-                    id = %issue.id,
-                    summary = %scan_report.summary(),
-                    "Post-merge verification PASSED"
-                );
-            } else {
-                warn!(
-                    id = %issue.id,
-                    summary = %scan_report.summary(),
-                    "Post-merge regression detected — reopening issue"
-                );
-                let _ = beads.update_status(&issue.id, "open");
-                success = false;
-            }
+        // --- Pre-merge reviewer gate ---
+        let issue_desc = issue.description.as_deref().unwrap_or(&issue.title);
+        if !run_pre_merge_review(config, &factory, &wt_path, &issue.title, issue_desc).await {
+            warn!(
+                id = %issue.id,
+                "Pre-merge review REJECTED — not merging, will retry"
+            );
+            success = false;
         }
-        info!(id = %issue.id, "Issue closed");
+
+        if !success {
+            // Reviewer rejected — fall through to failure handling
+            info!(id = %issue.id, "Skipping merge due to reviewer rejection");
+        } else {
+            info!(
+                id = %issue.id,
+                session_id = session.short_id(),
+                elapsed = %session.elapsed_human(),
+                iterations = session.iteration(),
+                "Issue resolved — merging worktree"
+            );
+
+            merge_close_or_reopen(
+                worktree_bridge,
+                beads,
+                &issue.id,
+                "Resolved by swarm orchestrator",
+            )?;
+            clear_resume_file(worktree_bridge.repo_root());
+
+            // --- Post-merge CI watcher: verify main still compiles after merge ---
+            //
+            // Run a lightweight check (fmt + clippy + check, skip tests) on the
+            // repo root after merge. If the merge introduced a regression (e.g.
+            // interacting changes from parallel merges), reopen the issue.
+            {
+                let post_merge_config = VerifierConfig {
+                    check_fmt: true,
+                    check_clippy: true,
+                    check_compile: true,
+                    check_test: false, // skip tests — only check compilation
+                    ..verifier_config.clone()
+                };
+                let scan_report = run_verifier_opts(
+                    worktree_bridge.repo_root(),
+                    &post_merge_config,
+                    &language_profile,
+                    true,
+                )
+                .await;
+
+                // Append quality metrics to trend file
+                let trend_path = worktree_bridge
+                    .repo_root()
+                    .join(".swarm")
+                    .join("quality-trend.jsonl");
+                if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                    "timestamp": chrono::Utc::now().to_rfc3339(),
+                    "issue_resolved": issue.id,
+                    "gates_passed": scan_report.gates_passed,
+                    "gates_total": scan_report.gates_total,
+                    "all_green": scan_report.all_green,
+                    "summary": scan_report.summary(),
+                })) {
+                    let _ = std::fs::OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&trend_path)
+                        .and_then(|mut f| {
+                            use std::io::Write;
+                            writeln!(f, "{json}")
+                        });
+                }
+
+                if scan_report.all_green {
+                    info!(
+                        id = %issue.id,
+                        summary = %scan_report.summary(),
+                        "Post-merge verification PASSED"
+                    );
+                } else {
+                    warn!(
+                        id = %issue.id,
+                        summary = %scan_report.summary(),
+                        "Post-merge regression detected — reopening issue"
+                    );
+                    let _ = beads.update_status(&issue.id, "open");
+                    success = false;
+                }
+            }
+            info!(id = %issue.id, "Issue closed");
+        }
     } else {
         session.fail();
         let _ = progress.log_session_end(
@@ -3993,6 +4055,130 @@ async fn process_issue_core(
     }
 
     Ok(success)
+}
+
+/// Run a lightweight pre-merge review using the fast-tier reviewer.
+///
+/// Gets the git diff from the worktree, builds a review prompt, and asks the
+/// reviewer model to approve or reject. Returns `true` if approved (or if
+/// the review is disabled/fails), `false` if the reviewer explicitly rejects.
+///
+/// Keeps the diff lightweight: `--stat` header plus the first 200 lines of
+/// the full diff to stay within context budgets for fast-tier models.
+async fn run_pre_merge_review(
+    config: &SwarmConfig,
+    factory: &AgentFactory,
+    wt_path: &Path,
+    issue_title: &str,
+    issue_description: &str,
+) -> bool {
+    if !config.review_before_merge {
+        return true;
+    }
+
+    // Gather abbreviated diff: stat header + first 200 lines of patch
+    let stat = tokio::process::Command::new("git")
+        .args(["diff", "main..HEAD", "--stat"])
+        .current_dir(wt_path)
+        .output()
+        .await
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    let full_diff = tokio::process::Command::new("git")
+        .args(["diff", "main..HEAD"])
+        .current_dir(wt_path)
+        .output()
+        .await
+        .ok()
+        .and_then(|o| {
+            if o.status.success() {
+                String::from_utf8(o.stdout).ok()
+            } else {
+                None
+            }
+        })
+        .unwrap_or_default();
+
+    if stat.is_empty() && full_diff.is_empty() {
+        debug!("Pre-merge review: no diff to review — auto-approving");
+        return true;
+    }
+
+    // Truncate full diff to first 200 lines to keep prompt small
+    let truncated_diff: String = full_diff.lines().take(200).collect::<Vec<_>>().join("\n");
+    let diff_summary = format!("{stat}\n{truncated_diff}");
+
+    let prompt = build_review_prompt(issue_title, issue_description, &diff_summary);
+    let reviewer = factory.build_reviewer();
+
+    match rig::completion::Prompt::prompt(&reviewer, &prompt).await {
+        Ok(response) => {
+            // Parse JSON response for {"approve": true/false, "reason": "..."}
+            let approved = parse_review_response(&response);
+            if approved {
+                info!("Pre-merge review: APPROVED");
+            } else {
+                warn!(
+                    response = %response,
+                    "Pre-merge review: REJECTED"
+                );
+            }
+            approved
+        }
+        Err(e) => {
+            // Review failure is non-fatal — log and approve to avoid blocking merges
+            warn!(error = %e, "Pre-merge review failed — auto-approving");
+            true
+        }
+    }
+}
+
+/// Parse the reviewer's JSON response for the `approve` field.
+///
+/// Tolerates markdown fencing, extra whitespace, and partial JSON.
+/// Returns `true` if the response contains `"approve": true` (or
+/// `"approve":true`), `false` otherwise.
+fn parse_review_response(response: &str) -> bool {
+    // Try serde_json first for well-formed responses
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(response) {
+        if let Some(approved) = val.get("approve").and_then(|v| v.as_bool()) {
+            return approved;
+        }
+    }
+
+    // Strip markdown code fences and retry
+    let stripped = response
+        .trim()
+        .trim_start_matches("```json")
+        .trim_start_matches("```")
+        .trim_end_matches("```")
+        .trim();
+    if let Ok(val) = serde_json::from_str::<serde_json::Value>(stripped) {
+        if let Some(approved) = val.get("approve").and_then(|v| v.as_bool()) {
+            return approved;
+        }
+    }
+
+    // Fallback: regex-like substring match
+    let lower = response.to_lowercase();
+    if lower.contains("\"approve\": true") || lower.contains("\"approve\":true") {
+        return true;
+    }
+    if lower.contains("\"approve\": false") || lower.contains("\"approve\":false") {
+        return false;
+    }
+
+    // Can't determine — default to approve to avoid blocking
+    warn!("Pre-merge review: could not parse response — auto-approving");
+    true
 }
 
 /// Compile-time guard: `process_issue_core`'s future must be `Send` so it
