@@ -100,6 +100,10 @@ pub struct ToolEvent {
     pub result_preview: String,
     pub duration_ms: u64,
     pub outcome: ToolOutcome,
+    /// Input tokens consumed by this tool call (if available from provider).
+    pub input_tokens: Option<u64>,
+    /// Output tokens consumed by this tool call (if available from provider).
+    pub output_tokens: Option<u64>,
 }
 
 /// Summary report extracted from the adapter after a prompt completes.
@@ -125,6 +129,10 @@ pub struct AdapterReport {
     pub successful_writes: u32,
     /// Last failed edit attempts: (file_path, error_snippet).
     pub last_failed_edits: Vec<(String, String)>,
+    /// Total input tokens across all tool calls in this session.
+    pub total_input_tokens: u64,
+    /// Total output tokens across all tool calls in this session.
+    pub total_output_tokens: u64,
 }
 
 /// In-flight tool call tracking.
@@ -287,6 +295,16 @@ impl RuntimeAdapter {
                     (path, e.result_preview.clone())
                 })
                 .collect(),
+            total_input_tokens: state
+                .tool_events
+                .iter()
+                .filter_map(|e| e.input_tokens)
+                .sum(),
+            total_output_tokens: state
+                .tool_events
+                .iter()
+                .filter_map(|e| e.output_tokens)
+                .sum(),
         })
     }
 
@@ -766,6 +784,11 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 result_preview,
                 duration_ms,
                 outcome,
+                // Token counts are not available from the tool result itself;
+                // callers can back-fill via the ToolEvent after the prompt completes
+                // if the provider response includes usage metadata.
+                input_tokens: None,
+                output_tokens: None,
             });
 
             // Inject pending write-deadline reminder into tool result logging.
@@ -1073,6 +1096,8 @@ mod tests {
                 result_preview: "fn main() {}".into(),
                 duration_ms: 42,
                 outcome: ToolOutcome::Success,
+                input_tokens: None,
+                output_tokens: None,
             }],
             turn_count: 3,
             total_tool_calls: 1,
@@ -1086,6 +1111,8 @@ mod tests {
             successful_writes: 0,
             last_failed_edits: vec![],
             total_reads_before_write: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
         };
 
         let json = serde_json::to_string(&report).unwrap();
