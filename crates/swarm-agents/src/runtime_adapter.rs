@@ -893,6 +893,7 @@ mod tests {
             max_reads_without_action: Some(8),
             max_turns_without_write: Some(3),
             search_unlock_turn: Some(3),
+            governance_tier: crate::config::GovernanceTier::Standard,
         };
         let adapter = RuntimeAdapter::new(config);
         let report = adapter.report().unwrap();
