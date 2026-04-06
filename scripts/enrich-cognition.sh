@@ -59,7 +59,7 @@ item = {
     'embedding': []
 }
 print(json.dumps(item))
-" "$item_id" "$domain" <<< "$content" >> "$COGNITION_DIR/items.jsonl" 2>/dev/null
+" "$item_id" "$domain" <<< "$content" >> "$COGNITION_DIR/enrichments.jsonl" 2>/dev/null
 }
 
 DATE_TAG=$(date +%Y%m%d)

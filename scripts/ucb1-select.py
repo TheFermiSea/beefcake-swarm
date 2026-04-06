@@ -11,6 +11,7 @@ Usage:
 Output: space-separated issue IDs (for dogfood-loop.sh consumption)
 """
 
+import os
 import json
 import math
 import subprocess
@@ -36,7 +37,7 @@ def load_experiment_history(path):
 def get_ready_issues():
     """Get ready issues from bd."""
     result = subprocess.run(
-        ["bd", "ready", "--json", "-n", "50"],
+        [os.environ.get("SWARM_BEADS_BIN", "bd"), "ready", "--json", "-n", "50"],
         capture_output=True, text=True
     )
     try:

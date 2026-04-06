@@ -64,9 +64,17 @@ pub fn embed_text(text: &str) -> Result<Vec<f32>> {
 pub fn embed_batch(texts: &[&str]) -> Result<Vec<Vec<f32>>> {
     let script = find_embed_script()?;
 
-    // Write to temp JSONL file
+    // Write to unique temp file (thread-safe via timestamp nanos)
     let tmp_dir = std::env::temp_dir();
-    let tmp_path = tmp_dir.join(format!("embed_batch_{}.jsonl", std::process::id()));
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let tmp_path = tmp_dir.join(format!(
+        "embed_batch_{}_{}.jsonl",
+        std::process::id(),
+        nanos
+    ));
     {
         let mut f = std::io::BufWriter::new(std::fs::File::create(&tmp_path)?);
         for text in texts {

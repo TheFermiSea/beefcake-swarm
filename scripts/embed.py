@@ -45,7 +45,7 @@ def get_embedder():
 
         model = SentenceTransformer("all-MiniLM-L6-v2")
         return lambda text: model.encode(text).tolist()
-    except ImportError:
+    except Exception:
         return lambda text: tfidf_hash_embedding(text)
 
 

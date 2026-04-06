@@ -55,7 +55,10 @@ impl RetrievalResult {
                 CognitionSource::Literature => "literature",
             };
             let preview = if r.item.content.len() > 200 {
-                format!("{}...", &r.item.content[..200])
+                format!(
+                    "{}...",
+                    crate::str_util::safe_truncate(&r.item.content, 200)
+                )
             } else {
                 r.item.content.clone()
             };
