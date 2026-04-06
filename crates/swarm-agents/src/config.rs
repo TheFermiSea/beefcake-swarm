@@ -594,6 +594,12 @@ pub struct SwarmConfig {
     /// insights into the Cognition Base.
     /// Populated from `SWARM_ANALYZE_AFTER_RESOLVE` env var (default: true).
     pub analyze_after_resolve: bool,
+    /// Enable optional LLM judge that scores resolution quality beyond verifier pass/fail.
+    /// When true, a judge prompt evaluates relevance, minimality, side-effects, and
+    /// correctness.  The judge score is blended with the verifier health_score
+    /// (default 80% verifier / 20% judge).
+    /// Populated from `SWARM_JUDGE_ENABLED` env var (default: false).
+    pub judge_enabled: bool,
 }
 
 impl Default for SwarmConfig {
@@ -764,6 +770,9 @@ impl Default for SwarmConfig {
             analyze_after_resolve: std::env::var("SWARM_ANALYZE_AFTER_RESOLVE")
                 .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
                 .unwrap_or(true),
+            judge_enabled: std::env::var("SWARM_JUDGE_ENABLED")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
         }
     }
 }
@@ -1034,6 +1043,7 @@ impl SwarmConfig {
             max_worker_tool_calls: 15,
             verify_before_merge: true,
             analyze_after_resolve: true,
+            judge_enabled: false,
         }
     }
 }
