@@ -53,6 +53,34 @@ pub enum SwarmRole {
     Council,
 }
 
+/// Governance tier controls how many RuntimeAdapter checks fire per tool call.
+/// Source: NeoSigma AutoHarness — Core/Standard/Enhanced pipeline tiers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GovernanceTier {
+    /// Minimal checks: write deadline only, no phase gate, no read budget.
+    /// For P3-P4 simple fixes (dead code, unused imports).
+    Core,
+    /// Standard checks: phase gate + read budget + anti-pattern detection.
+    /// Default for P2 medium-complexity issues.
+    #[default]
+    Standard,
+    /// Maximum validation: all Standard checks + tighter deadlines +
+    /// mandatory read-before-write + post-edit syntax check.
+    /// For P0-P1 complex issues (borrow checker, multi-file).
+    Enhanced,
+}
+
+impl std::fmt::Display for GovernanceTier {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            GovernanceTier::Core => write!(f, "core"),
+            GovernanceTier::Standard => write!(f, "standard"),
+            GovernanceTier::Enhanced => write!(f, "enhanced"),
+        }
+    }
+}
+
 /// Inference tier for model routing.
 #[derive(Debug, Clone, Deserialize)]
 pub enum Tier {

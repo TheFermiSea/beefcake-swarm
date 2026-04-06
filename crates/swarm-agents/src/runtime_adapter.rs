@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::action_validator::{ActionValidator, ValidatorState};
+use crate::config::GovernanceTier;
 
 /// Configuration for the runtime adapter.
 #[derive(Debug, Clone)]
@@ -57,6 +58,9 @@ pub struct AdapterConfig {
     /// In early turns, search tools are blocked to enforce edit-first behavior
     /// since task prompts inline target file content.
     pub search_unlock_turn: Option<usize>,
+    /// Governance tier controlling which checks fire per tool call.
+    /// Core = minimal (fast path), Standard = default, Enhanced = maximum validation.
+    pub governance_tier: GovernanceTier,
 }
 
 impl Default for AdapterConfig {
@@ -69,6 +73,7 @@ impl Default for AdapterConfig {
             max_reads_without_action: None,
             max_turns_without_write: None,
             search_unlock_turn: None,
+            governance_tier: GovernanceTier::default(),
         }
     }
 }
@@ -481,25 +486,29 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
 
             // Phase-gated tool access: block search tools in early turns to enforce edit-first behavior.
             // Research: ALARA (arxiv:2603.20380) — restricting tools produces "guaranteed behavioral change."
-            if let Some(unlock_turn) = config.search_unlock_turn {
-                if !s.has_written && s.turn_count <= unlock_turn {
-                    let base = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
-                    let is_search_tool = matches!(
-                        base,
-                        "search_code" | "colgrep" | "ast_grep" | "list_files" | "file_exists"
-                    );
-                    if is_search_tool {
-                        debug!(
-                            agent = %config.agent_name,
-                            tool = %tool_name,
-                            turn = s.turn_count,
-                            unlock_turn,
-                            "Phase gate: search tool blocked in early turns"
+            // Skipped on Core tier — simple fixes shouldn't pay the phase-gate overhead.
+            if config.governance_tier != GovernanceTier::Core {
+                if let Some(unlock_turn) = config.search_unlock_turn {
+                    if !s.has_written && s.turn_count <= unlock_turn {
+                        let base = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
+                        let is_search_tool = matches!(
+                            base,
+                            "search_code" | "colgrep" | "ast_grep" | "list_files" | "file_exists"
                         );
-                        return ToolCallHookAction::skip(format!(
-                            "Tool '{tool_name}' is not available until turn {unlock_turn} or after your first edit. \
-                             The target file content is already in your task prompt. Use edit_file or write_file now."
-                        ));
+                        if is_search_tool {
+                            debug!(
+                                agent = %config.agent_name,
+                                tool = %tool_name,
+                                turn = s.turn_count,
+                                unlock_turn,
+                                governance_tier = %config.governance_tier,
+                                "Phase gate: search tool blocked in early turns"
+                            );
+                            return ToolCallHookAction::skip(format!(
+                                "Tool '{tool_name}' is not available until turn {unlock_turn} or after your first edit. \
+                                 The target file content is already in your task prompt. Use edit_file or write_file now."
+                            ));
+                        }
                     }
                 }
             }
@@ -575,35 +584,44 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 ToolClass::ReadOnly => {
                     s.consecutive_reads += 1;
 
-                    // Track total pre-write reads (never resets until first write)
-                    if !s.has_written && config.max_turns_without_write.is_some() {
+                    // Track total pre-write reads (never resets until first write).
+                    // Skipped on Core tier — simple fixes don't need read-budget enforcement.
+                    if config.governance_tier != GovernanceTier::Core
+                        && !s.has_written
+                        && config.max_turns_without_write.is_some()
+                    {
                         s.total_reads_before_write += 1;
 
-                        // Hard budget: terminate after too many reads without writing
-                        const PRE_WRITE_READ_BUDGET: usize = 8;
-                        const PRE_WRITE_READ_WARN: usize = 5;
+                        // Hard budget: terminate after too many reads without writing.
+                        // Enhanced tier uses tighter thresholds to enforce focused behavior.
+                        let (pre_write_read_budget, pre_write_read_warn) =
+                            match config.governance_tier {
+                                GovernanceTier::Enhanced => (5, 3),
+                                _ => (8, 5),
+                            };
 
-                        if s.total_reads_before_write >= PRE_WRITE_READ_BUDGET {
+                        if s.total_reads_before_write >= pre_write_read_budget {
                             s.terminated_early = true;
                             let reason = format!(
                                 "Pre-write read budget exhausted: {} read-only calls with no \
-                                 edit_file/write_file. Stop exploring and write your edit now.",
-                                s.total_reads_before_write
+                                 edit_file/write_file (limit: {}, tier: {}). Stop exploring and write your edit now.",
+                                s.total_reads_before_write, pre_write_read_budget, config.governance_tier
                             );
                             s.termination_reason = Some(reason.clone());
                             warn!(
                                 agent = %config.agent_name,
                                 total_reads = s.total_reads_before_write,
+                                governance_tier = %config.governance_tier,
                                 "Anti-stall: pre-write read budget exceeded"
                             );
                             return ToolCallHookAction::terminate(format!(
                                 "Runtime adapter: {reason}"
                             ));
-                        } else if s.total_reads_before_write == PRE_WRITE_READ_WARN {
+                        } else if s.total_reads_before_write == pre_write_read_warn {
                             info!(
                                 agent = %config.agent_name,
                                 total_reads = s.total_reads_before_write,
-                                budget = PRE_WRITE_READ_BUDGET,
+                                budget = pre_write_read_budget,
                                 "Pre-write read warning: approaching budget limit"
                             );
                         }
