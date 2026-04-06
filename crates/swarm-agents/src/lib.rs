@@ -22,6 +22,7 @@ pub mod jsonl;
 pub mod kb_refresh;
 pub mod knowledge_sync;
 pub mod language_prompts;
+pub mod map_elites;
 pub mod meta_reflection;
 pub mod modes;
 pub mod mutation_archive;
