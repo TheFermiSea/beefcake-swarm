@@ -55,6 +55,7 @@ MAX_ISSUE_FAILURES="${DOGFOOD_MAX_ISSUE_FAILURES:-3}"  # defer after N consecuti
 STRINGER_INTERVAL="${DOGFOOD_STRINGER_INTERVAL:-86400}"
 DOGFOOD_WORKER_FIRST="${DOGFOOD_WORKER_FIRST:-1}"
 ALLOW_DIRTY_TARGET="${DOGFOOD_ALLOW_DIRTY_TARGET:-0}"
+ISSUE_SELECTION="${SWARM_ISSUE_SELECTION:-ucb1}"  # ucb1, priority, random
 
 # CLI overrides
 while [[ $# -gt 0 ]]; do
@@ -197,6 +198,9 @@ maybe_run_stringer() {
 RECONCILE_STAMP_FILE="/tmp/dogfood-loop${_LOCK_SUFFIX}.reconcile.last_run"
 RECONCILE_INTERVAL="${DOGFOOD_RECONCILE_INTERVAL:-600}"  # every 10 minutes
 
+ENRICH_STAMP_FILE="/tmp/dogfood-loop${_LOCK_SUFFIX}.enrich.last_run"
+ENRICH_INTERVAL="${DOGFOOD_ENRICH_INTERVAL:-604800}"  # weekly (7 days)
+
 maybe_reconcile() {
   local reconcile_script="$SCRIPT_DIR/reconcile-issues.sh"
   [[ -x "$reconcile_script" ]] || return 0
@@ -222,6 +226,35 @@ maybe_reconcile() {
   fi
   if bash "$reconcile_script" "${extra_args[@]}" 2>&1 | sed 's/^/    /'; then
     printf '%s\n' "$now" > "$RECONCILE_STAMP_FILE"
+  fi
+}
+
+# --- Cognition enrichment: query NotebookLM for insights weekly ---
+maybe_enrich_cognition() {
+  local enrich_script="$SCRIPT_DIR/enrich-cognition.sh"
+  [[ -x "$enrich_script" ]] || return 0
+
+  local now last_run elapsed
+  now=$(date +%s)
+  last_run=0
+  if [[ -f "$ENRICH_STAMP_FILE" ]]; then
+    last_run=$(cat "$ENRICH_STAMP_FILE" 2>/dev/null || echo "0")
+  fi
+
+  if [[ "$last_run" =~ ^[0-9]+$ ]]; then
+    elapsed=$((now - last_run))
+    if (( elapsed < ENRICH_INTERVAL )); then
+      return 0
+    fi
+  fi
+
+  log "  [enrich] Running enrich-cognition.sh (weekly cadence)..."
+  local extra_args=()
+  if [[ -n "$TARGET_REPO" ]]; then
+    extra_args+=(--repo-root "$TARGET_REPO")
+  fi
+  if bash "$enrich_script" "${extra_args[@]}" 2>&1 | sed 's/^/    /'; then
+    printf '%s\n' "$now" > "$ENRICH_STAMP_FILE"
   fi
 }
 
@@ -278,6 +311,7 @@ log "  Max runs: $([ "$MAX_RUNS" -eq 0 ] && echo 'unlimited' || echo "$MAX_RUNS"
 log "  Discover: $([ "$DISCOVER" -eq 1 ] && echo 'ON (auto-fetch new issues)' || echo 'OFF')"
 log "  Stringer refresh: ${STRINGER_INTERVAL}s"
 log "  Worker-first: ${DOGFOOD_WORKER_FIRST}"
+log "  Selection:  ${ISSUE_SELECTION}"
 
 if [[ -n "$ISSUE_LIST" ]]; then
   read -ra ISSUES <<< "$ISSUE_LIST"
@@ -338,6 +372,50 @@ elif sys.argv[1] == "ids":
                 if ref:
                     print(ref)
 ' "$@"
+}
+
+# --- UCB1-based issue selection (ASI-Evolve pattern) ---
+# Scores ready issues balancing exploitation (category success rate)
+# vs exploration (under-attempted categories).
+select_issues_ucb1() {
+  local top_n="${1:-3}"
+  local ucb1_script="$SCRIPT_DIR/ucb1-select.py"
+  local exp_db="${BD_RUN_DIR}/.swarm/experiment_history.jsonl"
+  local summary_db="$SUMMARY_FILE"
+
+  if [[ -f "$ucb1_script" ]] && command -v python3 &>/dev/null; then
+    local selected
+    selected=$(python3 "$ucb1_script" \
+      --experiment-db "$exp_db" \
+      --summary-db "$summary_db" \
+      --top-n "$top_n" 2>/dev/null)
+    if [[ -n "$selected" ]]; then
+      echo "$selected"
+      return 0
+    fi
+  fi
+
+  # Fallback: use bd ready (priority order)
+  bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null | head -n "$top_n" | tr '\n' ' '
+}
+
+# Select issues based on SWARM_ISSUE_SELECTION strategy.
+# Dispatches to ucb1, priority (bd ready), or random selection.
+select_issues() {
+  local top_n="${1:-3}"
+  case "$ISSUE_SELECTION" in
+    ucb1)
+      select_issues_ucb1 "$top_n"
+      ;;
+    random)
+      # Shuffle bd ready output
+      bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null | sort -R | head -n "$top_n" | tr '\n' ' '
+      ;;
+    priority|*)
+      # Default: bd ready priority order
+      bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null | head -n "$top_n" | tr '\n' ' '
+      ;;
+  esac
 }
 
 # --- Run a single issue (called from parallel dispatch) ---
@@ -512,9 +590,9 @@ if [[ "$PARALLEL" -le 1 ]]; then
       IDX=$((RUN_COUNT - 1))
       if [[ $IDX -ge ${#ISSUES[@]} ]]; then
         if [[ "$DISCOVER" -eq 1 ]]; then
-          # Discover new issues from bdh ready
-          log "Issue list exhausted — discovering new issues from bdh ready..."
-          mapfile -t NEW_ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+          # Discover new issues (UCB1-ranked if enabled, else bd ready)
+          log "Issue list exhausted — discovering new issues (strategy=$ISSUE_SELECTION)..."
+          mapfile -t NEW_ISSUES < <(select_issues 20 | tr ' ' '\n' || true)
           if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
             # Dedup: only add issues not already in the ISSUES array
             for _new_id in "${NEW_ISSUES[@]}"; do
@@ -550,7 +628,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
         fi
       fi
 
-      # Fallback: bash-side circuit breaker (if pick-next unavailable or returned nothing)
+      # Fallback: UCB1/priority selection with circuit breaker
       if [[ -z "$ISSUE_ID" ]]; then
         while IFS= read -r candidate; do
           [[ -z "$candidate" ]] && continue
@@ -560,7 +638,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
           fi
           ISSUE_ID="$candidate"
           break
-        done < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+        done < <(select_issues 10 | tr ' ' '\n' || true)
       fi
 
       if [[ -z "$ISSUE_ID" ]]; then
@@ -604,6 +682,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
     if [[ ${#ISSUES[@]} -gt 0 && $RUN_COUNT -ge ${#ISSUES[@]} && "$DISCOVER" -eq 0 ]]; then break; fi
 
     maybe_reconcile
+    maybe_enrich_cognition
     log "  Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
   done
@@ -611,15 +690,15 @@ else
   # --- Parallel mode ---
   log "=== Parallel mode: up to $PARALLEL concurrent issues ==="
 
-  # Build the issue queue
+  # Build the issue queue (UCB1-ranked if enabled)
   if [[ ${#ISSUES[@]} -eq 0 ]]; then
-    # Auto mode: fetch ready issues from beads
-    mapfile -t ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+    # Auto mode: fetch ready issues ranked by selection strategy
+    mapfile -t ISSUES < <(select_issues 20 | tr ' ' '\n' || true)
     if [[ ${#ISSUES[@]} -eq 0 ]]; then
       log "No ready issues found. Stopping."
       exit 0
     fi
-    log "  Found ${#ISSUES[@]} ready issues: ${ISSUES[*]}"
+    log "  Found ${#ISSUES[@]} ready issues (strategy=$ISSUE_SELECTION): ${ISSUES[*]}"
   fi
 
   # Apply max-runs limit to the queue
@@ -633,8 +712,8 @@ else
   while [[ $IDX -lt ${#ISSUES[@]} || "$DISCOVER" -eq 1 ]]; do
     # When discover is on and we've exhausted the list, fetch new issues
     if [[ $IDX -ge ${#ISSUES[@]} && "$DISCOVER" -eq 1 ]]; then
-      log "Issue list exhausted — discovering new issues from bdh ready..."
-      mapfile -t NEW_ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+      log "Issue list exhausted — discovering new issues (strategy=$ISSUE_SELECTION)..."
+      mapfile -t NEW_ISSUES < <(select_issues 20 | tr ' ' '\n' || true)
       if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
         # Dedup: only add issues not already in the ISSUES array
         for _new_id in "${NEW_ISSUES[@]}"; do
@@ -699,8 +778,8 @@ else
               log "  [pool] Backfill started issue=$ISSUE_ID (${#POOL_PIDS[@]} active)"
               IDX=$((IDX + 1))
             elif [[ "$DISCOVER" -eq 1 && ${#POOL_PIDS[@]} -lt $PARALLEL ]]; then
-              # Discover new issues to keep pool full
-              mapfile -t NEW_ISSUES < <(bd_cmd ready --json 2>/dev/null | parse_bdh_json ids 2>/dev/null || true)
+              # Discover new issues to keep pool full (UCB1-ranked)
+              mapfile -t NEW_ISSUES < <(select_issues 10 | tr ' ' '\n' || true)
               if [[ ${#NEW_ISSUES[@]} -gt 0 ]]; then
                 # Dedup: only add issues not already in the ISSUES array
                 for _new_id in "${NEW_ISSUES[@]}"; do
@@ -748,6 +827,7 @@ else
     # Pool drained — refresh backlog and reconcile zombie issues, then cooldown.
     maybe_run_stringer || true
     maybe_reconcile
+    maybe_enrich_cognition
     log "  Pool drained. Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
 
