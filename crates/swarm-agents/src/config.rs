@@ -590,6 +590,10 @@ pub struct SwarmConfig {
     /// are merged. When false, merge proceeds without pre-verification.
     /// Populated from `SWARM_VERIFY_BEFORE_MERGE` env var (default: true).
     pub verify_before_merge: bool,
+    /// Run the Analyzer agent after each successful resolution to distill reusable
+    /// insights into the Cognition Base.
+    /// Populated from `SWARM_ANALYZE_AFTER_RESOLVE` env var (default: true).
+    pub analyze_after_resolve: bool,
 }
 
 impl Default for SwarmConfig {
@@ -755,6 +759,9 @@ impl Default for SwarmConfig {
                 .filter(|v: &usize| *v > 0)
                 .unwrap_or(15),
             verify_before_merge: std::env::var("SWARM_VERIFY_BEFORE_MERGE")
+                .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
+                .unwrap_or(true),
+            analyze_after_resolve: std::env::var("SWARM_ANALYZE_AFTER_RESOLVE")
                 .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
                 .unwrap_or(true),
         }
@@ -1026,6 +1033,7 @@ impl SwarmConfig {
             max_turns_without_write: 8,
             max_worker_tool_calls: 15,
             verify_before_merge: true,
+            analyze_after_resolve: true,
         }
     }
 }

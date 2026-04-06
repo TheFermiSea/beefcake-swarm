@@ -1,6 +1,8 @@
 pub mod acceptance;
 pub mod action_validator;
 pub mod agents;
+pub mod analyzer;
+
 pub mod auto_fix;
 #[path = "autopilot/mod.rs"]
 pub mod autopilot;
