@@ -185,9 +185,9 @@ impl HarnessPreset {
     pub fn apply_to_tags(&self, tags: &mut FeedbackTags) {
         let params = self.params();
         tags.harness_preset = Some(self.as_tag().to_string());
-        tags.write_deadline = Some(params.write_deadline.to_string());
-        tags.search_unlock_turn = Some(params.search_unlock_turn.to_string());
-        tags.pre_write_read_budget = Some(params.pre_write_read_budget.to_string());
+        tags.write_deadline = Some(params.write_deadline);
+        tags.search_unlock_turn = Some(params.search_unlock_turn);
+        tags.pre_write_read_budget = Some(params.pre_write_read_budget);
     }
 }
 
@@ -249,17 +249,13 @@ pub struct FeedbackTags {
     /// See `HarnessPreset` for the preset→parameter mapping.
     pub harness_preset: Option<String>,
     /// Base write deadline value (max turns before a file edit is required).
-    /// Corresponds to `SWARM_MAX_TURNS_WITHOUT_WRITE` (default: 8).
-    pub write_deadline: Option<String>,
+    pub write_deadline: Option<usize>,
     /// Turn after which search tools are unlocked (0 = always available).
-    /// Lower values enforce edit-first behavior; higher values allow exploration.
-    pub search_unlock_turn: Option<String>,
+    pub search_unlock_turn: Option<usize>,
     /// Max consecutive read-only calls before termination.
-    /// Controls how much exploration is allowed before the agent must act.
-    pub pre_write_read_budget: Option<String>,
+    pub pre_write_read_budget: Option<usize>,
     /// Maximum tool calls per worker session.
-    /// Corresponds to `SWARM_MAX_WORKER_TOOL_CALLS` (default: 15).
-    pub max_tool_calls: Option<String>,
+    pub max_tool_calls: Option<usize>,
     /// Governance tier applied to this run: `"core"`, `"standard"`, or `"enhanced"`.
     /// Correlates adapter check intensity with task outcomes.
     pub governance_tier: Option<String>,
@@ -298,16 +294,16 @@ impl FeedbackTags {
             map.insert("harness_preset".to_string(), v);
         }
         if let Some(v) = self.write_deadline {
-            map.insert("write_deadline".to_string(), v);
+            map.insert("write_deadline".to_string(), v.to_string());
         }
         if let Some(v) = self.search_unlock_turn {
-            map.insert("search_unlock_turn".to_string(), v);
+            map.insert("search_unlock_turn".to_string(), v.to_string());
         }
         if let Some(v) = self.pre_write_read_budget {
-            map.insert("pre_write_read_budget".to_string(), v);
+            map.insert("pre_write_read_budget".to_string(), v.to_string());
         }
         if let Some(v) = self.max_tool_calls {
-            map.insert("max_tool_calls".to_string(), v);
+            map.insert("max_tool_calls".to_string(), v.to_string());
         }
         if let Some(v) = self.governance_tier {
             map.insert("governance_tier".to_string(), v);
@@ -646,10 +642,10 @@ pub async fn post_resolved_feedback(
             error_category: m.get("error_category").cloned(),
             retry_tier: m.get("retry_tier").cloned(),
             harness_preset: m.get("harness_preset").cloned(),
-            write_deadline: m.get("write_deadline").cloned(),
-            search_unlock_turn: m.get("search_unlock_turn").cloned(),
-            pre_write_read_budget: m.get("pre_write_read_budget").cloned(),
-            max_tool_calls: m.get("max_tool_calls").cloned(),
+            write_deadline: m.get("write_deadline").and_then(|v| v.parse().ok()),
+            search_unlock_turn: m.get("search_unlock_turn").and_then(|v| v.parse().ok()),
+            pre_write_read_budget: m.get("pre_write_read_budget").and_then(|v| v.parse().ok()),
+            max_tool_calls: m.get("max_tool_calls").and_then(|v| v.parse().ok()),
             governance_tier: m.get("governance_tier").cloned(),
         });
         post_episode_feedback(
@@ -952,9 +948,9 @@ mod tests {
         HarnessPreset::Tight.apply_to_tags(&mut tags);
 
         assert_eq!(tags.harness_preset.as_deref(), Some("tight"));
-        assert_eq!(tags.write_deadline.as_deref(), Some("4"));
-        assert_eq!(tags.search_unlock_turn.as_deref(), Some("2"));
-        assert_eq!(tags.pre_write_read_budget.as_deref(), Some("6"));
+        assert_eq!(tags.write_deadline, Some(4));
+        assert_eq!(tags.search_unlock_turn, Some(2));
+        assert_eq!(tags.pre_write_read_budget, Some(6));
         // Existing fields should be preserved.
         assert_eq!(tags.issue_id.as_deref(), Some("test-123"));
     }

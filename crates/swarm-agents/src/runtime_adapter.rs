@@ -354,17 +354,7 @@ impl RuntimeAdapter {
     }
 
     fn truncate(s: &str, max_len: usize) -> String {
-        if s.len() <= max_len {
-            s.to_string()
-        } else {
-            // Find nearest char boundary at or before max_len to avoid
-            // panicking on multi-byte UTF-8 characters (e.g. em dash '—').
-            let mut end = max_len;
-            while end > 0 && !s.is_char_boundary(end) {
-                end -= 1;
-            }
-            format!("{}...", &s[..end])
-        }
+        crate::str_util::safe_truncate_with_ellipsis(s, max_len)
     }
 }
 
@@ -503,7 +493,6 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
             }
 
             // Phase-gated tool access: block search tools in early turns to enforce edit-first behavior.
-            // Research: ALARA (arxiv:2603.20380) — restricting tools produces "guaranteed behavioral change."
             // Skipped on Core tier — simple fixes shouldn't pay the phase-gate overhead.
             if config.governance_tier != GovernanceTier::Core {
                 if let Some(unlock_turn) = config.search_unlock_turn {
@@ -852,8 +841,6 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
             }
 
             // Anti-pattern detection: consecutive edit failures on the same file.
-            // Research: Graphectory (arxiv:2512.02393) — StrNotFound is the strongest
-            // predictor of task failure. One case: 183 consecutive failed str_replace calls.
             const MAX_EDIT_FAILURES_PER_FILE: u32 = 3;
 
             let base_name = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
