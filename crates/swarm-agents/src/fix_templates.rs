@@ -28,9 +28,8 @@ static DEAD_CODE_RE: LazyLock<Regex> = LazyLock::new(|| {
 
 /// Regex to extract the import path from unused-import warnings.
 /// Matches: "unused import: `foo::Bar`"
-static UNUSED_IMPORT_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"unused import: `([^`]+)`").expect("valid unused import regex")
-});
+static UNUSED_IMPORT_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"unused import: `([^`]+)`").expect("valid unused import regex"));
 
 /// Result of attempting to apply a fix template.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -201,9 +200,7 @@ fn fix_dead_code(
     TemplateResult::Applied {
         file_path: file_path.to_string(),
         new_content,
-        description: format!(
-            "Add `#[allow(dead_code)]` above `{item_name}` at line {line_num}"
-        ),
+        description: format!("Add `#[allow(dead_code)]` above `{item_name}` at line {line_num}"),
     }
 }
 
@@ -276,13 +273,7 @@ mod tests {
         let content = "fn main() {\n    let count = 42;\n    println!(\"hello\");\n}\n";
         let msg = "warning: unused variable: `count`\n  --> src/main.rs:2:9\n   |\n2  |     let count = 42;\n   |         ^^^^^ help: if this is intentional, prefix it with an underscore: `_count`";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/main.rs",
-            content,
-            Some(2),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/main.rs", content, Some(2));
 
         match result {
             TemplateResult::Applied {
@@ -302,16 +293,11 @@ mod tests {
 
     #[test]
     fn test_unused_variable_in_pattern() {
-        let content = "fn process(items: Vec<i32>) {\n    for item in &items {\n        // todo\n    }\n}\n";
+        let content =
+            "fn process(items: Vec<i32>) {\n    for item in &items {\n        // todo\n    }\n}\n";
         let msg = "warning: unused variable: `item`\n  --> src/lib.rs:2:9";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/lib.rs",
-            content,
-            Some(2),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/lib.rs", content, Some(2));
 
         match result {
             TemplateResult::Applied { new_content, .. } => {
@@ -334,13 +320,7 @@ mod tests {
         let content = "fn main() {\n    let _x = 42;\n}\n";
         let msg = "warning: unused variable: `_x`";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/main.rs",
-            content,
-            Some(2),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/main.rs", content, Some(2));
 
         assert_eq!(result, TemplateResult::NoMatch);
     }
@@ -350,13 +330,7 @@ mod tests {
         let content = "fn main() {\n    let x = 42;\n}\n";
         let msg = "warning: unused variable: `x`";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/main.rs",
-            content,
-            None,
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/main.rs", content, None);
 
         assert_eq!(result, TemplateResult::NoMatch);
     }
@@ -368,13 +342,7 @@ mod tests {
         let content = "pub fn used() {}\n\nfn helper() {\n    // internal\n}\n";
         let msg = "warning: function `helper` is never used\n  --> src/lib.rs:3:4\n   |\n3  | fn helper() {\n   |    ^^^^^^";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/lib.rs",
-            content,
-            Some(3),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/lib.rs", content, Some(3));
 
         match result {
             TemplateResult::Applied {
@@ -422,13 +390,7 @@ mod tests {
         let content = "#[allow(dead_code)]\nfn helper() {}\n";
         let msg = "warning: function `helper` is never used\n  --> src/lib.rs:2:4";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/lib.rs",
-            content,
-            Some(2),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/lib.rs", content, Some(2));
 
         assert_eq!(result, TemplateResult::NoMatch);
     }
@@ -438,13 +400,7 @@ mod tests {
         let content = "impl Foo {\n    fn internal(&self) -> bool {\n        true\n    }\n}\n";
         let msg = "warning: associated function `internal` is never used\n  --> src/foo.rs:2:8";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/foo.rs",
-            content,
-            Some(2),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/foo.rs", content, Some(2));
 
         match result {
             TemplateResult::Applied { new_content, .. } => {
@@ -464,13 +420,7 @@ mod tests {
         let content = "use std::collections::HashMap;\nuse std::io;\n\nfn main() {\n    let m: HashMap<String, i32> = HashMap::new();\n}\n";
         let msg = "warning: unused import: `std::io`\n  --> src/main.rs:2:5";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/main.rs",
-            content,
-            Some(2),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/main.rs", content, Some(2));
 
         match result {
             TemplateResult::Applied {
@@ -497,13 +447,7 @@ mod tests {
         let content = "use std::collections::{HashMap, BTreeMap};\n\nfn main() {}\n";
         let msg = "warning: unused import: `BTreeMap`\n  --> src/main.rs:1:32";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/main.rs",
-            content,
-            Some(1),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/main.rs", content, Some(1));
 
         // Braced imports are too complex for templates
         assert_eq!(result, TemplateResult::NoMatch);
@@ -514,13 +458,7 @@ mod tests {
         let content = "// use std::io;\nfn main() {}\n";
         let msg = "warning: unused import: `std::io`\n  --> src/main.rs:1:5";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/main.rs",
-            content,
-            Some(1),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/main.rs", content, Some(1));
 
         // Commented-out line should not be removed
         assert_eq!(result, TemplateResult::NoMatch);
@@ -549,13 +487,7 @@ mod tests {
         let content = "fn main() {}\n";
         let msg = "warning: unused variable: `x`";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/main.rs",
-            content,
-            Some(99),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/main.rs", content, Some(99));
 
         assert_eq!(result, TemplateResult::NoMatch);
     }
@@ -565,13 +497,7 @@ mod tests {
         let content = "fn main() {\n    let count = 42;\n}\n";
         let msg = "warning: unused variable: `count`";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/main.rs",
-            content,
-            Some(2),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/main.rs", content, Some(2));
 
         match result {
             TemplateResult::Applied { new_content, .. } => {
@@ -589,13 +515,7 @@ mod tests {
         let content = "fn main() {\n    let count = 42;\n}";
         let msg = "warning: unused variable: `count`";
 
-        let result = try_template_fix(
-            &ErrorCategory::Other,
-            msg,
-            "src/main.rs",
-            content,
-            Some(2),
-        );
+        let result = try_template_fix(&ErrorCategory::Other, msg, "src/main.rs", content, Some(2));
 
         match result {
             TemplateResult::Applied { new_content, .. } => {

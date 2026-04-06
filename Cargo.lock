@@ -2227,6 +2227,7 @@ dependencies = [
  "chrono",
  "clap",
  "coordination",
+ "regex",
  "reqwest",
  "rig-core",
  "schemars 0.8.22",
