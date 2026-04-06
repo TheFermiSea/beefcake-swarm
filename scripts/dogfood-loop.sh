@@ -197,6 +197,9 @@ maybe_run_stringer() {
 RECONCILE_STAMP_FILE="/tmp/dogfood-loop${_LOCK_SUFFIX}.reconcile.last_run"
 RECONCILE_INTERVAL="${DOGFOOD_RECONCILE_INTERVAL:-600}"  # every 10 minutes
 
+ENRICH_STAMP_FILE="/tmp/dogfood-loop${_LOCK_SUFFIX}.enrich.last_run"
+ENRICH_INTERVAL="${DOGFOOD_ENRICH_INTERVAL:-604800}"  # weekly (7 days)
+
 maybe_reconcile() {
   local reconcile_script="$SCRIPT_DIR/reconcile-issues.sh"
   [[ -x "$reconcile_script" ]] || return 0
@@ -222,6 +225,35 @@ maybe_reconcile() {
   fi
   if bash "$reconcile_script" "${extra_args[@]}" 2>&1 | sed 's/^/    /'; then
     printf '%s\n' "$now" > "$RECONCILE_STAMP_FILE"
+  fi
+}
+
+# --- Cognition enrichment: query NotebookLM for insights weekly ---
+maybe_enrich_cognition() {
+  local enrich_script="$SCRIPT_DIR/enrich-cognition.sh"
+  [[ -x "$enrich_script" ]] || return 0
+
+  local now last_run elapsed
+  now=$(date +%s)
+  last_run=0
+  if [[ -f "$ENRICH_STAMP_FILE" ]]; then
+    last_run=$(cat "$ENRICH_STAMP_FILE" 2>/dev/null || echo "0")
+  fi
+
+  if [[ "$last_run" =~ ^[0-9]+$ ]]; then
+    elapsed=$((now - last_run))
+    if (( elapsed < ENRICH_INTERVAL )); then
+      return 0
+    fi
+  fi
+
+  log "  [enrich] Running enrich-cognition.sh (weekly cadence)..."
+  local extra_args=()
+  if [[ -n "$TARGET_REPO" ]]; then
+    extra_args+=(--repo-root "$TARGET_REPO")
+  fi
+  if bash "$enrich_script" "${extra_args[@]}" 2>&1 | sed 's/^/    /'; then
+    printf '%s\n' "$now" > "$ENRICH_STAMP_FILE"
   fi
 }
 
@@ -604,6 +636,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
     if [[ ${#ISSUES[@]} -gt 0 && $RUN_COUNT -ge ${#ISSUES[@]} && "$DISCOVER" -eq 0 ]]; then break; fi
 
     maybe_reconcile
+    maybe_enrich_cognition
     log "  Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
   done
@@ -748,6 +781,7 @@ else
     # Pool drained — refresh backlog and reconcile zombie issues, then cooldown.
     maybe_run_stringer || true
     maybe_reconcile
+    maybe_enrich_cognition
     log "  Pool drained. Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
 
