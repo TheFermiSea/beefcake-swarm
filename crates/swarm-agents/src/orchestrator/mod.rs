@@ -62,6 +62,7 @@ pub(crate) use crate::auto_fix::{should_reject_auto_fix, try_auto_fix};
 use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
+use crate::cognition::{self, CognitionBase};
 use crate::config::{GovernanceTier, SwarmConfig, SwarmRole};
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
@@ -503,6 +504,13 @@ async fn process_issue_core(
         max_iterations = config.max_retries,
         "Harness session started"
     );
+
+    // --- Cognition Base for analyzer distillation ---
+    let mut cognition_base: Option<CognitionBase> = if config.analyze_after_resolve {
+        Some(CognitionBase::new())
+    } else {
+        None
+    };
 
     // --- Telemetry ---
     let stack_profile_str = serde_json::to_string(&config.stack_profile)
@@ -3543,6 +3551,22 @@ async fn process_issue_core(
                 }
             }
             info!(id = %issue.id, "Issue closed");
+
+            // LDEA: Analyzer distillation (ASI-Evolve pattern)
+            let error_cat: Option<String> = escalation
+                .recent_error_categories
+                .iter()
+                .flatten()
+                .next()
+                .map(|c| c.to_string());
+            run_analyzer_distillation(
+                config,
+                &mut cognition_base,
+                issue,
+                session.iteration(),
+                error_cat.as_deref(),
+                Some(&format!("{:?}", escalation.current_tier)),
+            );
         }
         info!(
             id = %issue.id,
@@ -3644,6 +3668,22 @@ async fn process_issue_core(
                 }
             }
             info!(id = %issue.id, "Issue closed");
+
+            // LDEA: Analyzer distillation (ASI-Evolve pattern)
+            let error_cat: Option<String> = escalation
+                .recent_error_categories
+                .iter()
+                .flatten()
+                .next()
+                .map(|c| c.to_string());
+            run_analyzer_distillation(
+                config,
+                &mut cognition_base,
+                issue,
+                session.iteration(),
+                error_cat.as_deref(),
+                Some(&format!("{:?}", escalation.current_tier)),
+            );
         }
     } else {
         session.fail();
@@ -4319,6 +4359,44 @@ fn parse_review_response(response: &str) -> bool {
     // Can't determine — default to approve to avoid blocking
     warn!("Pre-merge review: could not parse response — auto-approving");
     true
+}
+
+/// LDEA: Analyzer distillation (ASI-Evolve pattern).
+///
+/// After a successful resolution, record a structured summary in the Cognition
+/// Base. The actual LLM call is deferred to a follow-up — for now we store the
+/// resolution metadata directly so the feedback loop has data to learn from.
+fn run_analyzer_distillation(
+    config: &SwarmConfig,
+    cognition_base: &mut Option<CognitionBase>,
+    issue: &BeadsIssue,
+    iteration: u32,
+    error_category: Option<&str>,
+    model_used: Option<&str>,
+) {
+    if !config.analyze_after_resolve {
+        return;
+    }
+    let content = format!(
+        "Resolved {} ({}) in {} iterations with {}",
+        issue.title,
+        error_category.unwrap_or("unknown"),
+        iteration,
+        model_used.unwrap_or("unknown"),
+    );
+    if let Some(ref mut base) = cognition_base {
+        let item = cognition::CognitionItem {
+            id: format!("exp-{}", issue.id),
+            content,
+            source: cognition::CognitionSource::Experiment,
+            domain: error_category.map(String::from),
+            embedding: vec![],
+        };
+        base.add(item);
+        info!(id = %issue.id, "Analyzer: distilled resolution insight into Cognition Base");
+    } else {
+        debug!(id = %issue.id, "Analyzer: skipped — no Cognition Base configured");
+    }
 }
 
 /// Compile-time guard: `process_issue_core`'s future must be `Send` so it
