@@ -590,6 +590,12 @@ pub struct SwarmConfig {
     /// are merged. When false, merge proceeds without pre-verification.
     /// Populated from `SWARM_VERIFY_BEFORE_MERGE` env var (default: true).
     pub verify_before_merge: bool,
+    /// Enable optional LLM judge that scores resolution quality beyond verifier pass/fail.
+    /// When true, a judge prompt evaluates relevance, minimality, side-effects, and
+    /// correctness.  The judge score is blended with the verifier health_score
+    /// (default 80% verifier / 20% judge).
+    /// Populated from `SWARM_JUDGE_ENABLED` env var (default: false).
+    pub judge_enabled: bool,
 }
 
 impl Default for SwarmConfig {
@@ -757,6 +763,9 @@ impl Default for SwarmConfig {
             verify_before_merge: std::env::var("SWARM_VERIFY_BEFORE_MERGE")
                 .map(|v| v != "0" && !v.eq_ignore_ascii_case("false"))
                 .unwrap_or(true),
+            judge_enabled: std::env::var("SWARM_JUDGE_ENABLED")
+                .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+                .unwrap_or(false),
         }
     }
 }
@@ -1026,6 +1035,7 @@ impl SwarmConfig {
             max_turns_without_write: 8,
             max_worker_tool_calls: 15,
             verify_before_merge: true,
+            judge_enabled: false,
         }
     }
 }
