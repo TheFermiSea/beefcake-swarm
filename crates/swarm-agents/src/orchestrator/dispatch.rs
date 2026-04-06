@@ -9,7 +9,9 @@ use tracing::{debug, info};
 
 use crate::file_targeting::find_target_files_by_grep;
 use coordination::feedback::ErrorCategory;
-use coordination::verifier::report::{GateOutcome, VerifierReport};
+#[cfg(test)]
+use coordination::verifier::report::GateOutcome;
+use coordination::verifier::report::VerifierReport;
 use coordination::WorkPacket;
 
 /// Coder routing decision with confidence level.
@@ -523,16 +525,7 @@ pub fn condense_verifier_report(report: &VerifierReport) -> String {
     let gates: Vec<String> = report
         .gates
         .iter()
-        .map(|g| {
-            let icon = match g.outcome {
-                GateOutcome::Passed => "PASS",
-                GateOutcome::Warning => "WARN",
-                GateOutcome::Failed => "FAIL",
-                GateOutcome::Skipped => "SKIP",
-                GateOutcome::Timeout => "TIMEOUT",
-            };
-            format!("{} {}", g.gate, icon)
-        })
+        .map(|g| format!("{} {}", g.gate, g.outcome))
         .collect();
     lines.push(format!("Gates: {}", gates.join(", ")));
 
@@ -546,21 +539,36 @@ pub fn condense_verifier_report(report: &VerifierReport) -> String {
     if !errors.is_empty() {
         lines.push("Key errors:".to_string());
         for e in errors {
-            // Safe truncation: rustc diagnostics may contain Unicode (quotes, arrows).
-            let truncated = if e.len() > 150 {
-                let mut end = 150;
-                while end > 0 && !e.is_char_boundary(end) {
-                    end -= 1;
-                }
-                &e[..end]
-            } else {
-                e
-            };
+            let truncated = crate::str_util::safe_truncate(e, 150);
             lines.push(format!("  - {truncated}"));
         }
     }
 
     lines.join("\n")
+}
+
+/// Build a review prompt for the pre-merge quality check.
+///
+/// The reviewer sees the issue context and an abbreviated diff, then decides
+/// whether the change should merge. Response is expected as JSON with
+/// `{"approve": true/false, "reason": "..."}`.
+pub fn build_review_prompt(
+    issue_title: &str,
+    issue_description: &str,
+    diff_summary: &str,
+) -> String {
+    format!(
+        "## Pre-Merge Review\n\n\
+         You are reviewing a code change before it merges to main.\n\n\
+         **Issue:** {issue_title}\n\
+         **Description:** {issue_description}\n\n\
+         **Diff:**\n```\n{diff_summary}\n```\n\n\
+         Check:\n\
+         1. Does the diff address the issue? (yes/no + brief reason)\n\
+         2. Are there unrelated changes? (yes/no)\n\
+         3. Any obvious bugs or problems? (yes/no + what)\n\n\
+         Respond with JSON only: {{\"approve\": true/false, \"reason\": \"...\"}}"
+    )
 }
 
 #[cfg(test)]

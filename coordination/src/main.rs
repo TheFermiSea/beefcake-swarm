@@ -36,11 +36,7 @@ pub mod state;
 
 use anyhow::Result;
 use clap::Parser;
-use rmcp::{
-    handler::server::wrapper::Parameters,
-    model::{ServerCapabilities, ServerInfo},
-    schemars, tool, tool_router, ServerHandler, ServiceExt,
-};
+use rmcp::{handler::server::wrapper::Parameters, schemars, tool, tool_router, ServiceExt};
 use serde::{Deserialize, Serialize};
 use tokio::io::{stdin, stdout};
 
@@ -1409,72 +1405,6 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         };
 
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
-    }
-}
-
-impl ServerHandler for RustClusterServer {
-    fn get_info(&self) -> ServerInfo {
-        let base_instructions = "MCP server providing access to local Rust-expert LLMs via llama.cpp router mode.\n\
-                 Models auto-switch on demand (LRU eviction when memory constrained).\n\
-                 - ask_rust_architect: OR1-Behemoth 73B (distributed GPU via RPC, ~11 tok/s)\n\
-                 - ask_rust_coder: Strand-Rust-Coder 14B (local GPU, ~53 tok/s)\n\
-                 - ask_hydra_coder: HydraCoder 31B MoE (local GPU, ~40-60 tok/s) - specialized Rust fine-tune";
-
-        let harness_instructions = "\n\n\
-## Agent Harness Workflow (when --harness enabled)
-
-This harness manages long-running agent sessions with structured progress tracking.
-
-### Recommended Workflow:
-1. `harness_start` → Initialize or resume session
-2. `harness_quick_status` → Check current state (minimal response)
-3. `harness_work_on_feature` → Start working on a feature (increments iteration)
-4. [do actual work...]
-5. `harness_complete_and_next` → Mark complete, checkpoint, get next feature
-6. Repeat steps 3-5 until all features done
-
-### Workflow Tools (reduce API calls):
-- `harness_work_on_feature`: Combines iterate + set_current + log (use instead of separate calls)
-- `harness_complete_and_next`: Combines complete + checkpoint + get_next (use instead of separate calls)
-- `harness_quick_status`: Minimal status for rapid polling (use instead of full harness_status)
-
-### Human Intervention Points (Phase 5):
-- `harness_request_intervention`: Request human review, approval, or decision
-- `harness_resolve_intervention`: Provide resolution to pending intervention
-- Types: `review_required` (non-blocking), `approval_needed`, `decision_point`, `clarification_needed`
-- Blocking interventions (approval_needed, decision_point) prevent work until resolved
-
-### Sub-Agent Delegation (Phase 6):
-- `harness_delegate`: Delegate token-heavy work to isolated sub-session
-- `harness_sub_session_status`: Check sub-session progress (read-only)
-- `harness_claim_sub_session_result`: Claim completed sub-session work
-- `harness_complete_sub_session`: Sub-agent marks work done
-- `harness_list_sub_sessions`: List active sub-sessions (read-only)
-- Use for: code generation, test writing, documentation, refactoring tasks
-
-### Context Management:
-- `harness_compact_progress`: Summarize old progress entries when context grows large
-- Use `max_progress_entries` parameter in `harness_status` to limit response size
-
-### Safety Notes:
-- `harness_status`, `harness_quick_status`, `harness_sub_session_status`, `harness_list_sub_sessions`: Read-only, safe to call anytime
-- `harness_rollback`: DESTRUCTIVE - rolls back git state, use with caution
-- `harness_checkpoint`: Creates git commits, safe but irreversible
-
-### Error Recovery:
-All errors include structured recovery actions. Parse the `recovery_action` field for actionable next steps.";
-
-        let instructions = if self.harness.is_some() {
-            format!("{}{}", base_instructions, harness_instructions)
-        } else {
-            base_instructions.to_string()
-        };
-
-        ServerInfo {
-            instructions: Some(instructions),
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            ..Default::default()
-        }
     }
 }
 

@@ -1051,8 +1051,13 @@ impl Verifier {
             .current_dir(&self.working_dir)
             .output()
             .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
     }
 
     /// Get current git commit SHA
@@ -1062,8 +1067,13 @@ impl Verifier {
             .current_dir(&self.working_dir)
             .output()
             .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .and_then(|o| {
+                if o.status.success() {
+                    Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
+                } else {
+                    None
+                }
+            })
     }
 
     /// Parse test summary from cargo test stdout
@@ -1151,11 +1161,11 @@ impl Verifier {
         if s.len() <= self.config.stderr_max_bytes {
             s.to_string()
         } else {
-            let mut limit = self.config.stderr_max_bytes;
-            while limit > 0 && !s.is_char_boundary(limit) {
-                limit -= 1;
+            let mut byte_idx = self.config.stderr_max_bytes;
+            while byte_idx > 0 && !s.is_char_boundary(byte_idx) {
+                byte_idx -= 1;
             }
-            let truncated = &s[..limit];
+            let truncated = &s[..byte_idx];
             format!("{}...\n[truncated at {} bytes]", truncated, s.len())
         }
     }

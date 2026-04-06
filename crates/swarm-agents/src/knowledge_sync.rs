@@ -8,6 +8,8 @@
 //! [`KnowledgeSyncService`] wraps these with routing rules, structured content
 //! formatting, and title-based deduplication.
 
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, Result};
 use coordination::SessionRetrospective;
 use serde::{Deserialize, Serialize};
@@ -89,6 +91,8 @@ const TRICKY_BUG_THRESHOLD: u32 = 3;
 pub struct KnowledgeSyncService<'a> {
     kb: &'a dyn KnowledgeBase,
     dedup_enabled: bool,
+    /// When set, retrospective recommendations are also filed as wiki pages.
+    repo_root: Option<PathBuf>,
 }
 
 impl<'a> KnowledgeSyncService<'a> {
@@ -97,12 +101,19 @@ impl<'a> KnowledgeSyncService<'a> {
         Self {
             kb,
             dedup_enabled: true,
+            repo_root: None,
         }
     }
 
     /// Disable deduplication (useful for testing or forced re-uploads).
     pub fn without_dedup(mut self) -> Self {
         self.dedup_enabled = false;
+        self
+    }
+
+    /// Set the repo root to enable wiki page capture for retrospectives.
+    pub fn with_repo_root(mut self, repo_root: &Path) -> Self {
+        self.repo_root = Some(repo_root.to_path_buf());
         self
     }
 
@@ -176,6 +187,26 @@ impl<'a> KnowledgeSyncService<'a> {
                 && retro.observations.is_empty();
             if !dominated && self.try_upload(&capture) {
                 uploaded.push(capture);
+            }
+        }
+
+        // Rule 4: Non-empty recommendations → wiki page (if repo_root is set)
+        if !retro.recommendations.is_empty() {
+            if let Some(ref root) = self.repo_root {
+                let recommendations = retro
+                    .recommendations
+                    .iter()
+                    .map(|r| format!("- {r}"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let _ = crate::wiki::capture_analysis(
+                    root,
+                    &format!("retro-{issue_id}"),
+                    &format!("Retrospective: {issue_title}"),
+                    "retrospective",
+                    &recommendations,
+                    Some(issue_id),
+                );
             }
         }
 
