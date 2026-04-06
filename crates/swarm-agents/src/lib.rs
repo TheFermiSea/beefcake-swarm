@@ -14,6 +14,7 @@ pub mod contracts;
 pub mod dashboard;
 pub mod driver;
 pub mod endpoint_pool;
+pub mod experiment_db;
 pub mod file_targeting;
 pub mod fix_templates;
 pub mod git_ops;
