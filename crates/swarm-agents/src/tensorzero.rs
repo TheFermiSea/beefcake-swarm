@@ -7,11 +7,189 @@
 //!
 //! TensorZero uses this feedback to optimize prompt selection via its GEPA
 //! (Generative Engineering with Production Analytics) pipeline.
+//!
+//! ## Harness Parameter Optimization
+//!
+//! In addition to model variant routing, this module implements Thompson
+//! sampling over harness parameter combinations (write deadline, search
+//! unlock turn, pre-write read budget). Four presets are defined:
+//!
+//! | Preset     | write_deadline | search_unlock_turn | pre_write_read_budget |
+//! |------------|---------------|-------------------|-----------------------|
+//! | very_tight | 3             | 1                 | 5                     |
+//! | tight      | 4             | 2                 | 6                     |
+//! | medium     | 6             | 3                 | 8                     |
+//! | loose      | 10            | 4                 | 12                    |
+//!
+//! The selected preset is recorded as a feedback tag (`harness_preset`)
+//! so TZ Autopilot can correlate parameter settings with `task_resolved`
+//! outcomes via tag-based segmentation analysis.
 
 use std::collections::HashMap;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
+
+/// Harness parameter preset for Thompson sampling optimization.
+///
+/// Each preset defines a combination of write_deadline, search_unlock_turn,
+/// and pre_write_read_budget. The orchestrator selects a preset at episode
+/// start and records it as a feedback tag for TZ Autopilot correlation.
+///
+/// Authoritative values — the comment block in `config/tensorzero.toml`
+/// references these definitions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HarnessPreset {
+    /// Maximum pressure: for simple/targeted single-file fixes.
+    VeryTight,
+    /// Fast-edit pressure: forces early writes, short exploration window.
+    Tight,
+    /// Balanced: matches current production defaults.
+    Medium,
+    /// Exploration-friendly: more reads allowed before write pressure kicks in.
+    Loose,
+}
+
+/// Concrete parameter values for a harness preset.
+#[derive(Debug, Clone, Copy)]
+pub struct HarnessParams {
+    /// Max LLM turns before a file edit is required.
+    pub write_deadline: usize,
+    /// Turn after which search tools are unlocked (0 = always available).
+    pub search_unlock_turn: usize,
+    /// Max consecutive read-only calls before termination.
+    pub pre_write_read_budget: usize,
+}
+
+impl HarnessPreset {
+    /// All available presets for iteration/selection.
+    pub const ALL: &[HarnessPreset] = &[
+        HarnessPreset::VeryTight,
+        HarnessPreset::Tight,
+        HarnessPreset::Medium,
+        HarnessPreset::Loose,
+    ];
+
+    /// Resolve preset to concrete parameter values.
+    pub fn params(self) -> HarnessParams {
+        match self {
+            HarnessPreset::VeryTight => HarnessParams {
+                write_deadline: 3,
+                search_unlock_turn: 1,
+                pre_write_read_budget: 5,
+            },
+            HarnessPreset::Tight => HarnessParams {
+                write_deadline: 4,
+                search_unlock_turn: 2,
+                pre_write_read_budget: 6,
+            },
+            HarnessPreset::Medium => HarnessParams {
+                write_deadline: 6,
+                search_unlock_turn: 3,
+                pre_write_read_budget: 8,
+            },
+            HarnessPreset::Loose => HarnessParams {
+                write_deadline: 10,
+                search_unlock_turn: 4,
+                pre_write_read_budget: 12,
+            },
+        }
+    }
+
+    /// Tag-friendly name for feedback reporting.
+    pub fn as_tag(&self) -> &'static str {
+        match self {
+            HarnessPreset::VeryTight => "very_tight",
+            HarnessPreset::Tight => "tight",
+            HarnessPreset::Medium => "medium",
+            HarnessPreset::Loose => "loose",
+        }
+    }
+
+    /// Select a preset using uniform random distribution.
+    ///
+    /// Initial exploration phase: all presets equally likely. Once TZ
+    /// Autopilot identifies a winner via tag-based segmentation, the
+    /// orchestrator can switch to `select_weighted()` with Autopilot's
+    /// recommended weights.
+    pub fn select_uniform() -> HarnessPreset {
+        use std::hash::{Hash, Hasher};
+        // Use timestamp + thread ID for cheap pseudo-random selection.
+        // No need for cryptographic randomness — this is exploration noise.
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .hash(&mut hasher);
+        std::thread::current().id().hash(&mut hasher);
+        let idx = (hasher.finish() as usize) % Self::ALL.len();
+        Self::ALL[idx]
+    }
+
+    /// Select a preset using provided weights (for Autopilot-informed selection).
+    ///
+    /// `weights` maps preset names to relative weights (e.g., from TZ insights).
+    /// Falls back to uniform selection if no weights match.
+    pub fn select_weighted(weights: &HashMap<String, f64>) -> HarnessPreset {
+        let candidates: Vec<(HarnessPreset, f64)> = Self::ALL
+            .iter()
+            .filter_map(|p| {
+                weights
+                    .get(p.as_tag())
+                    .filter(|&&w| w > 0.0)
+                    .map(|&w| (*p, w))
+            })
+            .collect();
+
+        if candidates.is_empty() {
+            return Self::select_uniform();
+        }
+
+        let total: f64 = candidates.iter().map(|(_, w)| w).sum();
+        if total <= 0.0 {
+            return Self::select_uniform();
+        }
+
+        // Weighted random selection using the same cheap hash approach.
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::hash::DefaultHasher::new();
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+            .hash(&mut hasher);
+        std::thread::current().id().hash(&mut hasher);
+        let roll = (hasher.finish() as f64) / (u64::MAX as f64) * total;
+
+        let mut cumulative = 0.0;
+        for (preset, weight) in &candidates {
+            cumulative += weight;
+            if roll < cumulative {
+                return *preset;
+            }
+        }
+
+        // Float rounding edge case — return last candidate.
+        candidates
+            .last()
+            .map(|(p, _)| *p)
+            .unwrap_or(HarnessPreset::Medium)
+    }
+
+    /// Apply this preset's parameter values to a `FeedbackTags` instance.
+    ///
+    /// Sets `harness_preset`, `write_deadline`, `search_unlock_turn`, and
+    /// `pre_write_read_budget` fields. Other fields are left unchanged.
+    pub fn apply_to_tags(&self, tags: &mut FeedbackTags) {
+        let params = self.params();
+        tags.harness_preset = Some(self.as_tag().to_string());
+        tags.write_deadline = Some(params.write_deadline.to_string());
+        tags.search_unlock_turn = Some(params.search_unlock_turn.to_string());
+        tags.pre_write_read_budget = Some(params.pre_write_read_budget.to_string());
+    }
+}
 
 /// Feedback payload for TensorZero's `/feedback` endpoint.
 ///
@@ -66,12 +244,25 @@ pub struct FeedbackTags {
     // ── Harness parameters for Meta-Harness optimization via TZ Autopilot ──
     // These allow Autopilot to correlate parameter settings with worker
     // behavior outcomes (made_edit, first_edit_early, avoids_exploration_loop).
+    /// Selected harness preset name (e.g. `"tight"`, `"medium"`).
+    /// Primary segmentation key for Thompson sampling over parameter combos.
+    /// See `HarnessPreset` for the preset→parameter mapping.
+    pub harness_preset: Option<String>,
     /// Base write deadline value (max turns before a file edit is required).
     /// Corresponds to `SWARM_MAX_TURNS_WITHOUT_WRITE` (default: 8).
     pub write_deadline: Option<String>,
+    /// Turn after which search tools are unlocked (0 = always available).
+    /// Lower values enforce edit-first behavior; higher values allow exploration.
+    pub search_unlock_turn: Option<String>,
+    /// Max consecutive read-only calls before termination.
+    /// Controls how much exploration is allowed before the agent must act.
+    pub pre_write_read_budget: Option<String>,
     /// Maximum tool calls per worker session.
     /// Corresponds to `SWARM_MAX_WORKER_TOOL_CALLS` (default: 15).
     pub max_tool_calls: Option<String>,
+    /// Governance tier applied to this run: `"core"`, `"standard"`, or `"enhanced"`.
+    /// Correlates adapter check intensity with task outcomes.
+    pub governance_tier: Option<String>,
 }
 
 impl FeedbackTags {
@@ -103,11 +294,23 @@ impl FeedbackTags {
         if let Some(v) = self.retry_tier {
             map.insert("retry_tier".to_string(), v);
         }
+        if let Some(v) = self.harness_preset {
+            map.insert("harness_preset".to_string(), v);
+        }
         if let Some(v) = self.write_deadline {
             map.insert("write_deadline".to_string(), v);
         }
+        if let Some(v) = self.search_unlock_turn {
+            map.insert("search_unlock_turn".to_string(), v);
+        }
+        if let Some(v) = self.pre_write_read_budget {
+            map.insert("pre_write_read_budget".to_string(), v);
+        }
         if let Some(v) = self.max_tool_calls {
             map.insert("max_tool_calls".to_string(), v);
+        }
+        if let Some(v) = self.governance_tier {
+            map.insert("governance_tier".to_string(), v);
         }
         map
     }
@@ -442,8 +645,12 @@ pub async fn post_resolved_feedback(
             prompt_version: m.get("prompt_version").cloned(),
             error_category: m.get("error_category").cloned(),
             retry_tier: m.get("retry_tier").cloned(),
+            harness_preset: m.get("harness_preset").cloned(),
             write_deadline: m.get("write_deadline").cloned(),
+            search_unlock_turn: m.get("search_unlock_turn").cloned(),
+            pre_write_read_budget: m.get("pre_write_read_budget").cloned(),
             max_tool_calls: m.get("max_tool_calls").cloned(),
+            governance_tier: m.get("governance_tier").cloned(),
         });
         post_episode_feedback(
             gateway_url,
@@ -673,5 +880,100 @@ mod tests {
         let ep2 = generate_episode_id("issue-2", "session-b");
         // UUIDv7 sorts lexicographically by time — ep2 should be greater
         assert!(ep2 > ep1, "ep1={ep1} ep2={ep2}");
+    }
+
+    #[test]
+    fn test_harness_preset_params_values() {
+        let vt = HarnessPreset::VeryTight.params();
+        assert_eq!(vt.write_deadline, 3);
+        assert_eq!(vt.search_unlock_turn, 1);
+        assert_eq!(vt.pre_write_read_budget, 5);
+
+        let t = HarnessPreset::Tight.params();
+        assert_eq!(t.write_deadline, 4);
+        assert_eq!(t.search_unlock_turn, 2);
+        assert_eq!(t.pre_write_read_budget, 6);
+
+        let m = HarnessPreset::Medium.params();
+        assert_eq!(m.write_deadline, 6);
+        assert_eq!(m.search_unlock_turn, 3);
+        assert_eq!(m.pre_write_read_budget, 8);
+
+        let l = HarnessPreset::Loose.params();
+        assert_eq!(l.write_deadline, 10);
+        assert_eq!(l.search_unlock_turn, 4);
+        assert_eq!(l.pre_write_read_budget, 12);
+    }
+
+    #[test]
+    fn test_harness_preset_as_tag() {
+        assert_eq!(HarnessPreset::VeryTight.as_tag(), "very_tight");
+        assert_eq!(HarnessPreset::Tight.as_tag(), "tight");
+        assert_eq!(HarnessPreset::Medium.as_tag(), "medium");
+        assert_eq!(HarnessPreset::Loose.as_tag(), "loose");
+    }
+
+    #[test]
+    fn test_harness_preset_all_covers_four_variants() {
+        assert_eq!(HarnessPreset::ALL.len(), 4);
+    }
+
+    #[test]
+    fn test_harness_preset_select_uniform_returns_valid() {
+        // Run multiple times to exercise the hash-based selection.
+        for _ in 0..20 {
+            let preset = HarnessPreset::select_uniform();
+            assert!(HarnessPreset::ALL.contains(&preset));
+        }
+    }
+
+    #[test]
+    fn test_harness_preset_select_weighted_with_single_weight() {
+        let mut weights = HashMap::new();
+        weights.insert("tight".to_string(), 1.0);
+        // With only one non-zero weight, should always return tight.
+        let preset = HarnessPreset::select_weighted(&weights);
+        assert_eq!(preset, HarnessPreset::Tight);
+    }
+
+    #[test]
+    fn test_harness_preset_select_weighted_empty_falls_back_to_uniform() {
+        let weights = HashMap::new();
+        let preset = HarnessPreset::select_weighted(&weights);
+        // Should not panic — falls back to uniform.
+        assert!(HarnessPreset::ALL.contains(&preset));
+    }
+
+    #[test]
+    fn test_harness_preset_apply_to_tags() {
+        let mut tags = FeedbackTags::default();
+        tags.issue_id = Some("test-123".to_string());
+
+        HarnessPreset::Tight.apply_to_tags(&mut tags);
+
+        assert_eq!(tags.harness_preset.as_deref(), Some("tight"));
+        assert_eq!(tags.write_deadline.as_deref(), Some("4"));
+        assert_eq!(tags.search_unlock_turn.as_deref(), Some("2"));
+        assert_eq!(tags.pre_write_read_budget.as_deref(), Some("6"));
+        // Existing fields should be preserved.
+        assert_eq!(tags.issue_id.as_deref(), Some("test-123"));
+    }
+
+    #[test]
+    fn test_feedback_tags_includes_harness_fields() {
+        let mut tags = FeedbackTags::default();
+        HarnessPreset::Medium.apply_to_tags(&mut tags);
+
+        let map = tags.into_map();
+        assert_eq!(
+            map.get("harness_preset").map(|s| s.as_str()),
+            Some("medium")
+        );
+        assert_eq!(map.get("write_deadline").map(|s| s.as_str()), Some("6"));
+        assert_eq!(map.get("search_unlock_turn").map(|s| s.as_str()), Some("3"));
+        assert_eq!(
+            map.get("pre_write_read_budget").map(|s| s.as_str()),
+            Some("8")
+        );
     }
 }

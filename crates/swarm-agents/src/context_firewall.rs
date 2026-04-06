@@ -24,28 +24,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::runtime_adapter::AdapterReport;
-
-/// Truncate a string at a char boundary. Safe for multi-byte UTF-8
-/// (e.g., em dash, Unicode quotes in rustc output).
-fn safe_truncate(s: &str, max_len: usize) -> &str {
-    if s.len() <= max_len {
-        return s;
-    }
-    let mut end = max_len;
-    while end > 0 && !s.is_char_boundary(end) {
-        end -= 1;
-    }
-    &s[..end]
-}
-
-/// Snap a byte offset forward to the nearest char boundary.
-fn snap_to_char_boundary(s: &str, byte_offset: usize) -> usize {
-    let mut pos = byte_offset;
-    while pos < s.len() && !s.is_char_boundary(pos) {
-        pos += 1;
-    }
-    pos
-}
+use crate::str_util::{safe_truncate, snap_to_char_boundary};
 
 /// Condensed worker result for manager consumption.
 /// Strips raw tool call logs to prevent context bloat.
@@ -175,15 +154,38 @@ pub struct CondensedAgentToolArgs {
 /// the manager's context window.
 pub struct CondensedAgentTool<M: CompletionModel> {
     inner: Agent<M>,
+    /// Cached tool definition — name, description, and schema never change after construction.
+    cached_definition: ToolDefinition,
 }
 
 impl<M: CompletionModel> CondensedAgentTool<M> {
     pub fn new(agent: Agent<M>) -> Self {
-        Self { inner: agent }
+        let name = agent
+            .name
+            .clone()
+            .unwrap_or_else(|| "condensed_agent_tool".to_string());
+        let description = format!(
+            "Prompt a sub-agent to do a task for you.\n\n\
+             Agent name: {name}\n\
+             Agent description: {desc}\n",
+            name = name,
+            desc = agent.description.clone().unwrap_or_default(),
+        );
+        let cached_definition = ToolDefinition {
+            name: name.clone(),
+            description,
+            parameters: serde_json::to_value(schemars::schema_for!(CondensedAgentToolArgs))
+                .unwrap_or_default(),
+        };
+        Self {
+            inner: agent,
+            cached_definition,
+        }
     }
 }
 
 impl<M: CompletionModel> Tool for CondensedAgentTool<M> {
+    // Required by Tool trait; overridden by fn name() which delegates to cached_definition.
     const NAME: &'static str = "condensed_agent_tool";
 
     type Error = PromptError;
@@ -191,24 +193,7 @@ impl<M: CompletionModel> Tool for CondensedAgentTool<M> {
     type Output = String;
 
     async fn definition(&self, _prompt: String) -> ToolDefinition {
-        let name = self
-            .inner
-            .name
-            .clone()
-            .unwrap_or_else(|| Self::NAME.to_string());
-        let description = format!(
-            "Prompt a sub-agent to do a task for you.\n\n\
-             Agent name: {name}\n\
-             Agent description: {desc}\n",
-            name = name,
-            desc = self.inner.description.clone().unwrap_or_default(),
-        );
-        ToolDefinition {
-            name: self.name(),
-            description,
-            parameters: serde_json::to_value(schemars::schema_for!(CondensedAgentToolArgs))
-                .unwrap_or_default(),
-        }
+        self.cached_definition.clone()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
@@ -219,10 +204,7 @@ impl<M: CompletionModel> Tool for CondensedAgentTool<M> {
     }
 
     fn name(&self) -> String {
-        self.inner
-            .name
-            .clone()
-            .unwrap_or_else(|| Self::NAME.to_string())
+        self.cached_definition.name.clone()
     }
 }
 
@@ -337,6 +319,8 @@ mod tests {
             successful_writes: 2,
             last_failed_edits: vec![],
             total_reads_before_write: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
         };
         let condensed = CondensedWorkerResult::from_adapter_report(&report, 15);
         assert_eq!(condensed.turns_used, 5);

@@ -33,6 +33,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::action_validator::{ActionValidator, ValidatorState};
+use crate::config::GovernanceTier;
 
 /// Configuration for the runtime adapter.
 #[derive(Debug, Clone)]
@@ -57,6 +58,9 @@ pub struct AdapterConfig {
     /// In early turns, search tools are blocked to enforce edit-first behavior
     /// since task prompts inline target file content.
     pub search_unlock_turn: Option<usize>,
+    /// Governance tier controlling which checks fire per tool call.
+    /// Core = minimal (fast path), Standard = default, Enhanced = maximum validation.
+    pub governance_tier: GovernanceTier,
 }
 
 impl Default for AdapterConfig {
@@ -69,6 +73,7 @@ impl Default for AdapterConfig {
             max_reads_without_action: None,
             max_turns_without_write: None,
             search_unlock_turn: None,
+            governance_tier: GovernanceTier::default(),
         }
     }
 }
@@ -100,6 +105,10 @@ pub struct ToolEvent {
     pub result_preview: String,
     pub duration_ms: u64,
     pub outcome: ToolOutcome,
+    /// Input tokens consumed by this tool call (if available from provider).
+    pub input_tokens: Option<u64>,
+    /// Output tokens consumed by this tool call (if available from provider).
+    pub output_tokens: Option<u64>,
 }
 
 /// Summary report extracted from the adapter after a prompt completes.
@@ -125,6 +134,10 @@ pub struct AdapterReport {
     pub successful_writes: u32,
     /// Last failed edit attempts: (file_path, error_snippet).
     pub last_failed_edits: Vec<(String, String)>,
+    /// Total input tokens across all tool calls in this session.
+    pub total_input_tokens: u64,
+    /// Total output tokens across all tool calls in this session.
+    pub total_output_tokens: u64,
 }
 
 /// In-flight tool call tracking.
@@ -287,6 +300,16 @@ impl RuntimeAdapter {
                     (path, e.result_preview.clone())
                 })
                 .collect(),
+            total_input_tokens: state
+                .tool_events
+                .iter()
+                .filter_map(|e| e.input_tokens)
+                .sum(),
+            total_output_tokens: state
+                .tool_events
+                .iter()
+                .filter_map(|e| e.output_tokens)
+                .sum(),
         })
     }
 
@@ -387,7 +410,7 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                     // Injecting "X turns left" improves edit rates by inducing focused behavior.
                     if terminate.is_none() {
                         let reminder = if let Some(max_turns) = config.max_turns_without_write {
-                            if !s.has_written && config.max_turns_without_write.is_some() {
+                            if !s.has_written {
                                 let remaining = max_turns.saturating_sub(turn);
                                 if remaining <= 2 && remaining > 0 {
                                     Some(format!(
@@ -481,32 +504,38 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
 
             // Phase-gated tool access: block search tools in early turns to enforce edit-first behavior.
             // Research: ALARA (arxiv:2603.20380) — restricting tools produces "guaranteed behavioral change."
-            if let Some(unlock_turn) = config.search_unlock_turn {
-                if !s.has_written && s.turn_count <= unlock_turn {
-                    let base = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
-                    let is_search_tool = matches!(
-                        base,
-                        "search_code" | "colgrep" | "ast_grep" | "list_files" | "file_exists"
-                    );
-                    if is_search_tool {
-                        debug!(
-                            agent = %config.agent_name,
-                            tool = %tool_name,
-                            turn = s.turn_count,
-                            unlock_turn,
-                            "Phase gate: search tool blocked in early turns"
+            // Skipped on Core tier — simple fixes shouldn't pay the phase-gate overhead.
+            if config.governance_tier != GovernanceTier::Core {
+                if let Some(unlock_turn) = config.search_unlock_turn {
+                    if !s.has_written && s.turn_count <= unlock_turn {
+                        let base = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
+                        let is_search_tool = matches!(
+                            base,
+                            "search_code" | "colgrep" | "ast_grep" | "list_files" | "file_exists"
                         );
-                        return ToolCallHookAction::skip(format!(
-                            "Tool '{tool_name}' is not available until turn {unlock_turn} or after your first edit. \
-                             The target file content is already in your task prompt. Use edit_file or write_file now."
-                        ));
+                        if is_search_tool {
+                            debug!(
+                                agent = %config.agent_name,
+                                tool = %tool_name,
+                                turn = s.turn_count,
+                                unlock_turn,
+                                governance_tier = %config.governance_tier,
+                                "Phase gate: search tool blocked in early turns"
+                            );
+                            return ToolCallHookAction::skip(format!(
+                                "Tool '{tool_name}' is not available until turn {unlock_turn} or after your first edit. \
+                                 The target file content is already in your task prompt. Use edit_file or write_file now."
+                            ));
+                        }
                     }
                 }
             }
 
             // Anti-loop: detect consecutive identical tool calls.
             // Hash (tool_name, args) to detect the same call repeated.
+            // After 3 repeats, we start skipping. After 6 consecutive skips (10th attempt), terminate.
             const MAX_REPEAT_CALLS: u32 = 3;
+            const MAX_CONSECUTIVE_SKIPS: u32 = 6;
             let call_key = {
                 let mut hasher = std::collections::hash_map::DefaultHasher::new();
                 tool_name.hash(&mut hasher);
@@ -514,28 +543,55 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 hasher.finish()
             };
 
-            if s.last_call_key == Some(call_key) {
-                let count = s.repeat_call_counts.entry(call_key).or_insert(1);
-                *count += 1;
-                if *count > MAX_REPEAT_CALLS {
-                    warn!(
-                        agent = %config.agent_name,
-                        tool = %tool_name,
-                        repeat_count = *count,
-                        "Anti-loop: identical tool call repeated {} times — skipping",
-                        *count
-                    );
-                    return ToolCallHookAction::skip(format!(
-                        "You have called {tool_name} with identical arguments {count} times. \
-                         The results will not change. Stop repeating this call and move on: \
-                         either run the verifier, delegate to a different worker, or report \
-                         completion."
-                    ));
-                }
-            } else {
+            if Some(call_key) != s.last_call_key {
                 // Different call — reset tracking
                 s.repeat_call_counts.clear();
                 s.repeat_call_counts.insert(call_key, 1);
+            } else {
+                // Same call as last time — increment and check threshold
+                let count_val = {
+                    let count = s.repeat_call_counts.entry(call_key).or_insert(1);
+                    *count += 1;
+                    *count
+                };
+                if count_val > MAX_REPEAT_CALLS {
+                    // We're in skip territory. Check if we've skipped too many times.
+                    if count_val > MAX_REPEAT_CALLS + MAX_CONSECUTIVE_SKIPS {
+                        // 10th attempt (3 allowed + 6 skips) — terminate
+                        s.terminated_early = true;
+                        s.termination_reason = Some(format!(
+                            "identical tool call repeated {} times — terminating",
+                            count_val
+                        ));
+                        warn!(
+                            agent = %config.agent_name,
+                            tool = %tool_name,
+                            repeat_count = count_val,
+                            "Anti-loop: identical tool call repeated {} times — terminating",
+                            count_val
+                        );
+                        return ToolCallHookAction::terminate(format!(
+                            "Runtime adapter: identical tool call repeated {} times. \
+                             This indicates a stuck loop. Terminating to prevent infinite repetition.",
+                            count_val
+                        ));
+                    } else {
+                        // Skip but continue tracking
+                        warn!(
+                            agent = %config.agent_name,
+                            tool = %tool_name,
+                            repeat_count = count_val,
+                            "Anti-loop: identical tool call repeated {} times — skipping",
+                            count_val
+                        );
+                        return ToolCallHookAction::skip(format!(
+                            "You have called {tool_name} with identical arguments {count_val} times. \
+                             The results will not change. Stop repeating this call and move on: \
+                             either run the verifier, delegate to a different worker, or report \
+                             completion."
+                        ));
+                    }
+                }
             }
             s.last_call_key = Some(call_key);
 
@@ -575,35 +631,44 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 ToolClass::ReadOnly => {
                     s.consecutive_reads += 1;
 
-                    // Track total pre-write reads (never resets until first write)
-                    if !s.has_written && config.max_turns_without_write.is_some() {
+                    // Track total pre-write reads (never resets until first write).
+                    // Skipped on Core tier — simple fixes don't need read-budget enforcement.
+                    if config.governance_tier != GovernanceTier::Core
+                        && !s.has_written
+                        && config.max_turns_without_write.is_some()
+                    {
                         s.total_reads_before_write += 1;
 
-                        // Hard budget: terminate after too many reads without writing
-                        const PRE_WRITE_READ_BUDGET: usize = 8;
-                        const PRE_WRITE_READ_WARN: usize = 5;
+                        // Hard budget: terminate after too many reads without writing.
+                        // Enhanced tier uses tighter thresholds to enforce focused behavior.
+                        let (pre_write_read_budget, pre_write_read_warn) =
+                            match config.governance_tier {
+                                GovernanceTier::Enhanced => (5, 3),
+                                _ => (8, 5),
+                            };
 
-                        if s.total_reads_before_write >= PRE_WRITE_READ_BUDGET {
+                        if s.total_reads_before_write >= pre_write_read_budget {
                             s.terminated_early = true;
                             let reason = format!(
                                 "Pre-write read budget exhausted: {} read-only calls with no \
-                                 edit_file/write_file. Stop exploring and write your edit now.",
-                                s.total_reads_before_write
+                                 edit_file/write_file (limit: {}, tier: {}). Stop exploring and write your edit now.",
+                                s.total_reads_before_write, pre_write_read_budget, config.governance_tier
                             );
                             s.termination_reason = Some(reason.clone());
                             warn!(
                                 agent = %config.agent_name,
                                 total_reads = s.total_reads_before_write,
+                                governance_tier = %config.governance_tier,
                                 "Anti-stall: pre-write read budget exceeded"
                             );
                             return ToolCallHookAction::terminate(format!(
                                 "Runtime adapter: {reason}"
                             ));
-                        } else if s.total_reads_before_write == PRE_WRITE_READ_WARN {
+                        } else if s.total_reads_before_write == pre_write_read_warn {
                             info!(
                                 agent = %config.agent_name,
                                 total_reads = s.total_reads_before_write,
-                                budget = PRE_WRITE_READ_BUDGET,
+                                budget = pre_write_read_budget,
                                 "Pre-write read warning: approaching budget limit"
                             );
                         }
@@ -766,6 +831,11 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 result_preview,
                 duration_ms,
                 outcome,
+                // Token counts are not available from the tool result itself;
+                // callers can back-fill via the ToolEvent after the prompt completes
+                // if the provider response includes usage metadata.
+                input_tokens: None,
+                output_tokens: None,
             });
 
             // Inject pending write-deadline reminder into tool result logging.
@@ -875,6 +945,7 @@ mod tests {
             max_reads_without_action: Some(8),
             max_turns_without_write: Some(3),
             search_unlock_turn: Some(3),
+            governance_tier: crate::config::GovernanceTier::Standard,
         };
         let adapter = RuntimeAdapter::new(config);
         let report = adapter.report().unwrap();
@@ -1073,6 +1144,8 @@ mod tests {
                 result_preview: "fn main() {}".into(),
                 duration_ms: 42,
                 outcome: ToolOutcome::Success,
+                input_tokens: None,
+                output_tokens: None,
             }],
             turn_count: 3,
             total_tool_calls: 1,
@@ -1086,6 +1159,8 @@ mod tests {
             successful_writes: 0,
             last_failed_edits: vec![],
             total_reads_before_write: 0,
+            total_input_tokens: 0,
+            total_output_tokens: 0,
         };
 
         let json = serde_json::to_string(&report).unwrap();

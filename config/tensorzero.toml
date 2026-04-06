@@ -50,12 +50,15 @@ level = "episode"
 
 # ─── Harness Parameter Tags (Meta-Harness) ─────────────────────────────────
 # Tags submitted with worker_code_edit episodes for Autopilot correlation:
+#   harness_preset: Selected preset name (very_tight/tight/medium/loose)
 #   write_deadline: Base write deadline value used for this episode
+#   search_unlock_turn: Turn after which search tools are unlocked
+#   pre_write_read_budget: Max consecutive read-only calls before termination
 #   max_tool_calls: Maximum tool calls per worker session
-#   (Future: search_unlock_turn, pre_write_read_budget, retry_tier)
+#   retry_tier: Retry tier routing decision (fast/coder)
 # These enable Autopilot to correlate harness settings with outcomes
 # (made_edit, first_edit_early, avoids_exploration_loop) and suggest
-# optimal parameter ranges.
+# optimal parameter combinations via tag-based segmentation.
 
 # ─── Evaluations ─────────────────────────────────────────────────────────────
 # Offline evaluations that compare variant performance on curated datasets.
@@ -495,6 +498,36 @@ type = "chat"
 [functions.adversarial_test.variants.qwen_breaker]
 type = "chat_completion"
 model = "qwen_coder"
+
+# ─── Harness Parameter Optimization (Tag-Based Thompson Sampling) ───────────
+#
+# Optimizes harness parameters (write_deadline, search_unlock_turn,
+# pre_write_read_budget) via TZ Autopilot's tag-based correlation analysis.
+#
+# TZ's adaptive experimentation requires chat_completion variants backed by
+# real LLM models — there is no "static template" variant type for returning
+# parameter JSON without inference. Instead, we use the tag-based approach:
+#
+#   1. Rust-side defines 4 parameter presets (very_tight/tight/medium/loose)
+#      as constants in tensorzero.rs → HarnessPreset.
+#   2. At episode start, the orchestrator selects a preset using weighted
+#      random selection (initial: uniform; updated by Autopilot insights).
+#   3. The selected preset name is recorded in the `harness_preset` feedback
+#      tag alongside the individual parameter values (write_deadline,
+#      search_unlock_turn, pre_write_read_budget).
+#   4. TZ Autopilot correlates harness_preset × task_resolved to recommend
+#      optimal parameter combinations — same optimization loop as model
+#      variant routing, but driven by tag segmentation instead of
+#      function-level variant selection.
+#
+# Preset definitions (see tensorzero.rs HarnessPreset for authoritative values):
+#   very_tight — write_deadline=3, search_unlock_turn=1, pre_write_read_budget=5
+#   tight      — write_deadline=4, search_unlock_turn=2, pre_write_read_budget=6
+#   medium     — write_deadline=6, search_unlock_turn=3, pre_write_read_budget=8
+#   loose      — write_deadline=10, search_unlock_turn=4, pre_write_read_budget=12
+#
+# Source: gyc567/AutoHarness — tree search + Thompson sampling for harness
+# synthesis achieves convergence in ~14.5 iterations.
 
 # ─── Embedding Models (archived — nomic-embed for future DICL) ───────────────
 # nomic-embed-text-v1.5 runs on CPU across all vasp nodes (port 8082).
