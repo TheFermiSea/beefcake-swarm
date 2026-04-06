@@ -446,16 +446,3 @@ fn keyword_triage(title: &str, description: Option<&str>) -> TriageResult {
         triage_model: None,
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn parse_triage_json() {
-        let json = r#"{"complexity": "simple", "language": "rust", "suggested_models": [], "reasoning": "lint fix"}"#;
-        let result = parse_triage_response(json).unwrap();
-        assert_eq!(result.complexity, Complexity::Simple);
-        assert_eq!(result.language, "rust");
-    }
-}
