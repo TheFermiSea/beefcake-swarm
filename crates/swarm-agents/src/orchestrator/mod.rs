@@ -62,7 +62,6 @@ pub(crate) use crate::auto_fix::{should_reject_auto_fix, try_auto_fix};
 use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
-use crate::cognition::{self, CognitionBase};
 use crate::config::{GovernanceTier, SwarmConfig, SwarmRole};
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
@@ -462,6 +461,20 @@ async fn process_issue_core(
         .map(|p| p.language.clone())
         .unwrap_or_else(|| "rust".to_string());
 
+    // --- Cognition base (ASI-Evolve pattern: knowledge retrieval) ---
+    // Load persistent knowledge items from `.swarm/cognition/` and seed from
+    // wiki pages. Retrieved items are injected into worker task prompts.
+    let cognition_base = crate::cognition::CognitionBase::load_or_create(
+        &worktree_bridge.repo_root().join(".swarm/cognition"),
+    )
+    .ok()
+    .map(|mut base| {
+        if let Err(e) = crate::cognition::seed_from_wiki(&mut base, worktree_bridge.repo_root()) {
+            warn!(error = %e, "Failed to seed cognition base from wiki");
+        }
+        base
+    });
+
     // --- Intent contract (reformulation engine: Phase 1) ---
     // Capture the original task goal on first pickup so reformulations can't
     // silently weaken it. The contract is append-only (first attempt only).
@@ -504,13 +517,6 @@ async fn process_issue_core(
         max_iterations = config.max_retries,
         "Harness session started"
     );
-
-    // --- Cognition Base for analyzer distillation ---
-    let mut cognition_base: Option<CognitionBase> = if config.analyze_after_resolve {
-        Some(CognitionBase::new())
-    } else {
-        None
-    };
 
     // --- Telemetry ---
     let stack_profile_str = serde_json::to_string(&config.stack_profile)
@@ -1289,6 +1295,9 @@ async fn process_issue_core(
     let skill_library =
         coordination::analytics::skills::SkillLibrary::load(&skills_path).unwrap_or_default();
 
+    // Track cognition items retrieved across iterations for TZ feedback.
+    let mut last_cognition_items_retrieved: usize = 0;
+
     // --- Main loop: implement → verify → review → escalate ---
     loop {
         let iteration = match session.next_iteration() {
@@ -1582,6 +1591,28 @@ async fn process_issue_core(
         } else {
             format_task_prompt(&packet)
         };
+
+        // --- Cognition context injection (ASI-Evolve pattern) ---
+        // Query the cognition base for relevant knowledge items and prepend
+        // them to the task prompt so workers have institutional context.
+        if let Some(ref cog_base) = cognition_base {
+            let error_cat_strs: Vec<String> = packet
+                .failure_signals
+                .iter()
+                .map(|s| format!("{}", s.category))
+                .collect();
+            let query = format!("{} {}", issue.title, error_cat_strs.join(" "));
+            let results = crate::cognition::retrieve_by_keywords(cog_base, &query, 5);
+            last_cognition_items_retrieved = results.len();
+            let cognition_context = crate::cognition::RetrievalResult::format_context(&results);
+            if !cognition_context.is_empty() {
+                task_prompt = format!("{cognition_context}\n{task_prompt}");
+                debug!(
+                    items = last_cognition_items_retrieved,
+                    "Injected cognition context into task prompt"
+                );
+            }
+        }
 
         // --- Condensed verifier summary injection (PreCompletionChecklist pattern) ---
         // On retries, prepend a structured summary of the previous verifier failure
@@ -3551,22 +3582,6 @@ async fn process_issue_core(
                 }
             }
             info!(id = %issue.id, "Issue closed");
-
-            // LDEA: Analyzer distillation (ASI-Evolve pattern)
-            let error_cat: Option<String> = escalation
-                .recent_error_categories
-                .iter()
-                .flatten()
-                .next()
-                .map(|c| c.to_string());
-            run_analyzer_distillation(
-                config,
-                &mut cognition_base,
-                issue,
-                session.iteration(),
-                error_cat.as_deref(),
-                Some(&format!("{:?}", escalation.current_tier)),
-            );
         }
         info!(
             id = %issue.id,
@@ -3668,22 +3683,6 @@ async fn process_issue_core(
                 }
             }
             info!(id = %issue.id, "Issue closed");
-
-            // LDEA: Analyzer distillation (ASI-Evolve pattern)
-            let error_cat: Option<String> = escalation
-                .recent_error_categories
-                .iter()
-                .flatten()
-                .next()
-                .map(|c| c.to_string());
-            run_analyzer_distillation(
-                config,
-                &mut cognition_base,
-                issue,
-                session.iteration(),
-                error_cat.as_deref(),
-                Some(&format!("{:?}", escalation.current_tier)),
-            );
         }
     } else {
         session.fail();
@@ -3945,6 +3944,11 @@ async fn process_issue_core(
             pre_write_read_budget: None,
             max_tool_calls: Some(config.max_worker_tool_calls),
             governance_tier: Some(governance_tier.to_string()),
+            cognition_items_retrieved: if last_cognition_items_retrieved > 0 {
+                Some(last_cognition_items_retrieved)
+            } else {
+                None
+            },
         };
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {
@@ -4359,44 +4363,6 @@ fn parse_review_response(response: &str) -> bool {
     // Can't determine — default to approve to avoid blocking
     warn!("Pre-merge review: could not parse response — auto-approving");
     true
-}
-
-/// LDEA: Analyzer distillation (ASI-Evolve pattern).
-///
-/// After a successful resolution, record a structured summary in the Cognition
-/// Base. The actual LLM call is deferred to a follow-up — for now we store the
-/// resolution metadata directly so the feedback loop has data to learn from.
-fn run_analyzer_distillation(
-    config: &SwarmConfig,
-    cognition_base: &mut Option<CognitionBase>,
-    issue: &BeadsIssue,
-    iteration: u32,
-    error_category: Option<&str>,
-    model_used: Option<&str>,
-) {
-    if !config.analyze_after_resolve {
-        return;
-    }
-    let content = format!(
-        "Resolved {} ({}) in {} iterations with {}",
-        issue.title,
-        error_category.unwrap_or("unknown"),
-        iteration,
-        model_used.unwrap_or("unknown"),
-    );
-    if let Some(ref mut base) = cognition_base {
-        let item = cognition::CognitionItem {
-            id: format!("exp-{}", issue.id),
-            content,
-            source: cognition::CognitionSource::Experiment,
-            domain: error_category.map(String::from),
-            embedding: vec![],
-        };
-        base.add(item);
-        info!(id = %issue.id, "Analyzer: distilled resolution insight into Cognition Base");
-    } else {
-        debug!(id = %issue.id, "Analyzer: skipped — no Cognition Base configured");
-    }
 }
 
 /// Compile-time guard: `process_issue_core`'s future must be `Send` so it
