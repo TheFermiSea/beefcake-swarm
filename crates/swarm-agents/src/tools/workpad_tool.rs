@@ -220,3 +220,51 @@ impl Tool for CheckAnnouncementsTool {
         Ok(output)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn read_workpad_returns_empty_when_file_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let entries = read_workpad(dir.path()).unwrap();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn read_workpad_parses_jsonl_entries() {
+        let dir = tempfile::tempdir().unwrap();
+        let workpad = dir.path().join(WORKPAD_FILENAME);
+        let entry = WorkpadEntry {
+            worker: "subtask-1".to_string(),
+            entry_type: "interface_change".to_string(),
+            file: "src/lib.rs".to_string(),
+            detail: "added timeout field".to_string(),
+        };
+        let line = serde_json::to_string(&entry).unwrap();
+        std::fs::write(&workpad, format!("{line}\n")).unwrap();
+
+        let entries = read_workpad(dir.path()).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].worker, "subtask-1");
+        assert_eq!(entries[0].detail, "added timeout field");
+    }
+
+    #[test]
+    fn read_workpad_skips_blank_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let workpad = dir.path().join(WORKPAD_FILENAME);
+        let entry = WorkpadEntry {
+            worker: "w1".to_string(),
+            entry_type: "note".to_string(),
+            file: "foo.rs".to_string(),
+            detail: "test".to_string(),
+        };
+        let line = serde_json::to_string(&entry).unwrap();
+        std::fs::write(&workpad, format!("\n{line}\n\n{line}\n")).unwrap();
+
+        let entries = read_workpad(dir.path()).unwrap();
+        assert_eq!(entries.len(), 2);
+    }
+}
