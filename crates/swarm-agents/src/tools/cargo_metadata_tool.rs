@@ -55,9 +55,9 @@ impl Tool for CargoMetadataTool {
         .await?;
 
         let meta: serde_json::Value = serde_json::from_str(&output).map_err(|e| {
-            ToolError::Io(std::io::Error::other(format!(
+            ToolError::Parse(format!(
                 "failed to parse cargo metadata JSON: {e}. Output was: {output}"
-            )))
+            ))
         })?;
 
         let workspace_root = meta

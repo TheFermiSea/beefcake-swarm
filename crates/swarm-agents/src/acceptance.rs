@@ -11,6 +11,15 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+/// Errors that can occur during acceptance gate evaluation.
+#[derive(Debug, thiserror::Error)]
+pub enum AcceptanceError {
+    #[error("git command failed: {0}")]
+    Git(String),
+    #[error("git output parse error: {0}")]
+    Parse(String),
+}
+
 /// Acceptance policy configuration.
 ///
 /// Each field is an optional gate. Gates that are `None` or set to their
@@ -197,18 +206,18 @@ pub fn check_acceptance(
 /// Count the number of added + removed lines in the diff since `initial_commit`.
 ///
 /// Uses `git diff --numstat` for reliable per-file counts.
-fn diff_line_count(wt_path: &Path, initial_commit: &str) -> Result<usize, String> {
+fn diff_line_count(wt_path: &Path, initial_commit: &str) -> Result<usize, AcceptanceError> {
     let output = std::process::Command::new("git")
         .args(["diff", "--numstat", initial_commit, "HEAD"])
         .current_dir(wt_path)
         .output()
-        .map_err(|e| format!("Failed to run git diff --numstat: {e}"))?;
+        .map_err(|e| AcceptanceError::Git(format!("Failed to run git diff --numstat: {e}")))?;
 
     if !output.status.success() {
-        return Err(format!(
+        return Err(AcceptanceError::Git(format!(
             "git diff --numstat failed: {}",
             String::from_utf8_lossy(&output.stderr)
-        ));
+        )));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -233,18 +242,18 @@ fn diff_line_count(wt_path: &Path, initial_commit: &str) -> Result<usize, String
 }
 
 /// Check if any test files were modified since `initial_commit`.
-fn has_test_changes(wt_path: &Path, initial_commit: &str) -> Result<bool, String> {
+fn has_test_changes(wt_path: &Path, initial_commit: &str) -> Result<bool, AcceptanceError> {
     let output = std::process::Command::new("git")
         .args(["diff", "--name-only", initial_commit, "HEAD"])
         .current_dir(wt_path)
         .output()
-        .map_err(|e| format!("Failed to run git diff --name-only: {e}"))?;
+        .map_err(|e| AcceptanceError::Git(format!("Failed to run git diff --name-only: {e}")))?;
 
     if !output.status.success() {
-        return Err(format!(
+        return Err(AcceptanceError::Git(format!(
             "git diff failed: {}",
             String::from_utf8_lossy(&output.stderr)
-        ));
+        )));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -266,7 +275,7 @@ fn check_scope(
     wt_path: &Path,
     initial_commit: &str,
     allowed_crates: &[String],
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, AcceptanceError> {
     // Empty allowed list means no restriction
     if allowed_crates.is_empty() {
         return Ok(Vec::new());
@@ -276,13 +285,13 @@ fn check_scope(
         .args(["diff", "--name-only", initial_commit, "HEAD"])
         .current_dir(wt_path)
         .output()
-        .map_err(|e| format!("Failed to run git diff --name-only: {e}"))?;
+        .map_err(|e| AcceptanceError::Git(format!("Failed to run git diff --name-only: {e}")))?;
 
     if !output.status.success() {
-        return Err(format!(
+        return Err(AcceptanceError::Git(format!(
             "git diff failed: {}",
             String::from_utf8_lossy(&output.stderr)
-        ));
+        )));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -306,7 +315,7 @@ fn check_file_scope(
     wt_path: &Path,
     initial_commit: &str,
     allowed_files: &[String],
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<String>, AcceptanceError> {
     if allowed_files.is_empty() {
         return Ok(Vec::new());
     }
@@ -315,13 +324,13 @@ fn check_file_scope(
         .args(["diff", "--name-only", initial_commit, "HEAD"])
         .current_dir(wt_path)
         .output()
-        .map_err(|e| format!("Failed to run git diff --name-only: {e}"))?;
+        .map_err(|e| AcceptanceError::Git(format!("Failed to run git diff --name-only: {e}")))?;
 
     if !output.status.success() {
-        return Err(format!(
+        return Err(AcceptanceError::Git(format!(
             "git diff failed: {}",
             String::from_utf8_lossy(&output.stderr)
-        ));
+        )));
     }
 
     let stdout = String::from_utf8_lossy(&output.stdout);

@@ -67,21 +67,15 @@ impl Tool for ApplyPlanTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         // Parse the plan JSON
         let plan: ArchitectPlan = serde_json::from_str(&args.plan_json).map_err(|e| {
-            ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "Failed to parse ArchitectPlan JSON: {e}. \
-                     Make sure you pass the complete JSON object from proxy_architect."
-                ),
+            ToolError::Parse(format!(
+                "Failed to parse ArchitectPlan JSON: {e}. \
+                 Make sure you pass the complete JSON object from proxy_architect."
             ))
         })?;
 
         // Validate the plan
         if let Err(e) = plan.validate() {
-            return Err(ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Invalid ArchitectPlan: {e}"),
-            )));
+            return Err(ToolError::Validation(format!("Invalid ArchitectPlan: {e}")));
         }
 
         // Apply edits directly
@@ -99,10 +93,10 @@ impl Tool for ApplyPlanTool {
                     .join("\n")
             ))
         } else if result.applied.is_empty() {
-            Err(ToolError::Io(std::io::Error::other(format!(
+            Err(ToolError::Validation(format!(
                 "All edits failed. Use proxy_editor as fallback.\n{}",
                 result.summary()
-            ))))
+            )))
         } else {
             // Partial success — report what worked and what didn't
             Ok(format!(

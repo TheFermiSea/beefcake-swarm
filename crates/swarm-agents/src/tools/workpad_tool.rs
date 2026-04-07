@@ -138,7 +138,7 @@ impl Tool for AnnounceTool {
         };
 
         let line = serde_json::to_string(&entry)
-            .map_err(|e| ToolError::Io(std::io::Error::other(format!("JSON serialize: {e}"))))?;
+            .map_err(|e| ToolError::Parse(format!("JSON serialize: {e}")))?;
 
         let path = self.working_dir.join(WORKPAD_FILENAME);
 

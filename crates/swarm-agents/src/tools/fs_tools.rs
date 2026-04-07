@@ -289,14 +289,11 @@ impl Tool for WriteFileTool {
         // Omission guard: reject writes containing placeholder patterns like
         // "// ... existing code ..." that indicate the LLM truncated the output.
         if let Some(placeholder) = crate::tools::patch_tool::detect_omission_placeholder(&content) {
-            return Err(ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "write_file: content contains an omission placeholder: `{placeholder}`. \
-                     This would produce an incomplete file. Provide the COMPLETE file content \
-                     — do not use comments like '// ...' to represent omitted code. \
-                     Use edit_file for targeted changes instead of rewriting the entire file.",
-                ),
+            return Err(ToolError::Validation(format!(
+                "write_file: content contains an omission placeholder: `{placeholder}`. \
+                 This would produce an incomplete file. Provide the COMPLETE file content \
+                 — do not use comments like '// ...' to represent omitted code. \
+                 Use edit_file for targeted changes instead of rewriting the entire file."
             )));
         }
 

@@ -157,58 +157,46 @@ impl EditFileTool {
         let lines: Vec<&str> = content.lines().collect();
 
         let (start_line, start_hash) = parse_anchor(start_anchor).ok_or_else(|| {
-            ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Invalid anchor_start format: '{start_anchor}'. Expected 'line:hash' (e.g. '42:a3')"),
+            ToolError::Validation(format!(
+                "Invalid anchor_start format: '{start_anchor}'. Expected 'line:hash' (e.g. '42:a3')"
             ))
         })?;
 
         let (end_line, end_hash) = parse_anchor(end_anchor).ok_or_else(|| {
-            ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("Invalid anchor_end format: '{end_anchor}'. Expected 'line:hash' (e.g. '44:0e')"),
+            ToolError::Validation(format!(
+                "Invalid anchor_end format: '{end_anchor}'. Expected 'line:hash' (e.g. '44:0e')"
             ))
         })?;
 
         // Validate line numbers
         if start_line == 0 || end_line == 0 || start_line > lines.len() || end_line > lines.len() {
-            return Err(ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "Anchor line numbers out of range: start={start_line}, end={end_line}, \
-                     file has {} lines. Re-read the file to get fresh anchors.",
-                    lines.len()
-                ),
+            return Err(ToolError::Validation(format!(
+                "Anchor line numbers out of range: start={start_line}, end={end_line}, \
+                 file has {} lines. Re-read the file to get fresh anchors.",
+                lines.len()
             )));
         }
 
         if start_line > end_line {
-            return Err(ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!("anchor_start line ({start_line}) must be <= anchor_end line ({end_line})"),
+            return Err(ToolError::Validation(format!(
+                "anchor_start line ({start_line}) must be <= anchor_end line ({end_line})"
             )));
         }
 
         // Verify hashes match current content
         let actual_start_hash = blake3_short(lines[start_line - 1].trim());
         if actual_start_hash != start_hash {
-            return Err(ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "Stale anchor_start: line {start_line} hash is now '{actual_start_hash}' \
-                     (expected '{start_hash}'). Re-read the file to get fresh anchors."
-                ),
+            return Err(ToolError::Validation(format!(
+                "Stale anchor_start: line {start_line} hash is now '{actual_start_hash}' \
+                 (expected '{start_hash}'). Re-read the file to get fresh anchors."
             )));
         }
 
         let actual_end_hash = blake3_short(lines[end_line - 1].trim());
         if actual_end_hash != end_hash {
-            return Err(ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "Stale anchor_end: line {end_line} hash is now '{actual_end_hash}' \
-                     (expected '{end_hash}'). Re-read the file to get fresh anchors."
-                ),
+            return Err(ToolError::Validation(format!(
+                "Stale anchor_end: line {end_line} hash is now '{actual_end_hash}' \
+                 (expected '{end_hash}'). Re-read the file to get fresh anchors."
             )));
         }
 
@@ -233,12 +221,9 @@ impl EditFileTool {
 
         // No-op detection
         if result == content {
-            return Err(ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "edit_file: no-op anchor edit — replacement is identical to lines {start_line}-{end_line} \
-                     in {rel_path}. Verify your change is different."
-                ),
+            return Err(ToolError::Validation(format!(
+                "edit_file: no-op anchor edit — replacement is identical to lines {start_line}-{end_line} \
+                 in {rel_path}. Verify your change is different."
             )));
         }
 
@@ -580,15 +565,15 @@ impl Tool for EditFileTool {
         let old_content_raw = match args.old_content {
             Some(ref oc) if !oc.is_empty() => oc.clone(),
             Some(_) | None => {
-                return Err(ToolError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
+                return Err(ToolError::Validation(
                     "edit_file: old_content is required. To INSERT new lines, include surrounding \
                      context lines in BOTH old_content and new_content. Example — to add Ok(()) \
                      before a closing brace:\n\
                      old_content: \"    assert_eq!(x, 1);\\n    }\\n}\"\n\
                      new_content: \"    assert_eq!(x, 1);\\n\\n        Ok(())\\n    }\\n}\"\n\
-                     Alternatively, use anchor_start and anchor_end (hashline anchors from read_file).",
-                )));
+                     Alternatively, use anchor_start and anchor_end (hashline anchors from read_file)."
+                    .to_string(),
+                ));
             }
         };
         let old_content = unescape_if_double_encoded(&old_content_raw);
@@ -687,14 +672,11 @@ impl Tool for EditFileTool {
                         } else {
                             ""
                         };
-                        return Err(ToolError::Io(std::io::Error::new(
-                            std::io::ErrorKind::NotFound,
-                            format!(
-                                "old_content not found in {}. \
-                                 Read the file first to see current content. \
-                                 First 500 chars:\n{}{}",
-                                args.path, preview, truncation_hint
-                            ),
+                        return Err(ToolError::Validation(format!(
+                            "old_content not found in {}. \
+                             Read the file first to see current content. \
+                             First 500 chars:\n{}{}",
+                            args.path, preview, truncation_hint
                         )));
                     }
                 }
@@ -711,13 +693,10 @@ impl Tool for EditFileTool {
                 (result, new_content.clone())
             }
             n if n > MAX_REPLACEMENTS => {
-                return Err(ToolError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "old_content matches {n} locations in {}. \
-                         Include more surrounding context to make the match unique.",
-                        args.path
-                    ),
+                return Err(ToolError::Validation(format!(
+                    "old_content matches {n} locations in {}. \
+                     Include more surrounding context to make the match unique.",
+                    args.path
                 )));
             }
             _ => unreachable!(),
@@ -727,13 +706,10 @@ impl Tool for EditFileTool {
         // like "// ... existing code ..." that indicate the LLM truncated the replacement.
         // These silently delete code when applied. Pattern from Gemini CLI.
         if let Some(placeholder) = detect_omission_placeholder(&new_content) {
-            return Err(ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "edit_file: new_content contains an omission placeholder: `{placeholder}`. \
-                     This would delete code. Provide the COMPLETE replacement text — do not use \
-                     comments like '// ...' or '// rest of file' to represent omitted code.",
-                ),
+            return Err(ToolError::Validation(format!(
+                "edit_file: new_content contains an omission placeholder: `{placeholder}`. \
+                 This would delete code. Provide the COMPLETE replacement text — do not use \
+                 comments like '// ...' or '// rest of file' to represent omitted code."
             )));
         }
 
@@ -742,14 +718,11 @@ impl Tool for EditFileTool {
         // whitespace — fuzzy match finds the location but the replacement is
         // byte-identical to the original region.
         if new_file_content == content {
-            return Err(ToolError::Io(std::io::Error::new(
-                std::io::ErrorKind::InvalidInput,
-                format!(
-                    "edit_file: no-op edit — replacement is identical to current \
-                     content in {}. Re-read the file and verify your change \
-                     is different from the existing code.",
-                    args.path
-                ),
+            return Err(ToolError::Validation(format!(
+                "edit_file: no-op edit — replacement is identical to current \
+                 content in {}. Re-read the file and verify your change \
+                 is different from the existing code.",
+                args.path
             )));
         }
 
@@ -792,13 +765,10 @@ impl Tool for EditFileTool {
             if let Some(diagnostics) = lint_check_fast(&self.working_dir, &args.path) {
                 // Revert the edit
                 std::fs::write(&full_path, &content)?;
-                return Err(ToolError::Io(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    format!(
-                        "edit_file: reverted — edit introduced compilation errors in {}:\n{}\n\
-                         Fix the errors and try the edit again.",
-                        args.path, diagnostics
-                    ),
+                return Err(ToolError::Validation(format!(
+                    "edit_file: reverted — edit introduced compilation errors in {}:\n{}\n\
+                     Fix the errors and try the edit again.",
+                    args.path, diagnostics
                 )));
             }
         }
