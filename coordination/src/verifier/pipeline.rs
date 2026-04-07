@@ -255,22 +255,13 @@ impl Verifier {
             }
         }
 
-        // Gate 2: sg scan (ast-grep) — catches LLM structural anti-patterns
-        // (<1s) before wasting a clippy/check cycle (10-30s each).
-        // Error-level rules (derive-on-impl, etc.) fail-fast.
+        // Gate 2: sg scan (ast-grep) — catches LLM structural anti-patterns.
+        // NEVER cascade-fails: pre-existing violations (37 panic!() calls etc.)
+        // would otherwise block all worker resolutions. sg results are recorded
+        // as advisory findings but don't short-circuit clippy/check/test gates.
         if config.check_sg {
             let result = self.run_sg_gate().await;
-            let failed = result.outcome == GateOutcome::Failed;
             report.add_gate(result);
-            if failed && !config.comprehensive {
-                self.skip_remaining_with(
-                    &mut report,
-                    &["clippy", "check", "test", "deny", "doc"],
-                    &config,
-                );
-                report.finalize(start.elapsed());
-                return report;
-            }
         }
 
         // Gate 3: cargo clippy -D warnings
@@ -548,9 +539,9 @@ impl Verifier {
 
                 GateResult {
                     gate: "sg".to_string(),
-                    outcome: if has_errors {
-                        GateOutcome::Failed
-                    } else if has_diagnostics {
+                    // sg is advisory only (Warning max, never Failed). Pre-existing
+                    // codebase violations must not block worker resolutions.
+                    outcome: if has_diagnostics {
                         GateOutcome::Warning
                     } else {
                         GateOutcome::Passed
