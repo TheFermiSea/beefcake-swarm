@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "tensorzero": {
+      "type": "url",
+      "url": "http://100.105.113.58:3000/mcp"
+    }
+  }
+}
