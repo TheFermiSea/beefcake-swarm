@@ -1,6 +1,23 @@
 //! Pre-routing classifier-extractor for complexity and risk analysis.
 //!
-//! Runs BEFORE the router makes a model tier selection.
+//! Analyzes tasks before model tier selection to determine risk and complexity.
+//!
+//! # Examples
+//!
+//! ```
+//! use coordination::router::classifier::PreRoutingClassifier;
+//! use coordination::router::task_classifier::ModelTier;
+//!
+//! let classifier = PreRoutingClassifier::new();
+//! let analysis = classifier.analyze_task(
+//!     "Fix async trait bounds",
+//!     &vec!["src/lib.rs".to_string()],
+//!     &vec![],
+//!     1,
+//!     &vec![]
+//! );
+//! assert_eq!(analysis.recommended_tier, ModelTier::Council);
+//! ```
 
 use serde::{Deserialize, Serialize};
 
@@ -9,27 +26,62 @@ pub use crate::router::task_classifier::ModelTier;
 pub use crate::verifier::report::FailureSignal;
 pub use crate::work_packet::types::{Constraint, ConstraintKind, WorkPacket};
 
-/// Risk severity level
+/// Risk severity level for task classification.
+///
+/// Represents the severity of identified risks in a task, from low to critical.
+///
+/// # Examples
+///
+/// ```
+/// use coordination::router::classifier::RiskLevel;
+///
+/// let low = RiskLevel::Low;
+/// let critical = RiskLevel::Critical;
+/// assert!(low < critical);
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskLevel {
+    /// Minimal risk, routine changes
     Low,
+    /// Moderate risk, requires careful review
     Medium,
+    /// High risk, significant impact potential
     High,
+    /// Critical risk, immediate escalation required
     Critical,
 }
 
-/// Kind of risk factor
+/// Kind of risk factor identified in task analysis.
+///
+/// Categorizes different types of risks that may be present in a task.
+///
+/// # Examples
+///
+/// ```
+/// use coordination::router::classifier::RiskKind;
+///
+/// let risk = RiskKind::UnsafeCode;
+/// assert_eq!(risk.to_string(), "unsafe_code");
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RiskKind {
+    /// Changes that may break public API compatibility
     BreakingApiChange,
+    /// Code containing unsafe blocks or FFI
     UnsafeCode,
+    /// Security-sensitive operations or data handling
     SecuritySensitive,
+    /// Operations that may cause data loss
     DataLoss,
+    /// Concurrency-related hazards
     ConcurrencyHazard,
+    /// Dependencies on external services
     ExternalDependency,
+    /// Large scope changes affecting many files
     LargeScope,
+    /// Tasks with repeated failure history
     RepeatedFailures,
 }
 
