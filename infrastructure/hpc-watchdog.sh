@@ -4,12 +4,11 @@
 #
 # Inspired by Gastown's Deacon patrol pattern
 # Monitors: Model endpoints, GPU health, SLURM jobs, Agent states
-# Current 5-model zoo:
+# Current 4-model zoo:
 # - GLM-4.7-Flash (vasp-03:8081) — Scout
 # - Qwen3.5-27B (vasp-01:8081) — Coder
-# - Devstral-Small-2-4B (vasp-02:8081) — Reasoning
+# - Devstral-Small-2-24B (vasp-02:8081) — Reasoning
 # - SERA-14B (vasp-03:8083) — SWE Specialist
-# - nomic-embed-text-v1.5 (vasp-03:8082) — Embedding
 
 set -euo pipefail
 
@@ -105,7 +104,6 @@ run_patrol() {
     check_endpoint "Qwen3.5-27B (vasp-01) - Coder" "10.0.0.20" 8081 || ((failures++))
     check_endpoint "Devstral-Small-2-24B (vasp-02) - Reasoning" "10.0.0.21" 8081 || ((failures++))
     check_endpoint "SERA-14B (vasp-03) - SWE Specialist" "10.0.0.22" 8083 || ((failures++))
-    check_endpoint "nomic-embed-text-v1.5 (vasp-03) - Embedding" "10.0.0.22" 8082 || ((failures++))
     
     # Check infrastructure services
     echo ""
@@ -136,7 +134,7 @@ run_patrol() {
         echo -e "${YELLOW}⚠ ${failures} issue(s) detected${NC}"
     else
         log "OK: All endpoints healthy"
-        echo -e "${GREEN}✓ All 5 models + 2 infrastructure services healthy${NC}"
+        echo -e "${GREEN}✓ All 4 models + 2 infrastructure services healthy${NC}"
     fi
     
     log "=== Patrol cycle complete ==="
