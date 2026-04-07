@@ -2,6 +2,7 @@
 
 use crate::analytics::replay::ReplayHint;
 use crate::analytics::skills::SkillHint;
+pub use crate::context_packer::ast_index::SymbolKind;
 use crate::escalation::state::SwarmTier;
 use crate::feedback::error_parser::ErrorCategory;
 use crate::verifier::report::{FailureSignal, ValidatorFeedback};
@@ -140,35 +141,6 @@ pub struct KeySymbol {
     pub file: String,
     /// Line number
     pub line: Option<usize>,
-}
-
-/// Kind of source code symbol
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SymbolKind {
-    Struct,
-    Trait,
-    Function,
-    Enum,
-    Impl,
-    Const,
-    Type,
-    Mod,
-}
-
-impl std::fmt::Display for SymbolKind {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Struct => write!(f, "struct"),
-            Self::Trait => write!(f, "trait"),
-            Self::Function => write!(f, "fn"),
-            Self::Enum => write!(f, "enum"),
-            Self::Impl => write!(f, "impl"),
-            Self::Const => write!(f, "const"),
-            Self::Type => write!(f, "type"),
-            Self::Mod => write!(f, "mod"),
-        }
-    }
 }
 
 /// File context — a relevant code snippet

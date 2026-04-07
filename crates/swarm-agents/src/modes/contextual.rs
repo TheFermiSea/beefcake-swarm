@@ -41,6 +41,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
 use crate::confidence::detect_context_anxiety;
+use crate::modes::chat_history::extract_message_text;
 use crate::modes::{
     errors::OrchestrationError,
     provider_config::ModeRunnerConfig,
@@ -468,38 +469,6 @@ pub async fn run_contextual(task: impl Into<String>) -> ModeOutcome {
     let mut runner = ContextualRunner::new(config.clone());
     let orch = crate::modes::ModeOrchestrator::new(config);
     orch.run(&mut runner, ModeRequest::new(task)).await
-}
-
-// ── Internal helpers ──────────────────────────────────────────────────────────
-
-/// Extract plain text from a `Message` (user or assistant).
-pub(crate) fn extract_message_text(msg: &Message) -> String {
-    use rig::completion::AssistantContent;
-    use rig::message::UserContent;
-    match msg {
-        Message::User { content } => content
-            .iter()
-            .filter_map(|c| {
-                if let UserContent::Text(t) = c {
-                    Some(t.text.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(""),
-        Message::Assistant { content, .. } => content
-            .iter()
-            .filter_map(|c| {
-                if let AssistantContent::Text(t) = c {
-                    Some(t.text.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(""),
-    }
 }
 
 #[cfg(test)]

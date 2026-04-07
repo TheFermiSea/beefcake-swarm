@@ -1,6 +1,6 @@
-use std::collections::VecDeque;
-use rig::completion::{Message, AssistantContent};
+use rig::completion::{AssistantContent, Message};
 use rig::message::UserContent;
+use std::collections::VecDeque;
 
 /// Shared chat history management with token estimation and compaction support.
 pub struct ChatHistory {
@@ -103,7 +103,7 @@ impl ChatHistory {
         // Keep the most recent 2 messages (latest exchange) intact.
         let keep = 2.min(self.messages.len());
         let tail: Vec<Message> = self.messages.iter().rev().take(keep).cloned().collect();
-        
+
         self.messages.clear();
         self.estimated_tokens = 0;
 
@@ -181,17 +181,17 @@ mod tests {
         history.push_assistant("Response 2");
 
         let summarizer = |_| async { Ok("Summarized history".to_string()) };
-        
+
         history.compact(summarizer).await.unwrap();
 
         let messages = history.to_vec();
         // Should have: Summary, Message 2, Response 2
         assert_eq!(messages.len(), 3);
-        
+
         let first_text = extract_message_text(&messages[0]);
         assert!(first_text.contains("Summarized history"));
         assert!(first_text.contains("tokens compacted"));
-        
+
         assert_eq!(extract_message_text(&messages[1]), "Message 2");
         assert_eq!(extract_message_text(&messages[2]), "Response 2");
     }

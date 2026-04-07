@@ -8,6 +8,7 @@
 //!
 //! Source: ASI-Evolve (arxiv:2603.29640) database/database.py
 
+use crate::embedding::cosine_similarity;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -191,20 +192,6 @@ impl ExperimentDb {
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
-}
-
-/// Cosine similarity between two vectors.
-fn cosine_similarity(a: &[f32], b: &[f32]) -> f32 {
-    if a.len() != b.len() || a.is_empty() {
-        return 0.0;
-    }
-    let dot: f32 = a.iter().zip(b.iter()).map(|(x, y)| x * y).sum();
-    let norm_a: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
-    let norm_b: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
-    if norm_a == 0.0 || norm_b == 0.0 {
-        return 0.0;
-    }
-    dot / (norm_a * norm_b)
 }
 
 #[cfg(test)]
