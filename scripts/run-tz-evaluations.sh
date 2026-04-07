@@ -14,55 +14,84 @@ log() { echo "[$(date -Iseconds)] $*" | tee -a "$LOG"; }
 
 log "=== TZ Evaluation Run ==="
 
-# Build fresh worker dataset from recent inferences (last 24h, max 10)
-log "Building worker dataset..."
-docker exec tensorzero-postgres-1 psql -U tensorzero -d tensorzero -t -A -c "
-SELECT json_build_object(
-  'datapoints', json_agg(json_build_object(
-    'type', 'chat',
-    'function_name', 'worker_code_edit',
-    'input', d.input,
-    'output', d.output
-  ))
-)
-FROM (
-  SELECT d.input, d.output
-  FROM chat_inference_data d
-  JOIN chat_inferences i ON d.id = i.id AND d.created_at = i.created_at
-  WHERE i.function_name = 'worker_code_edit'
-    AND i.created_at > now() - interval '7 days'
-  ORDER BY i.created_at DESC
-  LIMIT 10
-) d;
-" > /tmp/tz-eval-dataset.json
+# Helper: build dataset for a function from recent inferences (last 7 days)
+build_dataset() {
+  local func_name="$1" dataset_name="$2"
+  log "Building dataset for ${func_name}..."
+  docker exec tensorzero-postgres-1 psql -U tensorzero -d tensorzero -t -A -c "
+  SELECT json_build_object(
+    'datapoints', json_agg(json_build_object(
+      'type', 'chat',
+      'function_name', '${func_name}',
+      'input', ci.input,
+      'output', ci.output
+    ))
+  )
+  FROM (
+    SELECT ci.input, ci.output
+    FROM chat_inferences ci
+    WHERE ci.function_name = '${func_name}'
+      AND ci.created_at > now() - interval '7 days'
+    ORDER BY ci.created_at DESC
+    LIMIT 20
+  ) ci;
+  " > /tmp/tz-eval-dataset-${func_name}.json
 
-PAYLOAD_SIZE=$(wc -c < /tmp/tz-eval-dataset.json)
-log "Dataset payload: ${PAYLOAD_SIZE} bytes"
+  local payload_size
+  payload_size=$(wc -c < "/tmp/tz-eval-dataset-${func_name}.json")
+  log "  ${func_name} dataset: ${payload_size} bytes"
 
-if [ "$PAYLOAD_SIZE" -lt 10 ]; then
-  log "No recent inferences — skipping evaluation"
-  exit 0
-fi
+  if [ "$payload_size" -lt 10 ]; then
+    log "  No recent inferences for ${func_name} — skipping"
+    return 1
+  fi
 
-DATASET_NAME="worker_eval_${DATASET_SUFFIX}"
-RESP=$(curl -s -X POST "$GATEWAY/v1/datasets/${DATASET_NAME}/datapoints" \
-  -H "Content-Type: application/json" \
-  -d @/tmp/tz-eval-dataset.json)
-log "Dataset response: $(echo "$RESP" | head -c 200)"
+  RESP=$(curl -s -X POST "$GATEWAY/v1/datasets/${dataset_name}/datapoints" \
+    -H "Content-Type: application/json" \
+    -d @"/tmp/tz-eval-dataset-${func_name}.json")
+  log "  Dataset response: $(echo "$RESP" | head -c 200)"
+  return 0
+}
 
-# Run evaluations for both variants
-for VARIANT in qwen_coder qwen_reasoning; do
-  log "Running worker_code_quality eval: variant=$VARIANT"
+# Helper: run a single evaluation for a variant
+run_eval() {
+  local eval_name="$1" dataset_name="$2" variant="$3"
+  log "  Running ${eval_name}: variant=${variant}"
   docker run --rm --network host \
     -v "$(dirname "$CONFIG"):/app/config:ro" \
     -e "SWARM_CLOUD_API_KEY=${SWARM_CLOUD_API_KEY}" \
     -e "TENSORZERO_POSTGRES_URL=${PG_URL}" \
     tensorzero/evaluations \
     --config-file /app/config/tensorzero.toml \
-    --evaluation-name worker_code_quality \
-    --dataset-name "$DATASET_NAME" \
-    --variant-name "$VARIANT" \
+    --evaluation-name "$eval_name" \
+    --dataset-name "$dataset_name" \
+    --variant-name "$variant" \
     --concurrency 2 2>&1 | tee -a "$LOG"
-done
+}
+
+# ── 1. worker_code_edit evaluations ──────────────────────────────────────────
+WORKER_DATASET="worker_eval_${DATASET_SUFFIX}"
+if build_dataset "worker_code_edit" "$WORKER_DATASET"; then
+  for VARIANT in qwen35_27b devstral_24b sera_14b_worker; do
+    log "Evaluating worker variant: $VARIANT"
+    run_eval "worker_code_quality" "$WORKER_DATASET" "$VARIANT"
+    run_eval "worker_behavior_quality" "$WORKER_DATASET" "$VARIANT"
+  done
+fi
+
+# ── 2. code_fixing evaluations ───────────────────────────────────────────────
+FIXER_DATASET="fixer_eval_${DATASET_SUFFIX}"
+if build_dataset "code_fixing" "$FIXER_DATASET"; then
+  for VARIANT in qwen35_fixer devstral_fixer sera_14b_fixer; do
+    log "Evaluating fixer variant: $VARIANT"
+    run_eval "code_fixing_quality" "$FIXER_DATASET" "$VARIANT"
+  done
+fi
+
+# ── 3. cloud_manager_delegation evaluations ──────────────────────────────────
+MANAGER_DATASET="manager_eval_${DATASET_SUFFIX}"
+if build_dataset "cloud_manager_delegation" "$MANAGER_DATASET"; then
+  run_eval "manager_delegation" "$MANAGER_DATASET" "opus_primary"
+fi
 
 log "=== Evaluation complete ==="

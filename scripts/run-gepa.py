@@ -37,7 +37,7 @@ except ImportError:
 
 
 DEFAULT_GATEWAY_URL = "http://localhost:3000"
-DEFAULT_PG_URL = "postgresql://postgres:postgres@localhost:5432/tensorzero"
+DEFAULT_PG_URL = "postgresql://tensorzero:tensorzero@localhost:5433/tensorzero"
 DEFAULT_FUNCTION = "worker_code_edit"
 DEFAULT_EVALUATION = "worker_code_quality"
 DEFAULT_MAX_ITERATIONS = 5
@@ -49,13 +49,11 @@ MIN_DATAPOINTS = 3
 # Map function names to their known variant lists
 FUNCTION_VARIANTS = {
     "worker_code_edit": [
-        "omnicoder_9b",
         "qwen35_27b",
         "devstral_24b",
         "sera_14b_worker",
     ],
     "code_fixing": [
-        "omnicoder_fixer",
         "qwen35_fixer",
         "devstral_fixer",
         "sera_14b_fixer",

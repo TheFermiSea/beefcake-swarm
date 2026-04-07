@@ -418,11 +418,13 @@ model = "devstral"
 type = "chat_completion"
 model = "sera_14b"
 
-# Adaptive: Thompson Sampling across 5 worker variants.
+# Adaptive: Thompson Sampling across 3 productive worker variants.
 # sera_14b_worker re-added per Autopilot finding (77.4% task_resolved, n=944).
+# Retired 2026-04-07: qwen35_direct (0.0% resolved, n=192), devstral_structured (0.0% resolved, n=189).
+# Variant definitions kept above for historical reference and template experiments.
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
-candidate_variants = ["qwen35_27b", "devstral_24b", "qwen35_direct", "devstral_structured", "sera_14b_worker"]
+candidate_variants = ["qwen35_27b", "devstral_24b", "sera_14b_worker"]
 metric = "task_resolved"
 update_period_s = 300
 

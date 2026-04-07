@@ -38,7 +38,7 @@ except ImportError:
 
 
 DEFAULT_GATEWAY_URL = "http://localhost:3000"
-DEFAULT_PG_URL = "postgresql://postgres:postgres@localhost:5432/tensorzero"
+DEFAULT_PG_URL = "postgresql://tensorzero:tensorzero@localhost:5433/tensorzero"
 POLL_INTERVAL_SECS = 15
 MIN_DATAPOINTS = 3
 
