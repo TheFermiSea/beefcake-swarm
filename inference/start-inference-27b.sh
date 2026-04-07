@@ -1,22 +1,22 @@
 #!/bin/bash
-# Start Qwen3.5-27B dense from the shared Apptainer image on vasp-01/02.
+# Start Qwen3.5-27B dense on vasp-01.
 # Dense model: all weights on GPU, no expert offload needed.
 # Q4_K_M ~16.5GB fits in V100S 32GB with ~15GB for KV cache.
+# --parallel 4: ~8GB KV cache for 4 concurrent slots at 32K context.
+# Uses native binary (b8692+) for Gemma 4 compat and latest optimizations.
 set -euo pipefail
 
-CONTAINER="${CONTAINER:-/cluster/shared/containers/llama-server.sif}"
+LLAMA_SERVER="${LLAMA_SERVER:-/usr/local/bin/llama-server-gemma4}"
 LOG_PATH="${LOG_PATH:-/tmp/llama-inference.log}"
-# Default to Q4_K_M; override with QUANT=Q5_K_M for reasoning tier
 QUANT="${QUANT:-Q4_K_M}"
 MODEL_FILE="/scratch/ai/models/Qwen3.5-27B-${QUANT}.gguf"
 
-command -v apptainer >/dev/null
-mkdir -p /tmp/cuda-cache
+if [[ ! -x "${LLAMA_SERVER}" ]]; then
+  echo "ERROR: llama-server binary not found: ${LLAMA_SERVER}" >&2
+  exit 1
+fi
 
-export APPTAINERENV_HOME=/tmp
-export APPTAINERENV_CUDA_CACHE_PATH=/tmp/cuda-cache
-
-existing_pids="$(ps -eo pid=,args= | awk '/(llama-server-mmq|apptainer .*llama-server\.sif|\/usr\/local\/bin\/llama-server)( |$)/ { print $1 }')"
+existing_pids="$(ps -eo pid=,args= | awk '/llama-server.*--port 8081( |$)/ { print $1 }')"
 if [[ -n "${existing_pids}" ]]; then
   kill ${existing_pids} 2>/dev/null || true
   sleep 2
@@ -27,7 +27,7 @@ if [[ ! -f "${MODEL_FILE}" ]]; then
   exit 1
 fi
 
-nohup numactl --interleave=all apptainer run --nv --bind /scratch/ai:/scratch/ai:ro "${CONTAINER}" \
+nohup numactl --interleave=all "${LLAMA_SERVER}" \
   --model "${MODEL_FILE}" \
   --alias Qwen3.5-27B \
   --host 0.0.0.0 --port 8081 \
@@ -37,4 +37,4 @@ nohup numactl --interleave=all apptainer run --nv --bind /scratch/ai:/scratch/ai
   --cache-prompt -fa on --parallel 4 --mlock --cont-batching --metrics --jinja \
   > "${LOG_PATH}" 2>&1 &
 
-echo "Started Qwen3.5-27B (${QUANT}) PID=$! container=${CONTAINER}"
+echo "Started Qwen3.5-27B (${QUANT}) PID=$! binary=${LLAMA_SERVER}"
