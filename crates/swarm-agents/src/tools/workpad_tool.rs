@@ -226,7 +226,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn read_workpad_missing_file() {
+    fn test_workpad_read_empty() {
         let dir = tempfile::tempdir().unwrap();
         let entries = read_workpad(dir.path()).unwrap();
         assert!(entries.is_empty());
