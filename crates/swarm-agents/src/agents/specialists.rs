@@ -72,6 +72,7 @@ pub fn build_planner_named(
             wt_path,
             WorkerRole::Planner,
             proxy_tools,
+            None,
         ))
         .default_max_turns(planner_max_turns())
         .build()
@@ -110,6 +111,7 @@ pub fn build_fixer_named(
             wt_path,
             WorkerRole::General,
             proxy_tools,
+            None,
         ))
         .default_max_turns(fixer_max_turns())
         .build()
@@ -176,6 +178,7 @@ pub fn build_architect_named(
             wt_path,
             WorkerRole::Planner, // Read-only tools (same as planner)
             proxy_tools,
+            None,
         ))
         .default_max_turns(architect_max_turns())
         .build()
@@ -221,6 +224,7 @@ pub fn build_editor_named(
             wt_path,
             WorkerRole::General, // Full edit tools
             proxy_tools,
+            None,
         ))
         .default_max_turns(editor_max_turns())
         .build()

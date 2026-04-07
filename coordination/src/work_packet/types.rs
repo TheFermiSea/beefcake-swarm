@@ -84,6 +84,10 @@ pub struct WorkPacket {
     /// when a pivot is detected so the receiving tier knows what NOT to repeat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub failed_approach_summary: Option<String>,
+    /// Pre-computed dependency graph context from SemanticCodeGraph.
+    /// Injected by the orchestrator when the graph is available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dependency_graph: Option<String>,
 }
 
 impl WorkPacket {
@@ -356,6 +360,7 @@ mod tests {
             change_contract: None,
             repo_map: None,
             failed_approach_summary: None,
+            dependency_graph: None,
         };
 
         let summary = packet.summary();
@@ -403,6 +408,7 @@ mod tests {
             change_contract: None,
             repo_map: None,
             failed_approach_summary: None,
+            dependency_graph: None,
         };
 
         let json = serde_json::to_string_pretty(&packet).unwrap();
@@ -445,6 +451,7 @@ mod tests {
             change_contract: None,
             repo_map: None,
             failed_approach_summary: None,
+            dependency_graph: None,
         };
 
         // Should be a reasonable estimate
@@ -532,6 +539,7 @@ mod tests {
             change_contract: Some(contract),
             repo_map: None,
             failed_approach_summary: None,
+            dependency_graph: None,
         };
 
         // Round-trip with contract

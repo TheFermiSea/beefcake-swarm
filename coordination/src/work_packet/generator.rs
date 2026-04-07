@@ -177,6 +177,7 @@ impl WorkPacketGenerator {
             change_contract: None,         // Populated by planner agent
             repo_map: None,                // Populated by ContextPacker
             failed_approach_summary: None, // Populated by inject_pivot_context
+            dependency_graph: None,        // Populated by orchestrator from SemanticCodeGraph
         }
     }
 

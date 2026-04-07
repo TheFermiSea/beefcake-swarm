@@ -63,6 +63,7 @@ pub fn build_breaker_named(
             wt_path,
             WorkerRole::General,
             proxy_tools,
+            None,
         ))
         .default_max_turns(breaker_max_turns())
         .build()

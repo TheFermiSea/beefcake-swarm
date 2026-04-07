@@ -44,6 +44,7 @@ use super::colgrep_tool::ColGrepTool;
 use super::exec_tool::RunCommandTool;
 use super::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
 use super::git_tools::{GetDiffTool, ListChangedFilesTool};
+use super::graph_context_tool::GraphContextTool;
 use super::notebook_tool::QueryNotebookTool;
 use super::patch_tool::EditFileTool;
 use super::search_code_tool::SearchCodeTool;
@@ -62,3 +63,4 @@ proxy_tool!(ProxyListChangedFiles wraps ListChangedFilesTool as "proxy_list_chan
 proxy_tool!(ProxySearchCode wraps SearchCodeTool as "proxy_search_code");
 proxy_tool!(ProxyColGrep wraps ColGrepTool as "proxy_colgrep");
 proxy_tool!(ProxyAstGrep wraps AstGrepTool as "proxy_ast_grep");
+proxy_tool!(ProxyGraphContext wraps GraphContextTool as "proxy_graph_context");

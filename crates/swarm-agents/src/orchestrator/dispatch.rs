@@ -183,6 +183,12 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
         prompt.push('\n');
     }
 
+    if let Some(ref dep_graph) = packet.dependency_graph {
+        prompt.push_str("## Dependency Graph\n");
+        prompt.push_str(dep_graph);
+        prompt.push('\n');
+    }
+
     if !packet.key_symbols.is_empty() {
         prompt.push_str("## Key Symbols\n");
         for sym in &packet.key_symbols {
@@ -599,6 +605,7 @@ mod tests {
             change_contract: None,
             repo_map: None,
             failed_approach_summary: None,
+            dependency_graph: None,
         }
     }
 

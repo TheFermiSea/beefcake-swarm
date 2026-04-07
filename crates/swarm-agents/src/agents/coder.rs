@@ -163,6 +163,7 @@ pub fn build_rust_coder_named(
             wt_path,
             WorkerRole::RustSpecialist,
             proxy_tools,
+            None,
         ))
         .default_max_turns(worker_max_turns())
         .build()
@@ -205,6 +206,7 @@ pub fn build_reasoning_worker_named(
             wt_path,
             WorkerRole::General,
             proxy_tools,
+            None,
         ))
         .default_max_turns(reasoning_max_turns())
         .build()
@@ -237,6 +239,7 @@ pub fn build_strategist_named(
             wt_path,
             WorkerRole::Strategist,
             proxy_tools,
+            None,
         ))
         .default_max_turns(reasoning_max_turns())
         .build()
@@ -282,6 +285,7 @@ pub fn build_general_coder_named(
             wt_path,
             WorkerRole::General,
             proxy_tools,
+            None,
         ))
         .default_max_turns(worker_max_turns())
         .build()

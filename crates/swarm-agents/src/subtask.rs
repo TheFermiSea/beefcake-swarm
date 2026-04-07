@@ -807,7 +807,8 @@ async fn run_subtask_worker(
     };
 
     // Build tools scoped to the worktree with file allowlist enforcement.
-    let tools = bundles::subtask_worker_tools(wt_path, role, &subtask.target_files, &subtask.id);
+    let tools =
+        bundles::subtask_worker_tools(wt_path, role, &subtask.target_files, &subtask.id, None);
 
     // Scale turn budget dynamically based on task complexity and file counts:
     //

@@ -48,6 +48,7 @@ fn make_packet(objective: &str, iteration: u32) -> WorkPacket {
         change_contract: None,
         repo_map: None,
         failed_approach_summary: None,
+        dependency_graph: None,
     }
 }
 

@@ -83,7 +83,7 @@ impl ToolFactory {
     ///
     /// Delegates to [`bundles::worker_tools`] with the factory's stored parameters.
     pub fn worker_tools(&self, role: WorkerRole) -> Vec<Box<dyn ToolDyn>> {
-        bundles::worker_tools(&self.wt_path, role, self.proxy)
+        bundles::worker_tools(&self.wt_path, role, self.proxy, None)
     }
 
     /// Build the strategy-only tool bundle for a manager agent.
@@ -220,7 +220,7 @@ mod tests {
         let factory = ToolFactory::new(dir.path(), false, vec!["pkg".to_string()], None);
 
         let mut direct_names: Vec<String> =
-            bundles::worker_tools(dir.path(), WorkerRole::RustSpecialist, false)
+            bundles::worker_tools(dir.path(), WorkerRole::RustSpecialist, false, None)
                 .iter()
                 .map(|t| t.name())
                 .collect();

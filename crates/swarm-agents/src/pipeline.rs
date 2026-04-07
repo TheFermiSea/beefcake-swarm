@@ -795,6 +795,7 @@ mod tests {
             change_contract: None,
             repo_map: None,
             failed_approach_summary: None,
+            dependency_graph: None,
         }
     }
 

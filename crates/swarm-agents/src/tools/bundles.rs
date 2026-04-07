@@ -15,17 +15,20 @@ use std::sync::Arc;
 
 use rig::tool::ToolDyn;
 
+use coordination::context_packer::SemanticCodeGraph;
+
 use super::astgrep_tool::AstGrepTool;
 use super::colgrep_tool::ColGrepTool;
 use super::exec_tool::RunCommandTool;
 use super::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
 use super::git_tools::{GetDiffTool, ListChangedFilesTool};
+use super::graph_context_tool::GraphContextTool;
 use super::notebook_tool::QueryNotebookTool;
 use super::patch_tool::EditFileTool;
 use super::proxy_wrappers::{
-    ProxyAstGrep, ProxyColGrep, ProxyEditFile, ProxyGetDiff, ProxyListChangedFiles, ProxyListFiles,
-    ProxyQueryNotebook, ProxyReadFile, ProxyRunCommand, ProxyRunVerifier, ProxySearchCode,
-    ProxyWriteFile,
+    ProxyAstGrep, ProxyColGrep, ProxyEditFile, ProxyGetDiff, ProxyGraphContext,
+    ProxyListChangedFiles, ProxyListFiles, ProxyQueryNotebook, ProxyReadFile, ProxyRunCommand,
+    ProxyRunVerifier, ProxySearchCode, ProxyWriteFile,
 };
 use super::search_code_tool::SearchCodeTool;
 use super::verifier_tool::RunVerifierTool;
@@ -51,8 +54,13 @@ pub enum WorkerRole {
 ///
 /// When `proxy` is true, tools are wrapped with `proxy_` prefixed names
 /// for CLIAPIProxy compatibility.
-pub fn worker_tools(wt_path: &Path, role: WorkerRole, proxy: bool) -> Vec<Box<dyn ToolDyn>> {
-    process_tactical_tools(wt_path, role, proxy)
+pub fn worker_tools(
+    wt_path: &Path,
+    role: WorkerRole,
+    proxy: bool,
+    graph: Option<Arc<SemanticCodeGraph>>,
+) -> Vec<Box<dyn ToolDyn>> {
+    process_tactical_tools(wt_path, role, proxy, graph)
 }
 
 /// Build a worker tool bundle with a file allowlist for subtask dispatch.
@@ -69,6 +77,7 @@ pub fn subtask_worker_tools(
     role: WorkerRole,
     target_files: &[String],
     worker_id: &str,
+    graph: Option<Arc<SemanticCodeGraph>>,
 ) -> Vec<Box<dyn ToolDyn>> {
     let allowlist: std::collections::HashSet<String> = target_files.iter().cloned().collect();
 
@@ -87,6 +96,11 @@ pub fn subtask_worker_tools(
 
     if role == WorkerRole::General {
         tools.push(Box::new(ListFilesTool::new(wt_path)));
+    }
+
+    // Graph context tool for dependency analysis (when graph is available).
+    if let Some(g) = graph {
+        tools.push(Box::new(GraphContextTool::new(wt_path, g)));
     }
 
     // Workpad tools for inter-worker communication during concurrent dispatch.
@@ -201,8 +215,9 @@ pub fn process_tactical_tools(
     wt_path: &Path,
     role: WorkerRole,
     proxy: bool,
+    graph: Option<Arc<SemanticCodeGraph>>,
 ) -> Vec<Box<dyn ToolDyn>> {
-    match role {
+    let mut tools: Vec<Box<dyn ToolDyn>> = match role {
         WorkerRole::Planner | WorkerRole::Strategist => {
             // Read-only tools for analysis: read_file, list_files, run_command, plus search tools.
             if proxy {
@@ -226,7 +241,7 @@ pub fn process_tactical_tools(
             }
         }
         _ => {
-            let mut tools: Vec<Box<dyn ToolDyn>> = if proxy {
+            let mut inner: Vec<Box<dyn ToolDyn>> = if proxy {
                 vec![
                     Box::new(ProxyReadFile(ReadFileTool::new(wt_path))),
                     Box::new(ProxyWriteFile(WriteFileTool::new(wt_path))),
@@ -251,15 +266,28 @@ pub fn process_tactical_tools(
             // General/reasoning workers also get list_files for directory exploration.
             if role == WorkerRole::General {
                 if proxy {
-                    tools.push(Box::new(ProxyListFiles(ListFilesTool::new(wt_path))));
+                    inner.push(Box::new(ProxyListFiles(ListFilesTool::new(wt_path))));
                 } else {
-                    tools.push(Box::new(ListFilesTool::new(wt_path)));
+                    inner.push(Box::new(ListFilesTool::new(wt_path)));
                 }
             }
 
-            tools
+            inner
+        }
+    };
+
+    // Graph context tool for dependency analysis (when graph is available).
+    if let Some(g) = graph {
+        if proxy {
+            tools.push(Box::new(ProxyGraphContext(GraphContextTool::new(
+                wt_path, g,
+            ))));
+        } else {
+            tools.push(Box::new(GraphContextTool::new(wt_path, g)));
         }
     }
+
+    tools
 }
 
 /// Build the optional knowledge base tool for a manager agent.
@@ -285,7 +313,7 @@ mod tests {
     #[test]
     fn test_worker_rust_specialist_has_expected_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = worker_tools(dir.path(), WorkerRole::RustSpecialist, false);
+        let tools = worker_tools(dir.path(), WorkerRole::RustSpecialist, false, None);
         // read, write, edit, run + search_code, colgrep, astgrep = 7
         assert_eq!(tools.len(), 7, "Rust specialist should have 7 tools");
     }
@@ -293,7 +321,7 @@ mod tests {
     #[test]
     fn test_worker_general_has_expected_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = worker_tools(dir.path(), WorkerRole::General, false);
+        let tools = worker_tools(dir.path(), WorkerRole::General, false, None);
         // read, write, edit, run, list + search_code, colgrep, astgrep = 8
         assert_eq!(tools.len(), 8, "General worker should have 8 tools");
     }
@@ -301,15 +329,15 @@ mod tests {
     #[test]
     fn test_worker_proxy_same_count() {
         let dir = tempfile::tempdir().unwrap();
-        let local = worker_tools(dir.path(), WorkerRole::General, false);
-        let proxy = worker_tools(dir.path(), WorkerRole::General, true);
+        let local = worker_tools(dir.path(), WorkerRole::General, false, None);
+        let proxy = worker_tools(dir.path(), WorkerRole::General, true, None);
         assert_eq!(local.len(), proxy.len());
     }
 
     #[test]
     fn test_worker_proxy_names_have_prefix() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = worker_tools(dir.path(), WorkerRole::General, true);
+        let tools = worker_tools(dir.path(), WorkerRole::General, true, None);
         for tool in &tools {
             assert!(
                 tool.name().starts_with("proxy_"),
@@ -322,7 +350,7 @@ mod tests {
     #[test]
     fn test_worker_local_names_no_prefix() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = worker_tools(dir.path(), WorkerRole::General, false);
+        let tools = worker_tools(dir.path(), WorkerRole::General, false, None);
         for tool in &tools {
             assert!(
                 !tool.name().starts_with("proxy_"),
@@ -418,7 +446,7 @@ mod tests {
     #[test]
     fn test_worker_planner_has_expected_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = worker_tools(dir.path(), WorkerRole::Planner, false);
+        let tools = worker_tools(dir.path(), WorkerRole::Planner, false, None);
         // read, list, run + search_code, colgrep, astgrep = 6
         assert_eq!(
             tools.len(),
@@ -430,7 +458,7 @@ mod tests {
     #[test]
     fn test_worker_planner_no_write_tools() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = worker_tools(dir.path(), WorkerRole::Planner, false);
+        let tools = worker_tools(dir.path(), WorkerRole::Planner, false, None);
         let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
         assert!(
             !names
@@ -443,7 +471,7 @@ mod tests {
     #[test]
     fn test_worker_planner_proxy() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = worker_tools(dir.path(), WorkerRole::Planner, true);
+        let tools = worker_tools(dir.path(), WorkerRole::Planner, true, None);
         assert_eq!(tools.len(), 6);
         for tool in &tools {
             assert!(
@@ -535,7 +563,7 @@ mod tests {
     #[test]
     fn test_process_tactical_tools_general() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = process_tactical_tools(dir.path(), WorkerRole::General, false);
+        let tools = process_tactical_tools(dir.path(), WorkerRole::General, false, None);
         // read, write, edit, run, list + search_code, colgrep, astgrep = 8
         assert_eq!(
             tools.len(),
@@ -553,7 +581,7 @@ mod tests {
     #[test]
     fn test_process_tactical_tools_rust_specialist() {
         let dir = tempfile::tempdir().unwrap();
-        let tools = process_tactical_tools(dir.path(), WorkerRole::RustSpecialist, false);
+        let tools = process_tactical_tools(dir.path(), WorkerRole::RustSpecialist, false, None);
         // read, write, edit, run + search_code, colgrep, astgrep = 7
         assert_eq!(
             tools.len(),
@@ -571,7 +599,7 @@ mod tests {
             WorkerRole::Planner,
         ] {
             for proxy in [false, true] {
-                let tools = process_tactical_tools(dir.path(), role, proxy);
+                let tools = process_tactical_tools(dir.path(), role, proxy, None);
                 let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
                 let strategy_names = ["verifier", "get_diff", "list_changed_files"];
                 for bad in &strategy_names {
@@ -591,10 +619,11 @@ mod tests {
             .iter()
             .map(|t| t.name())
             .collect();
-        let tactical: Vec<String> = process_tactical_tools(dir.path(), WorkerRole::General, false)
-            .iter()
-            .map(|t| t.name())
-            .collect();
+        let tactical: Vec<String> =
+            process_tactical_tools(dir.path(), WorkerRole::General, false, None)
+                .iter()
+                .map(|t| t.name())
+                .collect();
         // Search tools (search_code, colgrep, ast_grep) are intentionally shared
         // between strategy and tactical bundles — both managers and workers need
         // code search. Only the core strategy tools must be exclusive.
