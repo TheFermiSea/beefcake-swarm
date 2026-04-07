@@ -296,6 +296,19 @@ model_name = "Qwen3.5-27B"
 api_base = "http://10.0.0.20:8081/v1"
 api_key_location = "none"
 
+# --- OmniCoder-9B on vasp-02:8083 (secondary, alongside Devstral-24B on :8081) ---
+# Dense 9B model, GPU-resident. Historical task_resolved ≈ 0.753 (worker, n=2742).
+# Originally ran on vasp-03:8081 before GLM-4.7-Flash replaced it. Now secondary on vasp-02.
+
+[models.omnicoder]
+routing = ["vasp02_omnicoder"]
+
+[models.omnicoder.providers.vasp02_omnicoder]
+type = "openai"
+model_name = "OmniCoder-9B"
+api_base = "http://10.0.0.21:8083/v1"
+api_key_location = "none"
+
 # --- Cloud models (via CLIAPIProxy on ai-proxy localhost) ---
 
 [models.claude_opus]
@@ -382,10 +395,10 @@ candidate_variants = ["qwen_coder", "qwen_reasoning"]
 metric = "task_resolved"
 update_period_s = 300
 
-# --- Worker Code Edit: 2-model A/B experiment ---
-# Qwen3.5-27B (coder) vs Devstral-24B (reasoning) — both ~64% task_resolved.
+# --- Worker Code Edit: 4-variant adaptive experiment ---
+# Current: qwen35_27b (0.640, n=4422), devstral_24b (0.634, n=5518), sera_14b_worker (0.774, n=944).
+# Re-added: omnicoder_9b — real OmniCoder-9B on vasp-02:8083 (historical 0.753, n=2742).
 # GLM-4.7-Flash retired: 7% task_resolved (catastrophically dominated).
-# Data: 40K inferences, qwen35=0.640 (n=4422), devstral=0.634 (n=5518), glm=0.070 (n=330).
 [functions.worker_code_edit]
 type = "chat"
 
@@ -418,13 +431,19 @@ model = "devstral"
 type = "chat_completion"
 model = "sera_14b"
 
-# Adaptive: Thompson Sampling across 3 productive worker variants.
+# OmniCoder-9B: re-added as real model on vasp-02:8083 (secondary, alongside Devstral).
+# Historical task_resolved ≈ 0.753 (n=2742). Dense 9B, GPU-resident, 32K context.
+[functions.worker_code_edit.variants.omnicoder_9b]
+type = "chat_completion"
+model = "omnicoder"
+
+# Adaptive: Thompson Sampling across 4 worker variants.
 # sera_14b_worker re-added per Autopilot finding (77.4% task_resolved, n=944).
+# omnicoder_9b re-added: real OmniCoder-9B on vasp-02:8083 (historical 0.753, n=2742).
 # Retired 2026-04-07: qwen35_direct (0.0% resolved, n=192), devstral_structured (0.0% resolved, n=189).
-# Variant definitions kept above for historical reference and template experiments.
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
-candidate_variants = ["qwen35_27b", "devstral_24b", "sera_14b_worker"]
+candidate_variants = ["omnicoder_9b", "qwen35_27b", "devstral_24b", "sera_14b_worker"]
 metric = "task_resolved"
 update_period_s = 300
 
@@ -464,10 +483,11 @@ candidate_variants = ["qwen_fast_planner", "qwen_planner"]
 metric = "task_resolved"
 update_period_s = 300
 
-# --- Code Fixing: 4-model autoresearch for error fixing ---
+# --- Code Fixing: 4-variant adaptive experiment for error fixing ---
 [functions.code_fixing]
 type = "chat"
 
+# Kept for config validation but removed from candidate_variants (0% task_resolved).
 [functions.code_fixing.variants.glm_flash_fixer]
 type = "chat_completion"
 model = "qwen_fast"
@@ -485,11 +505,16 @@ model = "devstral"
 type = "chat_completion"
 model = "sera_14b"
 
-# GLM-4.7-Flash fixer retired: 0% task_resolved.
+# OmniCoder-9B fixer: real model on vasp-02:8083. Historical task_resolved ≈ 0.724 (n=181).
+[functions.code_fixing.variants.omnicoder_fixer]
+type = "chat_completion"
+model = "omnicoder"
+
 # sera_14b_fixer re-added: 92.1% task_resolved (n=165) — best fixer in fleet.
+# omnicoder_fixer re-added: real OmniCoder-9B on vasp-02:8083 (historical 0.724, n=181).
 [functions.code_fixing.experimentation]
 type = "adaptive"
-candidate_variants = ["qwen35_fixer", "devstral_fixer", "sera_14b_fixer"]
+candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer"]
 metric = "task_resolved"
 update_period_s = 300
 
