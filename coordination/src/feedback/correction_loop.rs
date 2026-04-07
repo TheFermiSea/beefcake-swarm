@@ -9,6 +9,7 @@
 
 use crate::feedback::compiler::{CompileResult, Compiler};
 use crate::feedback::error_parser::{ErrorCategory, ErrorSummary, ParsedError, RustcErrorParser};
+use crate::router::task_classifier::ModelTier;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -115,52 +116,6 @@ impl From<&CompileResult> for CompileResultSummary {
             success: result.success,
             error_count: result.error_count(),
             warning_count: result.warnings().len(),
-        }
-    }
-}
-
-/// Model tier for escalation (local models)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModelTier {
-    /// Worker model (HydraCoder 30B-A3B MoE)
-    Worker,
-    /// Manager Council (Opus 4.5, Gemini 3 Pro, Qwen3.5)
-    Council,
-}
-
-impl ModelTier {
-    /// Get the model name for this tier
-    pub fn model_name(&self) -> &'static str {
-        match self {
-            Self::Worker => "HydraCoder-Q6_K",
-            Self::Council => "manager-council",
-        }
-    }
-
-    /// Escalate to next tier
-    pub fn escalate(&self) -> Self {
-        match self {
-            Self::Worker => Self::Council,
-            Self::Council => Self::Council, // Already at max
-        }
-    }
-
-    /// Parse tier from string
-    pub fn parse_tier(s: &str) -> Self {
-        match s {
-            "worker" => Self::Worker,
-            "council" => Self::Council,
-            _ => Self::Worker,
-        }
-    }
-}
-
-impl std::fmt::Display for ModelTier {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Worker => write!(f, "worker"),
-            Self::Council => write!(f, "council"),
         }
     }
 }

@@ -90,9 +90,13 @@ impl Tool for PlanParallelWorkTool {
         let summary = plan.summary.clone();
 
         // Store the validated plan for the orchestrator.
-        if let Ok(mut slot) = self.plan_slot.lock() {
-            *slot = Some(plan);
-        }
+        // A poisoned mutex means a prior panic occurred — this is a programming
+        // bug per M-PANIC-ON-BUG, so we propagate the panic.
+        let mut slot = self
+            .plan_slot
+            .lock()
+            .expect("plan_slot mutex poisoned — prior panic");
+        *slot = Some(plan);
 
         Ok(format!(
             "Parallel work plan accepted: {subtask_count} subtasks. Summary: {summary}. \

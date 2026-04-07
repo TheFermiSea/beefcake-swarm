@@ -126,9 +126,13 @@ impl Tool for SubmitPlanTool {
         let file_count = plan.target_files.len();
         let risk = plan.risk.clone();
 
-        if let Ok(mut slot) = self.plan_slot.lock() {
-            *slot = Some(plan);
-        }
+        // A poisoned mutex means a prior panic occurred — this is a programming
+        // bug per M-PANIC-ON-BUG, so we propagate the panic.
+        let mut slot = self
+            .plan_slot
+            .lock()
+            .expect("plan_slot mutex poisoned — prior panic");
+        *slot = Some(plan);
 
         tracing::info!(
             approach = %args.approach,

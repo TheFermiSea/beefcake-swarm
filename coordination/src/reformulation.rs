@@ -55,7 +55,7 @@ impl std::fmt::Display for RecoveryAction {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FailureSignal {
+pub struct ReformulationSignal {
     pub message: String,
     pub iterations: u32,
     pub tokens_used: u64,
@@ -74,7 +74,7 @@ pub struct ReformulationResult {
 pub struct ReformulationEngine;
 
 impl ReformulationEngine {
-    pub fn classify(signal: &FailureSignal) -> (FailureClass, f64) {
+    pub fn classify(signal: &ReformulationSignal) -> (FailureClass, f64) {
         if signal.infra_error {
             return (FailureClass::InfraTransient, 0.95);
         }
@@ -128,7 +128,7 @@ impl ReformulationEngine {
         }
     }
 
-    pub fn reformulate(signal: &FailureSignal) -> ReformulationResult {
+    pub fn reformulate(signal: &ReformulationSignal) -> ReformulationResult {
         let (class, confidence) = Self::classify(signal);
         let action = Self::recovery_action(class);
         let directive = Self::directive(class);
@@ -145,8 +145,8 @@ impl ReformulationEngine {
 mod tests {
     use super::*;
 
-    fn signal(message: &str) -> FailureSignal {
-        FailureSignal {
+    fn signal(message: &str) -> ReformulationSignal {
+        ReformulationSignal {
             message: message.to_string(),
             iterations: 1,
             tokens_used: 10_000,

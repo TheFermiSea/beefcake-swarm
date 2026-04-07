@@ -54,6 +54,15 @@ pub enum ToolError {
 
     #[error("policy violation: {0}")]
     Policy(String),
+
+    #[error("parse error: {0}")]
+    Parse(String),
+
+    #[error("validation error: {0}")]
+    Validation(String),
+
+    #[error("external service error: {0}")]
+    External(String),
 }
 
 /// Run a command with timeout, returning stdout or a formatted error.

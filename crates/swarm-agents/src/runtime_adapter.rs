@@ -481,14 +481,14 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
             // Run action validators (pre-tool-call checks).
             // Returns an error to the LLM but does NOT terminate the agent loop.
             for validator in validators.iter() {
-                if let Err(msg) = validator.validate(&tool_name, &args_owned, &s.validator_state) {
+                if let Err(err) = validator.validate(&tool_name, &args_owned, &s.validator_state) {
                     warn!(
                         agent = %config.agent_name,
                         validator = validator.name(),
                         tool = %tool_name,
-                        "Validation failed: {msg}"
+                        "Validation failed: {err}"
                     );
-                    return ToolCallHookAction::skip(msg);
+                    return ToolCallHookAction::skip(err.to_string());
                 }
             }
 

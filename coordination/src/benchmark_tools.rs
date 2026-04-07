@@ -10,6 +10,19 @@ use crate::router::{ModelRouter, ModelSelection};
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, RwLock};
 
+/// Errors that can occur during benchmark tool operations.
+#[derive(Debug, thiserror::Error)]
+pub enum BenchmarkError {
+    #[error("no active benchmark session")]
+    NoActiveSession,
+    #[error("lock poisoned")]
+    LockPoisoned,
+    #[error("benchmark load failed: {0}")]
+    LoadFailed(String),
+    #[error("compile check failed: {0}")]
+    CompileFailed(String),
+}
+
 /// Shared benchmark state accessible by MCP tools
 pub struct BenchmarkState {
     /// Current session (if any)
@@ -240,8 +253,11 @@ impl BenchmarkTools {
     pub fn benchmark_start(
         &self,
         req: BenchmarkStartRequest,
-    ) -> Result<BenchmarkStartResponse, String> {
-        let mut state = self.state.write().map_err(|e| e.to_string())?;
+    ) -> Result<BenchmarkStartResponse, BenchmarkError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| BenchmarkError::LockPoisoned)?;
 
         // Configure based on request
         state.config.max_correction_iterations = req.max_iterations.unwrap_or(5);
@@ -285,7 +301,7 @@ impl BenchmarkTools {
         let session = state.current_session_mut().unwrap();
         let count = session
             .load_problems(&req.bench_path)
-            .map_err(|e| format!("Failed to load problems: {}", e))?;
+            .map_err(|e| BenchmarkError::LoadFailed(format!("{e}")))?;
 
         // Count by difficulty
         let easy = session
@@ -314,12 +330,15 @@ impl BenchmarkTools {
     pub fn benchmark_status(
         &self,
         req: BenchmarkStatusRequest,
-    ) -> Result<BenchmarkStatusResponse, String> {
-        let mut state = self.state.write().map_err(|e| e.to_string())?;
+    ) -> Result<BenchmarkStatusResponse, BenchmarkError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| BenchmarkError::LockPoisoned)?;
 
         let session = state
             .current_session_mut()
-            .ok_or("No active benchmark session")?;
+            .ok_or(BenchmarkError::NoActiveSession)?;
 
         // Calculate metrics if requested
         if req.detailed.unwrap_or(false) {
@@ -340,17 +359,21 @@ impl BenchmarkTools {
     }
 
     /// Check if code compiles
-    pub fn compile_check(&self, req: CompileCheckRequest) -> Result<CompileCheckResponse, String> {
-        let state = self.state.read().map_err(|e| e.to_string())?;
-
-        // Create temporary crate
-        let work_dir = state.config.work_dir.clone();
+    pub fn compile_check(
+        &self,
+        req: CompileCheckRequest,
+    ) -> Result<CompileCheckResponse, BenchmarkError> {
+        // Create temporary crate in an auto-cleaned TempDir.
+        let tmp =
+            tempfile::TempDir::new().map_err(|e| BenchmarkError::CompileFailed(format!("{e}")))?;
         let crate_name = req.crate_name.unwrap_or_else(|| "temp_check".to_string());
-        let crate_dir = work_dir.join(&crate_name);
+        let crate_dir = tmp.path().join(&crate_name);
 
         // Setup crate structure
-        std::fs::create_dir_all(&crate_dir).map_err(|e| e.to_string())?;
-        std::fs::create_dir_all(crate_dir.join("src")).map_err(|e| e.to_string())?;
+        std::fs::create_dir_all(&crate_dir)
+            .map_err(|e| BenchmarkError::CompileFailed(format!("{e}")))?;
+        std::fs::create_dir_all(crate_dir.join("src"))
+            .map_err(|e| BenchmarkError::CompileFailed(format!("{e}")))?;
 
         // Write Cargo.toml
         let cargo_toml = format!(
@@ -361,13 +384,14 @@ edition = "2021"
 "#,
             crate_name
         );
-        std::fs::write(crate_dir.join("Cargo.toml"), cargo_toml).map_err(|e| e.to_string())?;
+        std::fs::write(crate_dir.join("Cargo.toml"), cargo_toml)
+            .map_err(|e| BenchmarkError::CompileFailed(format!("{e}")))?;
 
         // Write source file
         std::fs::write(crate_dir.join("src").join("lib.rs"), &req.code)
-            .map_err(|e| e.to_string())?;
+            .map_err(|e| BenchmarkError::CompileFailed(format!("{e}")))?;
 
-        // Run cargo check
+        // Run cargo check (tmp is kept alive until end of scope, then auto-cleaned)
         let compiler = Compiler::new(&crate_dir);
         let result = compiler.check();
 
@@ -385,8 +409,14 @@ edition = "2021"
     }
 
     /// Get recommended model for a task
-    pub fn select_model(&self, req: SelectModelRequest) -> Result<SelectModelResponse, String> {
-        let state = self.state.read().map_err(|e| e.to_string())?;
+    pub fn select_model(
+        &self,
+        req: SelectModelRequest,
+    ) -> Result<SelectModelResponse, BenchmarkError> {
+        let state = self
+            .state
+            .read()
+            .map_err(|_| BenchmarkError::LockPoisoned)?;
 
         let selection = if let Some(task) = &req.task {
             state.router.select_for_generation(task)

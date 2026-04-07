@@ -484,22 +484,22 @@ impl RustClusterServer {
         self
     }
 
-    fn get_harness(&self) -> Result<harness::SharedHarnessState, String> {
-        self.harness
-            .clone()
-            .ok_or_else(|| "Harness not enabled. Start server with --harness flag.".to_string())
+    fn get_harness(&self) -> Result<harness::SharedHarnessState, anyhow::Error> {
+        self.harness.clone().ok_or_else(|| {
+            anyhow::anyhow!("Harness not enabled. Start server with --harness flag.")
+        })
     }
 
-    fn get_ensemble(&self) -> Result<ensemble::SharedEnsembleCoordinator, String> {
-        self.ensemble
-            .clone()
-            .ok_or_else(|| "Ensemble not enabled. Start server with --ensemble flag.".to_string())
+    fn get_ensemble(&self) -> Result<ensemble::SharedEnsembleCoordinator, anyhow::Error> {
+        self.ensemble.clone().ok_or_else(|| {
+            anyhow::anyhow!("Ensemble not enabled. Start server with --ensemble flag.")
+        })
     }
 
-    fn get_event_bus(&self) -> Result<events::SharedEventBus, String> {
-        self.event_bus
-            .clone()
-            .ok_or_else(|| "Ensemble not enabled. Start server with --ensemble flag.".to_string())
+    fn get_event_bus(&self) -> Result<events::SharedEventBus, anyhow::Error> {
+        self.event_bus.clone().ok_or_else(|| {
+            anyhow::anyhow!("Ensemble not enabled. Start server with --ensemble flag.")
+        })
     }
 
     fn get_state_store(&self) -> Result<state::SharedStateStore, String> {
@@ -701,7 +701,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessStartRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessStartRequest {
             max_iterations: req.max_iterations,
@@ -721,7 +721,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessStatusRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessStatusRequest {
             include_features: req.include_features,
@@ -742,7 +742,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessIterateRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessIterateRequest {
             summary: req.summary,
@@ -760,7 +760,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessCompleteFeatureRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessCompleteFeatureRequest {
             feature_id: req.feature_id,
@@ -779,7 +779,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessCheckpointRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessCheckpointRequest {
             description: req.description,
@@ -798,7 +798,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessRollbackRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessRollbackRequest {
             commit_hash: req.commit_hash,
@@ -816,7 +816,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessCompactProgressRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessCompactProgressRequest {
             keep_recent: req.keep_recent,
@@ -834,7 +834,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessWorkOnFeatureRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessWorkOnFeatureRequest {
             feature_id: req.feature_id,
@@ -852,7 +852,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessCompleteAndNextRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessCompleteAndNextRequest {
             feature_id: req.feature_id,
@@ -872,7 +872,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(_req): Parameters<McpHarnessQuickStatusRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessQuickStatusRequest {};
         let response = harness::tools::harness_quick_status(&state, harness_req)
@@ -887,7 +887,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessAcknowledgeRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessAcknowledgeRequest {
             reviewed_items: req.reviewed_items,
@@ -904,7 +904,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessRequestInterventionRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessRequestInterventionRequest {
             intervention_type: req.intervention_type,
@@ -924,7 +924,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessResolveInterventionRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessResolveInterventionRequest {
             intervention_id: req.intervention_id,
@@ -946,7 +946,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessDelegateRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessDelegateRequest {
             feature_id: req.feature_id,
@@ -966,7 +966,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessSubSessionStatusRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessSubSessionStatusRequest {
             sub_session_id: req.sub_session_id,
@@ -983,7 +983,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessClaimSubSessionResultRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let harness_req = harness::tools::HarnessClaimSubSessionResultRequest {
             sub_session_id: req.sub_session_id,
@@ -1001,7 +1001,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessCompleteSubSessionRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         harness::tools::harness_complete_sub_session(&mut state, &req.sub_session_id, &req.summary)
             .map_err(|e| e.to_structured_json())?;
@@ -1015,7 +1015,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpHarnessFailSubSessionRequest>,
     ) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         harness::tools::harness_fail_sub_session(&mut state, &req.sub_session_id, &req.reason)
             .map_err(|e| e.to_structured_json())?;
@@ -1027,7 +1027,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         annotations(read_only_hint = true)
     )]
     async fn harness_list_sub_sessions(&self) -> Result<String, String> {
-        let shared = self.get_harness()?;
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
         let state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let sub_sessions = harness::tools::harness_list_sub_sessions(&state);
         serde_json::to_string_pretty(&sub_sessions).map_err(|e| e.to_string())
@@ -1044,7 +1044,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpEnsembleStartRequest>,
     ) -> Result<String, String> {
-        let coordinator = self.get_ensemble()?;
+        let coordinator = self.get_ensemble().map_err(|e| e.to_string())?;
         let session = coordinator
             .start_session(req.harness_session_id)
             .await
@@ -1061,7 +1061,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpEnsembleSubmitRequest>,
     ) -> Result<String, String> {
-        let coordinator = self.get_ensemble()?;
+        let coordinator = self.get_ensemble().map_err(|e| e.to_string())?;
         let require_consensus = req.require_consensus.unwrap_or(true);
         let execute = req.execute.unwrap_or(true);
 
@@ -1122,7 +1122,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpEnsembleStatusRequest>,
     ) -> Result<String, String> {
-        let coordinator = self.get_ensemble()?;
+        let coordinator = self.get_ensemble().map_err(|e| e.to_string())?;
 
         let session = if let Some(ref session_id) = req.session_id {
             coordinator
@@ -1192,7 +1192,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpEnsembleVoteRequest>,
     ) -> Result<String, String> {
-        let coordinator = self.get_ensemble()?;
+        let coordinator = self.get_ensemble().map_err(|e| e.to_string())?;
 
         let strategy = match req.strategy.as_deref() {
             Some("majority") => state::VotingStrategy::Majority,
@@ -1239,7 +1239,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpEnsembleArbitrateRequest>,
     ) -> Result<String, String> {
-        let coordinator = self.get_ensemble()?;
+        let coordinator = self.get_ensemble().map_err(|e| e.to_string())?;
 
         let reason = match req.reason.as_deref() {
             Some("tie") => events::ArbitrationReason::TieVote {
@@ -1270,7 +1270,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpEnsembleApplyDecisionRequest>,
     ) -> Result<String, String> {
-        let coordinator = self.get_ensemble()?;
+        let coordinator = self.get_ensemble().map_err(|e| e.to_string())?;
 
         let winner = match req.winner.to_lowercase().as_str() {
             "opus45" | "opus_45" | "behemoth" => state::ModelId::Opus45,
@@ -1303,7 +1303,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         &self,
         Parameters(req): Parameters<McpEnsembleContextRequest>,
     ) -> Result<String, String> {
-        let coordinator = self.get_ensemble()?;
+        let coordinator = self.get_ensemble().map_err(|e| e.to_string())?;
         let context_mgr = coordinator.context();
 
         let session_id = if let Some(ref id) = req.session_id {

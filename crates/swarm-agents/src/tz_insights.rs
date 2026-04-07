@@ -12,6 +12,13 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
+/// Errors that can occur when constructing or querying TZ insights.
+#[derive(Debug, thiserror::Error)]
+pub enum TzInsightsError {
+    #[error("invalid configuration: {0}")]
+    Config(String),
+}
+
 /// Cached performance insights from TensorZero Postgres.
 pub struct TzInsights {
     pg_url: String,
@@ -48,9 +55,9 @@ impl TzInsights {
     /// Create a new TzInsights reader.
     ///
     /// When `repo_id` is set, only insights from that repository are included.
-    pub fn new(pg_url: &str, ttl_secs: u64) -> Result<Self, String> {
+    pub fn new(pg_url: &str, ttl_secs: u64) -> Result<Self, TzInsightsError> {
         if pg_url.is_empty() {
-            return Err("empty Postgres URL".into());
+            return Err(TzInsightsError::Config("empty Postgres URL".into()));
         }
         Ok(Self {
             pg_url: pg_url.to_string(),

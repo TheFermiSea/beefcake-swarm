@@ -8,6 +8,15 @@
 
 use serde::{Deserialize, Serialize};
 
+/// Errors that can occur when parsing or validating a subtask plan.
+#[derive(Debug, thiserror::Error)]
+pub enum SubtaskPlanError {
+    #[error("failed to parse SubtaskPlan JSON: {0}")]
+    Parse(#[from] serde_json::Error),
+    #[error("{0}")]
+    Validation(String),
+}
+
 /// A single subtask within a concurrent plan.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Subtask {
@@ -41,18 +50,17 @@ pub struct SubtaskPlan {
 /// Parse a SubtaskPlan from JSON.
 ///
 /// Returns an error if the JSON is malformed or the plan is invalid.
-pub fn parse_subtask_plan(json: &str) -> Result<SubtaskPlan, String> {
-    let plan: SubtaskPlan = serde_json::from_str(json)
-        .map_err(|e| format!("Failed to parse SubtaskPlan JSON: {e}"))?;
+pub fn parse_subtask_plan(json: &str) -> Result<SubtaskPlan, SubtaskPlanError> {
+    let plan: SubtaskPlan = serde_json::from_str(json)?;
 
     // Validate that all subtasks have at least one target file
     for (i, subtask) in plan.subtasks.iter().enumerate() {
         if subtask.target_files.is_empty() {
-            return Err(format!(
+            return Err(SubtaskPlanError::Validation(format!(
                 "Subtask {} (id={}) must have at least one target file",
                 i + 1,
                 subtask.id
-            ));
+            )));
         }
     }
 

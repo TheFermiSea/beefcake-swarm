@@ -6,7 +6,31 @@
 //! a tool error (the agent loop continues — the call is rejected, not terminated).
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::path::Path;
+
+/// Error returned when a pre-tool-call validation check fails.
+///
+/// Contains an actionable hint message that is returned to the LLM.
+#[derive(Debug)]
+pub struct ValidationError {
+    /// Actionable hint describing why the tool call was rejected.
+    pub hint: String,
+}
+
+impl fmt::Display for ValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.hint)
+    }
+}
+
+impl std::error::Error for ValidationError {}
+
+impl ValidationError {
+    pub fn new(hint: impl Into<String>) -> Self {
+        Self { hint: hint.into() }
+    }
+}
 
 /// Shared state tracked across tool calls within a single agent session.
 pub struct ValidatorState {
@@ -54,13 +78,13 @@ impl Default for ValidatorState {
 /// and accumulated state to decide whether to allow or reject the call.
 pub trait ActionValidator: Send + Sync {
     fn name(&self) -> &str;
-    /// Return `Ok(())` to allow, `Err(message)` to reject with an actionable hint.
+    /// Return `Ok(())` to allow, `Err(ValidationError)` to reject with an actionable hint.
     fn validate(
         &self,
         tool_name: &str,
         args_json: &str,
         state: &ValidatorState,
-    ) -> Result<(), String>;
+    ) -> Result<(), ValidationError>;
 }
 
 // ---------------------------------------------------------------------------
@@ -80,7 +104,7 @@ impl ActionValidator for ReadBeforeWriteValidator {
         tool_name: &str,
         args_json: &str,
         state: &ValidatorState,
-    ) -> Result<(), String> {
+    ) -> Result<(), ValidationError> {
         let base = tool_name.strip_prefix("proxy_").unwrap_or(tool_name);
         if base != "edit_file" && base != "write_file" {
             return Ok(());
@@ -89,10 +113,10 @@ impl ActionValidator for ReadBeforeWriteValidator {
         let path = extract_path(args_json);
         if let Some(ref p) = path {
             if !state.files_read.contains(p.as_str()) {
-                return Err(format!(
+                return Err(ValidationError::new(format!(
                     "You must read_file '{p}' before editing it. \
                      Call read_file first to see the current content."
-                ));
+                )));
             }
         }
         Ok(())
@@ -113,7 +137,7 @@ impl ActionValidator for MinContextValidator {
         tool_name: &str,
         args_json: &str,
         _state: &ValidatorState,
-    ) -> Result<(), String> {
+    ) -> Result<(), ValidationError> {
         let base = tool_name.strip_prefix("proxy_").unwrap_or(tool_name);
         if base != "edit_file" {
             return Ok(());
@@ -128,9 +152,10 @@ impl ActionValidator for MinContextValidator {
         if let Some(ref content) = old {
             let non_empty_lines = content.lines().filter(|l| !l.trim().is_empty()).count();
             if non_empty_lines < 2 {
-                return Err("old_content has fewer than 2 non-empty lines. \
-                     Include 3-5 lines of surrounding context to ensure a unique match."
-                    .to_string());
+                return Err(ValidationError::new(
+                    "old_content has fewer than 2 non-empty lines. \
+                     Include 3-5 lines of surrounding context to ensure a unique match.",
+                ));
             }
         }
         Ok(())
@@ -150,7 +175,7 @@ impl ActionValidator for TruncatedJsonValidator {
         tool_name: &str,
         args_json: &str,
         _state: &ValidatorState,
-    ) -> Result<(), String> {
+    ) -> Result<(), ValidationError> {
         let base = tool_name.strip_prefix("proxy_").unwrap_or(tool_name);
         if base != "edit_file" && base != "write_file" {
             return Ok(());
@@ -159,9 +184,10 @@ impl ActionValidator for TruncatedJsonValidator {
             extract_field(args_json, "new_content").or_else(|| extract_field(args_json, "content"));
         if let Some(ref text) = content {
             if looks_truncated(text) {
-                return Err("Content appears truncated (unmatched braces/brackets). \
-                     Verify the content is complete before writing."
-                    .to_string());
+                return Err(ValidationError::new(
+                    "Content appears truncated (unmatched braces/brackets). \
+                     Verify the content is complete before writing.",
+                ));
             }
         }
         Ok(())
@@ -181,7 +207,7 @@ impl ActionValidator for ConsecutiveReadDetector {
         tool_name: &str,
         args_json: &str,
         state: &ValidatorState,
-    ) -> Result<(), String> {
+    ) -> Result<(), ValidationError> {
         let base = tool_name.strip_prefix("proxy_").unwrap_or(tool_name);
         if base != "read_file" {
             return Ok(());
@@ -190,10 +216,10 @@ impl ActionValidator for ConsecutiveReadDetector {
         if let Some(ref p) = path {
             if let Some(&count) = state.read_counts.get(p.as_str()) {
                 if count >= 3 {
-                    return Err(format!(
+                    return Err(ValidationError::new(format!(
                         "You have read '{p}' {count} times without editing it. \
                          Either edit the file now or move on to a different file."
-                    ));
+                    )));
                 }
             }
         }
@@ -224,7 +250,7 @@ impl ActionValidator for AnchorFreshnessValidator {
         tool_name: &str,
         args_json: &str,
         _state: &ValidatorState,
-    ) -> Result<(), String> {
+    ) -> Result<(), ValidationError> {
         let base = tool_name.strip_prefix("proxy_").unwrap_or(tool_name);
         if base != "edit_file" {
             return Ok(());
@@ -251,19 +277,19 @@ impl ActionValidator for AnchorFreshnessValidator {
         for anchor_str in [&anchor_start, &anchor_end].into_iter().flatten() {
             if let Some((line_num, expected_hash)) = parse_anchor(anchor_str) {
                 if line_num == 0 || line_num > lines.len() {
-                    return Err(format!(
+                    return Err(ValidationError::new(format!(
                         "Anchor '{anchor_str}' references line {line_num} but file has {} lines. \
                          Re-read the file to get fresh anchors.",
                         lines.len()
-                    ));
+                    )));
                 }
                 let actual_hash = blake3_short(lines[line_num - 1].trim());
                 if actual_hash != expected_hash {
-                    return Err(format!(
+                    return Err(ValidationError::new(format!(
                         "Stale anchor '{anchor_str}': expected hash '{expected_hash}' \
                          but line {line_num} now hashes to '{actual_hash}'. \
                          Re-read the file to get fresh anchors."
-                    ));
+                    )));
                 }
             }
         }
@@ -292,7 +318,7 @@ impl ActionValidator for DelegationPromptLengthValidator {
         tool_name: &str,
         args_json: &str,
         _state: &ValidatorState,
-    ) -> Result<(), String> {
+    ) -> Result<(), ValidationError> {
         if !is_delegation_tool(tool_name) {
             return Ok(());
         }
@@ -303,13 +329,13 @@ impl ActionValidator for DelegationPromptLengthValidator {
             return Ok(());
         }
 
-        Err(format!(
+        Err(ValidationError::new(format!(
             "Delegation prompt is too long ({} chars > {}). Shorten it to the objective, \
              target files, and the smallest relevant error excerpts. Do NOT paste repo maps, \
              full verifier output, or large file dumps into worker prompts.",
             prompt.chars().count(),
             self.max_chars
-        ))
+        )))
     }
 }
 
@@ -326,7 +352,7 @@ impl ActionValidator for ForbiddenDelegationPathValidator {
         tool_name: &str,
         args_json: &str,
         _state: &ValidatorState,
-    ) -> Result<(), String> {
+    ) -> Result<(), ValidationError> {
         if !is_delegation_tool(tool_name) {
             return Ok(());
         }
@@ -349,11 +375,11 @@ impl ActionValidator for ForbiddenDelegationPathValidator {
             return Ok(());
         }
 
-        Err(format!(
+        Err(ValidationError::new(format!(
             "Delegation prompt references volatile runtime metadata ({}) which workers must not \
              target. Focus the worker on source files or stable config/docs paths instead.",
             forbidden_hits.join(", ")
-        ))
+        )))
     }
 }
 

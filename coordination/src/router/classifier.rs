@@ -4,51 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 
-// Re-import types available in the lib crate.
-// NOTE: The binary target (main.rs) does not declare all modules from lib.rs,
-// so we define lightweight local types to keep this module self-contained.
-
-/// Error category for classification (mirrors feedback::error_parser::ErrorCategory).
 pub use crate::feedback::error_parser::ErrorCategory;
 pub use crate::router::task_classifier::ModelTier;
-
-/// A failure signal from verification (self-contained version).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct FailureSignal {
-    pub gate: String,
-    pub category: ErrorCategory,
-    pub code: Option<String>,
-    pub file: Option<String>,
-    pub line: Option<u32>,
-    pub message: String,
-}
-
-/// A constraint on the task (self-contained version).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Constraint {
-    pub kind: ConstraintKind,
-    pub description: String,
-}
-
-/// Kinds of constraints.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ConstraintKind {
-    NoBreakingApi,
-    NoDeps,
-    MaxPatchLoc,
-    Other,
-}
-
-/// Lightweight work packet for pre-routing analysis (self-contained version).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct WorkPacket {
-    pub objective: String,
-    pub files_touched: Vec<String>,
-    pub constraints: Vec<Constraint>,
-    pub iteration: u32,
-    pub failure_signals: Vec<FailureSignal>,
-}
+pub use crate::verifier::report::FailureSignal;
+pub use crate::work_packet::types::{Constraint, ConstraintKind, WorkPacket};
 
 /// Risk severity level
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

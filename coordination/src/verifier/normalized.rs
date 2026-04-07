@@ -139,8 +139,7 @@ impl NormalizedOutput {
 
     /// JSON string for machine consumption.
     pub fn to_json(&self) -> String {
-        serde_json::to_string(self)
-            .unwrap_or_else(|_| r#"{"error":"serialization failed"}"#.to_string())
+        serde_json::to_string(self).expect("NormalizedOutput must be serializable")
     }
 
     /// Whether there are errors in a specific category.

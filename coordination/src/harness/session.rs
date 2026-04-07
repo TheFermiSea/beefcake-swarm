@@ -411,7 +411,12 @@ pub struct SessionSummary {
 
 impl std::fmt::Display for SessionSummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Session: {} ({})", &self.session_id[..8], self.status)?;
+        writeln!(
+            f,
+            "Session: {} ({})",
+            self.session_id.get(..8).unwrap_or(&self.session_id),
+            self.status
+        )?;
         writeln!(
             f,
             "Progress: {}/{} iterations",

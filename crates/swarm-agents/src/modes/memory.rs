@@ -27,6 +27,7 @@ use rig::completion::{Message, Prompt};
 use tracing::{debug, info};
 
 use crate::handoff::{write_handoff, SessionHandoff};
+use crate::modes::chat_history::extract_message_text;
 use crate::modes::{
     errors::OrchestrationError,
     provider_config::{CompactionConfig, ModeRunnerConfig},
@@ -306,44 +307,15 @@ impl MemoryManager {
     // ── Internal helpers ──────────────────────────────────────────────────
 
     fn estimate_message(&self, msg: &Message) -> u64 {
-        let text = message_text(msg);
+        let text = extract_message_text(msg);
         self.estimator.estimate(&text)
-    }
-}
-
-fn message_text(msg: &Message) -> String {
-    use rig::completion::AssistantContent;
-    use rig::message::UserContent;
-    match msg {
-        Message::User { content } => content
-            .iter()
-            .filter_map(|c| {
-                if let UserContent::Text(t) = c {
-                    Some(t.text.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(""),
-        Message::Assistant { content, .. } => content
-            .iter()
-            .filter_map(|c| {
-                if let AssistantContent::Text(t) = c {
-                    Some(t.text.clone())
-                } else {
-                    None
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(""),
     }
 }
 
 fn serialise_messages(msgs: &[&Message]) -> String {
     msgs.iter()
         .map(|m| {
-            let text = message_text(m);
+            let text = extract_message_text(m);
             if text.is_empty() {
                 String::new()
             } else {

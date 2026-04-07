@@ -331,8 +331,7 @@ async fn main() -> Result<()> {
             result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, tracker.as_ref(), kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
-                    error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
-                    std::process::exit(1);
+                    anyhow::bail!("Issue {} NOT resolved", issue.id);
                 }
             }
             _ = shutdown_signal() => {
@@ -361,8 +360,7 @@ async fn main() -> Result<()> {
             result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
-                    error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
-                    std::process::exit(1);
+                    anyhow::bail!("Issue {} NOT resolved", issue.id);
                 }
             }
             _ = shutdown_signal() => {
@@ -427,8 +425,7 @@ async fn main() -> Result<()> {
             result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &*tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
                 if !resolved {
-                    error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
-                    std::process::exit(1);
+                    anyhow::bail!("Issue {} NOT resolved", issue.id);
                 }
             }
             _ = shutdown_signal() => {
@@ -503,8 +500,7 @@ async fn main() -> Result<()> {
                 result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &*tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                     let resolved = result?;
                     if !resolved {
-                        error!(id = %issue.id, "Issue NOT resolved — exiting with failure");
-                        std::process::exit(1);
+                        anyhow::bail!("Issue {} NOT resolved", issue.id);
                     }
                 }
                 _ = shutdown_signal() => {
@@ -675,18 +671,9 @@ fn handle_pick_next(repo_root: Option<&Path>) -> Result<()> {
     };
 
     let tracker = new_tracker(Some(&repo_root));
-    let issues = match tracker.list_ready() {
-        Ok(issues) => issues,
-        Err(e) => {
-            eprintln!("Failed to query issues: {e}");
-            std::process::exit(1);
-        }
-    };
+    let issues = tracker.list_ready().context("Failed to query issues")?;
 
-    if issues.is_empty() {
-        eprintln!("No ready issues");
-        std::process::exit(1);
-    }
+    anyhow::ensure!(!issues.is_empty(), "No ready issues");
 
     // Sort by priority then complexity (same as main orchestrator)
     let mut sorted = issues;
@@ -707,8 +694,7 @@ fn handle_pick_next(repo_root: Option<&Path>) -> Result<()> {
         return Ok(());
     }
 
-    eprintln!("All ready issues are exhausted or need human review");
-    std::process::exit(1);
+    anyhow::bail!("All ready issues are exhausted or need human review");
 }
 
 async fn shutdown_signal() {

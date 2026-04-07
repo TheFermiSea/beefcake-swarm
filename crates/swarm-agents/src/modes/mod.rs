@@ -13,6 +13,7 @@
 
 pub mod agentic;
 pub mod apply_diff;
+pub mod chat_history;
 pub mod contextual;
 pub mod deepthink;
 pub mod errors;

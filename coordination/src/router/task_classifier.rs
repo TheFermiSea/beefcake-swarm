@@ -93,6 +93,23 @@ impl ModelTier {
             Self::Council => 0.5,
         }
     }
+
+    /// Get the model name for this tier
+    pub fn model_name(&self) -> &'static str {
+        match self {
+            Self::Worker => "HydraCoder-Q6_K",
+            Self::Council => "manager-council",
+        }
+    }
+
+    /// Parse tier from string
+    pub fn parse_tier(s: &str) -> Self {
+        match s {
+            "worker" => Self::Worker,
+            "council" => Self::Council,
+            _ => Self::Worker,
+        }
+    }
 }
 
 impl std::fmt::Display for ModelTier {

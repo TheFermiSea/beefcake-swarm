@@ -66,7 +66,15 @@ impl ContextManager {
 
         // Publish update event
         let preview = if summary.len() > 100 {
-            format!("{}...", &summary[..100])
+            // Find the nearest char boundary at or before byte 100 to avoid
+            // panicking on multi-byte UTF-8 sequences.
+            let end = summary
+                .char_indices()
+                .map(|(i, _)| i)
+                .take_while(|&i| i <= 100)
+                .last()
+                .unwrap_or(0);
+            format!("{}...", &summary[..end])
         } else {
             summary
         };

@@ -72,7 +72,7 @@ impl QueryTensorZeroTool {
             .json(&init_body)
             .send()
             .await
-            .map_err(|e| ToolError::Verifier(format!("MCP init request failed: {e}")))?;
+            .map_err(|e| ToolError::External(format!("MCP init request failed: {e}")))?;
 
         let session_id = resp
             .headers()
@@ -80,14 +80,14 @@ impl QueryTensorZeroTool {
             .and_then(|v| v.to_str().ok())
             .map(String::from)
             .ok_or_else(|| {
-                ToolError::Verifier("MCP server did not return Mcp-Session-Id header".into())
+                ToolError::External("MCP server did not return Mcp-Session-Id header".into())
             })?;
 
         // Consume the init response body (may be JSON or SSE).
         let body = resp
             .text()
             .await
-            .map_err(|e| ToolError::Verifier(format!("Failed to read init response: {e}")))?;
+            .map_err(|e| ToolError::External(format!("Failed to read init response: {e}")))?;
         debug!(session_id = %session_id, body_len = body.len(), "MCP session initialized");
 
         // Send the initialized notification (fire-and-forget).
@@ -133,7 +133,7 @@ impl QueryTensorZeroTool {
             .json(&call_body)
             .send()
             .await
-            .map_err(|e| ToolError::Verifier(format!("MCP tool call failed: {e}")))?;
+            .map_err(|e| ToolError::External(format!("MCP tool call failed: {e}")))?;
 
         let content_type = resp
             .headers()
@@ -145,7 +145,7 @@ impl QueryTensorZeroTool {
         let body = resp
             .text()
             .await
-            .map_err(|e| ToolError::Verifier(format!("Failed to read tool response: {e}")))?;
+            .map_err(|e| ToolError::External(format!("Failed to read tool response: {e}")))?;
 
         // Parse response — may be direct JSON or SSE stream.
         if content_type.contains("text/event-stream") {
@@ -159,10 +159,10 @@ impl QueryTensorZeroTool {
 /// Extract the result from a JSON-RPC response body.
 fn parse_json_result(body: &str) -> Result<String, ToolError> {
     let parsed: serde_json::Value = serde_json::from_str(body)
-        .map_err(|e| ToolError::Verifier(format!("Invalid JSON response: {e}")))?;
+        .map_err(|e| ToolError::External(format!("Invalid JSON response: {e}")))?;
 
     if let Some(error) = parsed.get("error") {
-        return Err(ToolError::Verifier(format!(
+        return Err(ToolError::External(format!(
             "MCP error: {}",
             serde_json::to_string(error).unwrap_or_default()
         )));
@@ -199,7 +199,7 @@ fn parse_sse_result(body: &str) -> Result<String, ToolError> {
         }
     }
     // No JSON-RPC result found in SSE stream — return raw body.
-    Err(ToolError::Verifier(format!(
+    Err(ToolError::External(format!(
         "No JSON-RPC result in SSE response: {}",
         body.chars().take(500).collect::<String>()
     )))
@@ -241,7 +241,7 @@ impl Tool for QueryTensorZeroTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         // Parse the arguments JSON string.
         let arguments: serde_json::Value = serde_json::from_str(&args.arguments).map_err(|e| {
-            ToolError::Verifier(format!(
+            ToolError::External(format!(
                 "Invalid JSON in arguments: {e}. Expected a JSON object string."
             ))
         })?;
