@@ -364,8 +364,8 @@ impl BenchmarkTools {
         req: CompileCheckRequest,
     ) -> Result<CompileCheckResponse, BenchmarkError> {
         // Create temporary crate in an auto-cleaned TempDir.
-        let tmp = tempfile::TempDir::new()
-            .map_err(|e| BenchmarkError::CompileFailed(format!("{e}")))?;
+        let tmp =
+            tempfile::TempDir::new().map_err(|e| BenchmarkError::CompileFailed(format!("{e}")))?;
         let crate_name = req.crate_name.unwrap_or_else(|| "temp_check".to_string());
         let crate_dir = tmp.path().join(&crate_name);
 
