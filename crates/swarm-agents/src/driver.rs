@@ -1425,6 +1425,11 @@ pub async fn handle_validating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
 }
 
 /// Escalating: pre-escalation KB check, engine decision, stuck detection.
+///
+/// Simplified high-level flow:
+/// 1. State check: ensure verifier report is available
+/// 2. Decision: delegate to orchestrator's EscalationEngine
+/// 3. Execution: handle escalation event or stuck detection
 pub async fn handle_escalating(ctx: &mut OrchestratorContext<'_>) -> Result<StateTransition> {
     let iteration = ctx.session.iteration();
     let report = ctx
@@ -1444,16 +1449,14 @@ pub async fn handle_escalating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
     // Finish iteration metrics
     ctx.metrics.finish_iteration();
 
-    // Handle stuck detection
-    if decision.stuck {
-        return handle_escalating_stuck(ctx, &decision, iteration);
+    // Handle stuck detection or return to Planning
+    match decision.stuck {
+        true => handle_escalating_stuck(ctx, &decision, iteration),
+        false => Ok(StateTransition::Advance {
+            to: OrchestratorState::Planning,
+            reason: format!("escalation → {:?}", decision.target_tier),
+        }),
     }
-
-    // Back to Planning for next iteration
-    Ok(StateTransition::Advance {
-        to: OrchestratorState::Planning,
-        reason: format!("escalation → {:?}", decision.target_tier),
-    })
 }
 
 /// Pre-escalation knowledge base check.

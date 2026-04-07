@@ -51,8 +51,8 @@ pub async fn complete_fim(
     let url = format!("{}/v1/completions", endpoint.trim_end_matches('/'));
 
     let request_body = FimRequest {
-        prompt: prefix.to_string(),
-        suffix: suffix.to_string(),
+        prompt: String::from(prefix),
+        suffix: String::from(suffix),
         max_tokens,
     };
 
