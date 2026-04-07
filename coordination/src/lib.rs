@@ -188,6 +188,8 @@ pub use work_packet::{
 };
 
 // Re-export context packer types
+#[cfg(feature = "full")]
+pub use context_packer::SemanticCodeGraph;
 pub use context_packer::{ContextPacker, FileWalker, SourceFileProvider};
 
 // Re-export pre-routing classifier types
