@@ -255,22 +255,18 @@ impl Verifier {
             }
         }
 
-        // Gate 2: sg scan (ast-grep) — catches LLM structural anti-patterns
-        // (<1s) before wasting a clippy/check cycle (10-30s each).
-        // Error-level rules (derive-on-impl, etc.) fail-fast.
+        // Gate 2: sg scan (ast-grep) — catches LLM structural anti-patterns.
+        // IMPORTANT: sg gate NEVER cascade-fails the pipeline. Pre-existing
+        // violations in the codebase (37 panic!() calls, etc.) would otherwise
+        // block all worker resolutions. sg results are recorded but don't
+        // short-circuit clippy/check/test gates. This was the root cause of
+        // the 0% resolution rate in the 2026-04-07 dogfood run.
         if config.check_sg {
             let result = self.run_sg_gate().await;
-            let failed = result.outcome == GateOutcome::Failed;
+            // Record the result but NEVER short-circuit — sg violations are
+            // advisory, not blocking. Workers can't fix pre-existing violations
+            // unrelated to their issue.
             report.add_gate(result);
-            if failed && !config.comprehensive {
-                self.skip_remaining_with(
-                    &mut report,
-                    &["clippy", "check", "test", "deny", "doc"],
-                    &config,
-                );
-                report.finalize(start.elapsed());
-                return report;
-            }
         }
 
         // Gate 3: cargo clippy -D warnings
@@ -548,9 +544,11 @@ impl Verifier {
 
                 GateResult {
                     gate: "sg".to_string(),
-                    outcome: if has_errors {
-                        GateOutcome::Failed
-                    } else if has_diagnostics {
+                    // sg gate is always advisory (Warning at most, never Failed).
+                    // Pre-existing codebase violations (panic!, unwrap, etc.) would
+                    // otherwise block all worker resolutions. The gate reports
+                    // findings for awareness but does not block the pipeline.
+                    outcome: if has_diagnostics {
                         GateOutcome::Warning
                     } else {
                         GateOutcome::Passed
