@@ -232,8 +232,29 @@ impl ModeRunner for AgenticRunner {
                     Ok(StepResult::Continue(()))
                 }
             }
+        } else if looks_like_shell_fallback(&response) {
+            // Shell fallback: the model emitted raw shell commands or tool-call-like
+            // text instead of the expected JSON diff block. This is NOT a "done" signal
+            // — it's a formatting failure. Re-prompt the agent to use the correct format.
+            warn!(
+                iteration,
+                response_len = response.len(),
+                "Shell fallback detected: agent emitted raw commands instead of JSON diff"
+            );
+            let msg = "ERROR: Your response contained shell commands or raw text instead of \
+                       a JSON diff block. You MUST use the ```json format with \"file_path\" \
+                       and \"diff\" fields. If you are done editing, respond with plain text \
+                       that does NOT contain shell commands or code fences."
+                .to_string();
+            self.push_user(msg);
+            self.state = AgenticState::Editing {
+                task_prompt,
+                iteration: iteration + 1,
+                started,
+            };
+            Ok(StepResult::Continue(()))
         } else {
-            // No diff — agent is done.
+            // No diff and no shell fallback — agent is genuinely done.
             let elapsed_ms = started.elapsed().as_millis() as u64;
             info!(iteration, elapsed_ms, "agentic mode done");
             self.state = AgenticState::Done {
@@ -250,6 +271,43 @@ impl ModeRunner for AgenticRunner {
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Detect when a model emits raw shell commands or tool-call-like text instead
+/// of the expected JSON diff block. These are "shell fallback" responses — the
+/// model understood the task but failed to use the correct output format.
+///
+/// Without this check, such responses are silently treated as "done" (no diff
+/// found → agent finished), causing premature termination of the agentic loop.
+fn looks_like_shell_fallback(response: &str) -> bool {
+    let trimmed = response.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Shell command patterns: lines starting with common shell prefixes
+    let shell_prefixes = ["$ ", "# ", "cargo ", "sed ", "git ", "bash ", "cat ", "echo "];
+    let has_shell_commands = trimmed.lines().any(|line| {
+        let l = line.trim();
+        shell_prefixes.iter().any(|p| l.starts_with(p))
+    });
+
+    // Code fences containing non-JSON code (bash, shell, rust, python, diff without file_path)
+    let has_non_json_fence = trimmed.contains("```bash")
+        || trimmed.contains("```shell")
+        || trimmed.contains("```sh")
+        || trimmed.contains("```rust")
+        || trimmed.contains("```python");
+
+    // Tool-call-like patterns: function_call(...) or <tool_call> XML
+    let has_tool_call_pattern =
+        trimmed.contains("<tool_call>") || trimmed.contains("function_call(");
+
+    // A fenced ```diff block without `file_path`/`path` JSON fields is likely a
+    // raw diff the model forgot to wrap in the required JSON structure.
+    let has_naked_diff = trimmed.contains("```diff") && !trimmed.contains("\"file_path\"");
+
+    has_shell_commands || has_non_json_fence || has_tool_call_pattern || has_naked_diff
+}
 
 /// Extract a JSON block for `apply_diff` from the agent response.
 fn extract_apply_diff_json(response: &str) -> Option<String> {
@@ -304,5 +362,41 @@ Here is my edit:
     fn no_json_returns_none() {
         let response = "I am done, no more edits needed.";
         assert!(extract_apply_diff_json(response).is_none());
+    }
+
+    #[test]
+    fn shell_fallback_detects_cargo_commands() {
+        let response = "To fix this, run:\ncargo fmt --all\ncargo clippy";
+        assert!(looks_like_shell_fallback(response));
+    }
+
+    #[test]
+    fn shell_fallback_detects_bash_fence() {
+        let response = "Here's what to do:\n```bash\nsed -i 's/old/new/' src/main.rs\n```";
+        assert!(looks_like_shell_fallback(response));
+    }
+
+    #[test]
+    fn shell_fallback_detects_tool_call_xml() {
+        let response = "<tool_call>\n{\"name\": \"edit_file\", \"args\": {}}\n</tool_call>";
+        assert!(looks_like_shell_fallback(response));
+    }
+
+    #[test]
+    fn shell_fallback_detects_naked_diff() {
+        let response = "```diff\n-old line\n+new line\n```";
+        assert!(looks_like_shell_fallback(response));
+    }
+
+    #[test]
+    fn shell_fallback_ignores_plain_done_text() {
+        let response = "All edits are complete. The type mismatch has been resolved.";
+        assert!(!looks_like_shell_fallback(response));
+    }
+
+    #[test]
+    fn shell_fallback_ignores_empty() {
+        assert!(!looks_like_shell_fallback(""));
+        assert!(!looks_like_shell_fallback("  "));
     }
 }
