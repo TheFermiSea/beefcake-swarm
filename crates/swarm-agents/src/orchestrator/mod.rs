@@ -1726,6 +1726,25 @@ async fn process_issue_core(
             }
         }
 
+        // --- Prompt pruning: prevent scope poisoning across iterations ---
+        //
+        // After `prune_after_iteration` iterations, the task_prompt accumulates
+        // context from all previous iterations (diffs, verifier outputs, cognition
+        // items, archive feedback, etc.). This unbounded growth causes:
+        //   1. Context window overflow for small local models (8K-32K)
+        //   2. "Scope poisoning" — stale context from early iterations misleads
+        //      later workers into re-attempting already-failed approaches
+        //
+        // Pruning keeps only the original task description and the last 2
+        // iteration results, discarding intermediate noise. The verifier stderr
+        // is always fresh (injected below), so the agent still sees current errors.
+        let mut task_prompt = telemetry::prune_task_prompt(
+            &task_prompt,
+            iteration,
+            config.prune_after_iteration,
+            2, // keep last 2 iteration sections
+        );
+
         debug!(
             iteration,
             prompt_len = task_prompt.len(),
