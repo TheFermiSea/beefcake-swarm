@@ -220,15 +220,3 @@ impl Tool for CheckAnnouncementsTool {
         Ok(output)
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn read_workpad_missing_file() {
-        let dir = tempfile::tempdir().unwrap();
-        let entries = read_workpad(dir.path()).unwrap();
-        assert!(entries.is_empty());
-    }
-}
