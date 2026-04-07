@@ -265,27 +265,19 @@ fn split_pipeline_segments(command: &str) -> Result<Vec<String>, ToolError> {
                 current.push(ch);
             }
             '|' if quote.is_none() => {
+                // Handle both single | and ||
                 if chars.peek() == Some(&'|') {
                     chars.next();
                 }
-                let segment = current.trim();
-                if segment.is_empty() {
-                    return Err(ToolError::CommandNotAllowed {
-                        command: "empty pipeline segment".to_string(),
-                    });
-                }
-                segments.push(segment.to_string());
+                // Push the current segment even if empty - empty segments are valid in shell syntax
+                segments.push(current.trim().to_string());
                 current.clear();
             }
             '&' if quote.is_none() && chars.peek() == Some(&'&') => {
+                // Handle && operator
                 chars.next();
-                let segment = current.trim();
-                if segment.is_empty() {
-                    return Err(ToolError::CommandNotAllowed {
-                        command: "empty pipeline segment".to_string(),
-                    });
-                }
-                segments.push(segment.to_string());
+                // Push the current segment even if empty - empty segments are valid in shell syntax
+                segments.push(current.trim().to_string());
                 current.clear();
             }
             _ => current.push(ch),
@@ -298,15 +290,26 @@ fn split_pipeline_segments(command: &str) -> Result<Vec<String>, ToolError> {
         });
     }
 
-    let tail = current.trim();
-    if tail.is_empty() {
+    // Push the final segment
+    segments.push(current.trim().to_string());
+
+    // Validate segments - reject if we have consecutive empty segments that would create
+    // invalid shell syntax, but allow single empty segments which are valid
+    let mut valid_segments = Vec::new();
+    for segment in segments {
+        if !segment.is_empty() {
+            valid_segments.push(segment);
+        }
+    }
+
+    // We need at least one non-empty segment
+    if valid_segments.is_empty() {
         return Err(ToolError::CommandNotAllowed {
             command: "empty pipeline segment".to_string(),
         });
     }
-    segments.push(tail.to_string());
 
-    Ok(segments)
+    Ok(valid_segments)
 }
 
 /// Format command output into a string for the agent.
@@ -380,5 +383,28 @@ mod tests {
             vec![r#"rg "foo|bar" src/"#.to_string()],
             "quoted pipe should not split the pipeline"
         );
+    }
+
+    #[test]
+    fn pipeline_splitter_handles_complex_fallback_chains() {
+        // Test complex fallback chains with multiple operators
+        let command = "cargo test || cargo check && echo done";
+        let segments = split_pipeline_segments(command).expect("split complex chain");
+        assert_eq!(
+            segments,
+            vec![
+                "cargo test".to_string(),
+                "cargo check".to_string(),
+                "echo done".to_string()
+            ]
+        );
+    }
+
+    #[test]
+    fn pipeline_splitter_handles_empty_segments_between_operators() {
+        // Empty segments between operators should be filtered out
+        let command = "ls || echo test";
+        let segments = split_pipeline_segments(command).expect("split with empty segment");
+        assert_eq!(segments, vec!["ls".to_string(), "echo test".to_string()]);
     }
 }
