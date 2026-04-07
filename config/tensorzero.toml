@@ -309,6 +309,19 @@ model_name = "OmniCoder-9B"
 api_base = "http://10.0.0.21:8083/v1"
 api_key_location = "none"
 
+# --- Gemma-4-31B-it on vasp-02:8081 (time-sliced experiment, replaces Devstral) ---
+# Dense 30.7B model, 256K context, Google. Q4_K_M ~19.6GB — exclusive use of V100S.
+# NOT always running. Swap in via: scripts/experiment-gemma-swap.sh start
+
+[models.gemma_31b]
+routing = ["vasp02_gemma"]
+
+[models.gemma_31b.providers.vasp02_gemma]
+type = "openai"
+model_name = "gemma-4-31B-it"
+api_base = "http://10.0.0.21:8081/v1"
+api_key_location = "none"
+
 # --- Cloud models (via CLIAPIProxy on ai-proxy localhost) ---
 
 [models.claude_opus]
@@ -437,13 +450,17 @@ model = "sera_14b"
 type = "chat_completion"
 model = "omnicoder"
 
-# Adaptive: Thompson Sampling across 4 worker variants.
-# sera_14b_worker re-added per Autopilot finding (77.4% task_resolved, n=944).
-# omnicoder_9b re-added: real OmniCoder-9B on vasp-02:8083 (historical 0.753, n=2742).
+# Gemma-4-31B-it: time-sliced experiment on vasp-02:8081. Dense 30.7B, 256K context.
+[functions.worker_code_edit.variants.gemma_31b_worker]
+type = "chat_completion"
+model = "gemma_31b"
+
+# Adaptive: Thompson Sampling — Gemma experiment active, devstral+omnicoder on vasp-02 swapped out.
+# Normal candidates: ["omnicoder_9b", "qwen35_27b", "devstral_24b", "sera_14b_worker"]
 # Retired 2026-04-07: qwen35_direct (0.0% resolved, n=192), devstral_structured (0.0% resolved, n=189).
 [functions.worker_code_edit.experimentation]
 type = "adaptive"
-candidate_variants = ["omnicoder_9b", "qwen35_27b", "devstral_24b", "sera_14b_worker"]
+candidate_variants = ["gemma_31b_worker", "qwen35_27b", "sera_14b_worker"]
 metric = "task_resolved"
 update_period_s = 300
 
@@ -510,11 +527,16 @@ model = "sera_14b"
 type = "chat_completion"
 model = "omnicoder"
 
-# sera_14b_fixer re-added: 92.1% task_resolved (n=165) — best fixer in fleet.
-# omnicoder_fixer re-added: real OmniCoder-9B on vasp-02:8083 (historical 0.724, n=181).
+# Gemma-4-31B-it fixer: time-sliced experiment on vasp-02:8081.
+[functions.code_fixing.variants.gemma_31b_fixer]
+type = "chat_completion"
+model = "gemma_31b"
+
+# Adaptive — Gemma experiment active, devstral+omnicoder on vasp-02 swapped out.
+# Normal candidates: ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer"]
 [functions.code_fixing.experimentation]
 type = "adaptive"
-candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer"]
+candidate_variants = ["gemma_31b_fixer", "qwen35_fixer", "sera_14b_fixer"]
 metric = "task_resolved"
 update_period_s = 300
 
