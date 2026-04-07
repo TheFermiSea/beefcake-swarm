@@ -1,0 +1,8 @@
+# Normal production experiment routing.
+# All vasp-02 models (devstral, omnicoder) active.
+
+[worker_code_edit]
+candidate_variants = ["omnicoder_9b", "qwen35_27b", "devstral_24b", "sera_14b_worker"]
+
+[code_fixing]
+candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer"]

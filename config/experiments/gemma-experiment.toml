@@ -1,0 +1,9 @@
+# Gemma-4-31B-it time-sliced experiment.
+# vasp-02 models (devstral, omnicoder) swapped out — Gemma on vasp-02:8081.
+# Use with: scripts/experiment-gemma-swap.sh (handles model swap + this profile)
+
+[worker_code_edit]
+candidate_variants = ["gemma_31b_worker", "qwen35_27b", "sera_14b_worker"]
+
+[code_fixing]
+candidate_variants = ["gemma_31b_fixer", "qwen35_fixer", "sera_14b_fixer"]

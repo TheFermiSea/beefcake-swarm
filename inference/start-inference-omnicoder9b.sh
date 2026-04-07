@@ -34,7 +34,7 @@ nohup numactl --interleave=all apptainer run --nv --bind /scratch/ai:/scratch/ai
   --ctx-size 16384 --n-gpu-layers 999 \
   --threads 8 --batch-size 2048 --ubatch-size 2048 \
   --cache-type-k q8_0 --cache-type-v q8_0 \
-  --cache-prompt -fa on --parallel 1 --mlock --cont-batching --metrics --jinja \
+  --cache-prompt -fa on --parallel 2 --mlock --cont-batching --metrics --jinja \
   > "${LOG_PATH}" 2>&1 &
 
 echo "Started OmniCoder-9B PID=$! port=${PORT} container=${CONTAINER}"

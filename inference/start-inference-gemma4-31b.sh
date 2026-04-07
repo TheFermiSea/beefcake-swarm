@@ -40,7 +40,7 @@ nohup numactl --interleave=all "${LLAMA_SERVER}" \
   --ctx-size 16384 --n-gpu-layers 999 \
   --threads 32 --batch-size 4096 --ubatch-size 4096 \
   --cache-type-k q8_0 --cache-type-v q8_0 \
-  --cache-prompt -fa on --parallel 1 --mlock --cont-batching --metrics --jinja \
+  --cache-prompt -fa on --parallel 2 --mlock --cont-batching --metrics --jinja \
   > "${LOG_PATH}" 2>&1 &
 
 echo "Started gemma-4-31B-it PID=$! port=${PORT} binary=${LLAMA_SERVER}"

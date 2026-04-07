@@ -32,35 +32,9 @@ cd "$REPO_ROOT"
 #   worker_code_edit: ["gemma_31b_worker", "qwen35_27b", "sera_14b_worker"]
 #   code_fixing:      ["gemma_31b_fixer", "qwen35_fixer", "sera_14b_fixer"]
 
-swap_tz_config() {
-    # $1 = "gemma" or "normal"
-    local mode="$1"
-    python3 - "$mode" "$TZ_CONFIG" <<'PYEOF'
-import sys, re
-
-mode, path = sys.argv[1], sys.argv[2]
-text = open(path).read()
-
-if mode == "gemma":
-    # Swap worker experiment: remove devstral+omnicoder, add gemma
-    text = re.sub(
-        r'(candidate_variants = \[)"omnicoder_9b", "qwen35_27b", "devstral_24b", "sera_14b_worker"(\])',
-        r'\1"gemma_31b_worker", "qwen35_27b", "sera_14b_worker"\2', text)
-    text = re.sub(
-        r'(candidate_variants = \[)"omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer"(\])',
-        r'\1"gemma_31b_fixer", "qwen35_fixer", "sera_14b_fixer"\2', text)
-elif mode == "normal":
-    # Restore normal: remove gemma, add devstral+omnicoder
-    text = re.sub(
-        r'(candidate_variants = \[)"gemma_31b_worker", "qwen35_27b", "sera_14b_worker"(\])',
-        r'\1"omnicoder_9b", "qwen35_27b", "devstral_24b", "sera_14b_worker"\2', text)
-    text = re.sub(
-        r'(candidate_variants = \[)"gemma_31b_fixer", "qwen35_fixer", "sera_14b_fixer"(\])',
-        r'\1"omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer"\2', text)
-
-open(path, 'w').write(text)
-print(f"TZ config updated to {mode} mode")
-PYEOF
+apply_experiment_profile() {
+    # $1 = profile name (e.g., "gemma-experiment" or "normal")
+    bash "$REPO_ROOT/scripts/tz-apply-experiment.sh" "$1"
 }
 
 status() {
@@ -98,12 +72,8 @@ start_gemma() {
         sleep 2
     done
 
-    echo ">>> Updating TZ config (swap devstral+omnicoder → gemma)..."
-    swap_tz_config gemma
-
-    echo ">>> Restarting TZ gateway..."
-    docker restart tensorzero-gateway-1 >/dev/null 2>&1
-    sleep 2
+    echo ">>> Applying gemma-experiment profile..."
+    apply_experiment_profile gemma-experiment
 
     echo ""
     echo "=== Gemma experiment ACTIVE ==="
@@ -142,12 +112,8 @@ stop_gemma() {
         sleep 2
     done
 
-    echo ">>> Restoring TZ config (swap gemma → devstral+omnicoder)..."
-    swap_tz_config normal
-
-    echo ">>> Restarting TZ gateway..."
-    docker restart tensorzero-gateway-1 >/dev/null 2>&1
-    sleep 2
+    echo ">>> Applying normal profile..."
+    apply_experiment_profile normal
 
     echo ""
     echo "=== Normal operation RESTORED ==="
