@@ -363,15 +363,11 @@ impl BenchmarkTools {
         &self,
         req: CompileCheckRequest,
     ) -> Result<CompileCheckResponse, BenchmarkError> {
-        let state = self
-            .state
-            .read()
-            .map_err(|_| BenchmarkError::LockPoisoned)?;
-
-        // Create temporary crate
-        let work_dir = state.config.work_dir.clone();
+        // Create temporary crate in an auto-cleaned TempDir.
+        let tmp = tempfile::TempDir::new()
+            .map_err(|e| BenchmarkError::CompileFailed(format!("{e}")))?;
         let crate_name = req.crate_name.unwrap_or_else(|| "temp_check".to_string());
-        let crate_dir = work_dir.join(&crate_name);
+        let crate_dir = tmp.path().join(&crate_name);
 
         // Setup crate structure
         std::fs::create_dir_all(&crate_dir)
@@ -395,7 +391,7 @@ edition = "2021"
         std::fs::write(crate_dir.join("src").join("lib.rs"), &req.code)
             .map_err(|e| BenchmarkError::CompileFailed(format!("{e}")))?;
 
-        // Run cargo check
+        // Run cargo check (tmp is kept alive until end of scope, then auto-cleaned)
         let compiler = Compiler::new(&crate_dir);
         let result = compiler.check();
 

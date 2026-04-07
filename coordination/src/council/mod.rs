@@ -239,14 +239,12 @@ pub struct GeminiLibrarian {
 }
 
 impl GeminiLibrarian {
-    pub fn new(api_key: String) -> Self {
-        Self {
-            api_key,
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(120))
-                .build()
-                .expect("Failed to create HTTP client"),
-        }
+    pub fn new(api_key: String) -> Result<Self, CouncilError> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|e| CouncilError::RequestFailed(format!("HTTP client: {e}")))?;
+        Ok(Self { api_key, client })
     }
 }
 
@@ -348,14 +346,12 @@ pub struct ClaudeArchitect {
 }
 
 impl ClaudeArchitect {
-    pub fn new(api_key: String) -> Self {
-        Self {
-            api_key,
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(120))
-                .build()
-                .expect("Failed to create HTTP client"),
-        }
+    pub fn new(api_key: String) -> Result<Self, CouncilError> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(120))
+            .build()
+            .map_err(|e| CouncilError::RequestFailed(format!("HTTP client: {e}")))?;
+        Ok(Self { api_key, client })
     }
 }
 
@@ -452,14 +448,12 @@ pub struct Qwen35Strategist {
 }
 
 impl Qwen35Strategist {
-    pub fn new(endpoint: String) -> Self {
-        Self {
-            endpoint,
-            client: reqwest::Client::builder()
-                .timeout(Duration::from_secs(300))
-                .build()
-                .expect("Failed to create HTTP client"),
-        }
+    pub fn new(endpoint: String) -> Result<Self, CouncilError> {
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(300))
+            .build()
+            .map_err(|e| CouncilError::RequestFailed(format!("HTTP client: {e}")))?;
+        Ok(Self { endpoint, client })
     }
 }
 
@@ -570,33 +564,37 @@ pub struct ManagerCouncil {
 
 impl ManagerCouncil {
     /// Create a new Manager Council from configuration
-    pub fn from_config(config: CouncilConfig) -> Self {
+    pub fn from_config(config: CouncilConfig) -> Result<Self, CouncilError> {
         let librarian = config
             .api_keys
             .get("gemini")
-            .map(|key| Box::new(GeminiLibrarian::new(key.clone())) as Box<dyn CouncilMember>);
+            .map(|key| GeminiLibrarian::new(key.clone()))
+            .transpose()?
+            .map(|m| Box::new(m) as Box<dyn CouncilMember>);
 
         let architect = config
             .api_keys
             .get("anthropic")
-            .map(|key| Box::new(ClaudeArchitect::new(key.clone())) as Box<dyn CouncilMember>);
+            .map(|key| ClaudeArchitect::new(key.clone()))
+            .transpose()?
+            .map(|m| Box::new(m) as Box<dyn CouncilMember>);
 
         // Qwen3.5 is a local model — no API key needed
         let strategist = Some(
-            Box::new(Qwen35Strategist::new(config.qwen35_endpoint.clone()))
+            Box::new(Qwen35Strategist::new(config.qwen35_endpoint.clone())?)
                 as Box<dyn CouncilMember>,
         );
 
-        Self {
+        Ok(Self {
             librarian,
             architect,
             strategist,
             config,
-        }
+        })
     }
 
     /// Create with default configuration (from environment)
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, CouncilError> {
         Self::from_config(CouncilConfig::default())
     }
 
@@ -741,7 +739,9 @@ impl ManagerCouncil {
 
 impl Default for ManagerCouncil {
     fn default() -> Self {
-        Self::new()
+        Self::new().expect(
+            "ManagerCouncil::default: HTTP client creation is infallible in normal environments",
+        )
     }
 }
 
