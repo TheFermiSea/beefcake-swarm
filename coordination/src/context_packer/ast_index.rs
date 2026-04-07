@@ -10,7 +10,24 @@
 use serde::{Deserialize, Serialize};
 use tree_sitter::{Node, Parser};
 
-/// A symbol extracted from a Rust source file.
+/// Metadata for a symbol extracted from source code.
+///
+/// Contains detailed information about a symbol, including its name, kind,
+/// visibility, and its location (line range) within the source file.
+/// This is used to build a structured index of the codebase for context packing.
+///
+/// # Examples
+///
+/// ```
+/// let symbol = RustSymbol {
+///     name: "my_function".to_string(),
+///     kind: SymbolKind::Function,
+///     is_public: true,
+///     start_line: 10,
+///     end_line: 20,
+///     signature: "pub fn my_function(a: i32) -> i32".to_string(),
+/// };
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RustSymbol {
     /// Symbol name (e.g., "VerifierConfig", "run_pipeline")
@@ -27,7 +44,18 @@ pub struct RustSymbol {
     pub signature: String,
 }
 
-/// Categories of source code symbols (multi-language).
+/// Categories of source code symbols across multiple languages.
+///
+/// Represents the type of symbol extracted from the AST, such as a function,
+/// class, or trait. This allows the context packer to distinguish between
+/// different types of definitions when selecting relevant code snippets.
+///
+/// # Examples
+///
+/// ```
+/// let kind = SymbolKind::Function;
+/// println!("Symbol type: {}", kind); // Outputs: "Symbol type: fn"
+/// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SymbolKind {
@@ -69,7 +97,20 @@ impl std::fmt::Display for SymbolKind {
     }
 }
 
-/// Index of all symbols in a single Rust source file.
+/// Index of all symbols extracted from a single source file.
+///
+/// Contains the file path and a list of all symbols (functions, classes,
+/// structs, etc.) found in that file. Used by the context packer to provide
+/// structured code information instead of raw line-based extraction.
+///
+/// # Examples
+///
+/// ```
+/// let index = FileSymbolIndex {
+///     file: "src/main.rs".to_string(),
+///     symbols: vec![],
+/// };
+/// ```
 #[derive(Debug, Clone, Default)]
 pub struct FileSymbolIndex {
     /// Source file path (relative)
@@ -83,6 +124,16 @@ impl FileSymbolIndex {
     ///
     /// Supports: `.rs` (Rust), `.py` (Python), `.ts/.tsx` (TypeScript), `.go` (Go).
     /// Falls back to Rust parser for unknown extensions.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let index = FileSymbolIndex::from_source_language("main.rs", "fn main() {}");
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns an empty index if the tree-sitter language cannot be loaded.
     pub fn from_source_language(file: &str, source: &str) -> Self {
         let ext = file.rsplit('.').next().unwrap_or("");
         match ext {

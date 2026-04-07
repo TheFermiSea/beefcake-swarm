@@ -25,7 +25,7 @@ use std::path::Path;
 use super::ast_index::{FileSymbolIndex, SymbolKind};
 use super::file_walker::FileWalker;
 
-/// Maximum character budget for the repo map (~2000 tokens at 4 chars/token).
+/// Maximum character budget for the repo map (~2000 tokens at 4 chars/token).\n///\n/// # Summary\n/// Character budget for repo map generation.\n///\n/// # Extended\n/// The map targets ~2000 tokens (8000 chars). This constant defines the\n/// maximum number of characters allocated for the entire repo map output.\n///\n/// # Examples\n/// ```rust\n/// const BUDGET: usize = DEFAULT_CHAR_BUDGET; // 8000 chars for ~2000 tokens\n/// ```\n///\n/// # Safety\n/// This is a compile-time constant with no safety implications.
 const DEFAULT_CHAR_BUDGET: usize = 8000;
 
 /// A scored file entry in the repo map.
@@ -41,13 +41,41 @@ struct ScoredFile {
 
 /// Generate a repo map for the given worktree.
 ///
-/// Returns a formatted string showing the codebase structure organized by
-/// directory, with public symbols listed for the most important files.
+/// # Summary
+/// Creates a token-budgeted map of the codebase showing public symbols organized by file.
+///
+/// # Extended
+/// Generates a structured overview of the codebase using tree-sitter AST parsing.
+/// Files are ranked by import frequency, public symbol count, and relevance to the issue objective.
+/// The result is a formatted string that helps the manager/planner understand the codebase structure.
 ///
 /// # Arguments
 /// * `worktree_root` — Path to the worktree to map
 /// * `objective` — Issue objective text (used for keyword relevance scoring)
 /// * `char_budget` — Maximum characters for the map (0 = default 8000)
+///
+/// # Returns
+/// A formatted string showing the codebase structure organized by directory, with public symbols
+/// listed for the most important files. Low-ranked files are elided to just their path.
+///
+/// # Examples
+/// ```rust
+/// use std::path::Path;
+/// let map = generate_repo_map(
+///     Path::new("/path/to/worktree"),
+///     "Fix memory leak in HTTP handler",
+///     0 // Use default budget
+/// );
+/// ```
+///
+/// # Errors
+/// Returns an empty string if no Rust files are found in the worktree.
+///
+/// # Panics
+/// Panics if the worktree_root path is invalid or cannot be read.
+///
+/// # Safety
+/// This function is safe to call. It only reads files and does not modify any state.
 pub fn generate_repo_map(worktree_root: &Path, objective: &str, char_budget: usize) -> String {
     let budget = if char_budget == 0 {
         DEFAULT_CHAR_BUDGET
