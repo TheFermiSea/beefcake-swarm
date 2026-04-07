@@ -56,7 +56,19 @@ ssh "$PROXY_HOST" "
     echo \"WARNING: \$REMAINING swarm processes still alive after pkill\"
     pgrep -af 'swarm-agents' 2>/dev/null || true
   fi
-  rm -f /tmp/dogfood-loop.lock
+  # Verify lockfile is released (flock auto-releases when the process dies).
+  # Do NOT delete the lockfile — flock operates on the inode, so deleting
+  # creates a race where two processes hold flocks on different inodes.
+  if [ -f /tmp/dogfood-loop.lock ]; then
+    exec 200>>/tmp/dogfood-loop.lock
+    if flock -w 5 200; then
+      echo 'Lock acquired (previous process released it)'
+      exec 200>&-
+    else
+      echo 'WARNING: lockfile still held after pkill — process may still be alive'
+      exec 200>&-
+    fi
+  fi
   # Clean stale worktrees
   rm -rf /tmp/beefcake-wt/beefcake-* 2>/dev/null || true
   cd $REPO_DIR && git worktree prune 2>/dev/null || true
