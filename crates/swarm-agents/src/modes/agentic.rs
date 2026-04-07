@@ -285,7 +285,9 @@ fn looks_like_shell_fallback(response: &str) -> bool {
     }
 
     // Shell command patterns: lines starting with common shell prefixes
-    let shell_prefixes = ["$ ", "# ", "cargo ", "sed ", "git ", "bash ", "cat ", "echo "];
+    let shell_prefixes = [
+        "$ ", "# ", "cargo ", "sed ", "git ", "bash ", "cat ", "echo ",
+    ];
     let has_shell_commands = trimmed.lines().any(|line| {
         let l = line.trim();
         shell_prefixes.iter().any(|p| l.starts_with(p))
