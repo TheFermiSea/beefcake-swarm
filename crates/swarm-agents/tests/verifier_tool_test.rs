@@ -17,9 +17,9 @@ version = "0.1.0"
 edition = "2021"
 "#,
     )
-    .unwrap();
-    fs::create_dir_all(dir.join("src")).unwrap();
-    fs::write(dir.join("src/main.rs"), "fn main() {}\n").unwrap();
+    .expect("Failed to write Cargo.toml");
+    fs::create_dir_all(dir.join("src")).expect("Failed to create src directory");
+    fs::write(dir.join("src/main.rs"), "fn main() {}\n").expect("Failed to write main.rs");
 }
 
 /// Create a broken Rust crate (type mismatch) in the given directory.
