@@ -344,11 +344,34 @@ mod tests {
     #[test]
     fn test_analyze_packet_works() {
         let packet = WorkPacket {
+            bead_id: "test-123".into(),
+            branch: "test-branch".into(),
+            checkpoint: "abc123".into(),
             objective: "simple refactor".into(),
             files_touched: vec!["src/lib.rs".into()],
+            key_symbols: vec![],
+            file_contexts: vec![],
+            verification_gates: vec![],
             failure_signals: vec![],
             constraints: vec![],
             iteration: 1,
+            target_tier: SwarmTier::Worker,
+            escalation_reason: None,
+            error_history: vec![],
+            previous_attempts: vec![],
+            iteration_deltas: vec![],
+            relevant_heuristics: vec![],
+            relevant_playbooks: vec![],
+            decisions: vec![],
+            generated_at: chrono::Utc::now(),
+            max_patch_loc: 1000,
+            delegation_chain: vec![],
+            skill_hints: vec![],
+            replay_hints: vec![],
+            validator_feedback: vec![],
+            change_contract: None,
+            repo_map: None,
+            failed_approach_summary: None,
         };
         let a = PreRoutingClassifier::new().analyze_packet(&packet);
         assert_eq!(a.recommended_tier, ModelTier::Worker);
