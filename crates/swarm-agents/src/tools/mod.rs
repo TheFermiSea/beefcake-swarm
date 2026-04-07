@@ -21,6 +21,7 @@ pub mod proxy_wrappers;
 pub mod search_code_tool;
 pub mod shared;
 pub mod submit_plan_tool;
+pub mod tz_mcp_tool;
 pub mod verifier_tool;
 pub mod workpad_tool;
 
