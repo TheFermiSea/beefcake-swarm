@@ -7,7 +7,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - **Scout/Fast (vasp-03:8081):** GLM-4.7-Flash — 30B/3B MoE, SOTA tool-calling, ~50 tok/s. Used for scout, reviewer, fixer roles.
 - **Coder (vasp-01:8081):** Qwen3.5-27B — dense GPU-resident, 32K context, ~27 tok/s. Multi-file code generation and integration.
 - **Reasoning (vasp-02:8081):** Devstral-Small-2-24B — dense GPU-resident, 32K context, ~30 tok/s. Complex reasoning, planning, architecture decisions.
-- **Cloud Manager:** Claude Opus 4.6 via CLIAPIProxy (localhost:8317). Fallback cascade: Gemini 3.1 Pro → Sonnet 4.6 → Gemini 3.1 Flash Lite.
+- **Cloud Manager:** Claude Opus 4.6 via CLIAPIProxy (localhost:8317). Fallback cascade: Sonnet 4.6 → GPT-5.4 → Gemini 3 Flash Preview.
 - **Strategist (optional):** Qwen3.5-397B-A17B — advisor tier for non-writing arbitration. Configured via `SWARM_STRATEGIST_URL`.
 - **Research:** Always check **NotebookLM** first using `/ask-notebook` or `notebook_query`.
 
@@ -85,7 +85,7 @@ Key modules:
 
 ```text
 Cloud Manager (Claude Opus 4.6 via CLIAPIProxy, max 10 iterations)
-    → cloud fallback: Opus 4.6 → Gemini 3.1 Pro → Sonnet 4.6 → Gemini 3.1 Flash Lite
+    → cloud fallback: Sonnet 4.6 → GPT-5.4 → Gemini 3 Flash Preview
     → delegates to local workers:
         vasp-03:8081 — GLM-4.7-Flash (scout, reviewer, fixer)
         vasp-01:8081 — Qwen3.5-27B (coder, general worker)
@@ -120,7 +120,7 @@ Heterogeneous local cluster — each node runs a different model tier. See `docs
 | Coder | http://vasp-01:8081/v1 | Qwen3.5-27B Q4_K_M (dense) | V100S 32GB | ~27 tok/s |
 | Reasoning | http://vasp-02:8081/v1 | Devstral-Small-2-24B Q4_K_M (dense) | V100S 32GB | ~30 tok/s |
 | SWE Specialist | http://vasp-03:8083/v1 | SERA-14B Q4_K_M (Qwen3 backbone) | V100S 32GB (shared) | TBD |
-| Cloud | http://localhost:8317/v1 | gpt-5.4-mini (CLIAPIProxy) | ai-proxy | N/A |
+| Cloud | http://localhost:8317/v1 | claude-opus-4-6 (CLIAPIProxy) | ai-proxy | N/A |
 
 **GLM-4.7-Flash**: 30B total / 3B active MoE. SOTA tool-calling (tau2 84.7). Native OpenAI-format function calling. 200K context window.
 
@@ -131,10 +131,10 @@ Heterogeneous local cluster — each node runs a different model tier. See `docs
 **SERA-14B**: Allen AI's SWE agent model on Qwen3 backbone. SFT on synthetic SWE trajectories. Shares vasp-03 GPU with GLM-4.7-Flash. 8K context (VRAM-constrained).
 
 **Cloud fallback matrix** (configured in config.rs `CloudFallbackMatrix::default_matrix`):
-1. `gpt-5.4-mini` (primary)
-2. `gemini-3.1-pro-high` (fallback-1)
-3. `claude-sonnet-4-6` (fallback-2)
-4. `gemini-3.1-flash-lite-preview` (fallback-3)
+1. `claude-opus-4-6` (primary)
+2. `claude-sonnet-4-6` (fallback-1)
+3. `gpt-5.4` (fallback-2)
+4. `gemini-3-flash-preview` (fallback-3)
 
 **Start inference:**
 
@@ -175,9 +175,9 @@ Dense models on all three nodes. GLM-4.7-Flash + SERA-14B share vasp-03.
 |----------|---------|-------|
 | `SWARM_CLOUD_URL` | `http://localhost:8317/v1` (script) / *(none)* (config.rs) | Required for cloud manager mode |
 | `SWARM_CLOUD_API_KEY` | *(none)* | Required if cloud URL set |
-| `SWARM_CLOUD_MODEL` | `gpt-5.4-mini` | Primary cloud model |
-| `SWARM_CLOUD_FALLBACK_MODEL` (script) | `gemini-3.1-pro-high` | Shell-level fallback when primary model unavailable |
-| `SWARM_CLOUD_FALLBACK_MODELS` (config.rs) | `gpt-5.4-mini, gemini-3.1-pro-high, claude-sonnet-4-6, gemini-3.1-flash-lite-preview` | Comma-separated 4-model cascade in Rust |
+| `SWARM_CLOUD_MODEL` | `claude-opus-4-6` | Primary cloud model (set by run-swarm.sh) |
+| `SWARM_CLOUD_FALLBACK_MODEL` (script) | `claude-sonnet-4-6` | Shell-level fallback when primary model unavailable |
+| `SWARM_CLOUD_FALLBACK_MODELS` (config.rs) | `claude-opus-4-6, claude-sonnet-4-6, gpt-5.4, gemini-3-flash-preview` | Comma-separated 4-model cascade in Rust |
 | `SWARM_REQUIRE_ANTHROPIC_OWNERSHIP` | `1` | run-swarm.sh accepts both "anthropic" and "antigravity" |
 | `SWARM_CLOUD_PREFLIGHT` | `1` | Probe cloud endpoint before starting |
 
@@ -316,7 +316,7 @@ curl -s http://vasp-02:8081/health  # Reasoning (Devstral-24B)
 ```text
 INFO swarm_agents: Endpoint health check local_ok=true coder_ok=true reasoning_ok=true
 INFO swarm_agents: Beads-free mode: processing CLI issue id=<issue>
-INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed workers model=gpt-5.4-mini
+INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed workers model=claude-opus-4-6
 ```
 
 ## External Tools (install separately)
