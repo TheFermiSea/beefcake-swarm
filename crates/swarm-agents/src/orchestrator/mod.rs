@@ -1548,11 +1548,7 @@ async fn process_issue_core(
         // subgraph anchored at the packet's key symbols (2 hops). Injected into
         // the packet as a Markdown section that format_task_prompt() will render.
         if packet.dependency_graph.is_none() && !packet.key_symbols.is_empty() {
-            let sym_names: Vec<&str> = packet
-                .key_symbols
-                .iter()
-                .map(|s| s.name.as_str())
-                .collect();
+            let sym_names: Vec<&str> = packet.key_symbols.iter().map(|s| s.name.as_str()).collect();
             let graph = coordination::SemanticCodeGraph::build(&wt_path);
             if graph.node_count() > 0 {
                 let section = graph.to_dependency_section(&sym_names, 2);
