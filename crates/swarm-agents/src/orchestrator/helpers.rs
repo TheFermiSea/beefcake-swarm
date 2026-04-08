@@ -2,6 +2,7 @@
 //! and knowledge base helpers.
 
 use std::path::Path;
+use std::process::Command;
 use std::time::Duration;
 
 use tracing::{info, warn};
@@ -81,6 +82,27 @@ pub(crate) fn query_kb_with_failsafe(kb: &dyn KnowledgeBase, role: &str, questio
             warn!(role, error = %e, "KB query failed — proceeding without context");
             String::new()
         }
+    }
+}
+
+// ── Test Gate ───────────────────────────────────────────────────────
+
+/// Runs `cargo test --workspace` to verify the health of the entire project.
+/// Returns `Ok(())` if all tests pass, or an error describing the failure.
+pub fn check_baseline_tests(wt_path: &Path) -> Result<(), String> {
+    let status = Command::new("cargo")
+        .args(["test", "--workspace"])
+        .current_dir(wt_path)
+        .status()
+        .map_err(|e| format!("Failed to execute cargo test: {}", e))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!(
+            "Baseline tests failed with exit code: {:?}",
+            status.code()
+        ))
     }
 }
 
