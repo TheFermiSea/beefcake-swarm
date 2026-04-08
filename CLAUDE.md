@@ -194,7 +194,7 @@ Dense models on all three nodes. GLM-4.7-Flash + SERA-14B share vasp-03.
 | `SWARM_CLOUD_HTTP_TIMEOUT_SECS` | `300` | Per-request HTTP timeout for cloud API calls (5 min) |
 | `SWARM_LOCAL_HTTP_TIMEOUT_SECS` | `2700` | Per-request HTTP timeout for local LLM calls (45 min) |
 | `SWARM_SUBTASK_TIMEOUT_SECS` | `3600` | Wall-clock deadline per subtask worker (1 hour). Distinct from HTTP timeout — governs total worker session length, not per-request duration. |
-| `SWARM_BEADS_BIN` | `bd` | Beads CLI binary name |
+| `SWARM_BEADS_BIN` | `scripts/bd-safe.sh` | Beads CLI wrapper (calls `bd`; override to `bd` directly if preferred) |
 | `SWARM_OTEL_ENDPOINT` | *(empty)* | OTLP endpoint for beads metrics (e.g., `http://victoriametrics:4318`) |
 | `RUST_LOG` | `info` | Log level (see Debug & Monitoring) |
 
@@ -321,7 +321,7 @@ INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed wor
 
 ## External Tools (install separately)
 
-- `bd` (beads): `curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash` — Go binary, issue tracker CLI. Invoked via subprocess (see `beads_bridge.rs`). Humans may also use `bdh` wrapper for convenience.
+- `bd` (beads): `curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash` — Go binary, issue tracker CLI. Invoked via subprocess (see `beads_bridge.rs`). The swarm calls `bd` directly (via `scripts/bd-safe.sh` wrapper); humans may also use `bdh` for its `:` coordination commands.
 - `bv` (beads_viewer): `go install github.com/Dicklesworthstone/beads_viewer@latest`
 - `gastown`: `go install github.com/steveyegge/gastown@latest` — Multi-agent workspace manager (evaluated, not adopted — swarm uses raw `git worktree` via `worktree_bridge.rs`).
 - `stringer`: `go install github.com/davetashner/stringer/cmd/stringer@latest` — Codebase archaeology scanner. Outputs beads JSONL for auto-populating backlog.
