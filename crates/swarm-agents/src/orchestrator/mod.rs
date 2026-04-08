@@ -3577,184 +3577,112 @@ async fn process_issue_core(
             // Reviewer rejected — fall through to failure handling
             info!(id = %issue.id, "Skipping merge due to reviewer rejection");
         } else {
-            info!(
-                id = %issue.id,
-                session_id = session.short_id(),
-                elapsed = %session.elapsed_human(),
-                iterations = session.iteration(),
-                "Issue resolved — merging worktree"
-            );
-
-            merge_close_or_reopen(
-                worktree_bridge,
-                beads,
-                &issue.id,
-                "Resolved by swarm orchestrator",
-            )?;
-            clear_resume_file(worktree_bridge.repo_root());
-
-            // --- Post-merge CI watcher: verify main still compiles after merge ---
+            // --- Pre-merge verifier guarantee (RepoProver pattern) ---
             //
-            // Run a lightweight check (fmt + clippy + check, skip tests) on the
-            // repo root after merge. If the merge introduced a regression (e.g.
-            // interacting changes from parallel merges), reopen the issue.
-            {
-                let post_merge_config = VerifierConfig {
-                    check_fmt: true,
-                    check_clippy: true,
-                    check_compile: true,
-                    check_test: false, // skip tests — only check compilation
-                    ..verifier_config.clone()
-                };
-                let scan_report = run_verifier_opts(
-                    worktree_bridge.repo_root(),
-                    &post_merge_config,
-                    &language_profile,
-                    true,
-                )
-                .await;
+            // Run compile_only() verification IN THE WORKTREE before merging to main.
+            // Only merge branches where all gates pass. Prevents broken commits from
+            // reaching main. Configurable via SWARM_VERIFY_BEFORE_MERGE (default: true).
+            if config.verify_before_merge {
+                let pre_merge_config = VerifierConfig::compile_only();
+                let pre_merge_report =
+                    run_verifier_opts(&wt_path, &pre_merge_config, &language_profile, true).await;
 
-                // Append quality metrics to trend file
-                let trend_path = worktree_bridge
-                    .repo_root()
-                    .join(".swarm")
-                    .join("quality-trend.jsonl");
-                if let Ok(json) = serde_json::to_string(&serde_json::json!({
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                    "issue_resolved": issue.id,
-                    "gates_passed": scan_report.gates_passed,
-                    "gates_total": scan_report.gates_total,
-                    "all_green": scan_report.all_green,
-                    "summary": scan_report.summary(),
-                })) {
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&trend_path)
-                        .and_then(|mut f| {
-                            use std::io::Write;
-                            writeln!(f, "{json}")
-                        });
-                }
-
-                if scan_report.all_green {
-                    info!(
-                        id = %issue.id,
-                        summary = %scan_report.summary(),
-                        "Post-merge verification PASSED"
-                    );
-                } else {
+                if !pre_merge_report.all_green {
                     warn!(
                         id = %issue.id,
-                        summary = %scan_report.summary(),
-                        "Post-merge regression detected — reopening issue"
+                        summary = %pre_merge_report.summary(),
+                        "Pre-merge verifier failed in worktree — not merging to main"
                     );
-                    let _ = beads.update_status(&issue.id, "open");
+                    // Don't merge; feed back the report for retry
+                    last_report = Some(pre_merge_report);
                     success = false;
                 }
             }
-            info!(id = %issue.id, "Issue closed");
-        }
-        info!(
-            id = %issue.id,
-            session_id = session.short_id(),
-            elapsed = %session.elapsed_human(),
-            iterations = session.iteration(),
-            "Issue resolved — merging worktree"
-        );
 
-        // --- Pre-merge verifier guarantee (RepoProver pattern) ---
-        //
-        // Run compile_only() verification IN THE WORKTREE before merging to main.
-        // Only merge branches where all gates pass. Prevents broken commits from
-        // reaching main. Configurable via SWARM_VERIFY_BEFORE_MERGE (default: true).
-        if config.verify_before_merge {
-            let pre_merge_config = VerifierConfig::compile_only();
-            let pre_merge_report =
-                run_verifier_opts(&wt_path, &pre_merge_config, &language_profile, true).await;
-
-            if !pre_merge_report.all_green {
-                warn!(
+            if !success {
+                info!(
                     id = %issue.id,
-                    summary = %pre_merge_report.summary(),
-                    "Pre-merge verifier failed in worktree — not merging to main"
+                    "Skipping merge due to pre-merge verifier failure"
                 );
-                // Don't merge; feed back the report for retry
-                last_report = Some(pre_merge_report);
-                success = false;
-            }
-        }
+            } else {
+                info!(
+                    id = %issue.id,
+                    session_id = session.short_id(),
+                    elapsed = %session.elapsed_human(),
+                    iterations = session.iteration(),
+                    "Issue resolved — merging worktree"
+                );
 
-        if success {
-            merge_close_or_reopen(
-                worktree_bridge,
-                beads,
-                &issue.id,
-                "Resolved by swarm orchestrator",
-            )?;
-            clear_resume_file(worktree_bridge.repo_root());
+                merge_close_or_reopen(
+                    worktree_bridge,
+                    beads,
+                    &issue.id,
+                    "Resolved by swarm orchestrator",
+                )?;
+                clear_resume_file(worktree_bridge.repo_root());
 
-            // --- Post-merge CI watcher: verify main still compiles after merge ---
-            //
-            // Run a lightweight check (fmt + clippy + check, skip tests) on the
-            // repo root after merge. If the merge introduced a regression (e.g.
-            // interacting changes from parallel merges), reopen the issue.
-            {
-                let post_merge_config = VerifierConfig {
-                    check_fmt: true,
-                    check_clippy: true,
-                    check_compile: true,
-                    check_test: false, // skip tests — only check compilation
-                    ..verifier_config.clone()
-                };
-                let scan_report = run_verifier_opts(
-                    worktree_bridge.repo_root(),
-                    &post_merge_config,
-                    &language_profile,
-                    true,
-                )
-                .await;
+                // --- Post-merge CI watcher: verify main still compiles after merge ---
+                //
+                // Run a lightweight check (fmt + clippy + check, skip tests) on the
+                // repo root after merge. If the merge introduced a regression (e.g.
+                // interacting changes from parallel merges), reopen the issue.
+                {
+                    let post_merge_config = VerifierConfig {
+                        check_fmt: true,
+                        check_clippy: true,
+                        check_compile: true,
+                        check_test: false, // skip tests — only check compilation
+                        ..verifier_config.clone()
+                    };
+                    let scan_report = run_verifier_opts(
+                        worktree_bridge.repo_root(),
+                        &post_merge_config,
+                        &language_profile,
+                        true,
+                    )
+                    .await;
 
-                // Append quality metrics to trend file
-                let trend_path = worktree_bridge
-                    .repo_root()
-                    .join(".swarm")
-                    .join("quality-trend.jsonl");
-                if let Ok(json) = serde_json::to_string(&serde_json::json!({
-                    "timestamp": chrono::Utc::now().to_rfc3339(),
-                    "issue_resolved": issue.id,
-                    "gates_passed": scan_report.gates_passed,
-                    "gates_total": scan_report.gates_total,
-                    "all_green": scan_report.all_green,
-                    "summary": scan_report.summary(),
-                })) {
-                    let _ = std::fs::OpenOptions::new()
-                        .create(true)
-                        .append(true)
-                        .open(&trend_path)
-                        .and_then(|mut f| {
-                            use std::io::Write;
-                            writeln!(f, "{json}")
-                        });
+                    // Append quality metrics to trend file
+                    let trend_path = worktree_bridge
+                        .repo_root()
+                        .join(".swarm")
+                        .join("quality-trend.jsonl");
+                    if let Ok(json) = serde_json::to_string(&serde_json::json!({
+                        "timestamp": chrono::Utc::now().to_rfc3339(),
+                        "issue_resolved": issue.id,
+                        "gates_passed": scan_report.gates_passed,
+                        "gates_total": scan_report.gates_total,
+                        "all_green": scan_report.all_green,
+                        "summary": scan_report.summary(),
+                    })) {
+                        let _ = std::fs::OpenOptions::new()
+                            .create(true)
+                            .append(true)
+                            .open(&trend_path)
+                            .and_then(|mut f| {
+                                use std::io::Write;
+                                writeln!(f, "{json}")
+                            });
+                    }
+
+                    if scan_report.all_green {
+                        info!(
+                            id = %issue.id,
+                            summary = %scan_report.summary(),
+                            "Post-merge verification PASSED"
+                        );
+                    } else {
+                        warn!(
+                            id = %issue.id,
+                            summary = %scan_report.summary(),
+                            "Post-merge regression detected — reopening issue"
+                        );
+                        let _ = beads.update_status(&issue.id, "open");
+                        success = false;
+                    }
                 }
-
-                if scan_report.all_green {
-                    info!(
-                        id = %issue.id,
-                        summary = %scan_report.summary(),
-                        "Post-merge verification PASSED"
-                    );
-                } else {
-                    warn!(
-                        id = %issue.id,
-                        summary = %scan_report.summary(),
-                        "Post-merge regression detected — reopening issue"
-                    );
-                    let _ = beads.update_status(&issue.id, "open");
-                    success = false;
-                }
+                info!(id = %issue.id, "Issue closed");
             }
-            info!(id = %issue.id, "Issue closed");
         }
     } else {
         session.fail();
