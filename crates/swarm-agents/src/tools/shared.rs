@@ -23,6 +23,7 @@
 //! ```
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 
 use rig::tool::ToolDyn;
@@ -101,6 +102,15 @@ impl ToolFactory {
     pub fn notebook_tools(&self) -> Vec<Box<dyn ToolDyn>> {
         bundles::notebook_tool(self.kb.clone(), self.proxy)
     }
+}
+
+/// Executes `cargo test` in the specified worktree and returns whether it succeeded.
+pub fn run_cargo_test(wt_path: &Path) -> Result<bool, std::io::Error> {
+    let status = Command::new("cargo")
+        .arg("test")
+        .current_dir(wt_path)
+        .status()?;
+    Ok(status.success())
 }
 
 #[cfg(test)]
