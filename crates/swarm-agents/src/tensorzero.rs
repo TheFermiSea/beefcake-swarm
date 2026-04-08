@@ -958,8 +958,10 @@ mod tests {
 
     #[test]
     fn test_harness_preset_apply_to_tags() {
-        let mut tags = FeedbackTags::default();
-        tags.issue_id = Some("test-123".to_string());
+        let mut tags = FeedbackTags {
+            issue_id: Some("test-123".to_string()),
+            ..Default::default()
+        };
 
         HarnessPreset::Tight.apply_to_tags(&mut tags);
 
