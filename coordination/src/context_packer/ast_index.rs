@@ -19,6 +19,8 @@ use tree_sitter::{Node, Parser};
 /// # Examples
 ///
 /// ```
+/// use coordination::context_packer::{RustSymbol, SymbolKind};
+///
 /// let symbol = RustSymbol {
 ///     name: "my_function".to_string(),
 ///     kind: SymbolKind::Function,
@@ -53,6 +55,8 @@ pub struct RustSymbol {
 /// # Examples
 ///
 /// ```
+/// use coordination::context_packer::SymbolKind;
+///
 /// let kind = SymbolKind::Function;
 /// println!("Symbol type: {}", kind); // Outputs: "Symbol type: fn"
 /// ```
@@ -106,6 +110,8 @@ impl std::fmt::Display for SymbolKind {
 /// # Examples
 ///
 /// ```
+/// use coordination::context_packer::FileSymbolIndex;
+///
 /// let index = FileSymbolIndex {
 ///     file: "src/main.rs".to_string(),
 ///     symbols: vec![],
@@ -128,6 +134,8 @@ impl FileSymbolIndex {
     /// # Examples
     ///
     /// ```
+    /// use coordination::context_packer::FileSymbolIndex;
+    ///
     /// let index = FileSymbolIndex::from_source_language("main.rs", "fn main() {}");
     /// ```
     ///

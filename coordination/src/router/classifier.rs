@@ -16,7 +16,8 @@
 //!     1,
 //!     &vec![]
 //! );
-//! assert_eq!(analysis.recommended_tier, ModelTier::Council);
+//! // Low complexity + no risk factors → Worker tier
+//! assert_eq!(analysis.recommended_tier, ModelTier::Worker);
 //! ```
 
 use serde::{Deserialize, Serialize};
@@ -83,6 +84,21 @@ pub enum RiskKind {
     LargeScope,
     /// Tasks with repeated failure history
     RepeatedFailures,
+}
+
+impl std::fmt::Display for RiskKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BreakingApiChange => write!(f, "breaking_api_change"),
+            Self::UnsafeCode => write!(f, "unsafe_code"),
+            Self::SecuritySensitive => write!(f, "security_sensitive"),
+            Self::DataLoss => write!(f, "data_loss"),
+            Self::ConcurrencyHazard => write!(f, "concurrency_hazard"),
+            Self::ExternalDependency => write!(f, "external_dependency"),
+            Self::LargeScope => write!(f, "large_scope"),
+            Self::RepeatedFailures => write!(f, "repeated_failures"),
+        }
+    }
 }
 
 /// A single identified risk factor
@@ -332,6 +348,7 @@ impl Default for PreRoutingClassifier {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::escalation::SwarmTier;
 
     fn sig(category: ErrorCategory) -> FailureSignal {
         FailureSignal {

@@ -59,8 +59,10 @@ struct ScoredFile {
 /// listed for the most important files. Low-ranked files are elided to just their path.
 ///
 /// # Examples
-/// ```rust
+/// ```rust,no_run
 /// use std::path::Path;
+/// use coordination::context_packer::generate_repo_map;
+///
 /// let map = generate_repo_map(
 ///     Path::new("/path/to/worktree"),
 ///     "Fix memory leak in HTTP handler",
