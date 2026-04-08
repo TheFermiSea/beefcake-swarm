@@ -263,7 +263,16 @@ pub async fn process_issue(
             info!(id = %issue.id, ?mode, "Mode runner succeeded — merging");
             match worktree_bridge.merge_and_remove(&issue.id) {
                 Ok(()) => {
-                    let _ = beads.close(&issue.id, Some("mode runner completed successfully"));
+                    if let Err(e) =
+                        beads.close(&issue.id, Some("mode runner completed successfully"))
+                    {
+                        error!(
+                            id = %issue.id,
+                            error = %e,
+                            "Issue merge succeeded but bd close failed"
+                        );
+                        return Err(e);
+                    }
                 }
                 Err(e) => {
                     warn!(id = %issue.id, error = %e, "Merge failed after mode runner success");
@@ -3621,11 +3630,8 @@ async fn process_issue_core(
                 )?;
                 clear_resume_file(worktree_bridge.repo_root());
 
-                // --- Post-merge CI watcher: verify main still compiles after merge ---
-                //
-                // Run a lightweight check (fmt + clippy + check, skip tests) on the
-                // repo root after merge. If the merge introduced a regression (e.g.
-                // interacting changes from parallel merges), reopen the issue.
+                // Keep the post-merge scan advisory-only here: `merge_and_remove`
+                // already performed its own post-merge verification and cleanup.
                 {
                     let post_merge_config = VerifierConfig {
                         check_fmt: true,
@@ -3675,10 +3681,8 @@ async fn process_issue_core(
                         warn!(
                             id = %issue.id,
                             summary = %scan_report.summary(),
-                            "Post-merge regression detected — reopening issue"
+                            "Post-merge verification failed after close — advisory only"
                         );
-                        let _ = beads.update_status(&issue.id, "open");
-                        success = false;
                     }
                 }
                 info!(id = %issue.id, "Issue closed");
@@ -4377,6 +4381,16 @@ fn parse_review_response(response: &str) -> bool {
 /// can be dispatched via `tokio::spawn` / `JoinSet` in Phase 2 (Thread Weaving).
 /// Merge worktree and close issue, tolerating worktree cleanup failures.
 ///
+fn is_merge_failure_error(err_msg: &str) -> bool {
+    let err_msg = err_msg.to_lowercase();
+    err_msg.contains("conflict")
+        || err_msg.contains("uncommitted change")
+        || err_msg.contains("merge failed")
+        || err_msg.contains("post-merge verification failed")
+        || err_msg.contains("cargo check errors")
+        || err_msg.contains("merge reverted")
+}
+
 /// If `merge_and_remove` fails but the merge itself succeeded (the issue ID
 /// appears in the latest commit), close the issue anyway. Only reopens the
 /// issue when the git merge itself failed.
@@ -4394,12 +4408,8 @@ fn merge_close_or_reopen(
         // (worktree remove, branch delete). The error message distinguishes:
         // merge failures mention "conflict" or "uncommitted changes",
         // cleanup failures mention "worktree remove" or "branch".
-        let err_msg = e.to_string().to_lowercase();
-        let is_merge_failure = err_msg.contains("conflict")
-            || err_msg.contains("uncommitted change")
-            || err_msg.contains("merge failed");
-
-        if is_merge_failure {
+        let err_msg = e.to_string();
+        if is_merge_failure_error(&err_msg) {
             error!(id = %issue_id, "Merge failed: {e}");
             let _ = worktree_bridge.cleanup(issue_id);
             let _ = beads.update_status(issue_id, "open");
@@ -4724,6 +4734,19 @@ mod tests {
                 .sum()
         ];
         report
+    }
+
+    #[test]
+    fn test_merge_failure_classifier_flags_post_merge_verification_errors() {
+        assert!(is_merge_failure_error(
+            "Post-merge verification failed for beefcake-123: cargo check errors. Merge reverted."
+        ));
+        assert!(is_merge_failure_error(
+            "Merge failed for beefcake-123 (possible conflict): conflict"
+        ));
+        assert!(!is_merge_failure_error(
+            "Worktree cleanup failed after merge"
+        ));
     }
 
     /// Initialize a temporary git repo with one commit and return the initial
