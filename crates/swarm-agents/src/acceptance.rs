@@ -11,6 +11,8 @@ use std::path::Path;
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::git_ops::is_operational_artifact_path;
+
 /// Errors that can occur during acceptance gate evaluation.
 #[derive(Debug, thiserror::Error)]
 pub enum AcceptanceError {
@@ -44,10 +46,10 @@ pub struct AcceptancePolicy {
     /// Default: empty (no scope restriction).
     pub scope_to_crates: Vec<String>,
 
-    /// Minimum diff size in lines produced by the agent (excluding auto-fix).
-    /// Only enforced when `try_auto_fix` actually ran and made the verifier
-    /// pass — prevents accepting iterations where the agent wrote nothing
-    /// meaningful but auto-fix resolved pre-existing warnings.
+    /// Minimum diff size in lines produced by the agent.
+    ///
+    /// Guards against trivial one-line/comment-only landings that technically
+    /// pass verification but do not materially resolve the issue.
     /// Default: 5. Set to 0 to disable.
     pub min_diff_lines: usize,
 
@@ -79,6 +81,22 @@ pub struct AcceptanceResult {
     pub rejections: Vec<String>,
 }
 
+/// Lightweight task metadata used by the hard issue-resolution guard.
+#[derive(Debug, Clone, Copy)]
+pub struct TaskMetadata<'a> {
+    pub issue_title: &'a str,
+    pub issue_description: Option<&'a str>,
+}
+
+impl<'a> TaskMetadata<'a> {
+    pub fn new(issue_title: &'a str, issue_description: Option<&'a str>) -> Self {
+        Self {
+            issue_title,
+            issue_description,
+        }
+    }
+}
+
 impl AcceptanceResult {
     fn pass() -> Self {
         Self {
@@ -104,6 +122,17 @@ pub fn check_acceptance(
     wt_path: &Path,
     initial_commit: Option<&str>,
     cloud_passes: usize,
+) -> AcceptanceResult {
+    check_acceptance_with_task(policy, wt_path, initial_commit, cloud_passes, None)
+}
+
+/// Check the acceptance policy against the current worktree state with issue metadata.
+pub fn check_acceptance_with_task(
+    policy: &AcceptancePolicy,
+    wt_path: &Path,
+    initial_commit: Option<&str>,
+    cloud_passes: usize,
+    task: Option<TaskMetadata<'_>>,
 ) -> AcceptanceResult {
     let mut rejections = Vec::new();
 
@@ -132,7 +161,39 @@ pub fn check_acceptance(
         }
     }
 
-    // Gate 2: Cloud validator passes
+    // Gate 2: Minimum meaningful diff size
+    if policy.min_diff_lines > 0 {
+        if let Some(commit) = initial_commit {
+            match diff_line_count(wt_path, commit) {
+                Ok(lines) => {
+                    if lines < policy.min_diff_lines {
+                        rejections.push(format!(
+                            "Diff too small: {lines} lines (min: {})",
+                            policy.min_diff_lines
+                        ));
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to count diff lines: {e} — skipping min diff size check");
+                }
+            }
+        }
+    }
+
+    // Gate 3: Reject whitespace-only diffs
+    if let Some(commit) = initial_commit {
+        match has_non_whitespace_changes(wt_path, commit) {
+            Ok(true) => {}
+            Ok(false) => {
+                rejections.push("Diff contains only whitespace/formatting changes".into());
+            }
+            Err(e) => {
+                warn!("Failed to inspect whitespace-only diff: {e} — skipping whitespace check");
+            }
+        }
+    }
+
+    // Gate 4: Cloud validator passes
     if policy.min_cloud_passes > 0 && cloud_passes < policy.min_cloud_passes {
         rejections.push(format!(
             "Insufficient cloud validations: {cloud_passes} PASS (need: {})",
@@ -140,7 +201,7 @@ pub fn check_acceptance(
         ));
     }
 
-    // Gate 3: Test changes required
+    // Gate 5: Test changes required
     if policy.require_test_changes {
         if let Some(commit) = initial_commit {
             match has_test_changes(wt_path, commit) {
@@ -158,7 +219,7 @@ pub fn check_acceptance(
         }
     }
 
-    // Gate 4: Scope restriction
+    // Gate 6: Scope restriction
     if !policy.scope_to_crates.is_empty() {
         if let Some(commit) = initial_commit {
             match check_scope(wt_path, commit, &policy.scope_to_crates) {
@@ -177,7 +238,7 @@ pub fn check_acceptance(
         }
     }
 
-    // Gate 5: File-level scope restriction
+    // Gate 7: File-level scope restriction
     if !policy.allowed_files.is_empty() {
         if let Some(commit) = initial_commit {
             match check_file_scope(wt_path, commit, &policy.allowed_files) {
@@ -196,6 +257,48 @@ pub fn check_acceptance(
         }
     }
 
+    // Gate 8: Issue-target alignment.
+    if let (Some(commit), Some(task)) = (initial_commit, task) {
+        let changed_files = match changed_files_since(wt_path, commit) {
+            Ok(files) => files,
+            Err(e) => {
+                warn!("Failed to list changed files for issue guard: {e} — skipping target-file check");
+                Vec::new()
+            }
+        };
+
+        let explicit_targets = task
+            .issue_description
+            .map(extract_explicit_file_targets)
+            .unwrap_or_default();
+        if !explicit_targets.is_empty()
+            && !changed_files.iter().any(|changed| {
+                explicit_targets
+                    .iter()
+                    .any(|target| path_matches_target(changed, target))
+            })
+        {
+            rejections.push(format!(
+                "Changes do not touch the issue target files: {}",
+                explicit_targets.join(", ")
+            ));
+        }
+
+        let target_symbols = extract_target_symbols(task.issue_title);
+        if explicit_targets.is_empty() && !target_symbols.is_empty() {
+            match diff_mentions_any_symbol(wt_path, commit, &target_symbols) {
+                Ok(true) => {}
+                Ok(false) => rejections.push(format!(
+                    "Diff does not mention the target symbol(s): {}",
+                    target_symbols.join(", ")
+                )),
+                Err(e) => {
+                    warn!("Failed to inspect target symbols in diff: {e} — skipping symbol check");
+                }
+            }
+        }
+    }
+
     if rejections.is_empty() {
         AcceptanceResult::pass()
     } else {
@@ -205,7 +308,8 @@ pub fn check_acceptance(
 
 /// Count the number of added + removed lines in the diff since `initial_commit`.
 ///
-/// Uses `git diff --numstat` for reliable per-file counts.
+/// Uses `git diff --numstat` for reliable per-file counts and excludes
+/// operational-artifact files that should not count as real code changes.
 fn diff_line_count(wt_path: &Path, initial_commit: &str) -> Result<usize, AcceptanceError> {
     let output = std::process::Command::new("git")
         .args(["diff", "--numstat", initial_commit, "HEAD"])
@@ -224,11 +328,7 @@ fn diff_line_count(wt_path: &Path, initial_commit: &str) -> Result<usize, Accept
     let mut total = 0usize;
     for line in stdout.lines() {
         let parts: Vec<&str> = line.split('\t').collect();
-        // Skip .beads/ paths — in worktrees, .beads/ is a symlink to the main
-        // repo's beads database. If it somehow appears in the diff (e.g. from
-        // a pre-PR#38 worktree), exclude it so the size gate isn't triggered by
-        // beads noise rather than real code changes.
-        if parts.len() >= 3 && parts[2].starts_with(".beads") {
+        if parts.len() >= 3 && is_operational_artifact_path(parts[2]) {
             continue;
         }
         if parts.len() >= 2 {
@@ -320,6 +420,19 @@ fn check_file_scope(
         return Ok(Vec::new());
     }
 
+    let changed_files = changed_files_since(wt_path, initial_commit)?;
+    let out_of_scope = changed_files
+        .into_iter()
+        .filter(|file| !allowed_files.iter().any(|allowed| file == allowed))
+        .collect();
+
+    Ok(out_of_scope)
+}
+
+fn changed_files_since(
+    wt_path: &Path,
+    initial_commit: &str,
+) -> Result<Vec<String>, AcceptanceError> {
     let output = std::process::Command::new("git")
         .args(["diff", "--name-only", initial_commit, "HEAD"])
         .current_dir(wt_path)
@@ -333,23 +446,217 @@ fn check_file_scope(
         )));
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let out_of_scope: Vec<String> = stdout
+    Ok(String::from_utf8_lossy(&output.stdout)
         .lines()
-        .filter(|file| {
-            !allowed_files
-                .iter()
-                .any(|allowed| *file == allowed.as_str())
-        })
-        .map(String::from)
-        .collect();
+        .map(str::trim)
+        .filter(|path| !path.is_empty() && !is_operational_artifact_path(path))
+        .map(ToOwned::to_owned)
+        .collect())
+}
 
-    Ok(out_of_scope)
+fn has_non_whitespace_changes(
+    wt_path: &Path,
+    initial_commit: &str,
+) -> Result<bool, AcceptanceError> {
+    for path in changed_files_since(wt_path, initial_commit)? {
+        let before = file_contents_at_revision(wt_path, initial_commit, &path)?;
+        let after = file_contents_at_revision(wt_path, "HEAD", &path)?;
+
+        if normalize_without_whitespace(before.as_deref())
+            != normalize_without_whitespace(after.as_deref())
+        {
+            return Ok(true);
+        }
+    }
+
+    Ok(false)
+}
+
+fn file_contents_at_revision(
+    wt_path: &Path,
+    revision: &str,
+    path: &str,
+) -> Result<Option<String>, AcceptanceError> {
+    let spec = format!("{revision}:{path}");
+    let output = std::process::Command::new("git")
+        .args(["show", &spec])
+        .current_dir(wt_path)
+        .output()
+        .map_err(|e| AcceptanceError::Git(format!("Failed to run git show {spec}: {e}")))?;
+
+    if output.status.success() {
+        return Ok(Some(String::from_utf8_lossy(&output.stdout).into_owned()));
+    }
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    if stderr.contains("exists on disk, but not in")
+        || stderr.contains("does not exist in")
+        || stderr.contains("unknown revision or path")
+    {
+        return Ok(None);
+    }
+
+    Err(AcceptanceError::Git(format!(
+        "git show {spec} failed: {stderr}"
+    )))
+}
+
+fn normalize_without_whitespace(contents: Option<&str>) -> String {
+    contents
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .collect()
+}
+
+fn extract_explicit_file_targets(description: &str) -> Vec<String> {
+    description
+        .lines()
+        .filter_map(|line| {
+            let (_, rest) = line.split_once("Location:")?;
+            sanitize_location_token(rest.split_whitespace().next()?)
+        })
+        .collect()
+}
+
+fn sanitize_location_token(token: &str) -> Option<String> {
+    let token = token
+        .trim_matches(|c: char| matches!(c, '`' | '"' | '\'' | ',' | '.' | '(' | ')' | '[' | ']'));
+    if token.is_empty() {
+        return None;
+    }
+
+    let stripped = strip_line_suffix(token);
+    if stripped.contains('/') || stripped.ends_with(".rs") || stripped.ends_with(".toml") {
+        Some(stripped.to_string())
+    } else {
+        None
+    }
+}
+
+fn strip_line_suffix(token: &str) -> &str {
+    let mut segments = token.rsplitn(3, ':');
+    let last = segments.next();
+    let second = segments.next();
+    match (last, second) {
+        (Some(last), Some(second)) if last.chars().all(|c| c.is_ascii_digit() || c == '-') => {
+            &token[..token.len() - last.len() - 1]
+        }
+        _ => token,
+    }
+}
+
+fn path_matches_target(changed: &str, target: &str) -> bool {
+    changed == target || changed.ends_with(&format!("/{target}"))
+}
+
+fn extract_target_symbols(title: &str) -> Vec<String> {
+    let Some((prefix, rest)) = title.split_once(':') else {
+        return Vec::new();
+    };
+
+    let prefix = prefix.to_ascii_lowercase();
+    if !(prefix.contains("function")
+        || prefix.contains("method")
+        || prefix.contains("struct")
+        || prefix.contains("enum")
+        || prefix.contains("type"))
+    {
+        return Vec::new();
+    }
+
+    rest.split(|c: char| c.is_whitespace() || matches!(c, ',' | '(' | ')' | '[' | ']'))
+        .find(|token| !token.is_empty())
+        .map(|token| vec![token.trim_matches('`').to_string()])
+        .unwrap_or_default()
+}
+
+fn diff_mentions_any_symbol(
+    wt_path: &Path,
+    initial_commit: &str,
+    target_symbols: &[String],
+) -> Result<bool, AcceptanceError> {
+    let output = std::process::Command::new("git")
+        .args(["diff", "--unified=0", initial_commit, "HEAD"])
+        .current_dir(wt_path)
+        .output()
+        .map_err(|e| AcceptanceError::Git(format!("Failed to run git diff --unified=0: {e}")))?;
+
+    if !output.status.success() {
+        return Err(AcceptanceError::Git(format!(
+            "git diff --unified=0 failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+
+    let normalized_symbols: Vec<String> = target_symbols
+        .iter()
+        .map(|symbol| symbol.to_ascii_lowercase())
+        .collect();
+    let diff = String::from_utf8_lossy(&output.stdout);
+
+    Ok(diff.lines().any(|line| {
+        if !(line.starts_with('+') || line.starts_with('-'))
+            || line.starts_with("+++")
+            || line.starts_with("---")
+        {
+            return false;
+        }
+        let normalized_line = line.to_ascii_lowercase();
+        normalized_symbols
+            .iter()
+            .any(|symbol| normalized_line.contains(symbol))
+    }))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn init_git_repo(dir: &tempfile::TempDir) {
+        std::process::Command::new("git")
+            .args(["init"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.email", "test@test.com"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["config", "user.name", "Test"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+    }
+
+    fn commit_all(dir: &tempfile::TempDir, message: &str) {
+        std::process::Command::new("git")
+            .args(["add", "."])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        std::process::Command::new("git")
+            .args(["commit", "-m", message])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+    }
+
+    fn head_commit(dir: &tempfile::TempDir) -> String {
+        String::from_utf8(
+            std::process::Command::new("git")
+                .args(["rev-parse", "HEAD"])
+                .current_dir(dir.path())
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_string()
+    }
 
     #[test]
     fn test_default_policy() {
@@ -394,6 +701,171 @@ mod tests {
         // Enough cloud passes
         let result = check_acceptance(&policy, Path::new("/tmp"), None, 2);
         assert!(result.accepted);
+    }
+
+    #[test]
+    fn test_rejects_trivial_diff_for_targeted_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(&dir);
+
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "fn old_name() {}\n").unwrap();
+        commit_all(&dir, "init");
+        let initial = head_commit(&dir);
+
+        std::fs::write(dir.path().join("src/lib.rs"), "fn new_name() {}\n").unwrap();
+        commit_all(&dir, "rename");
+
+        let result = check_acceptance_with_task(
+            &AcceptancePolicy {
+                max_diff_lines: 0,
+                min_cloud_passes: 0,
+                require_test_changes: false,
+                scope_to_crates: Vec::new(),
+                min_diff_lines: 5,
+                allowed_files: Vec::new(),
+            },
+            dir.path(),
+            Some(&initial),
+            0,
+            Some(TaskMetadata::new(
+                "Unused function: old_name",
+                Some("Location: src/lib.rs:1"),
+            )),
+        );
+
+        assert!(!result.accepted);
+        assert!(result
+            .rejections
+            .iter()
+            .any(|r| r.contains("Diff too small")));
+    }
+
+    #[test]
+    fn test_rejects_whitespace_only_changes_for_targeted_issue() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(&dir);
+
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "fn process_issue_core() {\n    do_work();\n}\n",
+        )
+        .unwrap();
+        commit_all(&dir, "init");
+        let initial = head_commit(&dir);
+
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "fn process_issue_core() { do_work(); }\n",
+        )
+        .unwrap();
+        commit_all(&dir, "format only");
+
+        let result = check_acceptance_with_task(
+            &AcceptancePolicy {
+                max_diff_lines: 0,
+                min_cloud_passes: 0,
+                require_test_changes: false,
+                scope_to_crates: Vec::new(),
+                min_diff_lines: 0,
+                allowed_files: Vec::new(),
+            },
+            dir.path(),
+            Some(&initial),
+            0,
+            Some(TaskMetadata::new(
+                "Complex function: process_issue_core",
+                Some("Location: src/lib.rs:1"),
+            )),
+        );
+
+        assert!(!result.accepted);
+        assert!(result
+            .rejections
+            .iter()
+            .any(|r| r.contains("whitespace/formatting")));
+    }
+
+    #[test]
+    fn test_rejects_changes_outside_issue_target_file() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(&dir);
+
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(dir.path().join("src/lib.rs"), "fn get_event_bus() {}\n").unwrap();
+        std::fs::write(dir.path().join("src/other.rs"), "fn helper() {}\n").unwrap();
+        commit_all(&dir, "init");
+        let initial = head_commit(&dir);
+
+        std::fs::write(
+            dir.path().join("src/other.rs"),
+            "fn helper() {\n    let renamed = 1;\n    assert_eq!(renamed, 1);\n}\n",
+        )
+        .unwrap();
+        commit_all(&dir, "wrong file");
+
+        let result = check_acceptance_with_task(
+            &AcceptancePolicy {
+                max_diff_lines: 0,
+                min_cloud_passes: 0,
+                require_test_changes: false,
+                scope_to_crates: Vec::new(),
+                min_diff_lines: 0,
+                allowed_files: Vec::new(),
+            },
+            dir.path(),
+            Some(&initial),
+            0,
+            Some(TaskMetadata::new(
+                "Unused function: get_event_bus",
+                Some("Location: src/lib.rs:1"),
+            )),
+        );
+
+        assert!(!result.accepted);
+        assert!(result
+            .rejections
+            .iter()
+            .any(|r| r.contains("issue target files")));
+    }
+
+    #[test]
+    fn test_accepts_meaningful_targeted_change() {
+        let dir = tempfile::tempdir().unwrap();
+        init_git_repo(&dir);
+
+        std::fs::create_dir_all(dir.path().join("src")).unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            "fn get_event_bus() {\n    let x = 1;\n    let y = 2;\n    let z = x + y;\n    assert_eq!(z, 3);\n}\n",
+        )
+        .unwrap();
+        commit_all(&dir, "init");
+        let initial = head_commit(&dir);
+
+        std::fs::write(dir.path().join("src/lib.rs"), "fn helper() {}\n").unwrap();
+        commit_all(&dir, "remove target");
+
+        let result = check_acceptance_with_task(
+            &AcceptancePolicy {
+                max_diff_lines: 0,
+                min_cloud_passes: 0,
+                require_test_changes: false,
+                scope_to_crates: Vec::new(),
+                min_diff_lines: 5,
+                allowed_files: Vec::new(),
+            },
+            dir.path(),
+            Some(&initial),
+            0,
+            Some(TaskMetadata::new(
+                "Unused function: get_event_bus",
+                Some("Location: src/lib.rs:1"),
+            )),
+        );
+
+        assert!(result.accepted, "rejections: {:?}", result.rejections);
     }
 
     #[test]

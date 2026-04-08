@@ -3371,11 +3371,15 @@ async fn process_issue_core(
             }
 
             // --- Acceptance policy check ---
-            let acceptance_result = acceptance::check_acceptance(
+            let acceptance_result = acceptance::check_acceptance_with_task(
                 &acceptance_policy,
                 &wt_path,
                 session.state().initial_commit.as_deref(),
                 cloud_passes,
+                Some(acceptance::TaskMetadata::new(
+                    &issue.title,
+                    issue.description.as_deref(),
+                )),
             );
 
             if !acceptance_result.accepted {

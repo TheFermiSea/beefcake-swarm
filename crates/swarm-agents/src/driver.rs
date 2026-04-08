@@ -1401,11 +1401,15 @@ pub async fn handle_validating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
     }
 
     // Acceptance policy check
-    let acceptance_result = acceptance::check_acceptance(
+    let acceptance_result = acceptance::check_acceptance_with_task(
         &ctx.acceptance_policy,
         &ctx.wt_path,
         ctx.session.state().initial_commit.as_deref(),
         cloud_passes,
+        Some(acceptance::TaskMetadata::new(
+            &ctx.issue.title,
+            ctx.issue.description.as_deref(),
+        )),
     );
 
     if !acceptance_result.accepted {
