@@ -250,7 +250,7 @@ impl SemanticCodeGraph {
             // Free function call: foo()
             "call_expression" => {
                 if let Some(func_node) = node.child_by_field_name("function") {
-                    let caller = self.find_enclosing_function(file, node);
+                    let caller = self.find_enclosing_function(file, source, node);
                     match func_node.kind() {
                         // Direct call: my_func(...)
                         "identifier" => {
@@ -281,7 +281,7 @@ impl SemanticCodeGraph {
             "struct_expression" => {
                 if let Some(name_node) = node.child_by_field_name("name") {
                     if let Ok(struct_name) = name_node.utf8_text(source) {
-                        let caller = self.find_enclosing_function(file, node);
+                        let caller = self.find_enclosing_function(file, source, node);
                         if let Some(caller_key) = caller {
                             self.add_edge_by_name(&caller_key, struct_name, EdgeKind::Instantiates);
                         }
@@ -322,12 +322,12 @@ impl SemanticCodeGraph {
     }
 
     /// Find the enclosing function for a given AST node, returning its graph key.
-    fn find_enclosing_function(&self, file: &str, node: Node) -> Option<String> {
+    fn find_enclosing_function(&self, file: &str, source: &[u8], node: Node) -> Option<String> {
         let mut current = node.parent();
         while let Some(parent) = current {
             if parent.kind() == "function_item" {
                 if let Some(name_node) = parent.child_by_field_name("name") {
-                    if let Ok(fn_name) = name_node.utf8_text(&[]) {
+                    if let Ok(fn_name) = name_node.utf8_text(source) {
                         // Try to find this function in our index, trying various key forms
                         let key = format!("{}::{}", file, fn_name);
                         if self.index.contains_key(&key) {
@@ -335,7 +335,7 @@ impl SemanticCodeGraph {
                         }
                     }
                 }
-                // If we can't get the name from empty source, search by line number
+                // If name-based lookup fails, search by line number as a fallback.
                 let line = parent.start_position().row as u32;
                 // Find the node at this file/line
                 for (key, &idx) in &self.index {
@@ -785,6 +785,40 @@ fn make_config() -> Config {
             "Should have instantiates edge. Edges: {:?}",
             result.edges
         );
+    }
+
+    #[test]
+    fn test_find_enclosing_function_uses_source_bytes() {
+        let source = r#"
+fn outer() {
+    helper();
+}
+
+fn helper() {}
+"#;
+        let graph = SemanticCodeGraph::from_sources(&[("test.rs", source)]);
+
+        let mut parser = Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .expect("tree-sitter-rust should initialize");
+        let tree = parser.parse(source, None).expect("source should parse");
+        let root = tree.root_node();
+
+        let mut stack = vec![root];
+        let mut call_expr = None;
+        while let Some(node) = stack.pop() {
+            if node.kind() == "call_expression" {
+                call_expr = Some(node);
+                break;
+            }
+            let mut cursor = node.walk();
+            stack.extend(node.children(&mut cursor));
+        }
+
+        let call_expr = call_expr.expect("call expression should exist");
+        let caller = graph.find_enclosing_function("test.rs", source.as_bytes(), call_expr);
+        assert_eq!(caller.as_deref(), Some("test.rs::outer"));
     }
 
     #[test]

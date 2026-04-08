@@ -14,7 +14,7 @@ LOG_FILE="${2:?Usage: postmortem-review.sh <issue-id> <log-file>}"
 
 CLOUD_URL="${SWARM_CLOUD_URL:-http://localhost:8317/v1}"
 CLOUD_KEY="${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY required}"
-MODEL="${SWARM_CLOUD_MODEL:-claude-sonnet-4-6}"
+MODEL="${SWARM_CLOUD_MODEL:-gpt-5.4}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BEADS_BIN="${SWARM_BEADS_BIN:-${SCRIPT_DIR}/bd-safe.sh}"
 
@@ -33,7 +33,15 @@ LOG_TAIL="$(tail -200 "$LOG_FILE" 2>/dev/null)"
 ISSUE_INFO="$("$BEADS_BIN" show "$ISSUE_ID" 2>/dev/null || echo "Issue: $ISSUE_ID")"
 
 # Build the prompt for the cloud council
-PROMPT="$(cat <<PROMPT_EOF
+PROMPT_FILE="$(mktemp -t postmortem-prompt.XXXXXX)"
+PAYLOAD_FILE="$(mktemp -t postmortem-payload.XXXXXX)"
+RESPONSE_FILE="$(mktemp -t postmortem-response.XXXXXX)"
+cleanup() {
+  rm -f "$PROMPT_FILE" "$PAYLOAD_FILE" "$RESPONSE_FILE"
+}
+trap cleanup EXIT
+
+cat >"$PROMPT_FILE" <<PROMPT_EOF
 You are a senior engineering lead reviewing a failed automated coding attempt.
 
 ## Issue
@@ -55,31 +63,87 @@ Analyze why this automated coding attempt failed. Provide:
 
 Respond in plain text (no markdown fences). Start with "ROOT CAUSE:" on the first line.
 PROMPT_EOF
-)"
+
+python3 - "$MODEL" "$PROMPT_FILE" "$PAYLOAD_FILE" <<'PY'
+import json
+import pathlib
+import sys
+
+model, prompt_path, payload_path = sys.argv[1:4]
+prompt = pathlib.Path(prompt_path).read_text()
+payload = {
+    "model": model,
+    "messages": [{"role": "user", "content": prompt}],
+    "max_tokens": 2000,
+    "temperature": 0.3,
+}
+pathlib.Path(payload_path).write_text(json.dumps(payload))
+PY
 
 log "Sending postmortem for $ISSUE_ID to $MODEL..."
 
-# Call the cloud API
-RESPONSE="$(curl -sS --max-time 120 \
+# Call the cloud API without putting the prompt in argv.
+HTTP_STATUS="$(curl -sS --max-time 120 \
+  -o "$RESPONSE_FILE" \
+  -w "%{http_code}" \
   -H "x-api-key: $CLOUD_KEY" \
   -H "Content-Type: application/json" \
   "${CLOUD_URL%/}/chat/completions" \
-  -d "$(jq -n \
-    --arg model "$MODEL" \
-    --arg prompt "$PROMPT" \
-    '{
-      model: $model,
-      messages: [{role: "user", content: $prompt}],
-      max_tokens: 2000,
-      temperature: 0.3
-    }')" 2>&1)"
+  --data-binary "@$PAYLOAD_FILE")"
+
+if [[ ! "$HTTP_STATUS" =~ ^2 ]]; then
+  log "Cloud council request failed with HTTP $HTTP_STATUS — skipping update"
+  log "Raw response: $(python3 - "$RESPONSE_FILE" <<'PY'
+import pathlib
+import sys
+print(pathlib.Path(sys.argv[1]).read_text(errors='replace')[:500])
+PY
+)"
+  exit 0
+fi
 
 # Extract the response content
-DIAGNOSIS="$(echo "$RESPONSE" | jq -r '.choices[0].message.content // empty' 2>/dev/null)"
+DIAGNOSIS="$(python3 - "$RESPONSE_FILE" <<'PY'
+import json
+import pathlib
+import sys
+
+try:
+    payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
+except Exception:
+    print("")
+    raise SystemExit(0)
+
+choices = payload.get("choices") or []
+if not choices:
+    print("")
+    raise SystemExit(0)
+
+message = choices[0].get("message") or {}
+content = message.get("content")
+if isinstance(content, str):
+    print(content)
+elif isinstance(content, list):
+    parts = []
+    for item in content:
+        if isinstance(item, dict) and item.get("type") == "text":
+            text = item.get("text")
+            if text:
+                parts.append(text)
+    print("\n".join(parts))
+else:
+    print("")
+PY
+)"
 
 if [[ -z "$DIAGNOSIS" ]]; then
   log "Cloud council returned empty response — skipping update"
-  log "Raw response: $(echo "$RESPONSE" | head -c 500)"
+  log "Raw response: $(python3 - "$RESPONSE_FILE" <<'PY'
+import pathlib
+import sys
+print(pathlib.Path(sys.argv[1]).read_text(errors='replace')[:500])
+PY
+)"
   exit 0
 fi
 
