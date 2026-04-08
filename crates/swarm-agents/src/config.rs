@@ -449,7 +449,7 @@ impl CloudFallbackMatrix {
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "gemini-3.1-flash-lite-preview".to_string(),
+                    model: "gemini-3-flash-preview".to_string(),
                     tier_label: "fallback-3".to_string(),
                     max_tokens: 4096,
                 },
@@ -981,7 +981,7 @@ impl SwarmConfig {
         Self {
             fast_endpoint: Endpoint {
                 url: proxy_url.clone(),
-                model: "gemini-3.1-flash-lite-preview".into(),
+                model: "gemini-3-flash-preview".into(),
                 tier: Tier::Fast,
                 api_key: proxy_key.clone(),
             },
@@ -1397,7 +1397,7 @@ mod tests {
         assert_eq!(fallbacks.len(), 3);
         assert_eq!(fallbacks[0].model, "claude-sonnet-4-6");
         assert_eq!(fallbacks[1].model, "gpt-5.4");
-        assert_eq!(fallbacks[2].model, "gemini-3.1-flash-lite-preview");
+        assert_eq!(fallbacks[2].model, "gemini-3-flash-preview");
     }
 
     #[test]
