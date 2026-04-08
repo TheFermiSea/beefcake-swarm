@@ -6,6 +6,7 @@ description = "Deterministic quality gates, escalation state machine, ensemble v
 
 [dependencies]
 rmcp = { version = "0.13", features = ["server", "transport-io"] }
+# Tokio 1.44.2 - upgraded from GHSA-rr8g-9fpq-6wmg (broadcast channel Sync requirement)
 tokio = { version = "1.44.2", features = ["full"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
