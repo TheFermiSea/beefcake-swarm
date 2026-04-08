@@ -105,6 +105,20 @@ services:
       gateway:
         condition: service_healthy
 
+  # MCP schema-patching proxy (port 3001 → TensorZero MCP port 3000).
+  # Fixes missing "type" keys in tool inputSchemas that OpenAI rejects at
+  # function-registration time (upstream TensorZero bug — robust against updates).
+  mcp-proxy:
+    build: ./mcp-proxy
+    network_mode: host
+    environment:
+      UPSTREAM_MCP_URL: http://localhost:3000/mcp
+      PROXY_PORT: "3001"
+    restart: unless-stopped
+    depends_on:
+      gateway:
+        condition: service_healthy
+
   gateway-run-postgres-migrations:
     image: tensorzero/gateway
     environment:
