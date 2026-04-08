@@ -1,35 +1,6 @@
-//! Coordination Library
+//! Coordination library for multi-agent systems\n//!\n//! # M-CANONICAL-DOCS: Coordination Library\n//!\n//! This library provides:\n//! - MCP tools for delegating to local Rust-expert LLMs\n//! - Agent harness implementing Anthropic's patterns for effective long-running agents\n//! - Multi-agent ensemble coordination with voting and arbitration\n//!\n//! # Features\n//!\n//! ## LLM Tools\n//! - `ask_rust_architect`: Deep analysis with Qwen3.5/V100S models\n//! - `ask_rust_coder`: Idiomatic code with Qwen3.5/V100S models\n//! - `ask_hydra_coder`: Specialized generation with Qwen3.5/V100S models\n//!\n//! ## Harness Tools (when enabled with --harness)\n//! - `harness_start`: Initialize or resume a harness session\n//! - `harness_status`: Get session and feature status\n//! - `harness_complete_feature`: Mark a feature as complete\n//! - `harness_checkpoint`: Create a git checkpoint\n//! - `harness_rollback`: Rollback to a previous checkpoint\n//! - `harness_iterate`: Increment iteration counter\n//!\n//! ## Ensemble Tools (when enabled with --ensemble)\n//! - `ensemble_start`: Create ensemble session for multi-model coordination\n//! - `ensemble_submit`: Submit task for multi-model processing\n//! - `ensemble_status`: Get session state and pending tasks\n//! - `ensemble_vote`: Trigger voting on collected results\n//! - `ensemble_arbitrate`: Request Qwen3.5/V100S Arbitrator for disputes\n//! - `ensemble_context`: Get/update shared cross-model context\n//! - `ensemble_replay`: Replay events for debugging/recovery\n//!\n//! # Examples\n//!\n//! ```bash\n//! # Run in normal MCP mode\n//! coordination\n//!\n//! # Run with harness tools enabled\n//! coordination --harness\n//!\n//! # Run with ensemble coordination enabled\n//! coordination --ensemble --state-path ./ensemble-state\n//!\n//! # Run with both harness and ensemble\n//! coordination --harness --ensemble\n//! ```
 //!
-//! This library provides:
-//! - MCP tools for delegating to local Rust-expert LLMs
-//! - Agent harness implementing Anthropic's patterns for effective long-running agents
-//! - Multi-agent ensemble coordination with voting and arbitration
-//!
-//! # Features
-//!
-//! ## LLM Tools
-//! - `ask_rust_architect`: Deep analysis with OR1-Behemoth 73B
-//! - `ask_rust_coder`: Idiomatic code with Strand-Rust-Coder 14B
-//! - `ask_hydra_coder`: Specialized generation with HydraCoder 31B MoE
-//!
-//! ## Harness Tools (when enabled with --harness)
-//! - `harness_start`: Initialize or resume a harness session
-//! - `harness_status`: Get session and feature status
-//! - `harness_complete_feature`: Mark a feature as complete
-//! - `harness_checkpoint`: Create a git checkpoint
-//! - `harness_rollback`: Rollback to a previous checkpoint
-//! - `harness_iterate`: Increment iteration counter
-//!
-//! ## Ensemble Tools (when enabled with --ensemble)
-//! - `ensemble_start`: Create ensemble session for multi-model coordination
-//! - `ensemble_submit`: Submit task for multi-model processing
-//! - `ensemble_status`: Get session state and pending tasks
-//! - `ensemble_vote`: Trigger voting on collected results
-//! - `ensemble_arbitrate`: Request Claude arbitration for disputes
-//! - `ensemble_context`: Get/update shared cross-model context
-//! - `ensemble_replay`: Replay events for debugging/recovery
-//!
-//! # Usage
+//! # Examples
 //!
 //! ```bash
 //! # Run in normal MCP mode
@@ -46,19 +17,33 @@
 //! ```
 
 // ── Always-compiled modules (used by swarm-agents) ──
+/// Analytics and telemetry for agent behavior.
 pub mod analytics;
+/// Benchmarking and performance measurement.
 pub mod benchmark;
+/// Context packing for LLM prompts.
 pub mod context_packer;
+/// Escalation logic for multi-tier agents.
 pub mod escalation;
+/// Feedback and correction loops.
 pub mod feedback;
+/// Fill-in-the-middle (FIM) utilities.
 pub mod fim;
+/// Agent harness for long-running tasks.
 pub mod harness;
+/// OpenTelemetry integration.
 pub mod otel;
+/// Query reformulation for better retrieval.
 pub mod reformulation;
+/// Feature rollout and canarying.
 pub mod rollout;
+/// Request routing and classification.
 pub mod router;
+/// State management for coordination.
 pub mod state;
+/// Code and output verification.
 pub mod verifier;
+/// Work packet definition and generation.
 pub mod work_packet;
 
 // ── Full-only modules (unused by swarm-agents, needed by MCP binary) ──
