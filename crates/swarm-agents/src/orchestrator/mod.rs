@@ -216,7 +216,7 @@ pub async fn process_issue(
         crate::telemetry::MetricsCollector::new("", "", "", "unknown", None, None, "v1"),
     );
     crate::driver::handle_outcome(&mut ctx, metrics).await;
-    return result;
+    result
 }
 
 /// Core orchestration loop — implement → verify → review → escalate.

@@ -1,3 +1,4 @@
+#![allow(dead_code, unused_variables)]
 pub mod acceptance;
 pub mod action_validator;
 pub mod agents;
