@@ -4382,10 +4382,19 @@ fn is_landing_failure_error(err_msg: &str) -> bool {
 }
 
 fn classify_landing_error(err_msg: &str) -> &'static str {
-    if is_landing_failure_error(err_msg) {
+    let err_msg = err_msg.to_lowercase();
+
+    if err_msg.contains("cleanup failed after successful landing")
+        || err_msg.contains("worktree cleanup failed after successful landing")
+    {
+        "cleanup"
+    } else if is_landing_failure_error(&err_msg) {
         "landing"
     } else {
-        "cleanup"
+        // Fail-safe default: unknown landing errors are treated as landing failures.
+        // This prevents false-positive closure when merge_and_remove emits a new
+        // error string not yet covered by classifier patterns.
+        "landing"
     }
 }
 
@@ -4741,6 +4750,27 @@ mod tests {
         assert!(!is_landing_failure_error(
             "Worktree cleanup failed after merge"
         ));
+
+        assert_eq!(
+            classify_landing_error("cleanup failed after successful landing: git worktree remove"),
+            "cleanup"
+        );
+        assert_eq!(
+            classify_landing_error(
+                "Worktree cleanup failed after successful landing — branch delete warning"
+            ),
+            "cleanup"
+        );
+        assert_eq!(
+            classify_landing_error(
+                "Push failed for beefcake-123: remote rejected. Merge reverted."
+            ),
+            "landing"
+        );
+        assert_eq!(
+            classify_landing_error("unexpected landing failure from merge_and_remove"),
+            "landing"
+        );
     }
 
     /// Initialize a temporary git repo with one commit and return the initial

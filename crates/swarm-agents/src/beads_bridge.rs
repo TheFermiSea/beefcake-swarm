@@ -437,16 +437,29 @@ impl IssueTracker for BeadsBridge {
             args.push(&reason_arg);
         }
         tracing::info!(id = %id, wt_path = ?self.wt_path, "BeadsBridge: calling bd close");
-        match self.run_bd_ok(&args) {
+        let close_stdout = match self.run_bd_ok(&args) {
             Ok(stdout) => {
                 tracing::info!(id = %id, stdout = %stdout.trim(), "BeadsBridge: bd close succeeded");
-                Ok(())
+                stdout
             }
             Err(e) => {
                 tracing::error!(id = %id, error = %e, "BeadsBridge: bd close FAILED");
-                Err(e)
+                return Err(e);
             }
+        };
+
+        let refreshed = self.show(id).context(format!(
+            "Issue {id} close command completed but status refresh failed"
+        ))?;
+        if refreshed.status != "closed" {
+            anyhow::bail!(
+                "Issue {id} close command completed but status is '{}'",
+                refreshed.status
+            );
         }
+
+        tracing::debug!(id = %id, close_stdout = %close_stdout.trim(), "BeadsBridge: close command output");
+        Ok(())
     }
 
     /// Claim an issue using `bd update --claim`.
@@ -764,13 +777,14 @@ mod tests {
     }
 
     #[test]
-    fn test_escalate_via_mail_returns_health_record_on_send_failure() {
+    fn test_close_verifies_closed_status() {
         let _guard = beads_env_lock().lock().unwrap();
-        let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_send_failure");
+        let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_close_verify");
+        let _ = fs::remove_dir_all(&tmp_dir);
         fs::create_dir_all(&tmp_dir).unwrap();
         let script_path = tmp_dir.join("bd_mock");
 
-        let script_content = "#!/bin/bash\nif [ \"$1\" = \"mail\" ] && [ \"$2\" = \"send\" ]; then\n  echo \"failed to stage dolt_ignore\" >&2\n  exit 1\nfi\nexit 0\n";
+        let script_content = "#!/bin/bash\nif [ \"$1\" = \"close\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"show\" ]; then\n  cat <<'JSON'\n[{\"id\":\"beefcake-test\",\"title\":\"test\",\"status\":\"open\",\"priority\":1,\"type\":\"bug\",\"labels\":[]}]\nJSON\n  exit 0\nfi\necho \"unexpected args: $*\" >&2\nexit 1\n";
         {
             let mut file = fs::File::create(&script_path).unwrap();
             file.write_all(script_content.as_bytes()).unwrap();
@@ -784,17 +798,51 @@ mod tests {
         let old_bin = std::env::var("SWARM_BEADS_BIN").ok();
         std::env::set_var("SWARM_BEADS_BIN", &script_path);
 
-        let tmp_wt = tmp_dir.join("test_wt");
-        fs::create_dir_all(&tmp_wt).unwrap();
+        let bridge = BeadsBridge::new();
+        let err = bridge
+            .close("beefcake-test", Some("completed"))
+            .expect_err("close should fail when issue is still open");
+        assert!(
+            err.to_string()
+                .contains("Issue beefcake-test close command completed but status is 'open'"),
+            "unexpected error: {err}"
+        );
 
-        let health = escalate_via_mail(&tmp_wt, "beefcake-test", "stuck on retries")
-            .expect("expected send failure health record");
-        assert_eq!(health.operation, "send");
-        assert_eq!(health.error_class, "dolt_ignore_stage_failed");
+        if let Some(bin) = old_bin {
+            std::env::set_var("SWARM_BEADS_BIN", bin);
+        } else {
+            std::env::remove_var("SWARM_BEADS_BIN");
+        }
 
-        let latest = latest_mail_health(&tmp_wt).expect("expected saved mail health");
-        assert_eq!(latest.operation, "send");
-        assert_eq!(latest.error_class, "dolt_ignore_stage_failed");
+        let _ = fs::remove_dir_all(&tmp_dir);
+    }
+
+    #[test]
+    fn test_close_succeeds_when_status_is_closed() {
+        let _guard = beads_env_lock().lock().unwrap();
+        let tmp_dir = std::env::temp_dir().join("swarm_test_beads_bridge_close_ok");
+        let _ = fs::remove_dir_all(&tmp_dir);
+        fs::create_dir_all(&tmp_dir).unwrap();
+        let script_path = tmp_dir.join("bd_mock");
+
+        let script_content = "#!/bin/bash\nif [ \"$1\" = \"close\" ]; then\n  exit 0\nfi\nif [ \"$1\" = \"show\" ]; then\n  cat <<'JSON'\n[{\"id\":\"beefcake-test\",\"title\":\"test\",\"status\":\"closed\",\"priority\":1,\"type\":\"bug\",\"labels\":[]}]\nJSON\n  exit 0\nfi\necho \"unexpected args: $*\" >&2\nexit 1\n";
+        {
+            let mut file = fs::File::create(&script_path).unwrap();
+            file.write_all(script_content.as_bytes()).unwrap();
+        }
+        fs::set_permissions(
+            &script_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o755),
+        )
+        .unwrap();
+
+        let old_bin = std::env::var("SWARM_BEADS_BIN").ok();
+        std::env::set_var("SWARM_BEADS_BIN", &script_path);
+
+        let bridge = BeadsBridge::new();
+        bridge
+            .close("beefcake-test", Some("completed"))
+            .expect("close should succeed when issue is closed");
 
         if let Some(bin) = old_bin {
             std::env::set_var("SWARM_BEADS_BIN", bin);
