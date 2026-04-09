@@ -23,9 +23,9 @@ use crate::notebook_bridge::KnowledgeBase;
 use crate::orchestrator::{
     self, bool_from_env, cloud_validate, collect_artifacts_from_diff, count_diff_lines,
     create_stuck_intervention, extract_local_validator_feedback, extract_validator_feedback,
-    format_compact_task_prompt, format_task_prompt, git_commit_changes, local_validate,
-    prompt_with_hook_and_retry, query_kb_with_failsafe, route_to_coder, should_reject_auto_fix,
-    try_auto_fix, try_scaffold_fallback, CoderRoute, SwarmResumeFile,
+    format_compact_task_prompt, format_task_prompt, git_commit_changes, land_issue_or_reopen,
+    local_validate, prompt_with_hook_and_retry, query_kb_with_failsafe, route_to_coder,
+    should_reject_auto_fix, try_auto_fix, try_scaffold_fallback, CoderRoute, SwarmResumeFile,
 };
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 use crate::state_machine::{BudgetTracker, OrchestratorState, StateMachine};
@@ -1602,16 +1602,17 @@ pub async fn handle_merging(ctx: &mut OrchestratorContext<'_>) -> Result<StateTr
         }
     }
 
-    if let Err(e) = ctx.worktree_bridge.merge_and_remove(&ctx.issue.id) {
-        error!(id = %ctx.issue.id, "Merge failed (state driver): {e}");
-        if let Err(cleanup_err) = ctx.worktree_bridge.cleanup(&ctx.issue.id) {
-            warn!(id = %ctx.issue.id, "Cleanup failed: {cleanup_err}");
-        }
-        let _ = ctx.beads.update_status(&ctx.issue.id, "open");
+    if let Err(e) = land_issue_or_reopen(
+        ctx.worktree_bridge,
+        ctx.beads,
+        &ctx.issue.id,
+        "Resolved by swarm orchestrator (state driver)",
+    ) {
+        error!(id = %ctx.issue.id, "Landing failed (state driver): {e}");
         return Err(e);
     }
 
-    // Mark session complete only after merge succeeds
+    // Mark session complete only after authoritative landing succeeds
     ctx.session.complete();
     let _ = ctx.progress.log_session_end(
         ctx.session.session_id(),
@@ -1631,10 +1632,6 @@ pub async fn handle_merging(ctx: &mut OrchestratorContext<'_>) -> Result<StateTr
         );
     }
 
-    ctx.beads.close(
-        &ctx.issue.id,
-        Some("Resolved by swarm orchestrator (state driver)"),
-    )?;
     orchestrator::clear_resume_file(ctx.worktree_bridge.repo_root());
     info!(id = %ctx.issue.id, "Issue closed (state driver)");
 

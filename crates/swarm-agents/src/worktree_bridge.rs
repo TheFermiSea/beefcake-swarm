@@ -789,32 +789,58 @@ impl WorktreeBridge {
             }
         }
 
-        // --- Push to remote ---
-        // Push merged changes to origin so they're not stranded on the local repo.
-        // Best-effort: push failure is non-fatal (the merge already succeeded locally).
-        let push = Command::new("git")
-            .args(["push", "origin", "main"])
-            .current_dir(&self.repo_root)
-            .output();
+        // --- Push to remote (authoritative) ---
+        // Push merged changes to origin/main. If push fails, revert the local merge
+        // and fail this landing so the issue is NOT closed with stranded local state.
+        let push = retry_git_command(&["push", "origin", "main"], &self.repo_root, 3);
         match push {
             Ok(output) if output.status.success() => {
                 tracing::info!(issue_id = %issue_id, "Pushed merge to origin/main");
             }
             Ok(output) => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::warn!(
+                tracing::error!(
                     issue_id = %issue_id,
                     stderr = %stderr.trim(),
-                    "git push failed (non-fatal) — merge is local only"
+                    "git push failed — reverting local merge"
+                );
+                let revert = Command::new("git")
+                    .args(["reset", "--hard", "HEAD~1"])
+                    .current_dir(&self.repo_root)
+                    .output()
+                    .context("Failed to revert merge after push failure")?;
+                if !revert.status.success() {
+                    let revert_stderr = String::from_utf8_lossy(&revert.stderr);
+                    bail!("Push failed for {issue_id} and merge revert failed: {revert_stderr}");
+                }
+                bail!(
+                    "Push failed for {issue_id}: {}. Merge reverted.",
+                    stderr.trim()
                 );
             }
             Err(e) => {
-                tracing::warn!(issue_id = %issue_id, error = %e, "git push failed (non-fatal)");
+                tracing::error!(
+                    issue_id = %issue_id,
+                    error = %e,
+                    "git push command failed to execute — reverting local merge"
+                );
+                let revert = Command::new("git")
+                    .args(["reset", "--hard", "HEAD~1"])
+                    .current_dir(&self.repo_root)
+                    .output()
+                    .context("Failed to revert merge after push execution error")?;
+                if !revert.status.success() {
+                    let revert_stderr = String::from_utf8_lossy(&revert.stderr);
+                    bail!(
+                        "Push command failed for {issue_id} and merge revert failed: {revert_stderr}"
+                    );
+                }
+                bail!("Push command failed for {issue_id}: {e}. Merge reverted.");
             }
         }
 
         // Remove the worktree (--force: untracked .swarm-* artifacts are expected)
-        let remove = Command::new("git")
+        match Command::new("git")
             .args([
                 "worktree",
                 "remove",
@@ -823,28 +849,41 @@ impl WorktreeBridge {
             ])
             .current_dir(&self.repo_root)
             .output()
-            .context("Failed to remove worktree")?;
-
-        if !remove.status.success() {
-            let stderr = String::from_utf8_lossy(&remove.stderr);
-            tracing::warn!(stderr = %stderr.trim(), "git worktree remove --force warning");
-            // Fallback: force-delete the directory
-            if wt_path.exists() {
-                let _ = std::fs::remove_dir_all(&wt_path);
+        {
+            Ok(remove) => {
+                if !remove.status.success() {
+                    let stderr = String::from_utf8_lossy(&remove.stderr);
+                    tracing::warn!(stderr = %stderr.trim(), "git worktree remove --force warning");
+                    // Fallback: force-delete the directory
+                    if wt_path.exists() {
+                        let _ = std::fs::remove_dir_all(&wt_path);
+                    }
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to run git worktree remove --force");
+                if wt_path.exists() {
+                    let _ = std::fs::remove_dir_all(&wt_path);
+                }
             }
         }
 
         // Delete the branch (-D: force delete even if not fully merged,
         // since the merge already succeeded above)
-        let del = Command::new("git")
+        match Command::new("git")
             .args(["branch", "-D", &branch])
             .current_dir(&self.repo_root)
             .output()
-            .context("Failed to delete branch")?;
-
-        if !del.status.success() {
-            let stderr = String::from_utf8_lossy(&del.stderr);
-            tracing::warn!(stderr = %stderr.trim(), "git branch -D warning");
+        {
+            Ok(del) => {
+                if !del.status.success() {
+                    let stderr = String::from_utf8_lossy(&del.stderr);
+                    tracing::warn!(stderr = %stderr.trim(), "git branch -D warning");
+                }
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to run git branch -D");
+            }
         }
 
         Ok(())
@@ -994,7 +1033,7 @@ impl WorktreeBridge {
 
         // 2. Get all local branches matching swarm/*
         let branch_output = Command::new("git")
-            .args(["branch", "--list", "swarm/*"])
+            .args(["branch", "--no-color", "--list", "swarm/*"])
             .current_dir(&self.repo_root)
             .output()
             .context("Failed to list swarm branches")?;
@@ -1571,6 +1610,40 @@ mod tests {
             .current_dir(repo_dir.path())
             .output()
             .unwrap();
+
+        // `merge_and_remove` now requires authoritative push to origin/main.
+        // Seed a local bare remote so the test exercises the full landing path.
+        Command::new("git")
+            .args(["branch", "-M", "main"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        let remote_dir = tempfile::tempdir().unwrap();
+        Command::new("git")
+            .args(["init", "--bare"])
+            .current_dir(remote_dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args([
+                "remote",
+                "add",
+                "origin",
+                &remote_dir.path().display().to_string(),
+            ])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        let push = Command::new("git")
+            .args(["push", "-u", "origin", "main"])
+            .current_dir(repo_dir.path())
+            .output()
+            .unwrap();
+        assert!(
+            push.status.success(),
+            "failed to seed origin/main for test: {}",
+            String::from_utf8_lossy(&push.stderr)
+        );
 
         let bridge = WorktreeBridge::new(Some(wt_base.path().to_path_buf()), repo_dir.path())
             .expect("bridge creation");

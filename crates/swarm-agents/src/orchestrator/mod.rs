@@ -261,26 +261,13 @@ pub async fn process_issue(
         }
         if success {
             info!(id = %issue.id, ?mode, "Mode runner succeeded — merging");
-            match worktree_bridge.merge_and_remove(&issue.id) {
-                Ok(()) => {
-                    if let Err(e) =
-                        beads.close(&issue.id, Some("mode runner completed successfully"))
-                    {
-                        error!(
-                            id = %issue.id,
-                            error = %e,
-                            "Issue merge succeeded but bd close failed"
-                        );
-                        return Err(e);
-                    }
-                }
-                Err(e) => {
-                    warn!(id = %issue.id, error = %e, "Merge failed after mode runner success");
-                    let _ = beads.update_status(&issue.id, "open");
-                    let _ = worktree_bridge.cleanup(&issue.id);
-                    return Ok(false);
-                }
-            }
+            land_issue_or_reopen(
+                worktree_bridge,
+                beads,
+                &issue.id,
+                "mode runner completed successfully",
+            )?;
+            clear_resume_file(worktree_bridge.repo_root());
         } else {
             warn!(id = %issue.id, ?mode, "Mode runner failed");
             let _ = beads.update_status(&issue.id, "open");
@@ -1061,7 +1048,7 @@ async fn process_issue_core(
                             );
 
                             // Try to merge and close.
-                            merge_close_or_reopen(
+                            land_issue_or_reopen(
                                 worktree_bridge,
                                 beads,
                                 &issue.id,
@@ -1153,7 +1140,7 @@ async fn process_issue_core(
                                         "Issue resolved — merging worktree"
                                     );
 
-                                    merge_close_or_reopen(
+                                    land_issue_or_reopen(
                                         worktree_bridge,
                                         beads,
                                         &issue.id,
@@ -2256,7 +2243,7 @@ async fn process_issue_core(
                             "Issue resolved — merging worktree"
                         );
 
-                        merge_close_or_reopen(
+                        land_issue_or_reopen(
                             worktree_bridge,
                             beads,
                             &issue.id,
@@ -2555,7 +2542,7 @@ async fn process_issue_core(
                         "No-op resolution — merging worktree"
                     );
 
-                    merge_close_or_reopen(
+                    land_issue_or_reopen(
                         worktree_bridge,
                         beads,
                         &issue.id,
@@ -3622,7 +3609,7 @@ async fn process_issue_core(
                     "Issue resolved — merging worktree"
                 );
 
-                merge_close_or_reopen(
+                land_issue_or_reopen(
                     worktree_bridge,
                     beads,
                     &issue.id,
@@ -4377,11 +4364,12 @@ fn parse_review_response(response: &str) -> bool {
     true
 }
 
-/// Compile-time guard: `process_issue_core`'s future must be `Send` so it
-/// can be dispatched via `tokio::spawn` / `JoinSet` in Phase 2 (Thread Weaving).
-/// Merge worktree and close issue, tolerating worktree cleanup failures.
+/// Merge worktree, push to origin/main, and close issue.
 ///
-fn is_merge_failure_error(err_msg: &str) -> bool {
+/// If the merge/push landing step fails, cleanup is best-effort and the issue
+/// is returned to `open` so it can be retried. Cleanup-only failures after a
+/// successful landing do not block closure.
+fn is_landing_failure_error(err_msg: &str) -> bool {
     let err_msg = err_msg.to_lowercase();
     err_msg.contains("conflict")
         || err_msg.contains("uncommitted change")
@@ -4389,43 +4377,46 @@ fn is_merge_failure_error(err_msg: &str) -> bool {
         || err_msg.contains("post-merge verification failed")
         || err_msg.contains("cargo check errors")
         || err_msg.contains("merge reverted")
+        || err_msg.contains("push failed")
+        || err_msg.contains("git push")
 }
 
-/// If `merge_and_remove` fails but the merge itself succeeded (the issue ID
-/// appears in the latest commit), close the issue anyway. Only reopens the
-/// issue when the git merge itself failed.
-fn merge_close_or_reopen(
+fn classify_landing_error(err_msg: &str) -> &'static str {
+    if is_landing_failure_error(err_msg) {
+        "landing"
+    } else {
+        "cleanup"
+    }
+}
+
+pub(crate) fn land_issue_or_reopen(
     worktree_bridge: &WorktreeBridge,
     beads: &dyn IssueTracker,
     issue_id: &str,
     close_reason: &str,
 ) -> Result<()> {
-    let merge_err = worktree_bridge.merge_and_remove(issue_id).err();
+    let landing_result = worktree_bridge.merge_and_remove(issue_id);
 
-    if let Some(ref e) = merge_err {
-        // merge_and_remove failed. Check if it's a real merge failure
-        // (conflict, uncommitted changes) vs just a cleanup failure
-        // (worktree remove, branch delete). The error message distinguishes:
-        // merge failures mention "conflict" or "uncommitted changes",
-        // cleanup failures mention "worktree remove" or "branch".
+    if let Err(e) = landing_result {
         let err_msg = e.to_string();
-        if is_merge_failure_error(&err_msg) {
-            error!(id = %issue_id, "Merge failed: {e}");
-            let _ = worktree_bridge.cleanup(issue_id);
-            let _ = beads.update_status(issue_id, "open");
-            return Err(anyhow::anyhow!("Merge failed for {issue_id}: {e}"));
+        match classify_landing_error(&err_msg) {
+            "landing" => {
+                error!(id = %issue_id, "Landing failed: {e}");
+                let _ = worktree_bridge.cleanup(issue_id);
+                let _ = beads.update_status(issue_id, "open");
+                return Err(anyhow::anyhow!("Landing failed for {issue_id}: {e}"));
+            }
+            _ => {
+                warn!(
+                    id = %issue_id,
+                    error = %e,
+                    "Worktree cleanup failed after successful landing — closing issue anyway"
+                );
+                let _ = worktree_bridge.cleanup(issue_id);
+            }
         }
-
-        // Cleanup failure only — the merge itself succeeded.
-        warn!(
-            id = %issue_id,
-            error = %e,
-            "Worktree cleanup failed after merge — closing issue anyway"
-        );
-        let _ = worktree_bridge.cleanup(issue_id);
     }
 
-    // Close the issue (merge succeeded or was a no-op)
     beads.close(issue_id, Some(close_reason))?;
     Ok(())
 }
@@ -4737,14 +4728,17 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_failure_classifier_flags_post_merge_verification_errors() {
-        assert!(is_merge_failure_error(
+    fn test_landing_failure_classifier_flags_post_merge_and_push_failures() {
+        assert!(is_landing_failure_error(
             "Post-merge verification failed for beefcake-123: cargo check errors. Merge reverted."
         ));
-        assert!(is_merge_failure_error(
+        assert!(is_landing_failure_error(
             "Merge failed for beefcake-123 (possible conflict): conflict"
         ));
-        assert!(!is_merge_failure_error(
+        assert!(is_landing_failure_error(
+            "Push failed for beefcake-123: remote rejected. Merge reverted."
+        ));
+        assert!(!is_landing_failure_error(
             "Worktree cleanup failed after merge"
         ));
     }
