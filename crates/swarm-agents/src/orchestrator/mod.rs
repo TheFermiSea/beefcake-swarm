@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Orchestration loop: process a single issue through implement → verify → review → escalate.
 //!
 //! Split into submodules for the Slate architecture (Phase 0):
@@ -216,7 +217,7 @@ pub async fn process_issue(
         crate::telemetry::MetricsCollector::new("", "", "", "unknown", None, None, "v1"),
     );
     crate::driver::handle_outcome(&mut ctx, metrics).await;
-    return result;
+    result
 }
 
 /// Core orchestration loop — implement → verify → review → escalate.

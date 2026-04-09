@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Environment parsing utilities, directive management, scaffolding fallback,
 //! and knowledge base helpers.
 

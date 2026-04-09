@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 //! Git operations for the swarm orchestrator.
 
 use std::path::Path;

@@ -583,7 +583,7 @@ fn strip_line_suffix(token: &str) -> &str {
     let last = segments.next();
     let second = segments.next();
     match (last, second) {
-        (Some(last), Some(second)) if last.chars().all(|c| c.is_ascii_digit() || c == '-') => {
+        (Some(last), Some(_second)) if last.chars().all(|c| c.is_ascii_digit() || c == '-') => {
             &token[..token.len() - last.len() - 1]
         }
         _ => token,
