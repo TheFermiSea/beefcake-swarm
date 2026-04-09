@@ -297,6 +297,22 @@ pub fn check_acceptance_with_task(
                 }
             }
         }
+
+        // Gate 9: Evidence-based acceptance via Validation Command
+        if let Some(desc) = task.issue_description {
+            if let Some(cmd) = extract_validation_command(desc) {
+                info!("Found issue-specific validation command: {}", cmd);
+                match run_validation_command(wt_path, &cmd) {
+                    Ok(true) => info!("Issue-specific validation command passed"),
+                    Ok(false) => rejections
+                        .push(format!("Issue-specific validation command failed: {}", cmd)),
+                    Err(e) => rejections.push(format!(
+                        "Failed to execute issue-specific validation command: {} (error: {})",
+                        cmd, e
+                    )),
+                }
+            }
+        }
     }
 
     if rejections.is_empty() {
@@ -517,6 +533,34 @@ fn extract_explicit_file_targets(description: &str) -> Vec<String> {
             sanitize_location_token(rest.split_whitespace().next()?)
         })
         .collect()
+}
+
+/// Extract an explicit validation command from the issue description.
+/// Looks for a line starting with `Validation Command: `
+fn extract_validation_command(description: &str) -> Option<String> {
+    for line in description.lines() {
+        let line = line.trim();
+        if let Some(cmd) = line.strip_prefix("Validation Command:") {
+            let clean_cmd = cmd.trim().trim_matches('`').trim();
+            if !clean_cmd.is_empty() {
+                return Some(clean_cmd.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Run a validation command in the worktree.
+fn run_validation_command(wt_path: &Path, cmd: &str) -> anyhow::Result<bool> {
+    use std::process::Command;
+    let status = Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .current_dir(wt_path)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .status()?;
+    Ok(status.success())
 }
 
 fn sanitize_location_token(token: &str) -> Option<String> {

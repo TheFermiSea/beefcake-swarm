@@ -40,7 +40,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use rig::completion::Prompt;
-use tracing::{debug, error, info, warn, Instrument};
+use tracing::{debug, error, info, warn};
 
 use crate::cluster_health::ClusterHealth;
 use crate::file_targeting::detect_changed_packages;
@@ -197,100 +197,26 @@ pub async fn process_issue(
     issue: &BeadsIssue,
     beads: &dyn IssueTracker,
     knowledge_base: Option<&dyn KnowledgeBase>,
-    cancel: Arc<AtomicBool>,
+    _cancel: Arc<AtomicBool>,
 ) -> Result<bool> {
-    // --- State driver gate ---
-    if bool_from_env("SWARM_STATE_DRIVER", false) {
-        info!(id = %issue.id, "Using state-machine driver (SWARM_STATE_DRIVER=1)");
-        let mut ctx = crate::driver::OrchestratorContext::new(
-            config,
-            factory,
-            worktree_bridge,
-            issue,
-            beads,
-            knowledge_base,
-        )
-        .await?;
-        let result = crate::driver::drive(&mut ctx).await;
-        // Move metrics out before handle_outcome (finalize consumes self)
-        let metrics = std::mem::replace(
-            &mut ctx.metrics,
-            crate::telemetry::MetricsCollector::new("", "", "", "unknown", None, None, "v1"),
-        );
-        crate::driver::handle_outcome(&mut ctx, metrics).await;
-        return result;
-    }
-
-    // --- Mode runner gate ---
-    if bool_from_env("SWARM_MODE_DRIVER", false) {
-        use crate::modes::{ModeOrchestrator, ModeRequest, ModeRunnerConfig, SwarmMode};
-
-        let mode =
-            SwarmMode::from_issue(issue.issue_type.as_deref(), issue.priority, &issue.labels);
-        info!(id = %issue.id, ?mode, "Using mode runner (SWARM_MODE_DRIVER=1)");
-
-        let mode_config = ModeRunnerConfig::from_env();
-        let wt_path = worktree_bridge.create(&issue.id)?;
-        let mut runner = mode.into_runner(mode_config.clone(), wt_path.clone());
-        let orch = ModeOrchestrator::new(mode_config);
-        let request = ModeRequest::new(&issue.title).with_label(&issue.id);
-        let outcome = orch.run(runner.as_mut(), request).await;
-
-        let mut success = outcome.is_success();
-        if success {
-            // Commit edits before merge (mode runner may leave uncommitted changes).
-            if let Err(e) = git_commit_changes(&wt_path, 0).await {
-                warn!(id = %issue.id, "Failed to commit mode runner edits: {e}");
-            }
-
-            // Pre-merge verifier guarantee (RepoProver pattern)
-            if config.verify_before_merge {
-                let language_profile = LanguageProfile::load(&wt_path);
-                let pre_merge_config = VerifierConfig::compile_only();
-                let pre_merge_report =
-                    run_verifier_opts(&wt_path, &pre_merge_config, &language_profile, true).await;
-                if !pre_merge_report.all_green {
-                    warn!(
-                        id = %issue.id,
-                        summary = %pre_merge_report.summary(),
-                        "Pre-merge verifier failed in worktree (mode runner) — not merging"
-                    );
-                    success = false;
-                }
-            }
-        }
-        if success {
-            info!(id = %issue.id, ?mode, "Mode runner succeeded — merging");
-            land_issue_or_reopen(
-                worktree_bridge,
-                beads,
-                &issue.id,
-                "mode runner completed successfully",
-            )?;
-            clear_resume_file(worktree_bridge.repo_root());
-        } else {
-            warn!(id = %issue.id, ?mode, "Mode runner failed");
-            let _ = beads.update_status(&issue.id, "open");
-            let _ = worktree_bridge.cleanup(&issue.id);
-        }
-        return Ok(success);
-    }
-
-    // Instrument the core loop with a root span. Using `Instrument` rather
-    // than `Span::enter()` keeps the future `Send`, enabling `tokio::spawn`
-    // for parallel thread dispatch (Slate Phase 2).
-    let process_span = otel::process_issue_span(&issue.id);
-    process_issue_core(
+    info!(id = %issue.id, "Using state-machine driver (authoritative)");
+    let mut ctx = crate::driver::OrchestratorContext::new(
         config,
         factory,
         worktree_bridge,
         issue,
         beads,
         knowledge_base,
-        cancel,
     )
-    .instrument(process_span)
-    .await
+    .await?;
+    let result = crate::driver::drive(&mut ctx).await;
+    // Move metrics out before handle_outcome (finalize consumes self)
+    let metrics = std::mem::replace(
+        &mut ctx.metrics,
+        crate::telemetry::MetricsCollector::new("", "", "", "unknown", None, None, "v1"),
+    );
+    crate::driver::handle_outcome(&mut ctx, metrics).await;
+    return result;
 }
 
 /// Core orchestration loop — implement → verify → review → escalate.

@@ -433,50 +433,11 @@ run_issue() {
     return 0
   fi
 
-  # Fetch title + description from beads for the objective.
-  # Including the description gives find_target_files_by_grep more identifiers
-  # to search for (e.g., "edit_file", "verifier") beyond just the title.
-  # Try bdh first, fall back to JSONL backup if bdh/bd fails (Dolt server issues).
-  issue_title=$(bd_cmd show "$issue_id" --json 2>/dev/null | parse_bdh_json field title 1000 2>/dev/null)
-  if [[ -z "$issue_title" || "$issue_title" == "Issue $issue_id" ]]; then
-    # Fall back to JSONL backup (always available, no Dolt needed)
-    local jsonl_path="${REPO_ROOT}/.beads/backup/issues.jsonl"
-    if [[ -f "$jsonl_path" ]]; then
-      issue_title=$(python3 -c "
-import json, sys
-with open('$jsonl_path') as f:
-    for line in f:
-        issue = json.loads(line)
-        if issue.get('id') == '$issue_id':
-            print(issue.get('title', ''))
-            break
-" 2>/dev/null)
-    fi
-  fi
-  issue_title="${issue_title:-Issue $issue_id}"
+  # We rely on swarm-agents to fetch the full issue packet directly via BeadsBridge.
+  issue_args=(--issue "$issue_id" "${EXTRA_SWARM_ARGS[@]}")
 
-  issue_desc=$(bd_cmd show "$issue_id" --json 2>/dev/null | parse_bdh_json field description 300 2>/dev/null)
-  if [[ -z "$issue_desc" ]]; then
-    local jsonl_path="${REPO_ROOT}/.beads/backup/issues.jsonl"
-    if [[ -f "$jsonl_path" ]]; then
-      issue_desc=$(python3 -c "
-import json, sys
-with open('$jsonl_path') as f:
-    for line in f:
-        issue = json.loads(line)
-        if issue.get('id') == '$issue_id':
-            desc = issue.get('description', '')
-            print(desc[:300] if desc else '')
-            break
-" 2>/dev/null)
-    fi
-  fi
-  if [[ -n "$issue_desc" ]]; then
-    issue_objective="${issue_title}. ${issue_desc}"
-  else
-    issue_objective="$issue_title"
-  fi
-  issue_args=(--issue "$issue_id" --objective "$issue_objective" "${EXTRA_SWARM_ARGS[@]}")
+  # Fetch title just for the warning check
+  issue_title=$(bd_cmd show "$issue_id" --json 2>/dev/null | parse_bdh_json field title 1000 2>/dev/null || echo "")
 
   # Quality gate: issues with very short titles tend to fail (r=0.545 correlation)
   if [[ ${#issue_title} -lt 100 ]]; then

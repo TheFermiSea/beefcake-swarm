@@ -1,0 +1,13 @@
+{
+  "name": "Beefcake Swarm Basic Eval",
+  "description": "A small suite of tests to evaluate basic capabilities.",
+  "tasks": [
+    {
+      "id": "eval-001",
+      "title": "Fix the eval-test-001 syntax error",
+      "description": "The file crates/swarm-agents/src/eval_test_001.rs contains a syntax error. Fix it so that the file compiles.",
+      "timeout": 300,
+      "validation_command": "cargo check -p swarm-agents"
+    }
+  ]
+}
