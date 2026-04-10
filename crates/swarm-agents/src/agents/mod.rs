@@ -69,6 +69,10 @@ pub struct AgentFactory {
     /// Triage result for the current issue, used by phase-based model selection.
     /// When set, `resolve_phase_endpoint` uses it to pick cost-appropriate cloud models.
     pub triage: Option<TriageResult>,
+    /// Target repo language (e.g., "python", "typescript"). When set, prompt
+    /// templates are adapted for the language via `adapt_prompt_for_language`.
+    /// `None` = Rust (default behavior).
+    pub language: Option<String>,
 }
 
 impl AgentFactory {
@@ -84,6 +88,7 @@ impl AgentFactory {
             plan_slot: None,
             work_plan_slot: None,
             triage: None,
+            language: None,
         })
     }
 
@@ -176,6 +181,21 @@ impl AgentFactory {
     pub fn with_triage(mut self, triage: TriageResult) -> Self {
         self.triage = Some(triage);
         self
+    }
+
+    /// Set the target repo language for language-aware prompt adaptation.
+    ///
+    /// When set, all agent builders adapt Rust-specific prompt content to the
+    /// given language via [`prompts::adapt_prompt_for_language`]. Pass `None`
+    /// or omit to keep default Rust behavior.
+    pub fn with_language(mut self, language: Option<String>) -> Self {
+        self.language = language;
+        self
+    }
+
+    /// Helper: return language as `Option<&str>` for passing to builders.
+    fn lang(&self) -> Option<&str> {
+        self.language.as_deref()
     }
 
     /// Resolve client and model for a workflow phase using the phase-based selector.
@@ -275,12 +295,13 @@ impl AgentFactory {
     pub fn build_rust_coder(&self, wt_path: &Path) -> OaiAgent {
         let (client, model) =
             self.resolve_phase_endpoint(WorkflowPhase::Implement, SwarmRole::RustWorker);
-        coder::build_rust_coder_named(
+        coder::build_rust_coder_for_language(
             &client,
             &model,
             wt_path,
             "rust_coder",
             self.config.cloud_only,
+            self.lang(),
         )
     }
 
@@ -291,12 +312,13 @@ impl AgentFactory {
     pub fn build_general_coder(&self, wt_path: &Path) -> OaiAgent {
         let (client, model) =
             self.resolve_phase_endpoint(WorkflowPhase::Implement, SwarmRole::GeneralWorker);
-        coder::build_general_coder_named(
+        coder::build_general_coder_for_language(
             &client,
             &model,
             wt_path,
             "general_coder",
             self.config.cloud_only,
+            self.lang(),
         )
     }
 
@@ -319,12 +341,13 @@ impl AgentFactory {
     pub fn build_reasoning_worker(&self, wt_path: &Path) -> OaiAgent {
         let (client, model) =
             self.resolve_phase_endpoint(WorkflowPhase::Plan, SwarmRole::ReasoningWorker);
-        coder::build_reasoning_worker_named(
+        coder::build_reasoning_worker_for_language(
             &client,
             &model,
             wt_path,
             "reasoning_worker",
             self.config.cloud_only,
+            self.lang(),
         )
     }
 
@@ -338,12 +361,13 @@ impl AgentFactory {
     /// Build the strategist advisor (Qwen3.5-397B-A17B).
     pub fn build_strategist(&self, wt_path: &Path) -> OaiAgent {
         let (client, model) = self.resolve_role_endpoint(SwarmRole::Strategist);
-        coder::build_strategist_named(
+        coder::build_strategist_for_language(
             &client,
             &model,
             wt_path,
             "strategist",
             self.config.cloud_only,
+            self.lang(),
         )
     }
 
@@ -367,7 +391,14 @@ impl AgentFactory {
     pub fn build_fixer(&self, wt_path: &Path) -> OaiAgent {
         let (client, model) =
             self.resolve_phase_endpoint(WorkflowPhase::Implement, SwarmRole::Fixer);
-        specialists::build_fixer_named(&client, &model, wt_path, "fixer", self.config.cloud_only)
+        specialists::build_fixer_for_language(
+            &client,
+            &model,
+            wt_path,
+            "fixer",
+            self.config.cloud_only,
+            self.lang(),
+        )
     }
 
     /// Build the adversarial breaker agent.
@@ -390,9 +421,10 @@ impl AgentFactory {
     /// No proxy prefix needed — local models don't mangle tool names.
     pub fn build_manager(&self, wt_path: &Path) -> OaiAgent {
         // Resolve strategist if available for this profile
+        let lang = self.lang();
         let strategist = self.clients.strategist.as_ref().map(|client| {
             let model = self.config.resolve_role_model(SwarmRole::Strategist);
-            coder::build_strategist_named(
+            coder::build_strategist_for_language(
                 client,
                 &model,
                 wt_path,
@@ -402,6 +434,7 @@ impl AgentFactory {
                     "strategist"
                 },
                 self.clients.cloud.is_some(),
+                lang,
             )
         });
 
@@ -436,25 +469,33 @@ impl AgentFactory {
             );
 
             let (f_client, f_model) = self.resolve_role_endpoint(SwarmRole::Fixer);
-            let fixer =
-                specialists::build_fixer_named(&f_client, &f_model, wt_path, "proxy_fixer", true);
+            let fixer = specialists::build_fixer_for_language(
+                &f_client,
+                &f_model,
+                wt_path,
+                "proxy_fixer",
+                true,
+                lang,
+            );
 
             let (r_client, r_model) = self.resolve_role_endpoint(SwarmRole::RustWorker);
-            let rust_coder = coder::build_rust_coder_named(
+            let rust_coder = coder::build_rust_coder_for_language(
                 &r_client,
                 &r_model,
                 wt_path,
                 "proxy_rust_coder",
                 true,
+                lang,
             );
 
             let (g_client, g_model) = self.resolve_role_endpoint(SwarmRole::GeneralWorker);
-            let general_coder = coder::build_general_coder_named(
+            let general_coder = coder::build_general_coder_for_language(
                 &g_client,
                 &g_model,
                 wt_path,
                 "proxy_general_coder",
                 true,
+                lang,
             );
 
             let (rev_client, rev_model) = self.resolve_role_endpoint(SwarmRole::Reviewer);
@@ -466,12 +507,13 @@ impl AgentFactory {
             );
 
             let (reas_client, reas_model) = self.resolve_role_endpoint(SwarmRole::ReasoningWorker);
-            let reasoning_worker = coder::build_reasoning_worker_named(
+            let reasoning_worker = coder::build_reasoning_worker_for_language(
                 &reas_client,
                 &reas_model,
                 wt_path,
                 "proxy_reasoning_worker",
                 true,
+                lang,
             );
             // Architect/Editor pattern: Architect runs on cloud (deep understanding),
             // Editor runs on local 27B (fast mechanical edits).
@@ -504,12 +546,13 @@ impl AgentFactory {
                 plan_slot: self.plan_slot.clone(),
                 work_plan_slot: self.work_plan_slot.clone(),
             };
-            manager::build_cloud_manager(
+            manager::build_cloud_manager_for_language(
                 cloud_client,
                 manager_model,
                 workers,
                 wt_path,
                 &self.config.verifier_packages,
+                lang,
             )
         } else {
             let (m_client, m_model) = self.resolve_role_endpoint(SwarmRole::LocalManagerFallback);
@@ -537,12 +580,13 @@ impl AgentFactory {
                 plan_slot: self.plan_slot.clone(),
                 work_plan_slot: self.work_plan_slot.clone(),
             };
-            manager::build_local_manager(
+            manager::build_local_manager_for_language(
                 &m_client,
                 &m_model,
                 workers,
                 wt_path,
                 &self.config.verifier_packages,
+                lang,
             )
         }
     }
@@ -554,6 +598,7 @@ impl AgentFactory {
     /// Returns `None` if no cloud client is available.
     pub fn build_manager_for_model(&self, wt_path: &Path, model: &str) -> Option<OaiAgent> {
         let cloud_client = self.clients.cloud.as_ref()?;
+        let lang = self.lang();
         info!(
             model = %model,
             "Building cloud manager with fallback model"
@@ -561,7 +606,14 @@ impl AgentFactory {
 
         let strategist = self.clients.strategist.as_ref().map(|client| {
             let model = self.config.resolve_role_model(SwarmRole::Strategist);
-            coder::build_strategist_named(client, &model, wt_path, "proxy_strategist", true)
+            coder::build_strategist_for_language(
+                client,
+                &model,
+                wt_path,
+                "proxy_strategist",
+                true,
+                lang,
+            )
         });
 
         let (p_client, p_model) = self.resolve_role_endpoint(SwarmRole::Planner);
@@ -569,20 +621,33 @@ impl AgentFactory {
             specialists::build_planner_named(&p_client, &p_model, wt_path, "proxy_planner", true);
 
         let (f_client, f_model) = self.resolve_role_endpoint(SwarmRole::Fixer);
-        let fixer =
-            specialists::build_fixer_named(&f_client, &f_model, wt_path, "proxy_fixer", true);
+        let fixer = specialists::build_fixer_for_language(
+            &f_client,
+            &f_model,
+            wt_path,
+            "proxy_fixer",
+            true,
+            lang,
+        );
 
         let (r_client, r_model) = self.resolve_role_endpoint(SwarmRole::RustWorker);
-        let rust_coder =
-            coder::build_rust_coder_named(&r_client, &r_model, wt_path, "proxy_rust_coder", true);
+        let rust_coder = coder::build_rust_coder_for_language(
+            &r_client,
+            &r_model,
+            wt_path,
+            "proxy_rust_coder",
+            true,
+            lang,
+        );
 
         let (g_client, g_model) = self.resolve_role_endpoint(SwarmRole::GeneralWorker);
-        let general_coder = coder::build_general_coder_named(
+        let general_coder = coder::build_general_coder_for_language(
             &g_client,
             &g_model,
             wt_path,
             "proxy_general_coder",
             true,
+            lang,
         );
 
         let (rev_client, rev_model) = self.resolve_role_endpoint(SwarmRole::Reviewer);
@@ -594,12 +659,13 @@ impl AgentFactory {
         );
 
         let (reas_client, reas_model) = self.resolve_role_endpoint(SwarmRole::ReasoningWorker);
-        let reasoning_worker = coder::build_reasoning_worker_named(
+        let reasoning_worker = coder::build_reasoning_worker_for_language(
             &reas_client,
             &reas_model,
             wt_path,
             "proxy_reasoning_worker",
             true,
+            lang,
         );
         // Architect/Editor for this cloud manager path too
         let architect = specialists::build_architect_named(
@@ -628,12 +694,13 @@ impl AgentFactory {
             plan_slot: self.plan_slot.clone(),
             work_plan_slot: self.work_plan_slot.clone(),
         };
-        Some(manager::build_cloud_manager(
+        Some(manager::build_cloud_manager_for_language(
             cloud_client,
             model,
             workers,
             wt_path,
             &self.config.verifier_packages,
+            lang,
         ))
     }
 }

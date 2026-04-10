@@ -14,7 +14,7 @@ mkdir -p /tmp/cuda-cache
 export APPTAINERENV_HOME=/tmp
 export APPTAINERENV_CUDA_CACHE_PATH=/tmp/cuda-cache
 
-existing_pids="$(ps -eo pid=,args= | awk '/(llama-server-mmq|apptainer .*llama-server\.sif|\/usr\/local\/bin\/llama-server)( |$)/ { print $1 }')"
+existing_pids="$(ps -eo pid=,args= | awk '/([Aa]pptainer .*llama-server\.sif|llama-server-mmq|\/usr\/local\/bin\/llama-server)( |$)/ { print $1 }')"
 if [[ -n "${existing_pids}" ]]; then
   kill ${existing_pids} 2>/dev/null || true
   sleep 2

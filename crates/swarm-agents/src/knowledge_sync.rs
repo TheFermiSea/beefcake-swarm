@@ -537,7 +537,12 @@ pub fn query_pre_iteration_context(
 /// Runs `repomix --style markdown` to pack the repo, then uploads the result.
 /// This is expensive and should be run sparingly (e.g., via CLI flag).
 pub fn sync_codebase_notebook(kb: &dyn KnowledgeBase, repo_root: &std::path::Path) -> Result<()> {
-    let output_path = std::env::temp_dir().join("beefcake-swarm-repomix.md");
+    let repo_name = repo_root
+        .file_name()
+        .and_then(|n| n.to_str())
+        .unwrap_or("repo");
+    let output_path =
+        std::env::temp_dir().join(format!("{repo_name}-{}-repomix.md", std::process::id()));
 
     info!("Running repomix to pack codebase...");
     let repomix = std::process::Command::new("repomix")

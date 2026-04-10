@@ -1,4 +1,4 @@
-#![allow(dead_code)]
+// Legacy monolithic loop functions are kept for reference during state-machine migration.
 //! Orchestration loop: process a single issue through implement → verify → review → escalate.
 //!
 //! Split into submodules for the Slate architecture (Phase 0):
@@ -49,6 +49,10 @@ use crate::modes::errors::OrchestrationError;
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 
 /// Sentinel response when an agent exceeds its wall-clock timeout.
+#[allow(
+    dead_code,
+    reason = "legacy monolithic orchestrator path retained during state-machine migration"
+)]
 const TIMEOUT_RESPONSE: &str =
     "[TIMEOUT] agent exceeded deadline — no response received, checking disk state";
 
@@ -98,6 +102,10 @@ pub(crate) use crate::git_ops::{
 ///
 /// When `skip_test` is true, the test gate is excluded (used for baseline
 /// verification where worktree env may cause false test failures).
+#[allow(
+    dead_code,
+    reason = "legacy monolithic orchestrator path retained during state-machine migration"
+)]
 async fn run_verifier(
     wt_path: &Path,
     verifier_config: &VerifierConfig,
@@ -107,6 +115,10 @@ async fn run_verifier(
 }
 
 /// Like `run_verifier` but with explicit skip_test control.
+#[allow(
+    dead_code,
+    reason = "legacy monolithic orchestrator path retained during state-machine migration"
+)]
 async fn run_verifier_opts(
     wt_path: &Path,
     verifier_config: &VerifierConfig,
@@ -130,6 +142,10 @@ async fn run_verifier_opts(
     verifier.run_pipeline().await
 }
 
+#[allow(
+    dead_code,
+    reason = "legacy monolithic orchestrator path retained during state-machine migration"
+)]
 fn report_has_baseline_regression(baseline: &VerifierReport, current: &VerifierReport) -> bool {
     use coordination::verifier::report::GateOutcome;
 
@@ -156,6 +172,10 @@ fn report_has_baseline_regression(baseline: &VerifierReport, current: &VerifierR
     })
 }
 
+#[allow(
+    dead_code,
+    reason = "legacy monolithic orchestrator path retained during state-machine migration"
+)]
 fn report_improves_on_baseline(
     baseline: &VerifierReport,
     current: &VerifierReport,
@@ -201,9 +221,18 @@ pub async fn process_issue(
     _cancel: Arc<AtomicBool>,
 ) -> Result<bool> {
     info!(id = %issue.id, "Using state-machine driver (authoritative)");
+
+    // Load language profile from repo root (catches uncommitted .swarm/) then worktree.
+    // Set language on a factory clone so ALL agent builds (eager and lazy) use it.
+    let language_profile =
+        coordination::verifier::LanguageProfile::load(worktree_bridge.repo_root());
+    let lang_factory = factory
+        .clone()
+        .with_language(language_profile.as_ref().map(|p| p.language.clone()));
+
     let mut ctx = crate::driver::OrchestratorContext::new(
         config,
-        factory,
+        &lang_factory,
         worktree_bridge,
         issue,
         beads,
@@ -225,6 +254,10 @@ pub async fn process_issue(
 /// Separated from [`process_issue`] so the future can be wrapped with
 /// [`tracing::Instrument`] for Send-safe span management. The process span
 /// is accessible inside via [`tracing::Span::current()`].
+#[allow(
+    dead_code,
+    reason = "legacy monolithic orchestrator path retained during state-machine migration"
+)]
 async fn process_issue_core(
     config: &SwarmConfig,
     factory: &AgentFactory,
@@ -594,7 +627,8 @@ async fn process_issue_core(
     let factory = factory
         .clone()
         .with_plan_slot(plan_slot.clone())
-        .with_work_plan_slot(work_plan_slot.clone());
+        .with_work_plan_slot(work_plan_slot.clone())
+        .with_language(language_profile.as_ref().map(|p| p.language.clone()));
     let manager = factory.build_manager(&wt_path);
 
     // --- Escalation state ---
@@ -4174,6 +4208,10 @@ async fn process_issue_core(
 ///
 /// Keeps the diff lightweight: `--stat` header plus the first 200 lines of
 /// the full diff to stay within context budgets for fast-tier models.
+#[allow(
+    dead_code,
+    reason = "legacy monolithic orchestrator path retained during state-machine migration"
+)]
 async fn run_pre_merge_review(
     config: &SwarmConfig,
     factory: &AgentFactory,
@@ -4255,6 +4293,10 @@ async fn run_pre_merge_review(
 /// Tolerates markdown fencing, extra whitespace, and partial JSON.
 /// Returns `true` if the response contains `"approve": true` (or
 /// `"approve":true`), `false` otherwise.
+#[allow(
+    dead_code,
+    reason = "legacy monolithic orchestrator path retained during state-machine migration"
+)]
 fn parse_review_response(response: &str) -> bool {
     // Try serde_json first for well-formed responses
     if let Ok(val) = serde_json::from_str::<serde_json::Value>(response) {
@@ -4522,6 +4564,10 @@ pub(crate) async fn prompt_with_hook_and_retry(
 /// successfully but are semantically wrong.
 ///
 /// Only activated for Complex/Critical triage results to avoid overhead on simple fixes.
+#[allow(
+    dead_code,
+    reason = "legacy monolithic orchestrator path retained during state-machine migration"
+)]
 async fn self_evaluate_changes(
     reviewer: &crate::agents::coder::OaiAgent,
     wt_path: &Path,

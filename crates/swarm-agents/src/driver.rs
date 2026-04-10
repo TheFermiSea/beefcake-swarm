@@ -272,7 +272,8 @@ impl<'a> OrchestratorContext<'a> {
             ..VerifierConfig::default()
         };
 
-        // Agents
+        // Agents — language is already set on factory by the caller (process_issue).
+        // The factory's .lang() method returns the language for prompt adaptation.
         let rust_coder = factory.build_rust_coder(&wt_path);
         let general_coder = factory.build_general_coder(&wt_path);
         let reviewer = factory.build_reviewer();

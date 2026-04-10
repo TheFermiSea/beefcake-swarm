@@ -94,17 +94,30 @@ pub fn build_fixer_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
+    build_fixer_for_language(client, model, wt_path, name, proxy_tools, None)
+}
+
+/// Build the fixer specialist with language-aware prompts.
+pub fn build_fixer_for_language(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+    name: &str,
+    proxy_tools: bool,
+    language: Option<&str>,
+) -> OaiAgent {
     client
         .agent(model)
         .name(name)
         .description(
             "Implementation specialist. Follows structured plans to write targeted code fixes.",
         )
-        .preamble(&prompts::build_worker_prompt(&prompts::load_prompt(
+        .preamble(&prompts::build_full_worker_preamble(
             "fixer",
             wt_path,
             prompts::FIXER_PREAMBLE,
-        )))
+            language,
+        ))
         .temperature(0.2)
         .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(

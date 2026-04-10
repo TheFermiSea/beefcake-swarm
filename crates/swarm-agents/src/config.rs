@@ -671,7 +671,7 @@ impl Default for SwarmConfig {
                 .filter(|v| *v > 0)
                 .unwrap_or(6),
             worktree_base: None,
-            notebook_registry_path: Some(PathBuf::from("./notebook_registry.toml")),
+            notebook_registry_path: None, // resolved at startup via NotebookBridge::resolve_registry
             verifier_packages: std::env::var("SWARM_VERIFIER_PACKAGES")
                 .ok()
                 .filter(|s| !s.is_empty())

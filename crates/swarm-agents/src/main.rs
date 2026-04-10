@@ -91,6 +91,23 @@ enum SubCommand {
         #[arg(long, default_value_t = 50)]
         window: usize,
     },
+    /// Initialize .swarm/ directory for a target repository.
+    ///
+    /// Auto-detects the project language and generates a profile.toml with
+    /// sensible quality-gate defaults. Creates .swarm/prompts/ for custom prompts.
+    Init {
+        /// Path to the target repository (default: current directory).
+        #[arg(long)]
+        repo_root: Option<PathBuf>,
+
+        /// Override auto-detected language (rust, python, typescript, go).
+        #[arg(long)]
+        language: Option<String>,
+
+        /// Overwrite existing .swarm/ directory if present.
+        #[arg(long)]
+        force: bool,
+    },
 }
 
 #[tokio::main]
@@ -117,6 +134,20 @@ async fn main() -> Result<()> {
         let report = runner.run().await?;
         println!("{}", report.operator_summary());
         return Ok(());
+    }
+    if let Some(SubCommand::Init {
+        repo_root: init_root,
+        language,
+        force,
+    }) = &args.command
+    {
+        let root = match init_root {
+            Some(p) => p
+                .canonicalize()
+                .context("--repo-root path does not exist")?,
+            None => std::env::current_dir()?,
+        };
+        return handle_init(&root, language.as_deref(), *force);
     }
 
     let mut config = SwarmConfig::default();
@@ -222,7 +253,18 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Detect repo root (needed for registry resolution and worktree bridge)
+    let repo_root = match &args.repo_root {
+        Some(path) => path
+            .canonicalize()
+            .context("--repo-root path does not exist")?,
+        None => std::env::current_dir()?,
+    };
+
     // --- Initialize NotebookLM knowledge base ---
+    // If an explicit registry path is configured, use it directly.
+    // Otherwise, resolve by searching the repo root for a registry file.
+    // External repos without a registry get a silent no-op (debug log only).
     let knowledge_base: Option<Arc<dyn KnowledgeBase>> = if let Some(ref registry_path) =
         config.notebook_registry_path
     {
@@ -241,7 +283,8 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        None
+        // Auto-resolve: check .swarm/notebook_registry.toml then notebook_registry.toml
+        NotebookBridge::resolve_registry(&repo_root).map(|b| Arc::new(b) as Arc<dyn KnowledgeBase>)
     };
 
     // --- Build agent factory with health-aware routing ---
@@ -250,14 +293,6 @@ async fn main() -> Result<()> {
     if let Some(ref kb) = knowledge_base {
         factory = factory.with_notebook_bridge(kb.clone());
     }
-
-    // Detect repo root
-    let repo_root = match &args.repo_root {
-        Some(path) => path
-            .canonicalize()
-            .context("--repo-root path does not exist")?,
-        None => std::env::current_dir()?,
-    };
     let worktree_bridge = Arc::new(WorktreeBridge::new(
         config.worktree_base.clone(),
         &repo_root,
@@ -695,6 +730,213 @@ fn handle_pick_next(repo_root: Option<&Path>) -> Result<()> {
     }
 
     anyhow::bail!("All ready issues are exhausted or need human review");
+}
+
+// ---------------------------------------------------------------------------
+// `swarm init` implementation
+// ---------------------------------------------------------------------------
+
+/// Auto-detect the primary language of a repository by checking for marker files.
+fn detect_language(repo_root: &Path) -> &'static str {
+    if repo_root.join("Cargo.toml").exists() {
+        return "rust";
+    }
+    if repo_root.join("pyproject.toml").exists() || repo_root.join("setup.py").exists() {
+        return "python";
+    }
+    if repo_root.join("package.json").exists() {
+        return "typescript";
+    }
+    if repo_root.join("go.mod").exists() {
+        return "go";
+    }
+    "unknown"
+}
+
+/// Return the profile.toml content for a given language.
+fn profile_template(language: &str) -> &'static str {
+    match language {
+        "rust" => {
+            r#"language = "rust"
+source_extensions = [".rs"]
+package_manifest = "Cargo.toml"
+integration_files = ["Cargo.toml", "Cargo.lock"]
+
+[[gates]]
+name = "fmt"
+command = "cargo"
+args = ["fmt", "--all", "--", "--check"]
+
+[[gates]]
+name = "clippy"
+command = "cargo"
+args = ["clippy", "--workspace", "--", "-D", "warnings"]
+
+[[gates]]
+name = "check"
+command = "cargo"
+args = ["check", "--workspace", "--message-format=json"]
+
+[[gates]]
+name = "test"
+command = "cargo"
+args = ["test", "--workspace"]
+"#
+        }
+        "python" => {
+            r#"language = "python"
+source_extensions = [".py", ".pyi"]
+package_manifest = "pyproject.toml"
+integration_files = ["pyproject.toml", "__init__.py"]
+
+[[gates]]
+name = "lint"
+command = "ruff"
+args = ["check", "."]
+
+[[gates]]
+name = "format"
+command = "ruff"
+args = ["format", "--check", "."]
+
+[[gates]]
+name = "typecheck"
+command = "mypy"
+args = ["."]
+timeout_secs = 120
+
+[[gates]]
+name = "test"
+command = "pytest"
+"#
+        }
+        "typescript" => {
+            r#"language = "typescript"
+source_extensions = [".ts", ".tsx", ".js", ".jsx"]
+package_manifest = "package.json"
+integration_files = ["package.json", "tsconfig.json"]
+
+[[gates]]
+name = "lint"
+command = "npx"
+args = ["eslint", "."]
+
+[[gates]]
+name = "typecheck"
+command = "npx"
+args = ["tsc", "--noEmit"]
+
+[[gates]]
+name = "test"
+command = "npx"
+args = ["jest", "--passWithNoTests"]
+"#
+        }
+        "go" => {
+            r#"language = "go"
+source_extensions = [".go"]
+package_manifest = "go.mod"
+integration_files = ["go.mod", "go.sum"]
+
+[[gates]]
+name = "vet"
+command = "go"
+args = ["vet", "./..."]
+
+[[gates]]
+name = "lint"
+command = "golangci-lint"
+args = ["run"]
+
+[[gates]]
+name = "test"
+command = "go"
+args = ["test", "./..."]
+"#
+        }
+        _ => {
+            r#"# Unknown language — fill in manually.
+language = "unknown"
+source_extensions = []
+package_manifest = ""
+integration_files = []
+
+# [[gates]]
+# name = "lint"
+# command = "your-linter"
+# args = []
+#
+# [[gates]]
+# name = "test"
+# command = "your-test-runner"
+# args = []
+"#
+        }
+    }
+}
+
+/// Default .gitignore content for the .swarm/ directory.
+const SWARM_GITIGNORE: &str = "\
+# Session handoff files
+*.handoff.json
+
+# Autopilot artifacts
+autopilot/
+
+# Reformulation state
+reformulation/
+
+# Temporary files
+*.tmp
+";
+
+/// Handle the `init` subcommand: scaffold `.swarm/` in the target repo.
+fn handle_init(repo_root: &Path, language_override: Option<&str>, force: bool) -> Result<()> {
+    let swarm_dir = repo_root.join(".swarm");
+
+    if swarm_dir.exists() && !force {
+        anyhow::bail!(
+            ".swarm/ already exists at {}. Use --force to overwrite.",
+            swarm_dir.display()
+        );
+    }
+
+    let language = language_override.unwrap_or_else(|| detect_language(repo_root));
+
+    // Validate --language if explicitly provided
+    const SUPPORTED_LANGUAGES: &[&str] = &["rust", "python", "typescript", "go"];
+    if language_override.is_some() && !SUPPORTED_LANGUAGES.contains(&language) {
+        anyhow::bail!(
+            "Unsupported language '{}'. Supported: {}",
+            language,
+            SUPPORTED_LANGUAGES.join(", ")
+        );
+    }
+
+    let template = profile_template(language);
+
+    // Create directory structure
+    std::fs::create_dir_all(swarm_dir.join("prompts"))
+        .context("Failed to create .swarm/prompts/")?;
+
+    // Write profile.toml
+    let profile_path = swarm_dir.join("profile.toml");
+    std::fs::write(&profile_path, template).context("Failed to write profile.toml")?;
+
+    // Write .gitignore
+    let gitignore_path = swarm_dir.join(".gitignore");
+    std::fs::write(&gitignore_path, SWARM_GITIGNORE).context("Failed to write .gitignore")?;
+
+    println!(
+        "Initialized .swarm/ for {language} project at {}",
+        repo_root.display()
+    );
+    println!("  created {}", profile_path.display());
+    println!("  created {}", gitignore_path.display());
+    println!("  created {}", swarm_dir.join("prompts").display());
+    println!("\nEdit .swarm/profile.toml to customize quality gates.");
+
+    Ok(())
 }
 
 async fn shutdown_signal() {

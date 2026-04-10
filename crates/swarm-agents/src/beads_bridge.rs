@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::env;
@@ -109,6 +108,10 @@ pub(crate) struct MailHealthRecord {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[allow(
+    dead_code,
+    reason = "mail polling scaffolding is retained for staged beads mail integration"
+)]
 pub(crate) enum MailboxPoll {
     Messages(String),
     Advisory {
@@ -117,6 +120,10 @@ pub(crate) enum MailboxPoll {
     },
 }
 
+#[allow(
+    dead_code,
+    reason = "mail polling scaffolding is retained for staged beads mail integration"
+)]
 impl MailboxPoll {
     pub(crate) fn prompt_heading(&self) -> &'static str {
         match self {
@@ -407,6 +414,10 @@ pub(crate) fn latest_mail_health(wt_path: &Path) -> Option<MailHealthRecord> {
         .next()
 }
 
+#[allow(
+    dead_code,
+    reason = "mail polling scaffolding is retained for staged beads mail integration"
+)]
 fn mail_unavailable_advisory(record: &MailHealthRecord) -> String {
     format!(
         "Agent mail is currently unavailable (`bd mail {}` failed with {}: {}). Rely on the shared workpad for same-worktree coordination until Beads mail recovers.",
@@ -549,6 +560,10 @@ pub fn default_actor() -> String {
 /// Mail unavailability still does not block orchestration, but it is surfaced
 /// explicitly so the next agent prompt can fall back to workpad-only
 /// coordination instead of treating the failure as real mail.
+#[allow(
+    dead_code,
+    reason = "mail polling scaffolding is retained for staged beads mail integration"
+)]
 pub(crate) fn poll_mail_inbox(wt_path: &Path) -> Option<MailboxPoll> {
     let bridge = BeadsBridge::with_worktree(wt_path);
     match bridge.check_inbox() {

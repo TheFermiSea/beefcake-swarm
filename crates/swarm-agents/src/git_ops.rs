@@ -1,4 +1,3 @@
-#![allow(dead_code)]
 //! Git operations for the swarm orchestrator.
 
 use std::path::Path;
@@ -67,6 +66,10 @@ pub(crate) fn filter_meaningful_diff_output(output: &str, name_only: bool) -> St
 }
 
 /// Check whether the worktree has any meaningful (non-artifact) pending changes.
+#[allow(
+    dead_code,
+    reason = "legacy orchestrator helpers remain while callers migrate to git_ops"
+)]
 pub(crate) async fn git_has_meaningful_changes(wt_path: &Path) -> bool {
     tokio::process::Command::new("git")
         .args(["status", "--short"])
@@ -276,6 +279,10 @@ pub(crate) fn count_diff_lines(wt_path: &Path, from: &str, to: &str) -> usize {
 /// iterations changed so they don't undo or duplicate work.
 ///
 /// Returns empty string if no changes or git fails.
+#[allow(
+    dead_code,
+    reason = "legacy orchestrator helpers remain while callers migrate to git_ops"
+)]
 pub(crate) fn diff_stat_summary(wt_path: &Path) -> String {
     let output = std::process::Command::new("git")
         .args(["diff", "--stat", "--stat-width=60", "HEAD"])
@@ -313,6 +320,10 @@ pub(crate) fn diff_stat_summary(wt_path: &Path) -> String {
 /// so the next worker refines rather than rewrites from scratch.
 ///
 /// Returns `None` if there are no changes, either ref is missing, or git fails.
+#[allow(
+    dead_code,
+    reason = "legacy orchestrator helpers remain while callers migrate to git_ops"
+)]
 pub(crate) fn diff_between(wt_path: &Path, from: &str, to: &str) -> Option<String> {
     let output = std::process::Command::new("git")
         .args(["diff", from, to])
