@@ -80,16 +80,22 @@ export SWARM_TENSORZERO_PG_URL="${SWARM_TENSORZERO_PG_URL:-}"
 # Worktrees: local disk (fast I/O, 36 cores for compilation)
 export SWARM_WORKTREE_DIR="/tmp/swarm-wt"
 
-# Beads: use remote proxy if local bd is incompatible (Rocky 8 glibc < 2.32)
-if ! bd --version >/dev/null 2>&1; then
+# Beads: prefer statically-linked bd-static (built for Rocky 8 glibc 2.28),
+# fall back to bd-remote.sh SSH proxy if neither bd nor bd-static work.
+if command -v bd-static >/dev/null 2>&1; then
+    echo "[swarm-worker] Using bd-static (direct LAN connection to Dolt at 10.0.0.100:3308)"
+    export SWARM_BEADS_BIN="$(command -v bd-static)"
+    export DOGFOOD_BEADS_BIN="$SWARM_BEADS_BIN"
+    # Symlink so bare 'bd' also works
+    ln -sf "$(command -v bd-static)" /usr/local/bin/bd 2>/dev/null || true
+elif ! bd --version >/dev/null 2>&1; then
     SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
     if [[ -x "$SCRIPT_DIR/bd-remote.sh" ]]; then
-        echo "[swarm-worker] Local bd incompatible — using bd-remote.sh proxy to ai-proxy"
+        echo "[swarm-worker] Using bd-remote.sh SSH proxy (fallback)"
         export SWARM_BEADS_BIN="$SCRIPT_DIR/bd-remote.sh"
-        # dogfood-loop.sh uses DOGFOOD_BEADS_BIN for issue discovery (not SWARM_BEADS_BIN)
         export DOGFOOD_BEADS_BIN="$SCRIPT_DIR/bd-remote.sh"
     else
-        echo "[swarm-worker] WARNING: bd not working and bd-remote.sh not found" >&2
+        echo "[swarm-worker] WARNING: no working bd found" >&2
     fi
 fi
 
