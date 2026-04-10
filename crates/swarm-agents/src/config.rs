@@ -600,6 +600,12 @@ pub struct SwarmConfig {
     /// (default 80% verifier / 20% judge).
     /// Populated from `SWARM_JUDGE_ENABLED` env var (default: false).
     pub judge_enabled: bool,
+    /// Number of candidate patches to generate per iteration.
+    /// When > 1, the implementing phase fans out N workers (model + strategy diversity)
+    /// and picks the first candidate that produces file changes.
+    /// Based on ARXIV:2510.21513 — 2 candidates captures ~95% of ensemble benefit.
+    /// Populated from `SWARM_CANDIDATE_COUNT` env var (default: 1 = disabled).
+    pub candidate_count: usize,
 }
 
 impl Default for SwarmConfig {
@@ -773,6 +779,11 @@ impl Default for SwarmConfig {
             judge_enabled: std::env::var("SWARM_JUDGE_ENABLED")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            candidate_count: std::env::var("SWARM_CANDIDATE_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|v: &usize| *v > 0)
+                .unwrap_or(1),
         }
     }
 }
@@ -1044,6 +1055,7 @@ impl SwarmConfig {
             verify_before_merge: true,
             analyze_after_resolve: true,
             judge_enabled: false,
+            candidate_count: 1,
         }
     }
 }

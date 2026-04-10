@@ -654,6 +654,100 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     // Checkpoint before agent invocation
     ctx.pre_worker_commit = ctx.git_mgr.current_commit_full().ok();
 
+    // --- Multi-candidate fan-out (ARXIV:2510.21513) ---
+    //
+    // When SWARM_CANDIDATE_COUNT > 1 and we're in Worker tier, generate N
+    // candidates concurrently (model + strategy diversity) and pick the first
+    // that produces file changes.  This captures ~95% of ensemble benefit at
+    // a fraction of the sequential cost.
+    //
+    // Only activates for the Worker tier — Council/Strategist run once and
+    // produce authoritative output, so candidate redundancy isn't beneficial.
+    if ctx.config.candidate_count > 1 && tier == SwarmTier::Worker {
+        let base_commit = ctx
+            .pre_worker_commit
+            .clone()
+            .unwrap_or_else(|| "HEAD".to_string());
+        let timeout = orchestrator::timeout_from_env("SWARM_SUBTASK_TIMEOUT_SECS", 3600).as_secs();
+        let complexity = ctx
+            .last_report
+            .as_ref()
+            .map(|_| crate::triage::Complexity::Medium)
+            .unwrap_or(crate::triage::Complexity::Simple);
+
+        let cfg = crate::subtask::CandidateGenerationConfig {
+            candidate_count: ctx.config.candidate_count,
+            model_diversity: true,
+            strategy_diversity: true,
+        };
+
+        info!(
+            iteration,
+            candidate_count = ctx.config.candidate_count,
+            "Running multi-candidate fan-out (state driver)"
+        );
+
+        let candidates = crate::subtask::generate_candidates(
+            &cfg,
+            &ctx.factory.endpoint_pool,
+            &ctx.wt_path,
+            &ctx.issue.id,
+            &task_prompt,
+            &base_commit,
+            timeout,
+            complexity,
+            &ctx.issue.title,
+        )
+        .await;
+
+        // Pick the first candidate that produced changes; fall through to
+        // the single-agent path if no candidate wrote anything.
+        let winner = candidates.into_iter().find(|c| c.has_changes);
+        if let Some(w) = winner {
+            info!(
+                iteration,
+                winner = w.index,
+                elapsed_ms = w.elapsed.as_millis() as u64,
+                "Candidate {} selected — proceeding to verification",
+                w.index
+            );
+            ctx.metrics.record_agent_time(w.elapsed);
+            ctx.span_summary.record_agent(0);
+            ctx.escalation.reset_no_change();
+
+            // Auto-format before commit (same as single-agent path).
+            let mut fmt_args = vec!["fmt".to_string()];
+            if ctx.verifier_config.packages.is_empty() {
+                fmt_args.push("--all".to_string());
+            } else {
+                for pkg in &ctx.verifier_config.packages {
+                    fmt_args.extend(["--package".to_string(), pkg.clone()]);
+                }
+            }
+            let _ = tokio::process::Command::new("cargo")
+                .args(&fmt_args)
+                .current_dir(&ctx.wt_path)
+                .output()
+                .await;
+
+            let _ = git_commit_changes(&ctx.wt_path, iteration).await;
+            return Ok(StateTransition::Advance {
+                to: OrchestratorState::Verifying,
+                reason: format!(
+                    "candidate {} produced changes, ready for verification",
+                    w.index
+                ),
+            });
+        }
+
+        // All candidates produced no changes — fall through to single-agent path.
+        warn!(
+            iteration,
+            "All {} candidates produced no changes — falling back to single-agent",
+            ctx.config.candidate_count
+        );
+    }
+
     // Route to agent
     let agent_start = Instant::now();
     let (agent_future, adapter) = match tier {
