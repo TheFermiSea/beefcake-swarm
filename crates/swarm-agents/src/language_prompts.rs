@@ -67,6 +67,77 @@ pub fn environment_block(language: &str) -> String {
     )
 }
 
+/// Language-specific examples for prompt template substitution.
+///
+/// These replace Rust-specific references in built-in prompt constants
+/// (GENERAL_CODER_PREAMBLE, CLOUD_MANAGER_PREAMBLE, LOCAL_MANAGER_PREAMBLE)
+/// when the target repo uses a different language.
+pub struct LanguageExamples {
+    /// Verification commands (e.g., "cargo fmt, clippy, check, test" vs "ruff, pytest")
+    pub verification_commands: &'static str,
+    /// Example file path (e.g., "src/example.rs" vs "src/example.py")
+    pub example_file_path: &'static str,
+    /// Crate/workspace scope note (empty for non-Rust; only Rust has workspace crates)
+    pub crate_scope_note: &'static str,
+    /// Error focus description (e.g., "Rust compilation errors" vs "Python errors")
+    pub error_focus: &'static str,
+    /// Verifier tool description (e.g., "cargo fmt → clippy → check → test")
+    pub verifier_pipeline: &'static str,
+    /// "Do NOT run X yourself" instruction
+    pub do_not_run: &'static str,
+}
+
+impl LanguageExamples {
+    /// Return language-appropriate examples for prompt templates.
+    ///
+    /// When `lang` is "rust" or unrecognized, returns Rust defaults so that
+    /// existing behavior is preserved.
+    pub fn for_language(lang: &str) -> Self {
+        match lang.to_lowercase().as_str() {
+            "python" => Self {
+                verification_commands: "ruff check, ruff format, mypy, pytest",
+                example_file_path: "src/example.py",
+                crate_scope_note: "",
+                error_focus: "Python errors (import, type, runtime)",
+                verifier_pipeline: "ruff check → ruff format → mypy → pytest",
+                do_not_run: "Do NOT run pytest/mypy yourself. Do NOT commit.",
+            },
+            "typescript" | "javascript" => Self {
+                verification_commands: "eslint, tsc, vitest/jest",
+                example_file_path: "src/example.ts",
+                crate_scope_note: "",
+                error_focus: "TypeScript/JavaScript errors (type, module, runtime)",
+                verifier_pipeline: "eslint → tsc → vitest",
+                do_not_run: "Do NOT run tsc/vitest yourself. Do NOT commit.",
+            },
+            "go" | "golang" => Self {
+                verification_commands: "go vet, golangci-lint, go test",
+                example_file_path: "cmd/example.go",
+                crate_scope_note: "",
+                error_focus: "Go errors (type, interface, concurrency)",
+                verifier_pipeline: "go vet → golangci-lint → go test",
+                do_not_run: "Do NOT run go test yourself. Do NOT commit.",
+            },
+            // Rust or unrecognized — preserve existing behavior
+            _ => Self {
+                verification_commands: "cargo fmt, clippy, check, test",
+                example_file_path: "crates/swarm-agents/src/example.rs",
+                crate_scope_note: "When fixes span multiple workspace crates \
+                    (e.g. `coordination/` and `crates/`), delegate ONE CRATE AT A TIME:\n\
+                    - Fix the provider crate first (where the type/trait is defined), \
+                    verify, then fix consumers.\n\
+                    - Each delegation: at most 5 files. For larger changes, split into \
+                    sequential delegations.\n\
+                    - Run the verifier between each crate's delegation.\n\
+                    - Never ask a single worker to modify files in two different workspace crates.",
+                error_focus: "Rust compilation errors",
+                verifier_pipeline: "cargo fmt → clippy → check → test",
+                do_not_run: "Do NOT run cargo check/test yourself. Do NOT commit.",
+            },
+        }
+    }
+}
+
 /// Language-specific file extensions for search tool hints.
 pub fn search_hints(language: &str) -> &'static str {
     match language.to_lowercase().as_str() {
@@ -132,5 +203,44 @@ mod tests {
         assert!(source_extensions("python").contains(&".py"));
         assert!(source_extensions("go").contains(&".go"));
         assert!(source_extensions("unknown").is_empty());
+    }
+
+    #[test]
+    fn test_language_examples_python() {
+        let ex = LanguageExamples::for_language("python");
+        assert!(ex.verification_commands.contains("pytest"));
+        assert!(ex.example_file_path.ends_with(".py"));
+        assert!(ex.crate_scope_note.is_empty());
+        assert!(ex.error_focus.contains("Python"));
+    }
+
+    #[test]
+    fn test_language_examples_rust_default() {
+        let ex = LanguageExamples::for_language("rust");
+        assert!(ex.verification_commands.contains("cargo"));
+        assert!(ex.example_file_path.ends_with(".rs"));
+        assert!(!ex.crate_scope_note.is_empty());
+        assert!(ex.error_focus.contains("Rust"));
+    }
+
+    #[test]
+    fn test_language_examples_unknown_falls_to_rust() {
+        let ex = LanguageExamples::for_language("unknown");
+        assert!(ex.verification_commands.contains("cargo"));
+    }
+
+    #[test]
+    fn test_language_examples_go() {
+        let ex = LanguageExamples::for_language("go");
+        assert!(ex.verification_commands.contains("go vet"));
+        assert!(ex.example_file_path.ends_with(".go"));
+        assert!(ex.crate_scope_note.is_empty());
+    }
+
+    #[test]
+    fn test_language_examples_typescript() {
+        let ex = LanguageExamples::for_language("typescript");
+        assert!(ex.verification_commands.contains("eslint"));
+        assert!(ex.example_file_path.ends_with(".ts"));
     }
 }

@@ -904,13 +904,176 @@ After running tests, return ONLY valid JSON (no markdown outside JSON):
 /// Do NOT use for REVIEWER, PLANNER, ARCHITECT, EDITOR, or BREAKER
 /// (they have specialized JSON output formats or are read-only).
 pub fn build_worker_prompt(base_preamble: &str) -> String {
+    build_worker_prompt_for_language(base_preamble, None, None)
+}
+
+/// Build a language-aware worker prompt with optional repo context injection.
+///
+/// When `language` is `Some("python")`, `Some("typescript")`, or `Some("go")`,
+/// replaces Rust-specific phrases with language-appropriate equivalents.
+/// `None` or `Some("rust")` leaves the prompt unchanged.
+///
+/// When `repo_context` is `Some(...)`, injects target-repo documentation
+/// (CLAUDE.md / AGENTS.md / README.md) between the preamble and coordination block.
+pub fn build_worker_prompt_for_language(
+    base_preamble: &str,
+    language: Option<&str>,
+    repo_context: Option<&str>,
+) -> String {
+    let adapted = adapt_prompt_for_language(base_preamble, language);
+    let context_section = match repo_context {
+        Some(ctx) if !ctx.is_empty() => format!("\n{ctx}\n"),
+        _ => String::new(),
+    };
     format!(
-        "{base_preamble}{WORKER_COORDINATION_BLOCK}\n## How Your Output Will Be Graded\n\
+        "{adapted}{context_section}{WORKER_COORDINATION_BLOCK}\n## How Your Output Will Be Graded\n\
          Your implementation will be evaluated by a skeptical blind reviewer using this rubric:\n\
          {REVIEWER_RUBRIC}\n\
          Write code that scores ≥ 2 on all four criteria. No stubs. No bare unwrap(). \
          Implement all required paths.\n"
     )
+}
+
+/// Adapt a prompt's Rust-specific content for the given language.
+///
+/// Performs textual substitution on known Rust-specific phrases.  When
+/// `language` is `None` or a Rust variant, the input is returned unchanged.
+pub fn adapt_prompt_for_language(prompt: &str, language: Option<&str>) -> String {
+    let lang = match language {
+        Some(l) if !l.eq_ignore_ascii_case("rust") => l,
+        _ => return prompt.to_string(),
+    };
+
+    let ex = crate::language_prompts::LanguageExamples::for_language(lang);
+
+    let mut out = prompt.to_string();
+
+    // Replace verification command references
+    out = out.replace("cargo fmt, clippy, check, test", ex.verification_commands);
+    out = out.replace("cargo fmt → clippy → check → test", ex.verifier_pipeline);
+
+    // Replace "Do NOT run cargo check/test yourself" variants
+    out = out.replace(
+        "Do NOT run cargo check/test yourself. Do NOT commit.",
+        ex.do_not_run,
+    );
+    out = out.replace(
+        "Do NOT run cargo check/test. Query",
+        &format!(
+            "{} Query",
+            ex.do_not_run.trim_end_matches(". Do NOT commit.")
+        ),
+    );
+    out = out.replace(
+        "Do NOT run cargo check yourself — focus on writing correct code.",
+        &format!(
+            "The orchestrator will run the verifier ({}) after you return.",
+            ex.verification_commands
+        ),
+    );
+
+    // Replace example file path
+    out = out.replace("crates/swarm-agents/src/example.rs", ex.example_file_path);
+
+    // Replace error focus descriptions
+    out = out.replace(
+        "fix Rust compilation errors",
+        &format!("fix {}", ex.error_focus),
+    );
+
+    // Replace "Rust compilation errors" standalone
+    out = out.replace("Rust compilation errors", ex.error_focus);
+
+    // Replace cross-crate scope discipline for non-Rust
+    if ex.crate_scope_note.is_empty() {
+        // Remove the Cross-Crate Scope Discipline section for non-Rust languages
+        if let Some(start) = out.find("## Cross-Crate Scope Discipline") {
+            // Find the next section header or end of string
+            let rest = &out[start + 1..];
+            if let Some(next_section) = rest.find("\n## ") {
+                // Keep content from next section onward
+                let end = start + 1 + next_section;
+                out = format!("{}{}", &out[..start], &out[end..]);
+            } else {
+                // This section is at the end — just trim it
+                out.truncate(start);
+            }
+        }
+    }
+
+    out
+}
+
+// ── Repo Context Loader ─────────────────────────────────────────────────────
+//
+// Reads CLAUDE.md / AGENTS.md / README.md from the target repo (worktree) and
+// produces a truncated summary for injection into system prompts.  This gives
+// both managers and workers knowledge about the target repo's architecture,
+// conventions, and tooling — critical when the swarm works on external repos.
+
+/// Default byte budget for repo context injection.
+pub const DEFAULT_REPO_CONTEXT_MAX_BYTES: usize = 4096;
+
+/// Load project context from the target repo's documentation files.
+///
+/// Reads `CLAUDE.md`, `AGENTS.md`, and `README.md` (in that priority order).
+/// Returns a truncated summary suitable for injection into system prompts.
+/// Caps at `max_bytes` to avoid blowing out context windows (local models are 32K).
+///
+/// Returns `None` if no documentation files are found.  Never warns or errors.
+pub fn load_repo_context(worktree_path: &Path, max_bytes: usize) -> Option<String> {
+    let candidates = ["CLAUDE.md", "AGENTS.md", "README.md"];
+    let mut context_parts = Vec::new();
+    let mut total_bytes = 0;
+
+    for filename in &candidates {
+        let path = worktree_path.join(filename);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let remaining = max_bytes.saturating_sub(total_bytes);
+            if remaining == 0 {
+                break;
+            }
+            let truncated = if trimmed.len() > remaining {
+                match trimmed[..remaining].rfind('\n') {
+                    Some(pos) => &trimmed[..pos],
+                    None => &trimmed[..remaining],
+                }
+            } else {
+                trimmed
+            };
+            context_parts.push(format!("### From {filename}\n{truncated}"));
+            total_bytes += truncated.len();
+            tracing::info!(
+                file = filename,
+                bytes = truncated.len(),
+                "Loaded repo context"
+            );
+        }
+    }
+
+    if context_parts.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "## Project Context (from target repo)\n\n{}",
+            context_parts.join("\n\n")
+        ))
+    }
+}
+
+/// Inject repo context into a manager preamble string.
+///
+/// Appends the context block after the preamble text so the manager has
+/// target-repo knowledge before it starts delegating.
+pub fn inject_repo_context(preamble: &str, repo_context: Option<&str>) -> String {
+    match repo_context {
+        Some(ctx) if !ctx.is_empty() => format!("{preamble}\n{ctx}\n"),
+        _ => preamble.to_string(),
+    }
 }
 
 // ── PromptLoader ─────────────────────────────────────────────────────────────
@@ -1085,5 +1248,82 @@ mod prompt_loader_tests {
             &archive,
         );
         assert_eq!(result, "default prompt");
+    }
+
+    // ── Language adaptation tests ────────────────────────────────────────
+
+    #[test]
+    fn test_adapt_prompt_noop_for_rust() {
+        let prompt = "fix Rust compilation errors. cargo fmt, clippy, check, test";
+        assert_eq!(adapt_prompt_for_language(prompt, Some("rust")), prompt);
+    }
+
+    #[test]
+    fn test_adapt_prompt_noop_for_none() {
+        let prompt = "fix Rust compilation errors. cargo fmt, clippy, check, test";
+        assert_eq!(adapt_prompt_for_language(prompt, None), prompt);
+    }
+
+    #[test]
+    fn test_adapt_prompt_replaces_cargo_for_python() {
+        let prompt = "The verifier runs cargo fmt, clippy, check, test after you return.";
+        let adapted = adapt_prompt_for_language(prompt, Some("python"));
+        assert!(adapted.contains("ruff"));
+        assert!(adapted.contains("pytest"));
+        assert!(!adapted.contains("cargo"));
+    }
+
+    #[test]
+    fn test_adapt_prompt_replaces_error_focus_for_python() {
+        let prompt = "Your job is to fix Rust compilation errors and implement features.";
+        let adapted = adapt_prompt_for_language(prompt, Some("python"));
+        assert!(adapted.contains("Python errors"));
+        assert!(!adapted.contains("Rust compilation"));
+    }
+
+    #[test]
+    fn test_adapt_prompt_replaces_example_path_for_typescript() {
+        let prompt = "\"file\": \"crates/swarm-agents/src/example.rs\"";
+        let adapted = adapt_prompt_for_language(prompt, Some("typescript"));
+        assert!(adapted.contains("src/example.ts"));
+        assert!(!adapted.contains("example.rs"));
+    }
+
+    #[test]
+    fn test_adapt_prompt_removes_cross_crate_for_go() {
+        let prompt = "Some text.\n\n## Cross-Crate Scope Discipline\nWhen fixes span multiple workspace crates...\n- Fix the provider crate first.\n";
+        let adapted = adapt_prompt_for_language(prompt, Some("go"));
+        assert!(!adapted.contains("Cross-Crate Scope Discipline"));
+        assert!(adapted.contains("Some text."));
+    }
+
+    #[test]
+    fn test_adapt_prompt_replaces_verifier_pipeline_for_go() {
+        let prompt = "Run the verifier (cargo fmt → clippy → check → test) after you return.";
+        let adapted = adapt_prompt_for_language(prompt, Some("go"));
+        assert!(adapted.contains("go vet"));
+        assert!(!adapted.contains("cargo fmt"));
+    }
+
+    #[test]
+    fn test_build_worker_prompt_for_language_none_matches_original() {
+        let original = build_worker_prompt(GENERAL_CODER_PREAMBLE);
+        let with_none = build_worker_prompt_for_language(GENERAL_CODER_PREAMBLE, None, None);
+        assert_eq!(original, with_none);
+    }
+
+    #[test]
+    fn test_build_worker_prompt_for_language_rust_matches_original() {
+        let original = build_worker_prompt(GENERAL_CODER_PREAMBLE);
+        let with_rust =
+            build_worker_prompt_for_language(GENERAL_CODER_PREAMBLE, Some("rust"), None);
+        assert_eq!(original, with_rust);
+    }
+
+    #[test]
+    fn test_build_worker_prompt_for_language_python_adapts() {
+        let result = build_worker_prompt_for_language(GENERAL_CODER_PREAMBLE, Some("python"), None);
+        assert!(result.contains("ruff"));
+        assert!(!result.contains("cargo fmt, clippy, check, test"));
     }
 }
