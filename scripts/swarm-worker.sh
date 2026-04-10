@@ -99,7 +99,7 @@ export BD_ACTOR="worker-$NODE_ID"
 # Parallel issues per node. Each node has 36 cores and 251GB RAM — plenty for
 # concurrent cargo builds. The GPU queues inference requests, so while one issue
 # compiles (CPU-bound), another can do inference (GPU-bound). Pipeline FTW.
-PARALLEL="${SWARM_NODE_PARALLEL:-2}"
+PARALLEL="${SWARM_NODE_PARALLEL:-4}"
 
 # Use more retries since we have plenty of compute
 export SWARM_MAX_RETRIES="${SWARM_MAX_RETRIES:-6}"
