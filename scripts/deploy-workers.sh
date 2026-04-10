@@ -26,10 +26,10 @@ declare -A NODES=(
 )
 
 # Cloud proxy on ai-proxy (Tailnet IP)
-CLOUD_PROXY_URL="http://100.105.113.58:8317/v1"
-TZ_URL="http://100.105.113.58:3000"
-TZ_PG_URL="postgres://tensorzero:tensorzero@100.105.113.58:5433/tensorzero"
-DOLT_REMOTE="http://100.105.113.58:8001/beads"
+CLOUD_PROXY_URL="http://10.0.0.100:8317/v1"
+TZ_URL="http://10.0.0.100:3000"
+TZ_PG_URL="postgres://tensorzero:tensorzero@10.0.0.100:5433/tensorzero"
+DOLT_REMOTE="http://10.0.0.100:8001/beads"
 
 # Parse args
 BUILD_ONLY=false
