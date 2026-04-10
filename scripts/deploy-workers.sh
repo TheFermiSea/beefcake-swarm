@@ -103,11 +103,14 @@ deploy_node() {
     # ── 5. Clone repo locally ────────────────────────────────────────
     log "[$name] Setting up local repo clone..."
     $ssh 'mkdir -p /root/code
+    # Allow NFS-owned repos
+    git config --global --add safe.directory /cluster/shared/code/beefcake-swarm 2>/dev/null || true
+    git config --global --add safe.directory /root/code/beefcake-swarm 2>/dev/null || true
     if [[ ! -d /root/code/beefcake-swarm/.git ]]; then
         echo "Cloning from NFS..."
-        git clone /cluster/shared/code/beefcake-swarm /root/code/beefcake-swarm
+        git clone --local /cluster/shared/code/beefcake-swarm /root/code/beefcake-swarm
         cd /root/code/beefcake-swarm
-        # Add GitHub remote for push (via ai-proxy as SSH proxy)
+        # Point origin at GitHub for future fetches
         git remote set-url origin https://github.com/TheFermiSea/beefcake-swarm.git 2>/dev/null || true
     else
         echo "Updating existing clone..."
