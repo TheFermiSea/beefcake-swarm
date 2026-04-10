@@ -80,6 +80,17 @@ export SWARM_TENSORZERO_PG_URL="${SWARM_TENSORZERO_PG_URL:-}"
 # Worktrees: local disk (fast I/O, 36 cores for compilation)
 export SWARM_WORKTREE_DIR="/tmp/swarm-wt"
 
+# Beads: use remote proxy if local bd is incompatible (Rocky 8 glibc < 2.32)
+if ! bd --version >/dev/null 2>&1; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    if [[ -x "$SCRIPT_DIR/bd-remote.sh" ]]; then
+        echo "[swarm-worker] Local bd incompatible — using bd-remote.sh proxy to ai-proxy"
+        export SWARM_BEADS_BIN="$SCRIPT_DIR/bd-remote.sh"
+    else
+        echo "[swarm-worker] WARNING: bd not working and bd-remote.sh not found" >&2
+    fi
+fi
+
 # Beads identity
 export BD_ACTOR="worker-$NODE_ID"
 
