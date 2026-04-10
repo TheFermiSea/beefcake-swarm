@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::coder::OaiAgent;
 use crate::agents::AgentFactory;
-use crate::beads_bridge::{BeadsIssue, IssueTracker};
+use crate::beads_bridge::{BeadsBridge, BeadsIssue, IssueTracker};
 use crate::cluster_health::ClusterHealth;
 use crate::config::{SwarmConfig, SwarmRole};
 use crate::file_targeting::detect_changed_packages;
@@ -27,6 +27,7 @@ use crate::orchestrator::{
     local_validate, prompt_with_hook_and_retry, query_kb_with_failsafe, route_to_coder,
     should_reject_auto_fix, try_auto_fix, try_scaffold_fallback, CoderRoute, SwarmResumeFile,
 };
+use crate::reformulation::{IntentContract, ReformulationStore};
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 use crate::state_machine::{BudgetTracker, OrchestratorState, StateMachine};
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
@@ -110,6 +111,10 @@ pub struct OrchestratorContext<'a> {
     // ── Coordination integrations (P2.2 + P2.3) ──
     pub router: DynamicRouter,
     pub correction_loop: TieredCorrectionLoop,
+
+    // ── Reformulation engine ──
+    pub reformulation_store: ReformulationStore,
+    pub intent_contract: IntentContract,
 
     // ── External deps ──
     pub factory: &'a AgentFactory,
@@ -225,6 +230,19 @@ impl<'a> OrchestratorContext<'a> {
         let wt_path = worktree_bridge.create(&issue.id)?;
         info!(path = %wt_path.display(), "Created worktree (state driver)");
 
+        // Intent contract (reformulation engine Phase 1) — capture original goal on first pickup.
+        // The contract is append-only: subsequent retries of the same issue reuse the stored one.
+        let reformulation_store = ReformulationStore::new(worktree_bridge.repo_root());
+        let intent_contract =
+            IntentContract::from_issue(&issue.id, &issue.title, issue.description.as_deref());
+        reformulation_store.save_contract(&intent_contract);
+        info!(
+            issue = %issue.id,
+            outcomes = intent_contract.required_outcomes.len(),
+            digest = %intent_contract.intent_digest,
+            "Intent contract captured (state driver)"
+        );
+
         // Harness
         let mut session = SessionManager::new(wt_path.clone(), config.max_retries);
         let git_mgr = GitManager::new(&wt_path, "[swarm]");
@@ -312,6 +330,8 @@ impl<'a> OrchestratorContext<'a> {
                 cl
             },
             auto_fix_applied: false,
+            reformulation_store,
+            intent_contract,
             factory,
             beads,
             knowledge_base,
@@ -1584,10 +1604,15 @@ pub async fn handle_escalating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
     // Handle stuck detection or return to Planning
     match decision.stuck {
         true => handle_escalating_stuck(ctx, &decision, iteration),
-        false => Ok(StateTransition::Advance {
-            to: OrchestratorState::Planning,
-            reason: format!("escalation → {:?}", decision.target_tier),
-        }),
+        false => {
+            // Failure classification and intent guard — runs on every retry transition
+            // so the swarm knows WHY it's retrying and can log drift early.
+            handle_escalating_classify(ctx, &report, iteration);
+            Ok(StateTransition::Advance {
+                to: OrchestratorState::Planning,
+                reason: format!("escalation → {:?}", decision.target_tier),
+            })
+        }
     }
 }
 
@@ -1640,6 +1665,76 @@ fn handle_escalation_event(
             to = ?decision.target_tier,
             reason = %decision.reason,
             "Tier escalated (state driver)"
+        );
+    }
+}
+
+/// Classify the failure on a retry and check intent drift.
+///
+/// Called when escalation is NOT stuck (i.e., we're retrying). Classifies WHY
+/// the iteration failed and warns if the reformulated task drifts from the
+/// original intent contract. Recovery action routing:
+///
+/// - `DecompositionRequired` → logged; subtask fan-out handled by subtask.rs if triggered
+/// - `ImplementationThrash`  → logged for the cloud manager to notice
+/// - `ContextDeficit`        → logged; Planning auto-context enrichment helps next iter
+/// - `ToolConstraintMismatch`→ logged; rewrite applied at session end by reformulate()
+/// - `InfraTransient`        → logged; normal retry continues
+/// - Others                  → logged; normal retry continues
+fn handle_escalating_classify(
+    ctx: &OrchestratorContext<'_>,
+    report: &VerifierReport,
+    iteration: u32,
+) {
+    use crate::orchestrator::helpers::{list_changed_files, load_failure_ledger};
+    use crate::reformulation::{classify_failure, FailureReviewInput};
+
+    let failure_ledger = load_failure_ledger(&ctx.wt_path);
+    let files_changed = list_changed_files(&ctx.wt_path);
+    let error_cats: Vec<String> = report
+        .unique_error_categories()
+        .iter()
+        .map(|c| format!("{c:?}"))
+        .collect();
+
+    let review_input = FailureReviewInput {
+        issue_id: ctx.issue.id.clone(),
+        issue_title: ctx.issue.title.clone(),
+        issue_description: ctx.issue.description.clone(),
+        failure_ledger,
+        iterations_used: iteration,
+        max_iterations: ctx.config.max_retries,
+        files_changed,
+        error_categories: error_cats,
+        failure_reason: Some(ctx.escalation.summary()),
+    };
+
+    let classification = classify_failure(&review_input);
+    let fingerprint = classification.fingerprint();
+
+    info!(
+        iteration,
+        issue = %ctx.issue.id,
+        classification = ?classification,
+        fingerprint = %fingerprint,
+        "Failure classified on retry (state driver)"
+    );
+
+    // Intent guard: verify the current task description still matches the original intent.
+    // Compute a fresh IntentContract from the current issue state and compare digests.
+    // This detects drift early (before the reformulation engine rewrites at session end).
+    let current = IntentContract::from_issue(
+        &ctx.issue.id,
+        &ctx.issue.title,
+        ctx.issue.description.as_deref(),
+    );
+    if current.intent_digest != ctx.intent_contract.intent_digest {
+        warn!(
+            iteration,
+            issue = %ctx.issue.id,
+            original_digest = %ctx.intent_contract.intent_digest,
+            current_digest = %current.intent_digest,
+            "Intent drift detected: task description changed since initial pickup (state driver)"
         );
     }
 }
@@ -1885,6 +1980,81 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
                 count = captures.len(),
                 "Retrospective (failure, state driver)"
             );
+        }
+
+        // Reformulation engine — classify WHY the session failed and rewrite the bead
+        // description so the next attempt has a solvable formulation. Mirrors the
+        // equivalent logic in the legacy orchestrator/mod.rs path.
+        {
+            use crate::orchestrator::helpers::{list_changed_files, load_failure_ledger};
+            use crate::reformulation::{reformulate, FailureReviewInput};
+
+            let failure_ledger = load_failure_ledger(&ctx.wt_path);
+            let files_changed = list_changed_files(&ctx.wt_path);
+            let error_cats: Vec<String> = ctx
+                .last_report
+                .as_ref()
+                .map(|r| {
+                    r.unique_error_categories()
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let review_input = FailureReviewInput {
+                issue_id: ctx.issue.id.clone(),
+                issue_title: ctx.issue.title.clone(),
+                issue_description: ctx.issue.description.clone(),
+                failure_ledger,
+                iterations_used: ctx.session.iteration(),
+                max_iterations: ctx.config.max_retries,
+                files_changed,
+                error_categories: error_cats,
+                failure_reason: Some(ctx.escalation.summary()),
+            };
+
+            let result = reformulate(&ctx.reformulation_store, &review_input);
+            let bridge = BeadsBridge::new();
+
+            if let Some(ref new_desc) = result.new_description {
+                match bridge.update_description(&ctx.issue.id, new_desc) {
+                    Ok(()) => info!(
+                        id = %ctx.issue.id,
+                        classification = ?result.classification,
+                        "Reformulated issue description (state driver)"
+                    ),
+                    Err(e) => warn!(
+                        id = %ctx.issue.id,
+                        error = %e,
+                        "Failed to update issue description (reformulation not applied, state driver)"
+                    ),
+                }
+            }
+
+            if let Some(ref notes) = result.notes_appended {
+                if let Err(e) = bridge.update_notes(&ctx.issue.id, notes) {
+                    warn!(
+                        id = %ctx.issue.id,
+                        error = %e,
+                        "Failed to append reformulation notes (state driver)"
+                    );
+                }
+            }
+
+            if result.escalated {
+                let _ = bridge.add_swarm_label(&ctx.issue.id, "swarm:needs-human-review");
+                warn!(
+                    id = %ctx.issue.id,
+                    "Reformulation exhausted — labeled for human review (state driver)"
+                );
+            }
+
+            // Reset issue to open so the next loop iteration picks it up with the
+            // rewritten description (unless escalated to human review).
+            if !result.escalated {
+                let _ = ctx.beads.update_status(&ctx.issue.id, "open");
+            }
         }
 
         // Save session state for resume
