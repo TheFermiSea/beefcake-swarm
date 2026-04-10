@@ -79,7 +79,20 @@ pub fn build_cloud_manager(
     wt_path: &Path,
     verifier_packages: &[String],
 ) -> OaiAgent {
-    let preamble = prompts::load_prompt("manager", wt_path, prompts::CLOUD_MANAGER_PREAMBLE);
+    build_cloud_manager_for_language(client, model, workers, wt_path, verifier_packages, None)
+}
+
+/// Build the cloud-backed Manager with language-aware prompts.
+pub fn build_cloud_manager_for_language(
+    client: &openai::CompletionsClient,
+    model: &str,
+    workers: ManagerWorkers,
+    wt_path: &Path,
+    verifier_packages: &[String],
+    language: Option<&str>,
+) -> OaiAgent {
+    let raw = prompts::load_prompt("manager", wt_path, prompts::CLOUD_MANAGER_PREAMBLE);
+    let preamble = prompts::adapt_prompt_for_language(&raw, language);
     // Context firewalls: wrap worker agents so their raw tool call logs
     // are condensed before the manager sees them. The manager receives only
     // a compact summary (files modified, write count, termination reason).
@@ -166,7 +179,20 @@ pub fn build_local_manager(
     wt_path: &Path,
     verifier_packages: &[String],
 ) -> OaiAgent {
-    let preamble = prompts::load_prompt("local_manager", wt_path, prompts::LOCAL_MANAGER_PREAMBLE);
+    build_local_manager_for_language(client, model, workers, wt_path, verifier_packages, None)
+}
+
+/// Build the local-only Manager with language-aware prompts.
+pub fn build_local_manager_for_language(
+    client: &openai::CompletionsClient,
+    model: &str,
+    workers: ManagerWorkers,
+    wt_path: &Path,
+    verifier_packages: &[String],
+    language: Option<&str>,
+) -> OaiAgent {
+    let raw = prompts::load_prompt("local_manager", wt_path, prompts::LOCAL_MANAGER_PREAMBLE);
+    let preamble = prompts::adapt_prompt_for_language(&raw, language);
     // Context firewalls: wrap worker agents so their raw tool call logs
     // are condensed before the local manager sees them.
     let mut builder = client

@@ -593,7 +593,8 @@ async fn process_issue_core(
     let factory = factory
         .clone()
         .with_plan_slot(plan_slot.clone())
-        .with_work_plan_slot(work_plan_slot.clone());
+        .with_work_plan_slot(work_plan_slot.clone())
+        .with_language(language_profile.as_ref().map(|p| p.language.clone()));
     let manager = factory.build_manager(&wt_path);
 
     // --- Escalation state ---
