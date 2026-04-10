@@ -44,8 +44,11 @@ except ImportError:
     sys.exit(1)
 
 
-# Default Postgres DSN — matches infrastructure/tensorzero/docker-compose.yml
-DEFAULT_PG_URL = "postgresql://tensorzero:tensorzero@localhost:5433/tensorzero"
+# Default Postgres DSN for a local TensorZero database.
+#
+# Credentials should come from explicit args or environment variables rather than
+# being baked into the script.
+DEFAULT_PG_URL = "postgresql://localhost:5433/tensorzero"
 
 # TZ functions whose inferences are useful for worker DPO training.
 WORKER_FUNCTIONS = frozenset({
@@ -107,7 +110,6 @@ def connect_pg(pg_url: str):
 def fetch_verifier_outcomes(
     conn,
     since: str | None,
-    functions: frozenset[str],
 ) -> dict[str, dict[str, Any]]:
     """Fetch episode-level verifier outcomes (task_resolved boolean feedback).
 
@@ -234,6 +236,88 @@ def fetch_inference_data(conn, inference_id: str) -> dict[str, Any] | None:
         return None
 
 
+def parse_tool_arguments(arguments: Any) -> Any:
+    """Normalize tool arguments to Python objects."""
+    if not isinstance(arguments, str):
+        return arguments
+
+    try:
+        return json.loads(arguments)
+    except json.JSONDecodeError:
+        return {"_raw": arguments}
+
+
+def normalize_output_blocks(output: Any) -> list[Any]:
+    """Coerce TensorZero output into a list of content/tool-call blocks."""
+    if output is None:
+        return []
+    if isinstance(output, list):
+        return output
+    if isinstance(output, dict):
+        blocks: list[Any] = []
+        content = output.get("content")
+        if isinstance(content, list):
+            blocks.extend(content)
+        tool_calls = output.get("tool_calls") or []
+        if tool_calls:
+            blocks.extend(list(tool_calls))
+        return blocks
+    if isinstance(output, str):
+        return [{"type": "text", "content": output, "name": None}]
+    return []
+
+
+def make_tool_call_step(
+    *,
+    name: str,
+    arguments: Any,
+    result: Any,
+    raw_name: str | None,
+) -> dict[str, Any]:
+    """Build a normalized tool-call step."""
+    return {
+        "type": "tool_call",
+        "name": name,
+        "arguments": parse_tool_arguments(arguments),
+        "result": result,
+        "raw_name": raw_name,
+        "is_edit": name in EDIT_TOOL_NAMES if name else False,
+    }
+
+
+def extract_block_step(block: dict[str, Any]) -> dict[str, Any] | None:
+    """Normalize one TensorZero/OpenAI output block into a trajectory step."""
+    block_type = block.get("type", "")
+    if block_type in {"tool_call", "tool_use"}:
+        return make_tool_call_step(
+            name=(
+                block.get("name")
+                or block.get("raw_name")
+                or block.get("function", {}).get("name", "")
+            ),
+            arguments=block.get("arguments") or block.get("input") or {},
+            result=block.get("result"),
+            raw_name=block.get("raw_name"),
+        )
+    if block_type == "text":
+        return {
+            "type": "text",
+            "content": block.get("text") or block.get("content") or "",
+            "name": None,
+            "is_edit": False,
+        }
+    if "function" in block:
+        func = block["function"]
+        name = func.get("name", "")
+        return make_tool_call_step(
+            name=name,
+            arguments=func.get("arguments", {}),
+            result=None,
+            raw_name=name,
+        )
+    return None
+
+
 def extract_tool_calls(output: Any) -> list[dict[str, Any]]:
     """Extract tool-call steps from a TZ inference output blob.
 
@@ -245,77 +329,13 @@ def extract_tool_calls(output: Any) -> list[dict[str, Any]]:
     Returns a list of dicts: [{name, arguments, result, raw_name}, ...]
     preserving order so downstream DPO code sees full trajectories.
     """
-    if output is None:
-        return []
-
-    # Normalise to a list of content blocks.
-    blocks: list[Any] = []
-    if isinstance(output, list):
-        blocks = output
-    elif isinstance(output, dict):
-        # OpenAI-style: message.tool_calls or content list
-        content = output.get("content") or []
-        tool_calls = output.get("tool_calls") or []
-        if isinstance(content, list):
-            blocks = content
-        if tool_calls:
-            blocks = blocks + list(tool_calls)
-    elif isinstance(output, str):
-        # Heuristic: return a single pseudo block for the raw string.
-        return [{"type": "text", "content": output, "name": None}]
-
     calls: list[dict[str, Any]] = []
-    for block in blocks:
+    for block in normalize_output_blocks(output):
         if not isinstance(block, dict):
             continue
-
-        block_type = block.get("type", "")
-        if block_type == "tool_call" or block_type == "tool_use":
-            name = (
-                block.get("name")
-                or block.get("raw_name")
-                or block.get("function", {}).get("name", "")
-            )
-            arguments = block.get("arguments") or block.get("input") or {}
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {"_raw": arguments}
-            calls.append({
-                "type": "tool_call",
-                "name": name,
-                "arguments": arguments,
-                "result": block.get("result"),
-                "raw_name": block.get("raw_name"),
-                "is_edit": name in EDIT_TOOL_NAMES if name else False,
-            })
-        elif block_type == "text":
-            # Keep text blocks so the full reasoning trace is preserved.
-            calls.append({
-                "type": "text",
-                "content": block.get("text") or block.get("content") or "",
-                "name": None,
-                "is_edit": False,
-            })
-        elif "function" in block:
-            # OpenAI tool_call wrapper: {id, type, function: {name, arguments}}
-            func = block["function"]
-            name = func.get("name", "")
-            arguments = func.get("arguments", {})
-            if isinstance(arguments, str):
-                try:
-                    arguments = json.loads(arguments)
-                except json.JSONDecodeError:
-                    arguments = {"_raw": arguments}
-            calls.append({
-                "type": "tool_call",
-                "name": name,
-                "arguments": arguments,
-                "result": None,
-                "raw_name": name,
-                "is_edit": name in EDIT_TOOL_NAMES,
-            })
+        step = extract_block_step(block)
+        if step is not None:
+            calls.append(step)
 
     return calls
 
@@ -366,11 +386,117 @@ def build_trajectory(
     return steps
 
 
+def group_episodes_by_issue(
+    outcomes: dict[str, dict[str, Any]],
+) -> dict[str, dict[str, list[str]]]:
+    """Group episode ids into success/failure buckets keyed by issue/repo id."""
+    groups: dict[str, dict[str, list[str]]] = defaultdict(lambda: {"success": [], "failure": []})
+    for episode_id, outcome in outcomes.items():
+        tags = outcome.get("tags", {})
+        issue_id = tags.get("issue_id") or tags.get("repo_id") or "global"
+        bucket = "success" if outcome["resolved"] else "failure"
+        groups[issue_id][bucket].append(episode_id)
+    return groups
+
+
+def collect_episode_contexts(
+    conn,
+    episode_ids: list[str],
+    inferences_by_episode: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    """Build reusable model/trajectory metadata for a set of episodes."""
+    contexts: list[dict[str, Any]] = []
+    for episode_id in episode_ids:
+        inferences = inferences_by_episode.get(episode_id, [])
+        if not inferences:
+            continue
+
+        trajectory = build_trajectory(conn, inferences)
+        if not trajectory:
+            continue
+
+        variant = inferences[0].get("variant_name", "unknown")
+        contexts.append({
+            "episode_id": episode_id,
+            "trajectory": trajectory,
+            "variant": variant,
+            "model": inferences[0].get("model_name") or variant,
+        })
+    return contexts
+
+
+def build_pair_record(
+    issue_id: str,
+    winner: dict[str, Any],
+    loser: dict[str, Any],
+    outcomes: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Build one preference-pair record from winner/loser episode contexts."""
+    win_ep = winner["episode_id"]
+    lose_ep = loser["episode_id"]
+    win_traj = winner["trajectory"]
+    lose_traj = loser["trajectory"]
+    win_outcome = outcomes[win_ep]
+    lose_outcome = outcomes[lose_ep]
+    win_tags = win_outcome.get("tags", {})
+    lose_tags = lose_outcome.get("tags", {})
+    error_cats = infer_error_categories(
+        [tc for step in lose_traj for tc in step.get("tool_calls", [])]
+    )
+
+    return {
+        "issue_id": issue_id,
+        "winner_model": winner["model"],
+        "winner_variant": winner["variant"],
+        "loser_model": loser["model"],
+        "loser_variant": loser["variant"],
+        "winner_trajectory": win_traj,
+        "loser_trajectory": lose_traj,
+        "verifier_outcome": {
+            "winner_episode": win_ep,
+            "loser_episode": lose_ep,
+            "winner_resolved": True,
+            "loser_resolved": False,
+            "winner_iterations": win_tags.get("iterations_used"),
+            "loser_iterations": lose_tags.get("iterations_used"),
+            "winner_created_at": win_outcome.get("created_at"),
+            "loser_created_at": lose_outcome.get("created_at"),
+        },
+        "iterations": {
+            "winner": win_tags.get("iterations_used"),
+            "loser": lose_tags.get("iterations_used"),
+        },
+        "error_categories": error_cats,
+        "winner_edit_count": sum(step.get("edit_count", 0) for step in win_traj),
+        "loser_edit_count": sum(step.get("edit_count", 0) for step in lose_traj),
+    }
+
+
+def make_pairs_for_issue(
+    issue_id: str,
+    buckets: dict[str, list[str]],
+    outcomes: dict[str, dict[str, Any]],
+    inferences_by_episode: dict[str, list[dict[str, Any]]],
+    conn,
+) -> list[dict[str, Any]]:
+    """Build all cross-variant winner/loser pairs for one issue bucket."""
+    winners = collect_episode_contexts(conn, buckets["success"], inferences_by_episode)
+    losers = collect_episode_contexts(conn, buckets["failure"], inferences_by_episode)
+    if not winners or not losers:
+        return []
+
+    return [
+        build_pair_record(issue_id, winner, loser, outcomes)
+        for winner in winners
+        for loser in losers
+        if loser["variant"] != winner["variant"]
+    ]
+
+
 def make_pairs(
     outcomes: dict[str, dict[str, Any]],
     inferences_by_episode: dict[str, list[dict[str, Any]]],
     conn,
-    min_pairs: int,
 ) -> list[dict[str, Any]]:
     """Build preference pairs from episodes where both successes and failures exist.
 
@@ -384,89 +510,17 @@ def make_pairs(
     If no issue_id tag is available, fall back to grouping by function_name
     so we still get cross-episode pairs within the same task type.
     """
-    # Group episodes by (issue_id or "global") -> {success: [...], failure: [...]}
-    groups: dict[str, dict[str, list[str]]] = defaultdict(lambda: {"success": [], "failure": []})
-
-    for episode_id, outcome in outcomes.items():
-        tags = outcome.get("tags", {})
-        # Prefer issue_id tag; fall back to function_name from inferences.
-        issue_id = tags.get("issue_id") or tags.get("repo_id") or "global"
-        bucket = "success" if outcome["resolved"] else "failure"
-        groups[issue_id][bucket].append(episode_id)
-
     pairs: list[dict[str, Any]] = []
-
-    for issue_id, buckets in groups.items():
-        winners = buckets["success"]
-        losers = buckets["failure"]
-        if not winners or not losers:
-            continue
-
-        for win_ep in winners:
-            win_infs = inferences_by_episode.get(win_ep, [])
-            if not win_infs:
-                continue
-            win_traj = build_trajectory(conn, win_infs)
-            if not win_traj:
-                continue
-            win_model = win_infs[0].get("model_name") or win_infs[0].get("variant_name", "unknown")
-            win_variant = win_infs[0].get("variant_name", "unknown")
-
-            for lose_ep in losers:
-                lose_infs = inferences_by_episode.get(lose_ep, [])
-                if not lose_infs:
-                    continue
-                # Skip same-variant pairs — they are trivially not comparable.
-                lose_variant = lose_infs[0].get("variant_name", "unknown")
-                if lose_variant == win_variant:
-                    continue
-
-                lose_traj = build_trajectory(conn, lose_infs)
-                if not lose_traj:
-                    continue
-                lose_model = lose_infs[0].get("model_name") or lose_variant
-
-                # Collect metadata from episode outcomes.
-                win_outcome = outcomes[win_ep]
-                lose_outcome = outcomes[lose_ep]
-                win_tags = win_outcome.get("tags", {})
-                lose_tags = lose_outcome.get("tags", {})
-
-                error_cats = infer_error_categories(
-                    [tc for step in lose_traj for tc in step.get("tool_calls", [])]
-                )
-
-                pairs.append({
-                    "issue_id": issue_id,
-                    "winner_model": win_model,
-                    "winner_variant": win_variant,
-                    "loser_model": lose_model,
-                    "loser_variant": lose_variant,
-                    "winner_trajectory": win_traj,
-                    "loser_trajectory": lose_traj,
-                    "verifier_outcome": {
-                        "winner_episode": win_ep,
-                        "loser_episode": lose_ep,
-                        "winner_resolved": True,
-                        "loser_resolved": False,
-                        "winner_iterations": win_tags.get("iterations_used"),
-                        "loser_iterations": lose_tags.get("iterations_used"),
-                        "winner_created_at": win_outcome.get("created_at"),
-                        "loser_created_at": lose_outcome.get("created_at"),
-                    },
-                    "iterations": {
-                        "winner": win_tags.get("iterations_used"),
-                        "loser": lose_tags.get("iterations_used"),
-                    },
-                    "error_categories": error_cats,
-                    "winner_edit_count": sum(s.get("edit_count", 0) for s in win_traj),
-                    "loser_edit_count": sum(s.get("edit_count", 0) for s in lose_traj),
-                })
+    for issue_id, buckets in group_episodes_by_issue(outcomes).items():
+        pairs.extend(
+            make_pairs_for_issue(issue_id, buckets, outcomes, inferences_by_episode, conn)
+        )
 
     return pairs
 
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
+    """Build the CLI parser for the preference extraction script."""
     parser = argparse.ArgumentParser(
         description=(
             "Extract preference pairs from TensorZero telemetry for DPO training. "
@@ -517,24 +571,66 @@ def main() -> None:
             f"Default: {','.join(sorted(WORKER_FUNCTIONS))}"
         ),
     )
+    return parser
 
-    args = parser.parse_args()
 
+def parse_functions_arg(functions_arg: str | None) -> frozenset[str]:
+    """Parse the CLI function filter."""
+    if not functions_arg:
+        return WORKER_FUNCTIONS
+    return frozenset(func.strip() for func in functions_arg.split(","))
+
+
+def print_pair_summary(pairs: list[dict[str, Any]]) -> None:
+    """Print aggregate pair statistics."""
+    if not pairs:
+        return
+
+    model_pairs: dict[str, int] = defaultdict(int)
+    for pair in pairs:
+        key = f"{pair['winner_model']} > {pair['loser_model']}"
+        model_pairs[key] += 1
+    print("\nPair breakdown by model matchup:")
+    for matchup, count in sorted(model_pairs.items(), key=lambda item: -item[1]):
+        print(f"  {matchup}: {count}")
+
+    error_cat_counts: dict[str, int] = defaultdict(int)
+    for pair in pairs:
+        for category in pair["error_categories"]:
+            error_cat_counts[category] += 1
+    if not error_cat_counts:
+        return
+
+    print("\nError categories found in loser trajectories:")
+    for category, count in sorted(error_cat_counts.items(), key=lambda item: -item[1]):
+        print(f"  {category}: {count}")
+
+
+def write_pairs(output_path: str, pairs: list[dict[str, Any]]) -> None:
+    """Persist preference pairs as JSONL."""
+    output_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(output_dir, exist_ok=True)
+
+    with open(output_path, "w", encoding="utf-8") as fh:
+        for pair in pairs:
+            fh.write(json.dumps(pair, default=str) + "\n")
+
+    print(f"\nWrote {len(pairs)} preference pairs to {output_path}")
+
+
+def main() -> None:
+    args = build_parser().parse_args()
     pg_url = resolve_pg_url(args.pg_url)
-    functions = (
-        frozenset(f.strip() for f in args.functions.split(","))
-        if args.functions
-        else WORKER_FUNCTIONS
-    )
+    functions = parse_functions_arg(args.functions)
 
-    print(f"Connecting to TZ Postgres: {pg_url}")
+    print("Connecting to TZ Postgres...")
     conn = connect_pg(pg_url)
 
     print("Fetching verifier outcomes (task_resolved feedback)...")
-    outcomes = fetch_verifier_outcomes(conn, since=args.since, functions=functions)
+    outcomes = fetch_verifier_outcomes(conn, since=args.since)
     print(f"  Found {len(outcomes)} episodes with task_resolved feedback")
 
-    resolved_count = sum(1 for o in outcomes.values() if o["resolved"])
+    resolved_count = sum(1 for outcome in outcomes.values() if outcome["resolved"])
     failed_count = len(outcomes) - resolved_count
     print(f"  Resolved (winners): {resolved_count}  |  Failed (losers): {failed_count}")
 
@@ -544,36 +640,20 @@ def main() -> None:
         sys.exit(0)
 
     episode_ids = list(outcomes.keys())
-
-    print(f"Fetching inferences for {len(episode_ids)} episodes (functions: {', '.join(sorted(functions))})...")
+    print(
+        f"Fetching inferences for {len(episode_ids)} episodes "
+        f"(functions: {', '.join(sorted(functions))})..."
+    )
     inferences_by_episode = fetch_inferences_for_episodes(conn, episode_ids, functions)
-    total_inferences = sum(len(v) for v in inferences_by_episode.values())
+    total_inferences = sum(len(records) for records in inferences_by_episode.values())
     print(f"  Found {total_inferences} inference records across {len(inferences_by_episode)} episodes")
 
     print("Building preference pairs...")
-    pairs = make_pairs(outcomes, inferences_by_episode, conn, min_pairs=args.min_pairs)
+    pairs = make_pairs(outcomes, inferences_by_episode, conn)
     print(f"  Built {len(pairs)} preference pairs")
-
     conn.close()
 
-    # Summary statistics.
-    if pairs:
-        model_pairs: dict[str, int] = defaultdict(int)
-        for p in pairs:
-            key = f"{p['winner_model']} > {p['loser_model']}"
-            model_pairs[key] += 1
-        print("\nPair breakdown by model matchup:")
-        for matchup, count in sorted(model_pairs.items(), key=lambda x: -x[1]):
-            print(f"  {matchup}: {count}")
-
-        error_cat_counts: dict[str, int] = defaultdict(int)
-        for p in pairs:
-            for cat in p["error_categories"]:
-                error_cat_counts[cat] += 1
-        if error_cat_counts:
-            print("\nError categories found in loser trajectories:")
-            for cat, count in sorted(error_cat_counts.items(), key=lambda x: -x[1]):
-                print(f"  {cat}: {count}")
+    print_pair_summary(pairs)
 
     if len(pairs) < args.min_pairs:
         print(
@@ -587,15 +667,7 @@ def main() -> None:
         print(f"\n[dry-run] Would write {len(pairs)} pairs to {args.output}")
         sys.exit(0)
 
-    # Ensure output directory exists.
-    output_dir = os.path.dirname(os.path.abspath(args.output))
-    os.makedirs(output_dir, exist_ok=True)
-
-    with open(args.output, "w", encoding="utf-8") as fh:
-        for pair in pairs:
-            fh.write(json.dumps(pair, default=str) + "\n")
-
-    print(f"\nWrote {len(pairs)} preference pairs to {args.output}")
+    write_pairs(args.output, pairs)
 
 
 if __name__ == "__main__":

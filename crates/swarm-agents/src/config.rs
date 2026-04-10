@@ -113,6 +113,16 @@ pub struct Endpoint {
     pub api_key: String,
 }
 
+struct LocalEndpointConfig<'a> {
+    url_var: &'a str,
+    default_url: &'a str,
+    model_var: &'a str,
+    default_model: &'a str,
+    tier: Tier,
+    api_key_var: &'a str,
+    tensorzero_model: &'a str,
+}
+
 /// Cloud escalation endpoint (CLIAPIProxy on ai-proxy).
 ///
 /// CLIAPIProxy v6.8+ authenticates via `x-api-key` header (not `Authorization: Bearer`).
@@ -635,54 +645,48 @@ impl Default for SwarmConfig {
         // endpoints route through TZ's OpenAI-compat proxy. TZ handles variant selection
         // via Thompson Sampling based on task_resolved feedback.
         // Note: Rig's VERIFY_PATH was changed from "/models" to "" to avoid TZ 404.
-        let tz_url = std::env::var("SWARM_TENSORZERO_URL")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let tz_base = tz_url.as_ref().map(|u| format!("{u}/openai/v1"));
+        let tensorzero_url = Self::optional_nonempty_var("SWARM_TENSORZERO_URL");
+        let tz_base = tensorzero_url
+            .as_ref()
+            .map(|url| format!("{url}/openai/v1"));
 
         Self {
-            fast_endpoint: Endpoint {
-                url: tz_base
-                    .clone()
-                    .or_else(|| std::env::var("SWARM_FAST_URL").ok())
-                    .unwrap_or_else(|| "http://vasp-03:8081/v1".into()),
-                model: if tz_base.is_some() {
-                    "tensorzero::function_name::worker_code_edit".into()
-                } else {
-                    std::env::var("SWARM_FAST_MODEL").unwrap_or_else(|_| "OmniCoder-9B".into())
+            fast_endpoint: Self::local_endpoint(
+                tz_base.as_deref(),
+                LocalEndpointConfig {
+                    url_var: "SWARM_FAST_URL",
+                    default_url: "http://vasp-03:8081/v1",
+                    model_var: "SWARM_FAST_MODEL",
+                    default_model: "OmniCoder-9B",
+                    tier: Tier::Fast,
+                    api_key_var: "SWARM_FAST_API_KEY",
+                    tensorzero_model: "tensorzero::function_name::worker_code_edit",
                 },
-                tier: Tier::Fast,
-                api_key: std::env::var("SWARM_FAST_API_KEY")
-                    .unwrap_or_else(|_| "not-needed".into()),
-            },
-            coder_endpoint: Endpoint {
-                url: tz_base
-                    .clone()
-                    .or_else(|| std::env::var("SWARM_CODER_URL").ok())
-                    .unwrap_or_else(|| "http://vasp-01:8081/v1".into()),
-                model: if tz_base.is_some() {
-                    "tensorzero::function_name::worker_code_edit".into()
-                } else {
-                    std::env::var("SWARM_CODER_MODEL").unwrap_or_else(|_| "Qwen3.5-27B".into())
+            ),
+            coder_endpoint: Self::local_endpoint(
+                tz_base.as_deref(),
+                LocalEndpointConfig {
+                    url_var: "SWARM_CODER_URL",
+                    default_url: "http://vasp-01:8081/v1",
+                    model_var: "SWARM_CODER_MODEL",
+                    default_model: "Qwen3.5-27B",
+                    tier: Tier::Coder,
+                    api_key_var: "SWARM_CODER_API_KEY",
+                    tensorzero_model: "tensorzero::function_name::worker_code_edit",
                 },
-                tier: Tier::Coder,
-                api_key: std::env::var("SWARM_CODER_API_KEY")
-                    .unwrap_or_else(|_| "not-needed".into()),
-            },
-            reasoning_endpoint: Endpoint {
-                url: tz_base
-                    .clone()
-                    .or_else(|| std::env::var("SWARM_REASONING_URL").ok())
-                    .unwrap_or_else(|| "http://vasp-02:8081/v1".into()),
-                model: if tz_base.is_some() {
-                    "tensorzero::function_name::deep_reasoning".into()
-                } else {
-                    std::env::var("SWARM_REASONING_MODEL").unwrap_or_else(|_| "Qwen3.5-27B".into())
+            ),
+            reasoning_endpoint: Self::local_endpoint(
+                tz_base.as_deref(),
+                LocalEndpointConfig {
+                    url_var: "SWARM_REASONING_URL",
+                    default_url: "http://vasp-02:8081/v1",
+                    model_var: "SWARM_REASONING_MODEL",
+                    default_model: "Qwen3.5-27B",
+                    tier: Tier::Reasoning,
+                    api_key_var: "SWARM_REASONING_API_KEY",
+                    tensorzero_model: "tensorzero::function_name::deep_reasoning",
                 },
-                tier: Tier::Reasoning,
-                api_key: std::env::var("SWARM_REASONING_API_KEY")
-                    .unwrap_or_else(|_| "not-needed".into()),
-            },
+            ),
             cloud_endpoint: Self::cloud_from_env(),
             max_retries: std::env::var("SWARM_MAX_RETRIES")
                 .ok()
@@ -741,20 +745,9 @@ impl Default for SwarmConfig {
             strategist_endpoint: Self::strategist_from_env(),
             repo_id: std::env::var("SWARM_REPO_ID").ok(),
             adapter_id: std::env::var("SWARM_ADAPTER_ID").ok(),
-            tensorzero_url: std::env::var("SWARM_TENSORZERO_URL")
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
-            tensorzero_pg_url: std::env::var("SWARM_TENSORZERO_PG_URL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or_else(|| {
-                    std::env::var("SWARM_TENSORZERO_URL")
-                        .ok()
-                        .filter(|s| !s.trim().is_empty())
-                        .map(|_| {
-                            "postgres://tensorzero:tensorzero@localhost:5433/tensorzero".into()
-                        })
-                }),
+            tensorzero_url: tensorzero_url.clone(),
+            tensorzero_pg_url: Self::optional_nonempty_var("SWARM_TENSORZERO_PG_URL")
+                .or_else(|| Self::default_tensorzero_pg_url(tensorzero_url.as_ref())),
             tz_insights_ttl_secs: std::env::var("SWARM_TZ_INSIGHTS_TTL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -815,6 +808,33 @@ impl Default for SwarmConfig {
 }
 
 impl SwarmConfig {
+    fn optional_nonempty_var(name: &str) -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    fn local_endpoint(tz_base: Option<&str>, config: LocalEndpointConfig<'_>) -> Endpoint {
+        Endpoint {
+            url: tz_base
+                .map(str::to_owned)
+                .or_else(|| std::env::var(config.url_var).ok())
+                .unwrap_or_else(|| config.default_url.into()),
+            model: match tz_base {
+                Some(_) => config.tensorzero_model.into(),
+                None => {
+                    std::env::var(config.model_var).unwrap_or_else(|_| config.default_model.into())
+                }
+            },
+            tier: config.tier,
+            api_key: std::env::var(config.api_key_var).unwrap_or_else(|_| "not-needed".into()),
+        }
+    }
+
+    fn default_tensorzero_pg_url(tensorzero_url: Option<&String>) -> Option<String> {
+        tensorzero_url.map(|_| "postgres://tensorzero:tensorzero@localhost:5433/tensorzero".into())
+    }
+
     /// Resolve the appropriate rig client for a given swarm role based on the active stack profile.
     pub fn resolve_role_client(
         &self,
