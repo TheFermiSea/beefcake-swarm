@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
 use crate::notebook_bridge::KnowledgeBase;
+use crate::pipeline_config::PipelineConfig;
 
 /// Context threaded through the preflight pipeline.
 ///
@@ -434,6 +435,27 @@ impl Default for PreflightConfig {
     }
 }
 
+impl PreflightConfig {
+    /// Build a `PreflightConfig` from a loaded [`PipelineConfig`].
+    ///
+    /// Maps TOML stage presence to the boolean gates that control which stages
+    /// run. Stage names are matched by convention:
+    /// - `plan_generation` or `plan` → `enable_plan_generation`
+    /// - `knowledge_enrichment` → `enable_kb_enrichment`
+    pub fn from_pipeline_config(cfg: &PipelineConfig) -> Self {
+        let enable_plan_generation =
+            cfg.stage("plan_generation").is_some() || cfg.stage("plan").is_some();
+        let enable_kb_enrichment = cfg.stage("knowledge_enrichment").is_some();
+
+        Self {
+            enable_plan_generation,
+            enable_kb_enrichment,
+            max_verifier_hints: 10,
+            max_plan_steps: 15,
+        }
+    }
+}
+
 /// Run the preflight pipeline for the initial iteration (no prior errors).
 pub fn run_initial(
     wt_path: &std::path::Path,
@@ -462,6 +484,40 @@ pub fn run_initial(
     ctx = stage_acceptance_criteria(ctx);
 
     ctx
+}
+
+/// Run the preflight pipeline driven by a TOML [`PipelineConfig`].
+///
+/// This is a config-driven wrapper around `run_initial`: it derives a
+/// [`PreflightConfig`] from the loaded TOML stage registry and delegates
+/// to the existing stage functions. Stages absent from the registry (or
+/// disabled) are skipped; unknown stage names are logged and ignored.
+///
+/// The wrapper preserves full backward compatibility — callers that do not
+/// have a `PipelineConfig` continue to use `run_initial` directly.
+pub fn run_with_stage_config(
+    wt_path: &std::path::Path,
+    issue_id: &str,
+    issue_title: &str,
+    tier: SwarmTier,
+    knowledge_base: Option<&dyn KnowledgeBase>,
+    pipeline_cfg: &PipelineConfig,
+) -> PreflightContext {
+    let preflight_cfg = PreflightConfig::from_pipeline_config(pipeline_cfg);
+    info!(
+        pipeline = %pipeline_cfg.name(),
+        enable_plan = preflight_cfg.enable_plan_generation,
+        enable_kb = preflight_cfg.enable_kb_enrichment,
+        "Running preflight pipeline from TOML stage registry"
+    );
+    run_initial(
+        wt_path,
+        issue_id,
+        issue_title,
+        tier,
+        knowledge_base,
+        &preflight_cfg,
+    )
 }
 
 /// Stage: Extract actionable hints from the last verifier report.

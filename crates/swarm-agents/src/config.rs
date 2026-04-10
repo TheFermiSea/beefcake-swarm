@@ -600,6 +600,11 @@ pub struct SwarmConfig {
     /// (default 80% verifier / 20% judge).
     /// Populated from `SWARM_JUDGE_ENABLED` env var (default: false).
     pub judge_enabled: bool,
+    /// Path to the TOML pipeline stage registry.
+    /// Selects which pipeline stages run and with what parameters, enabling A/B testing
+    /// of different pipeline configurations without recompilation.
+    /// Populated from `SWARM_PIPELINE_CONFIG` env var (default: `config/pipeline-stages.toml`).
+    pub pipeline_config_path: Option<PathBuf>,
 }
 
 impl Default for SwarmConfig {
@@ -773,6 +778,19 @@ impl Default for SwarmConfig {
             judge_enabled: std::env::var("SWARM_JUDGE_ENABLED")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            pipeline_config_path: std::env::var("SWARM_PIPELINE_CONFIG")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    // Default to config/pipeline-stages.toml relative to the working directory.
+                    let default = PathBuf::from("config/pipeline-stages.toml");
+                    if default.exists() {
+                        Some(default)
+                    } else {
+                        None
+                    }
+                }),
         }
     }
 }
@@ -1044,6 +1062,7 @@ impl SwarmConfig {
             verify_before_merge: true,
             analyze_after_resolve: true,
             judge_enabled: false,
+            pipeline_config_path: None,
         }
     }
 }
