@@ -26,6 +26,33 @@ cargo fmt --all -- --check                 # Check formatting
 cargo clippy --workspace -- -D warnings    # Lint
 ```
 
+## Code Conventions
+
+### Rust Style
+
+- Use `thiserror` for error types — never `Result<(), String>`
+- Use `?` operator — avoid `.unwrap()` (use `.expect("reason")` only in tests)
+- `WasmCompatSend` / `WasmCompatSync` for trait bounds (Rig convention, not `Send`/`Sync` directly)
+- Targeted `#[allow(dead_code)]` with a comment explaining why, not blanket suppression
+- Prefer `tracing::info!`/`debug!` over `println!` for runtime logging
+- Conventional commits: `feat:`, `fix:`, `docs:`, `refactor:`, `test:`, `chore:`
+- Branch naming: `feat/<description>`, `fix/<description>`, or `swarm/<issue-id>` for automated work
+
+### Testing Patterns
+
+```bash
+cargo test -p coordination                    # All coordination tests
+cargo test -p coordination -- test_name       # Single test
+cargo test -p swarm-agents                    # Swarm orchestrator tests
+cargo test --workspace                        # Everything (slow)
+cargo test -p coordination -- --test-threads=1  # Env var tests (mutate process env — must run serially)
+```
+
+- Tests that call `std::env::set_var`/`remove_var` are **not thread-safe** — always run with `--test-threads=1`
+- Integration tests that require inference endpoints running should be marked `#[ignore]` in CI
+- State machine tests: cover each transition, edge cases, and error paths
+- Verifier tests use real rustc output snippets (see `coordination/src/verifier/pipeline.rs`)
+
 ## Architecture
 
 Autonomous coding swarm: local LLM agents on an HPC cluster (3x V100S GPUs) coordinated through deterministic quality gates.
@@ -75,11 +102,23 @@ Key modules:
 - `modes/` — Runner architectures: contextual (Draft→Critique→Condense, NS-2), deepthink (JoinSet fan-out, NS-3), agentic (LLM-driven unified-diff, NS-4).
 - `tools/` — 19 agent tools: colgrep, astgrep, exec, patch, fs, git, verifier, notebook, cargo_metadata, search_code, plan_parallel, workpad, apply_plan, bundles, proxy_wrappers, and more.
 - `config.rs` — SwarmConfig, Tier, SwarmRole, SwarmStackProfile, CloudFallbackMatrix.
+- `driver.rs` (~73k) — Top-level orchestration loop; owns the issue dispatch, worker delegation, and iteration logic. Entry point for understanding a swarm run.
+- `state_machine.rs` (~78k) — Core swarm state machine (issue lifecycle, iteration state, merge decisions).
+- `worktree_bridge.rs` (~71k) — Git worktree lifecycle: create, commit, merge, prune. Authoritative for worktree state.
+- `acceptance.rs` (~43k) — Landing verification: determines whether a completed iteration passes quality gates and can be merged.
+- `reformulation.rs` (~64k) — Task decomposition and reformulation before delegation to workers.
+- `runtime_adapter.rs` (~64k) — Runtime model-routing adapter; handles tier selection and fallback at call time.
+- `subtask.rs` (~46k) — Parallel subtask decomposition and execution.
+- `harness_layers.rs` (~39k) — Session harness layering (checkpoints, context budgets, delegation contracts).
+- `pipeline.rs` — High-level pipeline orchestration (pre-task research, post-success upload, retry logic).
+- `context_firewall.rs` — Prevents context bleed between parallel issues in the same worktree.
+- `autopilot.rs` + `autopilot/` — Fully autonomous execution mode (no cloud manager, local models only).
+- `map_elites.rs` — MAP-Elites evolutionary search for mutation diversity.
 - `beads_bridge.rs` — Native `bd` subprocess integration.
 - `file_targeting.rs` — Multi-language file targeting with snake_case/CamelCase extraction.
 - `mutation_archive.rs` — Tracks successful mutations for feedback loops.
 - `tensorzero.rs` — TensorZero feedback loop integration (experiment tracking, A/B testing).
-- `telemetry.rs` — OpenTelemetry-compatible observability.
+- `telemetry.rs` (~101k) — OpenTelemetry-compatible observability; spans, metrics, structured events.
 
 ### Escalation Ladder
 
@@ -319,6 +358,30 @@ INFO swarm_agents: Beads-free mode: processing CLI issue id=<issue>
 INFO swarm_agents::agents: Building cloud-backed manager with proxy-prefixed workers model=claude-opus-4-6
 ```
 
+### Swarm Behavior Insights
+
+- Cloud manager does heavy read-first exploration (~70% reads) before writing — this is expected, not a hang
+- Worker delegation uses `proxy_`-prefixed tools (e.g., `proxy_rust_coder`, `proxy_reasoning_worker`)
+- `MaxTurnError` on a worker is expected — manager retries with a different worker or reformulated task
+- Verifier runs after **each iteration**, not just at the end
+- Parallel issue dispatch: up to 3 issues run concurrently (one per node, round-robin)
+- Per-issue circuit breaker: after `SWARM_MAX_NO_CHANGE` consecutive no-change iterations → abort that issue
+- Multi-language verification: Rust uses cargo quality gates; Python/TypeScript/Go use `ScriptVerifier`
+
+### Common Gotchas
+
+| Gotcha | Solution |
+|--------|----------|
+| CLIAPIProxy reports `owned_by=antigravity` | run-swarm.sh accepts "antigravity" — no workaround needed |
+| Cloud proxy down or models missing | Use `/cloud-proxy` skill; restart: `ssh root@100.105.113.58 'pkill -f cli-proxy-api; sleep 2; nohup /opt/cli-proxy-api/cli-proxy-api -config /opt/cli-proxy-api/config.yaml > /tmp/cliproxyapi.log 2>&1 &'` |
+| Stale cloud credential | Check `curl -s -H "Authorization: Bearer rust-daq-proxy-key" http://100.105.113.58:8317/v0/management/auth-files`; re-auth via SSH if modtime >24h |
+| Stale worktree blocks new run | `rm -rf /tmp/beefcake-wt/<id> && git worktree prune` |
+| `SWARM_CLOUD_URL` wrong on ai-proxy | Use `http://localhost:8317/v1`, not the LAN IP |
+| Tests fail with env var races | Run with `cargo test -- --test-threads=1` |
+| Rig `default_max_turns` not enforced | Only wall-clock timeout works with `.prompt()` |
+| `nlm` not found on ai-proxy | Expected — swarm runs without NotebookLM on ai-proxy |
+| Race claiming an issue | Use `bd update <id> --claim` (atomic) not `--status in_progress` |
+
 ## External Tools (install separately)
 
 - `bd` (beads): `curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash` — Go binary, issue tracker CLI. Invoked via subprocess (see `beads_bridge.rs`). The swarm calls `bd` directly (via `scripts/bd-safe.sh` wrapper); humans may also use `bdh` for its `:` coordination commands.
@@ -417,7 +480,6 @@ Worktrees are created locally at `/tmp/beefcake-wt/<issue-id>` (not on NFS). Bea
 ## Known Issues
 
 - `#![allow(dead_code)]` in `coordination/src/main.rs` — rmcp `#[tool_router]` macro triggers false positives. Targeted `#[allow]` used elsewhere after refactor (PR #20).
-- `CLIAPIProxy ownership check` — Reports `owned_by=antigravity`. run-swarm.sh now accepts both "anthropic" and "antigravity", so ownership check passes normally.
 
 ## Worktree Agent Rules
 
@@ -489,6 +551,8 @@ bd list        # see all issues
 - Humans may use `bdh` for convenience (it wraps `bd`)
 - Identity is set via `BD_ACTOR` env var (e.g., `BD_ACTOR=worker-vasp03-beefcake-abc1`)
 - Sync with `bd dolt push/pull` to the Dolt remote on ai-proxy
+- Use `bd update <id> --claim` (atomic) to claim work — not `--status in_progress` (race condition risk in parallel agents)
+- Check `bd list --status=in_progress` before touching shared files to avoid stepping on other agents
 
 ### Native Messaging (Phase 2)
 
