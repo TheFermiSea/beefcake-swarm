@@ -91,10 +91,12 @@ pub fn build_cloud_manager_for_language(
     verifier_packages: &[String],
     language: Option<&str>,
 ) -> OaiAgent {
-    let raw = prompts::load_prompt("manager", wt_path, prompts::CLOUD_MANAGER_PREAMBLE);
-    let adapted = prompts::adapt_prompt_for_language(&raw, language);
-    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
-    let preamble = prompts::inject_repo_context(&adapted, repo_ctx.as_deref());
+    let preamble = prompts::build_full_manager_preamble(
+        "manager",
+        wt_path,
+        prompts::CLOUD_MANAGER_PREAMBLE,
+        language,
+    );
     // Context firewalls: wrap worker agents so their raw tool call logs
     // are condensed before the manager sees them. The manager receives only
     // a compact summary (files modified, write count, termination reason).
@@ -193,10 +195,12 @@ pub fn build_local_manager_for_language(
     verifier_packages: &[String],
     language: Option<&str>,
 ) -> OaiAgent {
-    let raw = prompts::load_prompt("local_manager", wt_path, prompts::LOCAL_MANAGER_PREAMBLE);
-    let adapted = prompts::adapt_prompt_for_language(&raw, language);
-    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
-    let preamble = prompts::inject_repo_context(&adapted, repo_ctx.as_deref());
+    let preamble = prompts::build_full_manager_preamble(
+        "local_manager",
+        wt_path,
+        prompts::LOCAL_MANAGER_PREAMBLE,
+        language,
+    );
     // Context firewalls: wrap worker agents so their raw tool call logs
     // are condensed before the local manager sees them.
     let mut builder = client

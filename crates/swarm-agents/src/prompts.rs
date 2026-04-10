@@ -1076,6 +1076,41 @@ pub fn inject_repo_context(preamble: &str, repo_context: Option<&str>) -> String
     }
 }
 
+/// Build a complete worker preamble: load custom prompt, adapt for language, inject repo context.
+///
+/// This is the standard entry point for all worker agent builders. It combines
+/// `load_prompt` + `load_repo_context` + `build_worker_prompt_for_language` into
+/// a single call, eliminating repetition across builder functions.
+pub fn build_full_worker_preamble(
+    role: &str,
+    wt_path: &Path,
+    default_preamble: &str,
+    language: Option<&str>,
+) -> String {
+    let repo_ctx = load_repo_context(wt_path, DEFAULT_REPO_CONTEXT_MAX_BYTES);
+    build_worker_prompt_for_language(
+        &load_prompt(role, wt_path, default_preamble),
+        language,
+        repo_ctx.as_deref(),
+    )
+}
+
+/// Build a complete manager preamble: load custom prompt, adapt for language, inject repo context.
+///
+/// Like [`build_full_worker_preamble`] but for managers, which don't get the
+/// worker coordination block appended.
+pub fn build_full_manager_preamble(
+    role: &str,
+    wt_path: &Path,
+    default_preamble: &str,
+    language: Option<&str>,
+) -> String {
+    let raw = load_prompt(role, wt_path, default_preamble);
+    let adapted = adapt_prompt_for_language(&raw, language);
+    let repo_ctx = load_repo_context(wt_path, DEFAULT_REPO_CONTEXT_MAX_BYTES);
+    inject_repo_context(&adapted, repo_ctx.as_deref())
+}
+
 // ── PromptLoader ─────────────────────────────────────────────────────────────
 //
 // Loads role-specific prompts from `.swarm/prompts/` in the target repo,

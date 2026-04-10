@@ -161,11 +161,11 @@ pub fn build_rust_coder_for_language(
     proxy_tools: bool,
     language: Option<&str>,
 ) -> OaiAgent {
-    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
-    let preamble = prompts::build_worker_prompt_for_language(
-        &prompts::load_prompt("coder", wt_path, prompts::RUST_CODER_PREAMBLE),
+    let preamble = prompts::build_full_worker_preamble(
+        "coder",
+        wt_path,
+        prompts::RUST_CODER_PREAMBLE,
         language,
-        repo_ctx.as_deref(),
     );
     client
         .agent(model)
@@ -217,15 +217,11 @@ pub fn build_reasoning_worker_for_language(
     proxy_tools: bool,
     language: Option<&str>,
 ) -> OaiAgent {
-    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
-    let preamble = prompts::build_worker_prompt_for_language(
-        &prompts::load_prompt(
-            "reasoning_worker",
-            wt_path,
-            prompts::REASONING_WORKER_PREAMBLE,
-        ),
+    let preamble = prompts::build_full_worker_preamble(
+        "reasoning_worker",
+        wt_path,
+        prompts::REASONING_WORKER_PREAMBLE,
         language,
-        repo_ctx.as_deref(),
     );
     client
         .agent(model)
@@ -267,15 +263,11 @@ pub fn build_strategist_for_language(
     proxy_tools: bool,
     language: Option<&str>,
 ) -> OaiAgent {
-    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
-    let preamble = prompts::build_worker_prompt_for_language(
-        &prompts::load_prompt(
-            "reasoning_worker",
-            wt_path,
-            prompts::REASONING_WORKER_PREAMBLE,
-        ),
+    let preamble = prompts::build_full_worker_preamble(
+        "reasoning_worker",
+        wt_path,
+        prompts::REASONING_WORKER_PREAMBLE,
         language,
-        repo_ctx.as_deref(),
     );
     client
         .agent(model)
@@ -330,11 +322,11 @@ pub fn build_general_coder_for_language(
     proxy_tools: bool,
     language: Option<&str>,
 ) -> OaiAgent {
-    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
-    let preamble = prompts::build_worker_prompt_for_language(
-        &prompts::load_prompt("coder", wt_path, prompts::GENERAL_CODER_PREAMBLE),
+    let preamble = prompts::build_full_worker_preamble(
+        "coder",
+        wt_path,
+        prompts::GENERAL_CODER_PREAMBLE,
         language,
-        repo_ctx.as_deref(),
     );
     client
         .agent(model)
