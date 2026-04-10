@@ -563,7 +563,7 @@ pub struct SwarmConfig {
     pub tensorzero_url: Option<String>,
     /// TensorZero Postgres URL for reading performance insights.
     /// Auto-detected when `SWARM_TENSORZERO_URL` is set (defaults to
-    /// `postgres://tensorzero:tensorzero@localhost:5433/tensorzero`).
+    /// `postgresql://localhost:5433/tensorzero`).
     /// Explicitly overridden via `SWARM_TENSORZERO_PG_URL` env var.
     pub tensorzero_pg_url: Option<String>,
     /// Cache TTL for TZ insights (seconds). Default: 1800 (30 min).
@@ -832,7 +832,7 @@ impl SwarmConfig {
     }
 
     fn default_tensorzero_pg_url(tensorzero_url: Option<&String>) -> Option<String> {
-        tensorzero_url.map(|_| "postgres://tensorzero:tensorzero@localhost:5433/tensorzero".into())
+        tensorzero_url.map(|_| "postgresql://localhost:5433/tensorzero".into())
     }
 
     /// Resolve the appropriate rig client for a given swarm role based on the active stack profile.
