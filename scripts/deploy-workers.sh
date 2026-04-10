@@ -48,13 +48,16 @@ log() { echo "[deploy] $(date +%H:%M:%S) $*"; }
 deploy_node() {
     local name="$1"
     local ip="${NODES[$name]}"
-    local ssh="ssh -o StrictHostKeyChecking=no root@$ip"
+    local ssh="ssh -o StrictHostKeyChecking=accept-new root@$ip"
 
     log "=== Deploying to $name ($ip) ==="
 
     if $BUILD_ONLY; then
         log "[$name] Build-only mode — rebuilding swarm-agents"
-        $ssh "cd /root/code/beefcake-swarm && git pull --rebase && cargo build --release -p swarm-agents 2>&1 | tail -3"
+        $ssh 'source "$HOME/.cargo/env" 2>/dev/null
+        cd /root/code/beefcake-swarm
+        git pull --rebase
+        cargo build --release -p swarm-agents 2>&1 | tail -3'
         log "[$name] Build complete"
         return
     fi
@@ -143,7 +146,7 @@ deploy_node() {
     # ── 8. Deploy swarm-worker service ───────────────────────────────
     log "[$name] Deploying swarm-worker service..."
     # Copy the worker runner script
-    scp -o StrictHostKeyChecking=no \
+    scp -o StrictHostKeyChecking=accept-new \
         "$REPO_ROOT/scripts/swarm-worker.sh" \
         "root@$ip:/root/code/beefcake-swarm/scripts/swarm-worker.sh"
     $ssh 'chmod +x /root/code/beefcake-swarm/scripts/swarm-worker.sh'
