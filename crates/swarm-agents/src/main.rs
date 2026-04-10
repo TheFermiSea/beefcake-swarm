@@ -253,7 +253,18 @@ async fn main() -> Result<()> {
         }
     }
 
+    // Detect repo root (needed for registry resolution and worktree bridge)
+    let repo_root = match &args.repo_root {
+        Some(path) => path
+            .canonicalize()
+            .context("--repo-root path does not exist")?,
+        None => std::env::current_dir()?,
+    };
+
     // --- Initialize NotebookLM knowledge base ---
+    // If an explicit registry path is configured, use it directly.
+    // Otherwise, resolve by searching the repo root for a registry file.
+    // External repos without a registry get a silent no-op (debug log only).
     let knowledge_base: Option<Arc<dyn KnowledgeBase>> = if let Some(ref registry_path) =
         config.notebook_registry_path
     {
@@ -272,7 +283,8 @@ async fn main() -> Result<()> {
             }
         }
     } else {
-        None
+        // Auto-resolve: check .swarm/notebook_registry.toml then notebook_registry.toml
+        NotebookBridge::resolve_registry(&repo_root).map(|b| Arc::new(b) as Arc<dyn KnowledgeBase>)
     };
 
     // --- Build agent factory with health-aware routing ---
@@ -281,14 +293,6 @@ async fn main() -> Result<()> {
     if let Some(ref kb) = knowledge_base {
         factory = factory.with_notebook_bridge(kb.clone());
     }
-
-    // Detect repo root
-    let repo_root = match &args.repo_root {
-        Some(path) => path
-            .canonicalize()
-            .context("--repo-root path does not exist")?,
-        None => std::env::current_dir()?,
-    };
     let worktree_bridge = Arc::new(WorktreeBridge::new(
         config.worktree_base.clone(),
         &repo_root,
