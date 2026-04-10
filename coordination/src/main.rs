@@ -496,12 +496,6 @@ impl RustClusterServer {
         })
     }
 
-    fn get_event_bus(&self) -> Result<events::SharedEventBus, anyhow::Error> {
-        self.event_bus.clone().ok_or_else(|| {
-            anyhow::anyhow!("Ensemble not enabled. Start server with --ensemble flag.")
-        })
-    }
-
     fn get_state_store(&self) -> Result<state::SharedStateStore, String> {
         self.state_store
             .clone()
