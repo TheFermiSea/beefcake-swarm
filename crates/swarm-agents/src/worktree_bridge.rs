@@ -110,9 +110,12 @@ pub struct WorktreeBridge {
 impl WorktreeBridge {
     /// Create a new WorktreeBridge.
     ///
-    /// `base_dir`: parent directory for worktrees. If None, auto-detects:
-    ///   - `/cluster/shared/wt/` if NFS mount exists (cluster)
-    ///   - `/tmp/beefcake-wt/` otherwise (local dev)
+    /// `base_dir`: parent directory for worktrees. If None, auto-detects using
+    /// this fallback chain:
+    ///   1. Explicit `base_dir` parameter (this argument)
+    ///   2. `SWARM_WORKTREE_DIR` env var
+    ///   3. `/cluster/shared/wt/` if NFS mount exists (cluster)
+    ///   4. `/tmp/swarm-wt/{repo-name}/` derived from `repo_root` dirname
     pub fn new(base_dir: Option<PathBuf>, repo_root: impl AsRef<Path>) -> Result<Self> {
         let repo_root = repo_root.as_ref().to_path_buf();
 
@@ -126,14 +129,20 @@ impl WorktreeBridge {
             bail!("Not a git repository: {}", repo_root.display());
         }
 
-        let base_dir = base_dir.unwrap_or_else(|| {
-            let cluster_path = PathBuf::from("/cluster/shared/wt");
-            if cluster_path.exists() {
-                cluster_path
-            } else {
-                PathBuf::from("/tmp/beefcake-wt")
-            }
-        });
+        let base_dir = base_dir
+            .or_else(|| std::env::var("SWARM_WORKTREE_DIR").ok().map(PathBuf::from))
+            .unwrap_or_else(|| {
+                let cluster_path = PathBuf::from("/cluster/shared/wt");
+                if cluster_path.exists() {
+                    cluster_path
+                } else {
+                    let repo_name = repo_root
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("default");
+                    PathBuf::from(format!("/tmp/swarm-wt/{repo_name}"))
+                }
+            });
 
         // Ensure base directory exists
         std::fs::create_dir_all(&base_dir).with_context(|| {

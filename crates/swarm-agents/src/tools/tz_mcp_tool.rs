@@ -48,6 +48,17 @@ impl QueryTensorZeroTool {
         }
     }
 
+    /// Derive the MCP client name from `SWARM_REPO_ID` env var, or from the
+    /// current working directory name, falling back to `"swarm"`.
+    fn client_name() -> String {
+        std::env::var("SWARM_REPO_ID").ok().unwrap_or_else(|| {
+            std::env::current_dir()
+                .ok()
+                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                .unwrap_or_else(|| "swarm".to_string())
+        })
+    }
+
     /// Initialize an MCP session and return the session ID.
     async fn init_session(&self) -> Result<String, ToolError> {
         let init_body = serde_json::json!({
@@ -58,7 +69,7 @@ impl QueryTensorZeroTool {
                 "protocolVersion": MCP_PROTOCOL_VERSION,
                 "capabilities": {},
                 "clientInfo": {
-                    "name": "beefcake-swarm",
+                    "name": Self::client_name(),
                     "version": "1.0.0"
                 }
             }
