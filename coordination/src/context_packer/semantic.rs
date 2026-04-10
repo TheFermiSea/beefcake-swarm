@@ -103,32 +103,47 @@ pub(crate) fn score_and_rerank(objective: &str, file_contexts: &mut [FileContext
 ///
 /// `texts[0]` is the query (objective). `texts[1..]` are the documents.
 /// Returns a Vec of cosine similarities between texts[0] and each of texts[1..].
+///
+/// Uses `spawn_blocking` to isolate the `reqwest::blocking::Client` lifecycle
+/// from the async runtime. Without this, dropping the blocking client's internal
+/// tokio Runtime inside an async context panics on tokio >=1.49.
 fn compute_similarities(texts: &[String]) -> Result<Vec<f32>, String> {
     let url =
         std::env::var("SWARM_EMBEDDING_URL").unwrap_or_else(|_| EMBEDDING_SERVICE_URL.to_string());
-
-    let client = reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_millis(EMBEDDING_TIMEOUT_MS))
-        .build()
-        .map_err(|e| format!("HTTP client error: {e}"))?;
 
     let body = serde_json::json!({
         "model": EMBEDDING_MODEL,
         "input": texts,
     });
 
-    let response = client
-        .post(&url)
-        .json(&body)
-        .send()
-        .map_err(|e| format!("Embedding request failed: {e}"))?;
+    // Run the blocking HTTP call on a dedicated thread to avoid dropping
+    // reqwest::blocking::Client's internal tokio Runtime inside an async context.
+    let response_bytes = std::thread::scope(|s| {
+        s.spawn(|| {
+            let client = reqwest::blocking::Client::builder()
+                .timeout(std::time::Duration::from_millis(EMBEDDING_TIMEOUT_MS))
+                .build()
+                .map_err(|e| format!("HTTP client error: {e}"))?;
 
-    if !response.status().is_success() {
-        return Err(format!("Embedding service returned {}", response.status()));
-    }
+            let response = client
+                .post(&url)
+                .json(&body)
+                .send()
+                .map_err(|e| format!("Embedding request failed: {e}"))?;
 
-    let json: serde_json::Value = response
-        .json()
+            if !response.status().is_success() {
+                return Err(format!("Embedding service returned {}", response.status()));
+            }
+
+            response
+                .bytes()
+                .map_err(|e| format!("Failed to read embedding response: {e}"))
+        })
+        .join()
+        .map_err(|_| "Embedding thread panicked".to_string())?
+    })?;
+
+    let json: serde_json::Value = serde_json::from_slice(&response_bytes)
         .map_err(|e| format!("Failed to parse embedding response: {e}"))?;
 
     // Parse embeddings from OpenAI-compatible response
