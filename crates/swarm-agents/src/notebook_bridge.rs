@@ -4,13 +4,13 @@
 //! via `std::process::Command` with graceful degradation when unavailable.
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use serde::Deserialize;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 /// Number of retries on authentication errors.
 const AUTH_RETRY_COUNT: u32 = 1;
@@ -114,6 +114,56 @@ impl NotebookBridge {
         let registry = NotebookRegistry::from_file(path)?;
         let bin = std::env::var("SWARM_NLM_BIN").unwrap_or_else(|_| "nlm".into());
         Ok(Self { bin, registry })
+    }
+
+    /// Resolve and load a registry from multiple candidate locations.
+    ///
+    /// Search order:
+    /// 1. `{repo_root}/.swarm/notebook_registry.toml`
+    /// 2. `{repo_root}/notebook_registry.toml`
+    ///
+    /// Returns `None` silently (debug log only) if no registry is found.
+    /// This is the expected path for external repos that don't use NotebookLM.
+    pub fn resolve_registry(repo_root: &Path) -> Option<Self> {
+        let candidates: [PathBuf; 2] = [
+            repo_root.join(".swarm/notebook_registry.toml"),
+            repo_root.join("notebook_registry.toml"),
+        ];
+
+        for path in &candidates {
+            if path.is_file() {
+                match Self::from_registry(path) {
+                    Ok(bridge) => {
+                        let count = bridge.registry.notebooks.len();
+                        if bridge.is_available() {
+                            info!(
+                                path = %path.display(),
+                                notebooks = count,
+                                "NotebookLM: enabled, {count} notebooks configured"
+                            );
+                        } else {
+                            debug!(
+                                path = %path.display(),
+                                "NotebookLM: registry found but `nlm` CLI not available"
+                            );
+                            return None;
+                        }
+                        return Some(bridge);
+                    }
+                    Err(e) => {
+                        warn!(
+                            path = %path.display(),
+                            error = %e,
+                            "NotebookLM: registry file exists but failed to parse"
+                        );
+                        // Continue to next candidate
+                    }
+                }
+            }
+        }
+
+        debug!("NotebookLM: disabled (no registry found)");
+        None
     }
 
     /// Create a bridge with an explicit registry and binary name.
@@ -499,5 +549,77 @@ auto_update = false
 
         let registry = NotebookRegistry::from_file(&path).unwrap();
         assert_eq!(registry.id_for_role("brain"), Some("test-id"));
+    }
+
+    #[test]
+    fn test_resolve_registry_no_file_returns_none() {
+        let dir = tempfile::tempdir().unwrap();
+        // Empty directory — no registry file at all
+        let result = NotebookBridge::resolve_registry(dir.path());
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_resolve_registry_prefers_swarm_subdir() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Create both candidates with different IDs so we can distinguish
+        let swarm_dir = dir.path().join(".swarm");
+        std::fs::create_dir_all(&swarm_dir).unwrap();
+        std::fs::write(
+            swarm_dir.join("notebook_registry.toml"),
+            r#"
+[notebooks.brain]
+id = "swarm-dir-id"
+role = "brain"
+auto_query = false
+"#,
+        )
+        .unwrap();
+
+        std::fs::write(
+            dir.path().join("notebook_registry.toml"),
+            r#"
+[notebooks.brain]
+id = "root-id"
+role = "brain"
+auto_query = false
+"#,
+        )
+        .unwrap();
+
+        // resolve_registry should either:
+        // - Return Some with the .swarm/ registry (if nlm is available)
+        // - Return None (if nlm CLI is not installed)
+        // Either way, it must not error/panic.
+        let result = NotebookBridge::resolve_registry(dir.path());
+        if let Some(bridge) = result {
+            // If nlm IS available, the .swarm/ path should win (searched first)
+            assert_eq!(bridge.registry().id_for_role("brain"), Some("swarm-dir-id"));
+        }
+    }
+
+    #[test]
+    fn test_resolve_registry_falls_back_to_root() {
+        let dir = tempfile::tempdir().unwrap();
+
+        // Only root-level registry, no .swarm/ dir
+        std::fs::write(
+            dir.path().join("notebook_registry.toml"),
+            r#"
+[notebooks.brain]
+id = "root-id"
+role = "brain"
+auto_query = false
+"#,
+        )
+        .unwrap();
+
+        // Should either load from root or return None (nlm unavailable).
+        // Must not panic/error when .swarm/ doesn't exist.
+        let result = NotebookBridge::resolve_registry(dir.path());
+        if let Some(bridge) = result {
+            assert_eq!(bridge.registry().id_for_role("brain"), Some("root-id"));
+        }
     }
 }
