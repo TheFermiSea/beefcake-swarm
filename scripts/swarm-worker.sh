@@ -86,6 +86,8 @@ if ! bd --version >/dev/null 2>&1; then
     if [[ -x "$SCRIPT_DIR/bd-remote.sh" ]]; then
         echo "[swarm-worker] Local bd incompatible — using bd-remote.sh proxy to ai-proxy"
         export SWARM_BEADS_BIN="$SCRIPT_DIR/bd-remote.sh"
+        # dogfood-loop.sh uses DOGFOOD_BEADS_BIN for issue discovery (not SWARM_BEADS_BIN)
+        export DOGFOOD_BEADS_BIN="$SCRIPT_DIR/bd-remote.sh"
     else
         echo "[swarm-worker] WARNING: bd not working and bd-remote.sh not found" >&2
     fi
