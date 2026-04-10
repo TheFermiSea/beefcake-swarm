@@ -300,6 +300,7 @@ pub(crate) fn create_stuck_intervention(
 ///
 /// Groups entries by `(tool, error_class)` and generates directives for
 /// patterns that occurred 3+ times. Returns at most 5 directives.
+#[allow(dead_code)] // Used by directive pipeline (not yet wired into driver)
 pub(crate) fn detect_failure_patterns(worktree_path: &Path) -> Vec<String> {
     let path = worktree_path.join(".swarm-failure-ledger.jsonl");
     let content = match std::fs::read_to_string(&path) {
@@ -333,6 +334,7 @@ pub(crate) fn detect_failure_patterns(worktree_path: &Path) -> Vec<String> {
 }
 
 /// Save generated directives to `.swarm-directives.jsonl` in the repo root.
+#[allow(dead_code)] // Used by directive pipeline (not yet wired into driver)
 pub(crate) fn save_directives(repo_root: &Path, directives: &[String]) {
     use std::io::Write;
     let path = repo_root.join(".swarm-directives.jsonl");
@@ -355,6 +357,7 @@ pub(crate) fn save_directives(repo_root: &Path, directives: &[String]) {
 /// Load recent directives from `.swarm-directives.jsonl`.
 ///
 /// Returns at most 5 recent directives (deduped).
+#[allow(dead_code)] // Used by directive pipeline (not yet wired into driver)
 pub(crate) fn load_directives(repo_root: &Path) -> Vec<String> {
     let path = repo_root.join(".swarm-directives.jsonl");
     let content = match std::fs::read_to_string(&path) {
@@ -381,6 +384,7 @@ pub(crate) fn load_directives(repo_root: &Path) -> Vec<String> {
 // ── Reformulation helpers ────────────────────────────────────────────
 
 /// Load failure ledger entries from a worktree's `.swarm-failure-ledger.jsonl`.
+#[allow(dead_code)] // Used by reformulation pipeline (not yet wired into driver)
 pub(crate) fn load_failure_ledger(
     worktree_path: &Path,
 ) -> Vec<crate::telemetry::FailureLedgerEntry> {
@@ -395,6 +399,7 @@ pub(crate) fn load_failure_ledger(
 }
 
 /// List files changed in the worktree relative to main (via `git diff --name-only`).
+#[allow(dead_code)] // Used by reformulation pipeline (not yet wired into driver)
 pub(crate) fn list_changed_files(worktree_path: &Path) -> Vec<String> {
     match std::process::Command::new("git")
         .args(["diff", "--name-only", "main"])
