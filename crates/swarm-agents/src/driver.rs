@@ -540,6 +540,70 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         }
     }
 
+    // --- Part B: Mutation archive strategy seeding ---
+    //
+    // On the first iteration (no last_report), query the archive for similar past
+    // issues and inject the strategies that worked as a heuristic hint.  Uses
+    // map_elites::sample_diverse() so we suggest a variety of approaches rather
+    // than always repeating the most-recently-successful pattern.
+    if ctx.last_report.is_none() {
+        let archive =
+            crate::mutation_archive::MutationArchive::new(ctx.worktree_bridge.repo_root());
+        let keyword_matches = archive.query_by_keywords(&ctx.issue.title, 10);
+        if !keyword_matches.is_empty() {
+            // Build a temporary QD archive from the keyword matches so we can
+            // sample diverse strategies (rather than just the top match).
+            let mut qd = crate::map_elites::QualityDiversityArchive::new();
+            for r in &keyword_matches {
+                let lines = (r.lines_added + r.lines_removed) as usize;
+                let files = r.files_changed.len();
+                let features =
+                    crate::map_elites::FeatureExtractor::extract_from_metadata(lines, files);
+                let score = if r.resolved {
+                    1.0 / r.iterations.max(1) as f64
+                } else {
+                    0.0
+                };
+                let node = crate::map_elites::ExperimentNode {
+                    id: r.issue_id.clone(),
+                    description: r.issue_title.clone(),
+                    score,
+                    lines_changed: lines,
+                    files_changed: files,
+                    strategy: crate::map_elites::FeatureExtractor::infer_strategy(files, lines),
+                };
+                qd.insert(node, features);
+            }
+
+            // Sample up to 3 diverse experiments from different bins.
+            let diverse = qd.sample_diverse(3);
+            if !diverse.is_empty() {
+                let mut hint = String::from(
+                    "## Strategy Hints from Past Similar Issues\n\n\
+                     The mutation archive found similar past issues. \
+                     Consider these strategies (do not blindly copy — adapt as needed):\n\n",
+                );
+                for node in &diverse {
+                    // Find the original record for model/tier info.
+                    if let Some(rec) = keyword_matches.iter().find(|r| r.issue_id == node.id) {
+                        hint.push_str(&format!(
+                            "- **{}** (resolved={}, {} iter, model=`{}`, strategy={:?})\n",
+                            rec.issue_title, rec.resolved, rec.iterations, rec.model, node.strategy,
+                        ));
+                    }
+                }
+                hint.push('\n');
+                packet.relevant_heuristics.push(hint);
+                info!(
+                    matches = keyword_matches.len(),
+                    diverse = diverse.len(),
+                    "Mutation archive: seeded {} diverse strategy hints (state driver)",
+                    diverse.len()
+                );
+            }
+        }
+    }
+
     info!(
         tokens = packet.estimated_tokens(),
         files = packet.file_contexts.len(),
@@ -2179,5 +2243,186 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
         let dashboard = crate::dashboard::generate(reader.sessions(), &skills, now);
         let summary = crate::dashboard::format_summary(&dashboard);
         info!(sessions = reader.sessions().len(), "\n{summary}");
+    }
+
+    // --- Mutation archive (Phase 4a: evolutionary tracking) ---
+    //
+    // Record outcome for SERA-14B critic training and strategy seeding.
+    // Mirrors the legacy path in orchestrator/mod.rs:4056-4145.
+    {
+        let archive =
+            crate::mutation_archive::MutationArchive::new(ctx.worktree_bridge.repo_root());
+        let language = ctx
+            .factory
+            .language
+            .as_deref()
+            .unwrap_or("rust")
+            .to_string();
+        let final_tier = format!("{:?}", ctx.escalation.current_tier);
+        let primary_model = ctx
+            .config
+            .resolve_role_model(crate::config::SwarmRole::Planner);
+
+        let mut record = crate::mutation_archive::build_record(
+            &ctx.issue.id,
+            &ctx.issue.title,
+            &language,
+            ctx.success,
+            ctx.session.iteration(),
+            &final_tier,
+            &primary_model,
+            ctx.process_start.elapsed().as_secs(),
+        );
+
+        // Populate error categories and first-failure gate from last verifier report.
+        record.auto_fix_only = ctx.success && ctx.session.iteration() == 0;
+        if let Some(ref report) = ctx.last_report {
+            record.error_categories = report
+                .unique_error_categories()
+                .iter()
+                .map(|c| c.to_string())
+                .collect();
+            record.first_failure_gate = report.first_failure.clone();
+        }
+        if !ctx.success {
+            record.failure_reason = Some(ctx.escalation.summary());
+        }
+
+        // Populate files changed and line counts.
+        record.files_changed = crate::orchestrator::helpers::list_changed_files(&ctx.wt_path);
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["diff", "--stat", "main"])
+            .current_dir(&ctx.wt_path)
+            .output()
+        {
+            let stat = String::from_utf8_lossy(&output.stdout);
+            for line in stat.lines() {
+                if line.contains("insertion") {
+                    if let Some(n) = line.split_whitespace().next().and_then(|s| s.parse().ok()) {
+                        record.lines_added = n;
+                    }
+                }
+                if line.contains("deletion") {
+                    for word in line.split_whitespace() {
+                        if let Ok(n) = word.parse::<u32>() {
+                            record.lines_removed = n;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        archive.record(&record);
+
+        // --- Part C: MAP-Elites diversity update ---
+        //
+        // Insert the outcome into the quality-diversity archive so the swarm
+        // tracks which (complexity, strategy) bins have been explored and
+        // avoids converging on a single approach.
+        {
+            let lines_changed = (record.lines_added + record.lines_removed) as usize;
+            let files_changed = record.files_changed.len();
+            let features = crate::map_elites::FeatureExtractor::extract_from_metadata(
+                lines_changed,
+                files_changed,
+            );
+            let score = if ctx.success {
+                // Reward speed: fewer iterations → higher score.
+                let iter = ctx.session.iteration().max(1) as f64;
+                1.0 / iter
+            } else {
+                0.0
+            };
+            let node = crate::map_elites::ExperimentNode {
+                id: ctx.issue.id.clone(),
+                description: ctx.issue.title.clone(),
+                score,
+                lines_changed,
+                files_changed,
+                strategy: crate::map_elites::FeatureExtractor::infer_strategy(
+                    files_changed,
+                    lines_changed,
+                ),
+            };
+            let mut qd_archive = crate::map_elites::QualityDiversityArchive::new();
+            // Load existing archive records into the in-memory grid so coverage
+            // reflects accumulated history, not just the current session.
+            for past in archive.load_all() {
+                let past_lines = (past.lines_added + past.lines_removed) as usize;
+                let past_files = past.files_changed.len();
+                let past_features = crate::map_elites::FeatureExtractor::extract_from_metadata(
+                    past_lines, past_files,
+                );
+                let past_score = if past.resolved {
+                    1.0 / past.iterations.max(1) as f64
+                } else {
+                    0.0
+                };
+                let past_node = crate::map_elites::ExperimentNode {
+                    id: past.issue_id.clone(),
+                    description: past.issue_title.clone(),
+                    score: past_score,
+                    lines_changed: past_lines,
+                    files_changed: past_files,
+                    strategy: crate::map_elites::FeatureExtractor::infer_strategy(
+                        past_files, past_lines,
+                    ),
+                };
+                qd_archive.insert(past_node, past_features);
+            }
+            let inserted = qd_archive.insert(node, features);
+            info!(
+                issue = %ctx.issue.id,
+                complexity_bin = features.complexity_bin,
+                strategy_bin = features.strategy_bin,
+                score,
+                inserted,
+                coverage = qd_archive.coverage(),
+                occupied_cells = qd_archive.len(),
+                "MAP-Elites: updated quality-diversity archive (state driver)"
+            );
+        }
+
+        // --- Hyperagents: extract skills from successful mutations ---
+        if ctx.success {
+            let skills_path = ctx.worktree_bridge.repo_root().join(".swarm/skills.json");
+            if let Some(candidate) =
+                crate::mutation_archive::MutationArchive::extract_skill_candidate(&record)
+            {
+                if let Ok(mut lib) =
+                    coordination::analytics::skills::SkillLibrary::load(&skills_path)
+                {
+                    let triggers: Vec<coordination::feedback::ErrorCategory> = candidate
+                        .error_categories
+                        .iter()
+                        .filter_map(|s| s.parse().ok())
+                        .collect();
+                    if !triggers.is_empty() {
+                        let trigger = coordination::analytics::skills::SkillTrigger {
+                            error_categories: triggers,
+                            file_patterns: vec![],
+                            task_type: None,
+                        };
+                        lib.create_skill(
+                            &candidate.approach_summary,
+                            trigger,
+                            &candidate.approach_summary,
+                        );
+                        if let Err(e) = lib.save(&skills_path) {
+                            warn!(
+                                error = %e,
+                                "Hyperagents: failed to save skill library (state driver)"
+                            );
+                        } else {
+                            info!(
+                                skill = %candidate.approach_summary,
+                                "Hyperagents: extracted skill from successful mutation (state driver)"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }
