@@ -14,7 +14,7 @@ use tracing::{debug, error, info, warn};
 use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::coder::OaiAgent;
 use crate::agents::AgentFactory;
-use crate::beads_bridge::{BeadsIssue, IssueTracker};
+use crate::beads_bridge::{BeadsBridge, BeadsIssue, IssueTracker};
 use crate::cluster_health::ClusterHealth;
 use crate::config::{SwarmConfig, SwarmRole};
 use crate::file_targeting::detect_changed_packages;
@@ -27,6 +27,7 @@ use crate::orchestrator::{
     local_validate, prompt_with_hook_and_retry, query_kb_with_failsafe, route_to_coder,
     should_reject_auto_fix, try_auto_fix, try_scaffold_fallback, CoderRoute, SwarmResumeFile,
 };
+use crate::reformulation::{IntentContract, ReformulationStore};
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
 use crate::state_machine::{BudgetTracker, OrchestratorState, StateMachine};
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
@@ -110,6 +111,10 @@ pub struct OrchestratorContext<'a> {
     // ── Coordination integrations (P2.2 + P2.3) ──
     pub router: DynamicRouter,
     pub correction_loop: TieredCorrectionLoop,
+
+    // ── Reformulation engine ──
+    pub reformulation_store: ReformulationStore,
+    pub intent_contract: IntentContract,
 
     // ── External deps ──
     pub factory: &'a AgentFactory,
@@ -225,6 +230,19 @@ impl<'a> OrchestratorContext<'a> {
         let wt_path = worktree_bridge.create(&issue.id)?;
         info!(path = %wt_path.display(), "Created worktree (state driver)");
 
+        // Intent contract (reformulation engine Phase 1) — capture original goal on first pickup.
+        // The contract is append-only: subsequent retries of the same issue reuse the stored one.
+        let reformulation_store = ReformulationStore::new(worktree_bridge.repo_root());
+        let intent_contract =
+            IntentContract::from_issue(&issue.id, &issue.title, issue.description.as_deref());
+        reformulation_store.save_contract(&intent_contract);
+        info!(
+            issue = %issue.id,
+            outcomes = intent_contract.required_outcomes.len(),
+            digest = %intent_contract.intent_digest,
+            "Intent contract captured (state driver)"
+        );
+
         // Harness
         let mut session = SessionManager::new(wt_path.clone(), config.max_retries);
         let git_mgr = GitManager::new(&wt_path, "[swarm]");
@@ -312,6 +330,8 @@ impl<'a> OrchestratorContext<'a> {
                 cl
             },
             auto_fix_applied: false,
+            reformulation_store,
+            intent_contract,
             factory,
             beads,
             knowledge_base,
@@ -520,6 +540,70 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         }
     }
 
+    // --- Part B: Mutation archive strategy seeding ---
+    //
+    // On the first iteration (no last_report), query the archive for similar past
+    // issues and inject the strategies that worked as a heuristic hint.  Uses
+    // map_elites::sample_diverse() so we suggest a variety of approaches rather
+    // than always repeating the most-recently-successful pattern.
+    if ctx.last_report.is_none() {
+        let archive =
+            crate::mutation_archive::MutationArchive::new(ctx.worktree_bridge.repo_root());
+        let keyword_matches = archive.query_by_keywords(&ctx.issue.title, 10);
+        if !keyword_matches.is_empty() {
+            // Build a temporary QD archive from the keyword matches so we can
+            // sample diverse strategies (rather than just the top match).
+            let mut qd = crate::map_elites::QualityDiversityArchive::new();
+            for r in &keyword_matches {
+                let lines = (r.lines_added + r.lines_removed) as usize;
+                let files = r.files_changed.len();
+                let features =
+                    crate::map_elites::FeatureExtractor::extract_from_metadata(lines, files);
+                let score = if r.resolved {
+                    1.0 / r.iterations.max(1) as f64
+                } else {
+                    0.0
+                };
+                let node = crate::map_elites::ExperimentNode {
+                    id: r.issue_id.clone(),
+                    description: r.issue_title.clone(),
+                    score,
+                    lines_changed: lines,
+                    files_changed: files,
+                    strategy: crate::map_elites::FeatureExtractor::infer_strategy(files, lines),
+                };
+                qd.insert(node, features);
+            }
+
+            // Sample up to 3 diverse experiments from different bins.
+            let diverse = qd.sample_diverse(3);
+            if !diverse.is_empty() {
+                let mut hint = String::from(
+                    "## Strategy Hints from Past Similar Issues\n\n\
+                     The mutation archive found similar past issues. \
+                     Consider these strategies (do not blindly copy — adapt as needed):\n\n",
+                );
+                for node in &diverse {
+                    // Find the original record for model/tier info.
+                    if let Some(rec) = keyword_matches.iter().find(|r| r.issue_id == node.id) {
+                        hint.push_str(&format!(
+                            "- **{}** (resolved={}, {} iter, model=`{}`, strategy={:?})\n",
+                            rec.issue_title, rec.resolved, rec.iterations, rec.model, node.strategy,
+                        ));
+                    }
+                }
+                hint.push('\n');
+                packet.relevant_heuristics.push(hint);
+                info!(
+                    matches = keyword_matches.len(),
+                    diverse = diverse.len(),
+                    "Mutation archive: seeded {} diverse strategy hints (state driver)",
+                    diverse.len()
+                );
+            }
+        }
+    }
+
     info!(
         tokens = packet.estimated_tokens(),
         files = packet.file_contexts.len(),
@@ -654,6 +738,100 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     // Checkpoint before agent invocation
     ctx.pre_worker_commit = ctx.git_mgr.current_commit_full().ok();
 
+    // --- Multi-candidate fan-out (ARXIV:2510.21513) ---
+    //
+    // When SWARM_CANDIDATE_COUNT > 1 and we're in Worker tier, generate N
+    // candidates concurrently (model + strategy diversity) and pick the first
+    // that produces file changes.  This captures ~95% of ensemble benefit at
+    // a fraction of the sequential cost.
+    //
+    // Only activates for the Worker tier — Council/Strategist run once and
+    // produce authoritative output, so candidate redundancy isn't beneficial.
+    if ctx.config.candidate_count > 1 && tier == SwarmTier::Worker {
+        let base_commit = ctx
+            .pre_worker_commit
+            .clone()
+            .unwrap_or_else(|| "HEAD".to_string());
+        let timeout = orchestrator::timeout_from_env("SWARM_SUBTASK_TIMEOUT_SECS", 3600).as_secs();
+        let complexity = ctx
+            .last_report
+            .as_ref()
+            .map(|_| crate::triage::Complexity::Medium)
+            .unwrap_or(crate::triage::Complexity::Simple);
+
+        let cfg = crate::subtask::CandidateGenerationConfig {
+            candidate_count: ctx.config.candidate_count,
+            model_diversity: true,
+            strategy_diversity: true,
+        };
+
+        info!(
+            iteration,
+            candidate_count = ctx.config.candidate_count,
+            "Running multi-candidate fan-out (state driver)"
+        );
+
+        let candidates = crate::subtask::generate_candidates(
+            &cfg,
+            &ctx.factory.endpoint_pool,
+            &ctx.wt_path,
+            &ctx.issue.id,
+            &task_prompt,
+            &base_commit,
+            timeout,
+            complexity,
+            &ctx.issue.title,
+        )
+        .await;
+
+        // Pick the first candidate that produced changes; fall through to
+        // the single-agent path if no candidate wrote anything.
+        let winner = candidates.into_iter().find(|c| c.has_changes);
+        if let Some(w) = winner {
+            info!(
+                iteration,
+                winner = w.index,
+                elapsed_ms = w.elapsed.as_millis() as u64,
+                "Candidate {} selected — proceeding to verification",
+                w.index
+            );
+            ctx.metrics.record_agent_time(w.elapsed);
+            ctx.span_summary.record_agent(0);
+            ctx.escalation.reset_no_change();
+
+            // Auto-format before commit (same as single-agent path).
+            let mut fmt_args = vec!["fmt".to_string()];
+            if ctx.verifier_config.packages.is_empty() {
+                fmt_args.push("--all".to_string());
+            } else {
+                for pkg in &ctx.verifier_config.packages {
+                    fmt_args.extend(["--package".to_string(), pkg.clone()]);
+                }
+            }
+            let _ = tokio::process::Command::new("cargo")
+                .args(&fmt_args)
+                .current_dir(&ctx.wt_path)
+                .output()
+                .await;
+
+            let _ = git_commit_changes(&ctx.wt_path, iteration).await;
+            return Ok(StateTransition::Advance {
+                to: OrchestratorState::Verifying,
+                reason: format!(
+                    "candidate {} produced changes, ready for verification",
+                    w.index
+                ),
+            });
+        }
+
+        // All candidates produced no changes — fall through to single-agent path.
+        warn!(
+            iteration,
+            "All {} candidates produced no changes — falling back to single-agent",
+            ctx.config.candidate_count
+        );
+    }
+
     // Route to agent
     let agent_start = Instant::now();
     let (agent_future, adapter) = match tier {
@@ -760,6 +938,39 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                         Err(_) => {
                             warn!(iteration, "fast_fixer timed out (state driver)");
                             Ok("fast_fixer timed out. Changes on disk.".into())
+                        }
+                    };
+                    (result, adapter)
+                }
+                CoderRoute::CoTPlanner => {
+                    info!(
+                        iteration,
+                        "Routing to CoT planner (Devstral-24B, no tools — state driver)"
+                    );
+                    ctx.metrics.record_coder_route("CoTPlanner");
+                    ctx.metrics
+                        .record_agent_metrics("Devstral-CoTPlanner", 0, 0);
+                    let cot_planner = ctx.factory.build_cot_planner(&ctx.wt_path);
+                    let adapter = RuntimeAdapter::new(AdapterConfig {
+                        agent_name: "Devstral-CoTPlanner".into(),
+                        deadline: Some(Instant::now() + ctx.worker_timeout),
+                        ..Default::default()
+                    });
+                    let result = match tokio::time::timeout(
+                        ctx.worker_timeout,
+                        crate::orchestrator::prompt_with_hook_and_retry(
+                            &cot_planner,
+                            &task_prompt,
+                            2,
+                            adapter.clone(),
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => {
+                            warn!(iteration, "cot_planner timed out (state driver)");
+                            Ok("cot_planner timed out. No plan produced.".into())
                         }
                     };
                     (result, adapter)
@@ -1457,10 +1668,15 @@ pub async fn handle_escalating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
     // Handle stuck detection or return to Planning
     match decision.stuck {
         true => handle_escalating_stuck(ctx, &decision, iteration),
-        false => Ok(StateTransition::Advance {
-            to: OrchestratorState::Planning,
-            reason: format!("escalation → {:?}", decision.target_tier),
-        }),
+        false => {
+            // Failure classification and intent guard — runs on every retry transition
+            // so the swarm knows WHY it's retrying and can log drift early.
+            handle_escalating_classify(ctx, &report, iteration);
+            Ok(StateTransition::Advance {
+                to: OrchestratorState::Planning,
+                reason: format!("escalation → {:?}", decision.target_tier),
+            })
+        }
     }
 }
 
@@ -1513,6 +1729,76 @@ fn handle_escalation_event(
             to = ?decision.target_tier,
             reason = %decision.reason,
             "Tier escalated (state driver)"
+        );
+    }
+}
+
+/// Classify the failure on a retry and check intent drift.
+///
+/// Called when escalation is NOT stuck (i.e., we're retrying). Classifies WHY
+/// the iteration failed and warns if the reformulated task drifts from the
+/// original intent contract. Recovery action routing:
+///
+/// - `DecompositionRequired` → logged; subtask fan-out handled by subtask.rs if triggered
+/// - `ImplementationThrash`  → logged for the cloud manager to notice
+/// - `ContextDeficit`        → logged; Planning auto-context enrichment helps next iter
+/// - `ToolConstraintMismatch`→ logged; rewrite applied at session end by reformulate()
+/// - `InfraTransient`        → logged; normal retry continues
+/// - Others                  → logged; normal retry continues
+fn handle_escalating_classify(
+    ctx: &OrchestratorContext<'_>,
+    report: &VerifierReport,
+    iteration: u32,
+) {
+    use crate::orchestrator::helpers::{list_changed_files, load_failure_ledger};
+    use crate::reformulation::{classify_failure, FailureReviewInput};
+
+    let failure_ledger = load_failure_ledger(&ctx.wt_path);
+    let files_changed = list_changed_files(&ctx.wt_path);
+    let error_cats: Vec<String> = report
+        .unique_error_categories()
+        .iter()
+        .map(|c| format!("{c:?}"))
+        .collect();
+
+    let review_input = FailureReviewInput {
+        issue_id: ctx.issue.id.clone(),
+        issue_title: ctx.issue.title.clone(),
+        issue_description: ctx.issue.description.clone(),
+        failure_ledger,
+        iterations_used: iteration,
+        max_iterations: ctx.config.max_retries,
+        files_changed,
+        error_categories: error_cats,
+        failure_reason: Some(ctx.escalation.summary()),
+    };
+
+    let classification = classify_failure(&review_input);
+    let fingerprint = classification.fingerprint();
+
+    info!(
+        iteration,
+        issue = %ctx.issue.id,
+        classification = ?classification,
+        fingerprint = %fingerprint,
+        "Failure classified on retry (state driver)"
+    );
+
+    // Intent guard: verify the current task description still matches the original intent.
+    // Compute a fresh IntentContract from the current issue state and compare digests.
+    // This detects drift early (before the reformulation engine rewrites at session end).
+    let current = IntentContract::from_issue(
+        &ctx.issue.id,
+        &ctx.issue.title,
+        ctx.issue.description.as_deref(),
+    );
+    if current.intent_digest != ctx.intent_contract.intent_digest {
+        warn!(
+            iteration,
+            issue = %ctx.issue.id,
+            original_digest = %ctx.intent_contract.intent_digest,
+            current_digest = %current.intent_digest,
+            "Intent drift detected: task description changed since initial pickup (state driver)"
         );
     }
 }
@@ -1760,6 +2046,81 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
             );
         }
 
+        // Reformulation engine — classify WHY the session failed and rewrite the bead
+        // description so the next attempt has a solvable formulation. Mirrors the
+        // equivalent logic in the legacy orchestrator/mod.rs path.
+        {
+            use crate::orchestrator::helpers::{list_changed_files, load_failure_ledger};
+            use crate::reformulation::{reformulate, FailureReviewInput};
+
+            let failure_ledger = load_failure_ledger(&ctx.wt_path);
+            let files_changed = list_changed_files(&ctx.wt_path);
+            let error_cats: Vec<String> = ctx
+                .last_report
+                .as_ref()
+                .map(|r| {
+                    r.unique_error_categories()
+                        .iter()
+                        .map(|c| c.to_string())
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let review_input = FailureReviewInput {
+                issue_id: ctx.issue.id.clone(),
+                issue_title: ctx.issue.title.clone(),
+                issue_description: ctx.issue.description.clone(),
+                failure_ledger,
+                iterations_used: ctx.session.iteration(),
+                max_iterations: ctx.config.max_retries,
+                files_changed,
+                error_categories: error_cats,
+                failure_reason: Some(ctx.escalation.summary()),
+            };
+
+            let result = reformulate(&ctx.reformulation_store, &review_input);
+            let bridge = BeadsBridge::new();
+
+            if let Some(ref new_desc) = result.new_description {
+                match bridge.update_description(&ctx.issue.id, new_desc) {
+                    Ok(()) => info!(
+                        id = %ctx.issue.id,
+                        classification = ?result.classification,
+                        "Reformulated issue description (state driver)"
+                    ),
+                    Err(e) => warn!(
+                        id = %ctx.issue.id,
+                        error = %e,
+                        "Failed to update issue description (reformulation not applied, state driver)"
+                    ),
+                }
+            }
+
+            if let Some(ref notes) = result.notes_appended {
+                if let Err(e) = bridge.update_notes(&ctx.issue.id, notes) {
+                    warn!(
+                        id = %ctx.issue.id,
+                        error = %e,
+                        "Failed to append reformulation notes (state driver)"
+                    );
+                }
+            }
+
+            if result.escalated {
+                let _ = bridge.add_swarm_label(&ctx.issue.id, "swarm:needs-human-review");
+                warn!(
+                    id = %ctx.issue.id,
+                    "Reformulation exhausted — labeled for human review (state driver)"
+                );
+            }
+
+            // Reset issue to open so the next loop iteration picks it up with the
+            // rewritten description (unless escalated to human review).
+            if !result.escalated {
+                let _ = ctx.beads.update_status(&ctx.issue.id, "open");
+            }
+        }
+
         // Save session state for resume
         let state_path = ctx.wt_path.join(".swarm-session.json");
         if let Err(e) = save_session_state(ctx.session.state(), &state_path) {
@@ -1882,5 +2243,186 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
         let dashboard = crate::dashboard::generate(reader.sessions(), &skills, now);
         let summary = crate::dashboard::format_summary(&dashboard);
         info!(sessions = reader.sessions().len(), "\n{summary}");
+    }
+
+    // --- Mutation archive (Phase 4a: evolutionary tracking) ---
+    //
+    // Record outcome for SERA-14B critic training and strategy seeding.
+    // Mirrors the legacy path in orchestrator/mod.rs:4056-4145.
+    {
+        let archive =
+            crate::mutation_archive::MutationArchive::new(ctx.worktree_bridge.repo_root());
+        let language = ctx
+            .factory
+            .language
+            .as_deref()
+            .unwrap_or("rust")
+            .to_string();
+        let final_tier = format!("{:?}", ctx.escalation.current_tier);
+        let primary_model = ctx
+            .config
+            .resolve_role_model(crate::config::SwarmRole::Planner);
+
+        let mut record = crate::mutation_archive::build_record(
+            &ctx.issue.id,
+            &ctx.issue.title,
+            &language,
+            ctx.success,
+            ctx.session.iteration(),
+            &final_tier,
+            &primary_model,
+            ctx.process_start.elapsed().as_secs(),
+        );
+
+        // Populate error categories and first-failure gate from last verifier report.
+        record.auto_fix_only = ctx.success && ctx.session.iteration() == 0;
+        if let Some(ref report) = ctx.last_report {
+            record.error_categories = report
+                .unique_error_categories()
+                .iter()
+                .map(|c| c.to_string())
+                .collect();
+            record.first_failure_gate = report.first_failure.clone();
+        }
+        if !ctx.success {
+            record.failure_reason = Some(ctx.escalation.summary());
+        }
+
+        // Populate files changed and line counts.
+        record.files_changed = crate::orchestrator::helpers::list_changed_files(&ctx.wt_path);
+        if let Ok(output) = std::process::Command::new("git")
+            .args(["diff", "--stat", "main"])
+            .current_dir(&ctx.wt_path)
+            .output()
+        {
+            let stat = String::from_utf8_lossy(&output.stdout);
+            for line in stat.lines() {
+                if line.contains("insertion") {
+                    if let Some(n) = line.split_whitespace().next().and_then(|s| s.parse().ok()) {
+                        record.lines_added = n;
+                    }
+                }
+                if line.contains("deletion") {
+                    for word in line.split_whitespace() {
+                        if let Ok(n) = word.parse::<u32>() {
+                            record.lines_removed = n;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        archive.record(&record);
+
+        // --- Part C: MAP-Elites diversity update ---
+        //
+        // Insert the outcome into the quality-diversity archive so the swarm
+        // tracks which (complexity, strategy) bins have been explored and
+        // avoids converging on a single approach.
+        {
+            let lines_changed = (record.lines_added + record.lines_removed) as usize;
+            let files_changed = record.files_changed.len();
+            let features = crate::map_elites::FeatureExtractor::extract_from_metadata(
+                lines_changed,
+                files_changed,
+            );
+            let score = if ctx.success {
+                // Reward speed: fewer iterations → higher score.
+                let iter = ctx.session.iteration().max(1) as f64;
+                1.0 / iter
+            } else {
+                0.0
+            };
+            let node = crate::map_elites::ExperimentNode {
+                id: ctx.issue.id.clone(),
+                description: ctx.issue.title.clone(),
+                score,
+                lines_changed,
+                files_changed,
+                strategy: crate::map_elites::FeatureExtractor::infer_strategy(
+                    files_changed,
+                    lines_changed,
+                ),
+            };
+            let mut qd_archive = crate::map_elites::QualityDiversityArchive::new();
+            // Load existing archive records into the in-memory grid so coverage
+            // reflects accumulated history, not just the current session.
+            for past in archive.load_all() {
+                let past_lines = (past.lines_added + past.lines_removed) as usize;
+                let past_files = past.files_changed.len();
+                let past_features = crate::map_elites::FeatureExtractor::extract_from_metadata(
+                    past_lines, past_files,
+                );
+                let past_score = if past.resolved {
+                    1.0 / past.iterations.max(1) as f64
+                } else {
+                    0.0
+                };
+                let past_node = crate::map_elites::ExperimentNode {
+                    id: past.issue_id.clone(),
+                    description: past.issue_title.clone(),
+                    score: past_score,
+                    lines_changed: past_lines,
+                    files_changed: past_files,
+                    strategy: crate::map_elites::FeatureExtractor::infer_strategy(
+                        past_files, past_lines,
+                    ),
+                };
+                qd_archive.insert(past_node, past_features);
+            }
+            let inserted = qd_archive.insert(node, features);
+            info!(
+                issue = %ctx.issue.id,
+                complexity_bin = features.complexity_bin,
+                strategy_bin = features.strategy_bin,
+                score,
+                inserted,
+                coverage = qd_archive.coverage(),
+                occupied_cells = qd_archive.len(),
+                "MAP-Elites: updated quality-diversity archive (state driver)"
+            );
+        }
+
+        // --- Hyperagents: extract skills from successful mutations ---
+        if ctx.success {
+            let skills_path = ctx.worktree_bridge.repo_root().join(".swarm/skills.json");
+            if let Some(candidate) =
+                crate::mutation_archive::MutationArchive::extract_skill_candidate(&record)
+            {
+                if let Ok(mut lib) =
+                    coordination::analytics::skills::SkillLibrary::load(&skills_path)
+                {
+                    let triggers: Vec<coordination::feedback::ErrorCategory> = candidate
+                        .error_categories
+                        .iter()
+                        .filter_map(|s| s.parse().ok())
+                        .collect();
+                    if !triggers.is_empty() {
+                        let trigger = coordination::analytics::skills::SkillTrigger {
+                            error_categories: triggers,
+                            file_patterns: vec![],
+                            task_type: None,
+                        };
+                        lib.create_skill(
+                            &candidate.approach_summary,
+                            trigger,
+                            &candidate.approach_summary,
+                        );
+                        if let Err(e) = lib.save(&skills_path) {
+                            warn!(
+                                error = %e,
+                                "Hyperagents: failed to save skill library (state driver)"
+                            );
+                        } else {
+                            info!(
+                                skill = %candidate.approach_summary,
+                                "Hyperagents: extracted skill from successful mutation (state driver)"
+                            );
+                        }
+                    }
+                }
+            }
+        }
     }
 }

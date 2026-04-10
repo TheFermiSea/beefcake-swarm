@@ -11,7 +11,7 @@
 
 set -euo pipefail
 
-REMOTE_HOST="${BD_REMOTE_HOST:-brian@10.0.0.100}"
+REMOTE_HOST="${BD_REMOTE_HOST:-brian@100.105.113.58}"
 REMOTE_BD="${BD_REMOTE_BIN:-/home/brian/.local/bin/bd}"
 REMOTE_REPO="${BD_REMOTE_REPO:-/home/brian/code/beefcake-swarm}"
 

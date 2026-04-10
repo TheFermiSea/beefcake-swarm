@@ -51,6 +51,14 @@ pub enum SwarmRole {
     Strategist,
     LocalManagerFallback,
     Council,
+    /// Chain-of-Thought only planner/evaluator — Devstral-24B on vasp-02 with NO tools.
+    ///
+    /// Based on the MASAI "Fixer without tools" pattern (ICLR 2025): removing environment
+    /// access from the patch-generation stage improves results because the model reasons
+    /// better without exploration distractions. Devstral's 10% edit rate was caused by
+    /// exploration loops; as a CoT-only planner it produces structured plans or unified-diff
+    /// patches from full context provided in the prompt.
+    CoTPlanner,
 }
 
 /// Governance tier controls how many RuntimeAdapter checks fire per tool call.
@@ -103,6 +111,16 @@ pub struct Endpoint {
     pub model: String,
     pub tier: Tier,
     pub api_key: String,
+}
+
+struct LocalEndpointConfig<'a> {
+    url_var: &'a str,
+    default_url: &'a str,
+    model_var: &'a str,
+    default_model: &'a str,
+    tier: Tier,
+    api_key_var: &'a str,
+    tensorzero_model: &'a str,
 }
 
 /// Cloud escalation endpoint (CLIAPIProxy on ai-proxy).
@@ -545,7 +563,7 @@ pub struct SwarmConfig {
     pub tensorzero_url: Option<String>,
     /// TensorZero Postgres URL for reading performance insights.
     /// Auto-detected when `SWARM_TENSORZERO_URL` is set (defaults to
-    /// `postgres://tensorzero:tensorzero@localhost:5433/tensorzero`).
+    /// `postgresql://localhost:5433/tensorzero`).
     /// Explicitly overridden via `SWARM_TENSORZERO_PG_URL` env var.
     pub tensorzero_pg_url: Option<String>,
     /// Cache TTL for TZ insights (seconds). Default: 1800 (30 min).
@@ -600,6 +618,17 @@ pub struct SwarmConfig {
     /// (default 80% verifier / 20% judge).
     /// Populated from `SWARM_JUDGE_ENABLED` env var (default: false).
     pub judge_enabled: bool,
+    /// Number of candidate patches to generate per iteration.
+    /// When > 1, the implementing phase fans out N workers (model + strategy diversity)
+    /// and picks the first candidate that produces file changes.
+    /// Based on ARXIV:2510.21513 — 2 candidates captures ~95% of ensemble benefit.
+    /// Populated from `SWARM_CANDIDATE_COUNT` env var (default: 1 = disabled).
+    pub candidate_count: usize,
+    /// Path to the TOML pipeline stage registry.
+    /// Selects which pipeline stages run and with what parameters, enabling A/B testing
+    /// of different pipeline configurations without recompilation.
+    /// Populated from `SWARM_PIPELINE_CONFIG` env var (default: `config/pipeline-stages.toml`).
+    pub pipeline_config_path: Option<PathBuf>,
 }
 
 impl Default for SwarmConfig {
@@ -616,54 +645,48 @@ impl Default for SwarmConfig {
         // endpoints route through TZ's OpenAI-compat proxy. TZ handles variant selection
         // via Thompson Sampling based on task_resolved feedback.
         // Note: Rig's VERIFY_PATH was changed from "/models" to "" to avoid TZ 404.
-        let tz_url = std::env::var("SWARM_TENSORZERO_URL")
-            .ok()
-            .filter(|s| !s.is_empty());
-        let tz_base = tz_url.as_ref().map(|u| format!("{u}/openai/v1"));
+        let tensorzero_url = Self::optional_nonempty_var("SWARM_TENSORZERO_URL");
+        let tz_base = tensorzero_url
+            .as_ref()
+            .map(|url| format!("{url}/openai/v1"));
 
         Self {
-            fast_endpoint: Endpoint {
-                url: tz_base
-                    .clone()
-                    .or_else(|| std::env::var("SWARM_FAST_URL").ok())
-                    .unwrap_or_else(|| "http://vasp-03:8081/v1".into()),
-                model: if tz_base.is_some() {
-                    "tensorzero::function_name::worker_code_edit".into()
-                } else {
-                    std::env::var("SWARM_FAST_MODEL").unwrap_or_else(|_| "OmniCoder-9B".into())
+            fast_endpoint: Self::local_endpoint(
+                tz_base.as_deref(),
+                LocalEndpointConfig {
+                    url_var: "SWARM_FAST_URL",
+                    default_url: "http://vasp-03:8081/v1",
+                    model_var: "SWARM_FAST_MODEL",
+                    default_model: "OmniCoder-9B",
+                    tier: Tier::Fast,
+                    api_key_var: "SWARM_FAST_API_KEY",
+                    tensorzero_model: "tensorzero::function_name::worker_code_edit",
                 },
-                tier: Tier::Fast,
-                api_key: std::env::var("SWARM_FAST_API_KEY")
-                    .unwrap_or_else(|_| "not-needed".into()),
-            },
-            coder_endpoint: Endpoint {
-                url: tz_base
-                    .clone()
-                    .or_else(|| std::env::var("SWARM_CODER_URL").ok())
-                    .unwrap_or_else(|| "http://vasp-01:8081/v1".into()),
-                model: if tz_base.is_some() {
-                    "tensorzero::function_name::worker_code_edit".into()
-                } else {
-                    std::env::var("SWARM_CODER_MODEL").unwrap_or_else(|_| "Qwen3.5-27B".into())
+            ),
+            coder_endpoint: Self::local_endpoint(
+                tz_base.as_deref(),
+                LocalEndpointConfig {
+                    url_var: "SWARM_CODER_URL",
+                    default_url: "http://vasp-01:8081/v1",
+                    model_var: "SWARM_CODER_MODEL",
+                    default_model: "Qwen3.5-27B",
+                    tier: Tier::Coder,
+                    api_key_var: "SWARM_CODER_API_KEY",
+                    tensorzero_model: "tensorzero::function_name::worker_code_edit",
                 },
-                tier: Tier::Coder,
-                api_key: std::env::var("SWARM_CODER_API_KEY")
-                    .unwrap_or_else(|_| "not-needed".into()),
-            },
-            reasoning_endpoint: Endpoint {
-                url: tz_base
-                    .clone()
-                    .or_else(|| std::env::var("SWARM_REASONING_URL").ok())
-                    .unwrap_or_else(|| "http://vasp-02:8081/v1".into()),
-                model: if tz_base.is_some() {
-                    "tensorzero::function_name::deep_reasoning".into()
-                } else {
-                    std::env::var("SWARM_REASONING_MODEL").unwrap_or_else(|_| "Qwen3.5-27B".into())
+            ),
+            reasoning_endpoint: Self::local_endpoint(
+                tz_base.as_deref(),
+                LocalEndpointConfig {
+                    url_var: "SWARM_REASONING_URL",
+                    default_url: "http://vasp-02:8081/v1",
+                    model_var: "SWARM_REASONING_MODEL",
+                    default_model: "Qwen3.5-27B",
+                    tier: Tier::Reasoning,
+                    api_key_var: "SWARM_REASONING_API_KEY",
+                    tensorzero_model: "tensorzero::function_name::deep_reasoning",
                 },
-                tier: Tier::Reasoning,
-                api_key: std::env::var("SWARM_REASONING_API_KEY")
-                    .unwrap_or_else(|_| "not-needed".into()),
-            },
+            ),
             cloud_endpoint: Self::cloud_from_env(),
             max_retries: std::env::var("SWARM_MAX_RETRIES")
                 .ok()
@@ -722,20 +745,9 @@ impl Default for SwarmConfig {
             strategist_endpoint: Self::strategist_from_env(),
             repo_id: std::env::var("SWARM_REPO_ID").ok(),
             adapter_id: std::env::var("SWARM_ADAPTER_ID").ok(),
-            tensorzero_url: std::env::var("SWARM_TENSORZERO_URL")
-                .ok()
-                .filter(|s| !s.trim().is_empty()),
-            tensorzero_pg_url: std::env::var("SWARM_TENSORZERO_PG_URL")
-                .ok()
-                .filter(|s| !s.trim().is_empty())
-                .or_else(|| {
-                    std::env::var("SWARM_TENSORZERO_URL")
-                        .ok()
-                        .filter(|s| !s.trim().is_empty())
-                        .map(|_| {
-                            "postgres://tensorzero:tensorzero@localhost:5433/tensorzero".into()
-                        })
-                }),
+            tensorzero_url: tensorzero_url.clone(),
+            tensorzero_pg_url: Self::optional_nonempty_var("SWARM_TENSORZERO_PG_URL")
+                .or_else(|| Self::default_tensorzero_pg_url(tensorzero_url.as_ref())),
             tz_insights_ttl_secs: std::env::var("SWARM_TZ_INSIGHTS_TTL_SECS")
                 .ok()
                 .and_then(|s| s.parse().ok())
@@ -773,11 +785,56 @@ impl Default for SwarmConfig {
             judge_enabled: std::env::var("SWARM_JUDGE_ENABLED")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            candidate_count: std::env::var("SWARM_CANDIDATE_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .filter(|v: &usize| *v > 0)
+                .unwrap_or(1),
+            pipeline_config_path: std::env::var("SWARM_PIPELINE_CONFIG")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    // Default to config/pipeline-stages.toml relative to the working directory.
+                    let default = PathBuf::from("config/pipeline-stages.toml");
+                    if default.exists() {
+                        Some(default)
+                    } else {
+                        None
+                    }
+                }),
         }
     }
 }
 
 impl SwarmConfig {
+    fn optional_nonempty_var(name: &str) -> Option<String> {
+        std::env::var(name)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    fn local_endpoint(tz_base: Option<&str>, config: LocalEndpointConfig<'_>) -> Endpoint {
+        Endpoint {
+            url: tz_base
+                .map(str::to_owned)
+                .or_else(|| std::env::var(config.url_var).ok())
+                .unwrap_or_else(|| config.default_url.into()),
+            model: match tz_base {
+                Some(_) => config.tensorzero_model.into(),
+                None => {
+                    std::env::var(config.model_var).unwrap_or_else(|_| config.default_model.into())
+                }
+            },
+            tier: config.tier,
+            api_key: std::env::var(config.api_key_var).unwrap_or_else(|_| "not-needed".into()),
+        }
+    }
+
+    fn default_tensorzero_pg_url(tensorzero_url: Option<&String>) -> Option<String> {
+        tensorzero_url.map(|_| "postgresql://localhost:5433/tensorzero".into())
+    }
+
     /// Resolve the appropriate rig client for a given swarm role based on the active stack profile.
     pub fn resolve_role_client(
         &self,
@@ -793,6 +850,9 @@ impl SwarmConfig {
                 | SwarmRole::Planner
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()), // Use coder/reasoning pool via factory
+                // CoTPlanner always routes to the reasoning endpoint (vasp-02, Devstral-24B).
+                // No tool calls — context is provided in the prompt, output is a plan or patch.
+                SwarmRole::CoTPlanner => Ok(clients.reasoning.clone()),
                 SwarmRole::Council => clients
                     .cloud_tz
                     .clone()
@@ -813,6 +873,8 @@ impl SwarmConfig {
                 SwarmRole::GeneralWorker
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()),
+                // CoTPlanner always pins to Devstral-24B on vasp-02.
+                SwarmRole::CoTPlanner => Ok(clients.reasoning.clone()),
                 SwarmRole::Council => clients
                     .cloud_tz
                     .clone()
@@ -832,6 +894,8 @@ impl SwarmConfig {
                 | SwarmRole::Planner
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()),
+                // CoTPlanner always pins to Devstral-24B on vasp-02.
+                SwarmRole::CoTPlanner => Ok(clients.reasoning.clone()),
                 SwarmRole::Strategist => clients.strategist.clone().context(
                     "Strategist role requested for StrategistHybridV1 but SWARM_STRATEGIST_URL is not set",
                 ),
@@ -864,7 +928,9 @@ impl SwarmConfig {
                     "tensorzero::function_name::worker_code_edit"
                 }
                 SwarmRole::Fixer => "tensorzero::function_name::code_fixing",
-                SwarmRole::Planner => "tensorzero::function_name::task_planning",
+                SwarmRole::Planner | SwarmRole::CoTPlanner => {
+                    "tensorzero::function_name::task_planning"
+                }
                 SwarmRole::ReasoningWorker => "tensorzero::function_name::deep_reasoning",
                 SwarmRole::Strategist => "tensorzero::function_name::deep_reasoning",
                 SwarmRole::LocalManagerFallback => "tensorzero::function_name::worker_code_edit",
@@ -882,6 +948,8 @@ impl SwarmConfig {
                 | SwarmRole::Planner
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => &self.coder_endpoint.model,
+                // CoTPlanner always routes to Devstral-24B on vasp-02 (reasoning endpoint).
+                SwarmRole::CoTPlanner => &self.reasoning_endpoint.model,
                 SwarmRole::Council => self
                     .cloud_endpoint
                     .as_ref()
@@ -903,6 +971,8 @@ impl SwarmConfig {
                 SwarmRole::GeneralWorker
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => &self.coder_endpoint.model,
+                // CoTPlanner always routes to Devstral-24B on vasp-02 (reasoning endpoint).
+                SwarmRole::CoTPlanner => &self.reasoning_endpoint.model,
                 SwarmRole::Council => self
                     .cloud_endpoint
                     .as_ref()
@@ -924,6 +994,8 @@ impl SwarmConfig {
                 | SwarmRole::Planner
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => &self.coder_endpoint.model,
+                // CoTPlanner always routes to Devstral-24B on vasp-02 (reasoning endpoint).
+                SwarmRole::CoTPlanner => &self.reasoning_endpoint.model,
                 SwarmRole::Strategist => self
                     .strategist_endpoint
                     .as_ref()
@@ -1044,6 +1116,8 @@ impl SwarmConfig {
             verify_before_merge: true,
             analyze_after_resolve: true,
             judge_enabled: false,
+            candidate_count: 1,
+            pipeline_config_path: None,
         }
     }
 }

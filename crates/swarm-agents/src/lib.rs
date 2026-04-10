@@ -35,6 +35,7 @@ pub mod mutation_archive;
 pub mod notebook_bridge;
 pub mod orchestrator;
 pub mod pipeline;
+pub mod pipeline_config;
 pub mod prompts;
 pub mod recommendations;
 pub mod reformulation;

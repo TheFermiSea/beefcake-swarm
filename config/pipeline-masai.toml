@@ -1,0 +1,73 @@
+# MASAI-inspired 6-stage pipeline configuration
+#
+# Heterogeneous model assignment per stage, inspired by the MASAI paper
+# (Modular Architecture for Software-engineering AI).
+#
+# Each stage uses the model best suited for its task:
+#   - Localize: GLM-4.7-Flash (Scout) — fast file/symbol navigation
+#   - Plan:     Devstral-24B (ReasoningWorker) — CoT without tools (MASAI Fixer)
+#   - Generate: Qwen3.5-27B (RustWorker) — multi-candidate code generation
+#   - Evaluate: Scout — lightweight critic pass
+#   - Verify:   Deterministic (cargo/clippy gates)
+#   - Record:   Scout — upload resolution summary to Debugging KB
+#
+# Enable via: SWARM_PIPELINE_CONFIG=config/pipeline-masai.toml
+
+[pipeline]
+name = "masai_heterogeneous"
+description = "MASAI-inspired 6-stage pipeline with heterogeneous models"
+
+[[pipeline.stages]]
+name = "localize"
+enabled = true
+model_role = "Scout"          # GLM-4.7-Flash
+strategy = "ReAct"
+tool_access = true
+max_turns = 15
+timeout_secs = 300
+
+[[pipeline.stages]]
+name = "plan"
+enabled = true
+model_role = "ReasoningWorker"  # Devstral-24B
+strategy = "CoT"
+tool_access = false              # MASAI Fixer pattern: no tools for planning
+max_turns = 5
+timeout_secs = 180
+
+[[pipeline.stages]]
+name = "generate"
+enabled = true
+model_role = "RustWorker"       # Qwen3.5-27B
+strategy = "ReAct"
+tool_access = true
+max_turns = 20
+timeout_secs = 600
+candidate_count = 2             # Multi-candidate generation
+
+[[pipeline.stages]]
+name = "evaluate"
+enabled = true
+model_role = "Scout"            # SERA-14B critic
+strategy = "CoT"
+tool_access = false
+max_turns = 3
+timeout_secs = 120
+
+[[pipeline.stages]]
+name = "verify"
+enabled = true
+model_role = "Verifier"         # Deterministic (cargo/clippy gates)
+strategy = "Vanilla"
+tool_access = false
+max_turns = 1
+timeout_secs = 600
+
+[[pipeline.stages]]
+name = "record"
+enabled = true
+model_role = "Scout"
+strategy = "Vanilla"
+tool_access = false
+max_turns = 1
+timeout_secs = 30

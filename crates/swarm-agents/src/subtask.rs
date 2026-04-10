@@ -249,6 +249,218 @@ impl DispatchOutcome {
     }
 }
 
+// ── Candidate generation ──────────────────────────────────────────────────────
+
+/// Configuration for multi-candidate patch generation.
+///
+/// Based on "Wisdom and Delusion of LLM Ensembles" (ARXIV:2510.21513):
+/// generating 2-3 candidates with diversity-based selection achieves ~95% of
+/// the theoretical 83% improvement over single-model execution.
+#[derive(Debug, Clone)]
+pub struct CandidateGenerationConfig {
+    /// Number of candidates to generate (default: 2).
+    pub candidate_count: usize,
+    /// Whether to route each candidate to a different model endpoint.
+    pub model_diversity: bool,
+    /// Whether to use a different strategy seed per candidate (temperature jitter).
+    pub strategy_diversity: bool,
+}
+
+impl Default for CandidateGenerationConfig {
+    fn default() -> Self {
+        Self {
+            candidate_count: 2,
+            model_diversity: true,
+            strategy_diversity: true,
+        }
+    }
+}
+
+/// Result from a single candidate generation run.
+#[derive(Debug)]
+pub struct CandidateResult {
+    /// Candidate index (0-based).
+    pub index: usize,
+    /// Git diff of the candidate's changes against the base commit, if any.
+    pub patch: Option<String>,
+    /// Whether the candidate produced file changes.
+    pub has_changes: bool,
+    /// The agent's final response text.
+    pub response: String,
+    /// Wall-clock duration of the candidate's execution.
+    pub elapsed: Duration,
+    /// Adapter report (tool calls, turns, termination info).
+    pub report: Option<crate::runtime_adapter::AdapterReport>,
+}
+
+/// Generate N candidate patches concurrently for the same task prompt.
+///
+/// Each candidate operates on the same worktree but uses a different endpoint
+/// (model diversity) and/or a different temperature seed (strategy diversity).
+/// Candidates are run concurrently via `tokio::task::spawn_blocking` so that
+/// each candidate's blocking agent call does not starve the async runtime.
+///
+/// After all candidates complete, their git diffs against `base_commit` are
+/// collected and returned as `Vec<CandidateResult>`. The caller is responsible
+/// for picking the best candidate (by default: first that has changes).
+///
+/// # Constraints
+/// - Each candidate gets its own independent turn budget (not multiplied total).
+/// - The semaphore limits concurrent candidates to `endpoint_pool.capacity()`.
+/// - The worktree is SHARED — candidates must not conflict on files. This is
+///   acceptable because all candidates target the same files with the same goal;
+///   the last writer wins and the diff captures whatever was left on disk.
+#[allow(clippy::too_many_arguments)]
+pub async fn generate_candidates(
+    cfg: &CandidateGenerationConfig,
+    endpoint_pool: &crate::endpoint_pool::EndpointPool,
+    wt_path: &std::path::Path,
+    issue_id: &str,
+    task_prompt: &str,
+    base_commit: &str,
+    timeout_secs: u64,
+    complexity: crate::triage::Complexity,
+    objective: &str,
+) -> Vec<CandidateResult> {
+    let n = cfg.candidate_count.max(1);
+    let max_concurrent = endpoint_pool.capacity().max(1).min(n);
+    let sem = Arc::new(Semaphore::new(max_concurrent));
+    let wt_path = Arc::new(wt_path.to_path_buf());
+    let task_prompt = Arc::new(task_prompt.to_string());
+    let base_commit = Arc::new(base_commit.to_string());
+    let objective = Arc::new(objective.to_string());
+
+    info!(
+        issue = %issue_id,
+        candidate_count = n,
+        max_concurrent,
+        model_diversity = cfg.model_diversity,
+        strategy_diversity = cfg.strategy_diversity,
+        "Generating {} candidates in parallel",
+        n
+    );
+
+    let mut join_set: JoinSet<CandidateResult> = JoinSet::new();
+
+    for idx in 0..n {
+        let sem = sem.clone();
+        let wt_path = wt_path.clone();
+        let task_prompt = task_prompt.clone();
+        let base_commit = base_commit.clone();
+        let objective = objective.clone();
+
+        // Select endpoint via round-robin for model diversity.
+        let (client, model) = endpoint_pool.next();
+        let client = client.clone();
+        let model = model.to_string();
+
+        // Write deadline per candidate (independent budget per candidate).
+        let write_deadline = dynamic_write_deadline(complexity, &objective, &[], &[]);
+        let dynamic_turns = scale_dynamic_turns(16, complexity, &objective);
+
+        // Temperature jitter for strategy diversity (±0.1 around worker baseline).
+        let temperature = if cfg.strategy_diversity {
+            let base = crate::agents::coder::worker_temperature();
+            // Candidate 0 uses the baseline; subsequent candidates jitter up.
+            base + 0.05 * idx as f64
+        } else {
+            crate::agents::coder::worker_temperature()
+        };
+
+        join_set.spawn(async move {
+            let _permit = sem.acquire().await.expect("candidate semaphore closed");
+            let start = Instant::now();
+
+            info!(
+                candidate = idx,
+                model = %model,
+                temperature,
+                "Starting candidate worker"
+            );
+
+            // Build a simple worker agent (no file allowlist — full worktree access).
+            let agent = client
+                .agent(&model)
+                .preamble(
+                    "You are a software engineer. Fix the issue described in the task. \
+                     Read relevant files, make focused changes, and stop once done.",
+                )
+                .temperature(temperature)
+                .tool_choice(rig::completion::message::ToolChoice::Auto)
+                .additional_params(crate::agents::coder::worker_sampling_params())
+                .default_max_turns(dynamic_turns)
+                .build();
+
+            let adapter = crate::runtime_adapter::RuntimeAdapter::new(
+                crate::runtime_adapter::AdapterConfig {
+                    agent_name: format!("candidate-{idx}"),
+                    max_tool_calls: Some(dynamic_turns * 3),
+                    deadline: Some(Instant::now() + Duration::from_secs(timeout_secs)),
+                    max_turns_without_write: Some(write_deadline),
+                    search_unlock_turn: Some(3),
+                    ..Default::default()
+                },
+            );
+
+            let result = agent
+                .prompt(task_prompt.as_str())
+                .with_hook(adapter.clone())
+                .await;
+            let report = adapter.report().ok();
+
+            let (response, _ok) = match result {
+                Ok(r) => (r, true),
+                Err(e) => {
+                    warn!(candidate = idx, error = %e, "Candidate worker failed");
+                    (format!("error: {e}"), false)
+                }
+            };
+
+            // Collect git diff against base commit.
+            let patch = crate::git_ops::diff_between(&wt_path, &base_commit, "HEAD");
+            let has_changes = patch.is_some();
+
+            info!(
+                candidate = idx,
+                has_changes,
+                elapsed_ms = start.elapsed().as_millis() as u64,
+                "Candidate worker done"
+            );
+
+            CandidateResult {
+                index: idx,
+                patch,
+                has_changes,
+                response,
+                elapsed: start.elapsed(),
+                report,
+            }
+        });
+    }
+
+    let mut results = Vec::with_capacity(n);
+    while let Some(res) = join_set.join_next().await {
+        match res {
+            Ok(r) => {
+                debug!(
+                    candidate = r.index,
+                    has_changes = r.has_changes,
+                    elapsed_ms = r.elapsed.as_millis() as u64,
+                    "Candidate result collected"
+                );
+                results.push(r);
+            }
+            Err(e) => {
+                error!(error = %e, "Candidate worker panicked");
+            }
+        }
+    }
+
+    // Sort by index so the caller sees candidates in spawn order.
+    results.sort_by_key(|r| r.index);
+    results
+}
+
 // ── Molecule tracking ────────────────────────────────────────────────────────
 
 /// Create beads child issues for each subtask in the plan (molecule pattern).
