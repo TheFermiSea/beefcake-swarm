@@ -100,11 +100,14 @@ pub fn build_fixer_named(
         .description(
             "Implementation specialist. Follows structured plans to write targeted code fixes.",
         )
-        .preamble(&prompts::build_worker_prompt(&prompts::load_prompt(
-            "fixer",
-            wt_path,
-            prompts::FIXER_PREAMBLE,
-        )))
+        .preamble(&{
+            let repo_ctx =
+                prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
+            prompts::build_worker_prompt_with_context(
+                &prompts::load_prompt("fixer", wt_path, prompts::FIXER_PREAMBLE),
+                repo_ctx.as_deref(),
+            )
+        })
         .temperature(0.2)
         .additional_params(worker_sampling_params())
         .tools(bundles::worker_tools(

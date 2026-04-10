@@ -79,7 +79,9 @@ pub fn build_cloud_manager(
     wt_path: &Path,
     verifier_packages: &[String],
 ) -> OaiAgent {
-    let preamble = prompts::load_prompt("manager", wt_path, prompts::CLOUD_MANAGER_PREAMBLE);
+    let base_preamble = prompts::load_prompt("manager", wt_path, prompts::CLOUD_MANAGER_PREAMBLE);
+    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
+    let preamble = prompts::inject_repo_context(&base_preamble, repo_ctx.as_deref());
     // Context firewalls: wrap worker agents so their raw tool call logs
     // are condensed before the manager sees them. The manager receives only
     // a compact summary (files modified, write count, termination reason).
@@ -166,7 +168,10 @@ pub fn build_local_manager(
     wt_path: &Path,
     verifier_packages: &[String],
 ) -> OaiAgent {
-    let preamble = prompts::load_prompt("local_manager", wt_path, prompts::LOCAL_MANAGER_PREAMBLE);
+    let base_preamble =
+        prompts::load_prompt("local_manager", wt_path, prompts::LOCAL_MANAGER_PREAMBLE);
+    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
+    let preamble = prompts::inject_repo_context(&base_preamble, repo_ctx.as_deref());
     // Context firewalls: wrap worker agents so their raw tool call logs
     // are condensed before the local manager sees them.
     let mut builder = client

@@ -146,11 +146,11 @@ pub fn build_rust_coder_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::build_worker_prompt(&prompts::load_prompt(
-        "coder",
-        wt_path,
-        prompts::RUST_CODER_PREAMBLE,
-    ));
+    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
+    let preamble = prompts::build_worker_prompt_with_context(
+        &prompts::load_prompt("coder", wt_path, prompts::RUST_CODER_PREAMBLE),
+        repo_ctx.as_deref(),
+    );
     client
         .agent(model)
         .name(name)
@@ -189,11 +189,15 @@ pub fn build_reasoning_worker_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::build_worker_prompt(&prompts::load_prompt(
-        "reasoning_worker",
-        wt_path,
-        prompts::REASONING_WORKER_PREAMBLE,
-    ));
+    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
+    let preamble = prompts::build_worker_prompt_with_context(
+        &prompts::load_prompt(
+            "reasoning_worker",
+            wt_path,
+            prompts::REASONING_WORKER_PREAMBLE,
+        ),
+        repo_ctx.as_deref(),
+    );
     client
         .agent(model)
         .name(name)
@@ -222,11 +226,15 @@ pub fn build_strategist_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::build_worker_prompt(&prompts::load_prompt(
-        "reasoning_worker",
-        wt_path,
-        prompts::REASONING_WORKER_PREAMBLE,
-    ));
+    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
+    let preamble = prompts::build_worker_prompt_with_context(
+        &prompts::load_prompt(
+            "reasoning_worker",
+            wt_path,
+            prompts::REASONING_WORKER_PREAMBLE,
+        ),
+        repo_ctx.as_deref(),
+    );
     client
         .agent(model)
         .name(name)
@@ -268,11 +276,11 @@ pub fn build_general_coder_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::build_worker_prompt(&prompts::load_prompt(
-        "coder",
-        wt_path,
-        prompts::GENERAL_CODER_PREAMBLE,
-    ));
+    let repo_ctx = prompts::load_repo_context(wt_path, prompts::DEFAULT_REPO_CONTEXT_MAX_BYTES);
+    let preamble = prompts::build_worker_prompt_with_context(
+        &prompts::load_prompt("coder", wt_path, prompts::GENERAL_CODER_PREAMBLE),
+        repo_ctx.as_deref(),
+    );
     client
         .agent(model)
         .name(name)

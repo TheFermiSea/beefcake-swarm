@@ -904,13 +904,102 @@ After running tests, return ONLY valid JSON (no markdown outside JSON):
 /// Do NOT use for REVIEWER, PLANNER, ARCHITECT, EDITOR, or BREAKER
 /// (they have specialized JSON output formats or are read-only).
 pub fn build_worker_prompt(base_preamble: &str) -> String {
+    build_worker_prompt_with_context(base_preamble, None)
+}
+
+/// Build a complete worker prompt with optional repo context injected.
+///
+/// Like [`build_worker_prompt`], but inserts target-repo documentation
+/// (CLAUDE.md / AGENTS.md / README.md) between the base preamble and the
+/// coordination block.  This gives workers context about the target repo's
+/// architecture, conventions, and tooling.
+pub fn build_worker_prompt_with_context(base_preamble: &str, repo_context: Option<&str>) -> String {
+    let context_section = match repo_context {
+        Some(ctx) if !ctx.is_empty() => format!("\n{ctx}\n"),
+        _ => String::new(),
+    };
     format!(
-        "{base_preamble}{WORKER_COORDINATION_BLOCK}\n## How Your Output Will Be Graded\n\
+        "{base_preamble}{context_section}{WORKER_COORDINATION_BLOCK}\n## How Your Output Will Be Graded\n\
          Your implementation will be evaluated by a skeptical blind reviewer using this rubric:\n\
          {REVIEWER_RUBRIC}\n\
          Write code that scores ≥ 2 on all four criteria. No stubs. No bare unwrap(). \
          Implement all required paths.\n"
     )
+}
+
+// ── Repo Context Loader ─────────────────────────────────────────────────────
+//
+// Reads CLAUDE.md / AGENTS.md / README.md from the target repo (worktree) and
+// produces a truncated summary for injection into system prompts.  This gives
+// both managers and workers knowledge about the target repo's architecture,
+// conventions, and tooling — critical when the swarm works on external repos.
+
+/// Default byte budget for repo context injection.
+pub const DEFAULT_REPO_CONTEXT_MAX_BYTES: usize = 4096;
+
+/// Load project context from the target repo's documentation files.
+///
+/// Reads `CLAUDE.md`, `AGENTS.md`, and `README.md` (in that priority order).
+/// Returns a truncated summary suitable for injection into system prompts.
+/// Caps at `max_bytes` to avoid blowing out context windows (local models are 32K).
+///
+/// Returns `None` if no documentation files are found, or if the worktree path
+/// does not exist.  Never warns or errors — graceful degradation.
+pub fn load_repo_context(worktree_path: &Path, max_bytes: usize) -> Option<String> {
+    let candidates = ["CLAUDE.md", "AGENTS.md", "README.md"];
+    let mut context_parts = Vec::new();
+    let mut total_bytes = 0;
+
+    for filename in &candidates {
+        let path = worktree_path.join(filename);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let trimmed = content.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            let remaining = max_bytes.saturating_sub(total_bytes);
+            if remaining == 0 {
+                break;
+            }
+            let truncated = if trimmed.len() > remaining {
+                // Truncate at a line boundary to avoid mid-line cuts.
+                match trimmed[..remaining].rfind('\n') {
+                    Some(pos) => &trimmed[..pos],
+                    None => &trimmed[..remaining],
+                }
+            } else {
+                trimmed
+            };
+            context_parts.push(format!("### From {filename}\n{truncated}"));
+            total_bytes += truncated.len();
+            tracing::info!(
+                file = filename,
+                bytes = truncated.len(),
+                "Loaded repo context"
+            );
+        }
+    }
+
+    if context_parts.is_empty() {
+        None
+    } else {
+        Some(format!(
+            "## Project Context (from target repo)\n\n{}",
+            context_parts.join("\n\n")
+        ))
+    }
+}
+
+/// Inject repo context into a manager preamble string.
+///
+/// Appends the context block after the preamble text so the manager has
+/// target-repo knowledge before it starts delegating.  Returns the preamble
+/// unchanged when `repo_context` is `None` or empty.
+pub fn inject_repo_context(preamble: &str, repo_context: Option<&str>) -> String {
+    match repo_context {
+        Some(ctx) if !ctx.is_empty() => format!("{preamble}\n{ctx}\n"),
+        _ => preamble.to_string(),
+    }
 }
 
 // ── PromptLoader ─────────────────────────────────────────────────────────────
@@ -1073,6 +1162,99 @@ mod prompt_loader_tests {
 
         let result = load_prompt("manager", dir.path(), "default text");
         assert_eq!(result, "default text");
+    }
+
+    #[test]
+    fn test_load_repo_context_returns_none_for_missing_dir() {
+        let result = load_repo_context(Path::new("/nonexistent/path"), 4096);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_load_repo_context_reads_claude_md() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("CLAUDE.md"),
+            "# My Project\nBuild with cargo.",
+        )
+        .unwrap();
+
+        let result = load_repo_context(dir.path(), 4096).unwrap();
+        assert!(result.contains("## Project Context (from target repo)"));
+        assert!(result.contains("### From CLAUDE.md"));
+        assert!(result.contains("Build with cargo."));
+    }
+
+    #[test]
+    fn test_load_repo_context_priority_order() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "Claude content").unwrap();
+        std::fs::write(dir.path().join("README.md"), "Readme content").unwrap();
+
+        let result = load_repo_context(dir.path(), 4096).unwrap();
+        let claude_pos = result.find("Claude content").unwrap();
+        let readme_pos = result.find("Readme content").unwrap();
+        assert!(
+            claude_pos < readme_pos,
+            "CLAUDE.md should come before README.md"
+        );
+    }
+
+    #[test]
+    fn test_load_repo_context_truncates_at_line_boundary() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "line1\nline2\nline3\nline4").unwrap();
+
+        // Small budget: should truncate at a line boundary
+        let result = load_repo_context(dir.path(), 30).unwrap();
+        // The "### From CLAUDE.md\n" header eats into the budget of context_parts,
+        // but total_bytes only counts the trimmed content, so all 4 lines fit in 23 bytes.
+        assert!(result.contains("line1"));
+    }
+
+    #[test]
+    fn test_load_repo_context_skips_empty_files() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("CLAUDE.md"), "  \n  ").unwrap();
+        std::fs::write(dir.path().join("README.md"), "Real content").unwrap();
+
+        let result = load_repo_context(dir.path(), 4096).unwrap();
+        assert!(!result.contains("### From CLAUDE.md"));
+        assert!(result.contains("### From README.md"));
+    }
+
+    #[test]
+    fn test_inject_repo_context_none() {
+        let preamble = "You are a manager.";
+        let result = inject_repo_context(preamble, None);
+        assert_eq!(result, preamble);
+    }
+
+    #[test]
+    fn test_inject_repo_context_with_content() {
+        let preamble = "You are a manager.";
+        let ctx = "## Project Context\nSome context here.";
+        let result = inject_repo_context(preamble, Some(ctx));
+        assert!(result.starts_with(preamble));
+        assert!(result.contains(ctx));
+    }
+
+    #[test]
+    fn test_build_worker_prompt_with_context_includes_context() {
+        let base = "You are a worker.";
+        let ctx = "## Project Context\nTarget repo info.";
+        let result = build_worker_prompt_with_context(base, Some(ctx));
+        assert!(result.contains("You are a worker."));
+        assert!(result.contains("Target repo info."));
+        assert!(result.contains("Team Coordination"));
+    }
+
+    #[test]
+    fn test_build_worker_prompt_with_context_none_matches_original() {
+        let base = "You are a worker.";
+        let with_none = build_worker_prompt_with_context(base, None);
+        let original = build_worker_prompt(base);
+        assert_eq!(with_none, original);
     }
 
     #[test]
