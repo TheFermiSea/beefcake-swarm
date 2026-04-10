@@ -351,6 +351,16 @@ impl AgentFactory {
         )
     }
 
+    /// Build the CoT-only planner (Devstral-24B on vasp-02, no tools).
+    ///
+    /// Implements the MASAI "Fixer without tools" pattern (ICLR 2025).
+    /// Context must be provided in the prompt; the agent reasons without tool access.
+    /// Output is a `SubtaskPlan` JSON or a unified-diff patch.
+    pub fn build_cot_planner(&self, wt_path: &Path) -> OaiAgent {
+        let (client, model) = self.resolve_role_endpoint(SwarmRole::CoTPlanner);
+        coder::build_cot_planner_for_language(&client, &model, wt_path, "cot_planner", self.lang())
+    }
+
     /// Build the blind reviewer (Qwen3.5-27B-Distilled on vasp-03).
     pub fn build_reviewer(&self) -> OaiAgent {
         let (client, model) =

@@ -21,7 +21,7 @@ pub mod validation;
 
 pub use dispatch::{
     build_review_prompt, condense_verifier_report, format_compact_task_prompt, format_task_prompt,
-    route_to_coder, CoderRoute,
+    needs_cot_planner, route_to_coder, CoderRoute,
 };
 pub use helpers::try_scaffold_fallback;
 pub(crate) use helpers::{
@@ -1911,6 +1911,44 @@ async fn process_issue_core(
                                     iteration,
                                     timeout_secs = worker_timeout.as_secs(),
                                     "fast_fixer exceeded timeout — proceeding with changes on disk"
+                                );
+                                Ok(TIMEOUT_RESPONSE.to_string())
+                            }
+                        };
+                        (result, adapter)
+                    }
+                    CoderRoute::CoTPlanner => {
+                        info!(
+                            iteration,
+                            "Routing to CoT planner (Devstral-24B, no tools — MASAI Fixer pattern)"
+                        );
+                        metrics.record_coder_route("CoTPlanner");
+                        metrics.record_agent_metrics("Devstral-CoTPlanner", 0, 0);
+                        let cot_planner = factory.build_cot_planner(&wt_path);
+                        // CoT planner runs one turn: receives full context, produces plan/patch.
+                        // No RuntimeAdapter write-deadline since it emits no tool calls.
+                        let adapter = RuntimeAdapter::new(AdapterConfig {
+                            agent_name: "Devstral-CoTPlanner".into(),
+                            deadline: Some(Instant::now() + worker_timeout),
+                            ..Default::default()
+                        });
+                        let result = match tokio::time::timeout(
+                            worker_timeout,
+                            prompt_with_hook_and_retry(
+                                &cot_planner,
+                                &task_prompt,
+                                2,
+                                adapter.clone(),
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(_elapsed) => {
+                                warn!(
+                                    iteration,
+                                    timeout_secs = worker_timeout.as_secs(),
+                                    "cot_planner exceeded timeout"
                                 );
                                 Ok(TIMEOUT_RESPONSE.to_string())
                             }
