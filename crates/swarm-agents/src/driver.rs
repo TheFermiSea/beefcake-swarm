@@ -43,8 +43,8 @@ use coordination::save_session_state;
 use coordination::TieredCorrectionLoop;
 use coordination::{
     ContextPacker, EscalationDecision, EscalationEngine, EscalationState, GitManager,
-    LanguageProfile, ProgressTracker, SessionManager, SwarmTier, TierBudget, TurnPolicy,
-    ValidatorFeedback, Verifier, VerifierConfig, VerifierReport,
+    ProgressTracker, SessionManager, SwarmTier, TierBudget, TurnPolicy, ValidatorFeedback,
+    Verifier, VerifierConfig, VerifierReport,
 };
 
 // ---------------------------------------------------------------------------
@@ -272,17 +272,12 @@ impl<'a> OrchestratorContext<'a> {
             ..VerifierConfig::default()
         };
 
-        // Agents — use a language-aware factory clone for prompt adaptation.
-        // When .swarm/profile.toml specifies a non-Rust language, prompt
-        // templates are adapted (e.g., "cargo fmt" → "ruff check").
-        let language_profile = LanguageProfile::load(&wt_path);
-        let lang_factory = factory
-            .clone()
-            .with_language(language_profile.as_ref().map(|p| p.language.clone()));
-        let rust_coder = lang_factory.build_rust_coder(&wt_path);
-        let general_coder = lang_factory.build_general_coder(&wt_path);
-        let reviewer = lang_factory.build_reviewer();
-        let manager = lang_factory.build_manager(&wt_path);
+        // Agents — language is already set on factory by the caller (process_issue).
+        // The factory's .lang() method returns the language for prompt adaptation.
+        let rust_coder = factory.build_rust_coder(&wt_path);
+        let general_coder = factory.build_general_coder(&wt_path);
+        let reviewer = factory.build_reviewer();
+        let manager = factory.build_manager(&wt_path);
 
         Ok(OrchestratorContext {
             config,

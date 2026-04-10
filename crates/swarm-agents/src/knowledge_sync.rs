@@ -541,7 +541,8 @@ pub fn sync_codebase_notebook(kb: &dyn KnowledgeBase, repo_root: &std::path::Pat
         .file_name()
         .and_then(|n| n.to_str())
         .unwrap_or("repo");
-    let output_path = std::env::temp_dir().join(format!("{repo_name}-repomix.md"));
+    let output_path =
+        std::env::temp_dir().join(format!("{repo_name}-{}-repomix.md", std::process::id()));
 
     info!("Running repomix to pack codebase...");
     let repomix = std::process::Command::new("repomix")

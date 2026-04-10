@@ -902,6 +902,17 @@ fn handle_init(repo_root: &Path, language_override: Option<&str>, force: bool) -
     }
 
     let language = language_override.unwrap_or_else(|| detect_language(repo_root));
+
+    // Validate --language if explicitly provided
+    const SUPPORTED_LANGUAGES: &[&str] = &["rust", "python", "typescript", "go"];
+    if language_override.is_some() && !SUPPORTED_LANGUAGES.contains(&language) {
+        anyhow::bail!(
+            "Unsupported language '{}'. Supported: {}",
+            language,
+            SUPPORTED_LANGUAGES.join(", ")
+        );
+    }
+
     let template = profile_template(language);
 
     // Create directory structure

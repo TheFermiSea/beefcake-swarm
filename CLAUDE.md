@@ -513,7 +513,7 @@ Enabled via `CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in `.claude/settings.json`.
 
 ### Teammate Workflow
 
-1. Claim issue: `bd update <id> --status in_progress`
+1. Claim issue: `bd update <id> --claim`
 2. Create branch: `git checkout -b swarm/<issue-id>`
 3. Implement the fix/feature
 4. Quality gates auto-run on task completion (fmt, clippy, check, test)

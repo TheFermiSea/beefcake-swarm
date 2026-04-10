@@ -200,9 +200,18 @@ pub async fn process_issue(
     _cancel: Arc<AtomicBool>,
 ) -> Result<bool> {
     info!(id = %issue.id, "Using state-machine driver (authoritative)");
+
+    // Load language profile from repo root (catches uncommitted .swarm/) then worktree.
+    // Set language on a factory clone so ALL agent builds (eager and lazy) use it.
+    let language_profile =
+        coordination::verifier::LanguageProfile::load(worktree_bridge.repo_root());
+    let lang_factory = factory
+        .clone()
+        .with_language(language_profile.as_ref().map(|p| p.language.clone()));
+
     let mut ctx = crate::driver::OrchestratorContext::new(
         config,
-        factory,
+        &lang_factory,
         worktree_bridge,
         issue,
         beads,
