@@ -1,3 +1,5 @@
+// Legacy monolithic loop functions are kept for reference during state-machine migration.
+#![allow(dead_code)]
 //! Orchestration loop: process a single issue through implement → verify → review → escalate.
 //!
 //! Split into submodules for the Slate architecture (Phase 0):
@@ -200,9 +202,18 @@ pub async fn process_issue(
     _cancel: Arc<AtomicBool>,
 ) -> Result<bool> {
     info!(id = %issue.id, "Using state-machine driver (authoritative)");
+
+    // Load language profile from repo root (catches uncommitted .swarm/) then worktree.
+    // Set language on a factory clone so ALL agent builds (eager and lazy) use it.
+    let language_profile =
+        coordination::verifier::LanguageProfile::load(worktree_bridge.repo_root());
+    let lang_factory = factory
+        .clone()
+        .with_language(language_profile.as_ref().map(|p| p.language.clone()));
+
     let mut ctx = crate::driver::OrchestratorContext::new(
         config,
-        factory,
+        &lang_factory,
         worktree_bridge,
         issue,
         beads,
@@ -216,7 +227,7 @@ pub async fn process_issue(
         crate::telemetry::MetricsCollector::new("", "", "", "unknown", None, None, "v1"),
     );
     crate::driver::handle_outcome(&mut ctx, metrics).await;
-    return result;
+    result
 }
 
 /// Core orchestration loop — implement → verify → review → escalate.
@@ -593,7 +604,8 @@ async fn process_issue_core(
     let factory = factory
         .clone()
         .with_plan_slot(plan_slot.clone())
-        .with_work_plan_slot(work_plan_slot.clone());
+        .with_work_plan_slot(work_plan_slot.clone())
+        .with_language(language_profile.as_ref().map(|p| p.language.clone()));
     let manager = factory.build_manager(&wt_path);
 
     // --- Escalation state ---

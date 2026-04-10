@@ -29,10 +29,13 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Emergency stop sentinel: touch /tmp/beefcake-dogfood-stop to prevent all new starts.
+# Emergency stop sentinel: touch /tmp/<repo-name>-dogfood-stop to prevent all new starts.
 # This is checked before acquiring the lockfile so even parallel children abort immediately.
-if [[ -f "/tmp/beefcake-dogfood-stop" ]]; then
-    echo "[dogfood-loop] Stop sentinel /tmp/beefcake-dogfood-stop exists; aborting." >&2
+# Derives from the target repo basename so multi-repo loops have independent sentinels.
+_STOP_REPO_NAME="$(basename "$REPO_ROOT")"
+_STOP_SENTINEL="/tmp/${_STOP_REPO_NAME}-dogfood-stop"
+if [[ -f "$_STOP_SENTINEL" ]]; then
+    echo "[dogfood-loop] Stop sentinel $_STOP_SENTINEL exists; aborting." >&2
     exit 0
 fi
 
