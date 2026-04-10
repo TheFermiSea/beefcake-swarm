@@ -1098,8 +1098,6 @@ impl SwarmConfig {
             judge_enabled: false,
             candidate_count: 1,
             pipeline_config_path: None,
-            candidate_count: 1,
-            pipeline_config_path: None,
         }
     }
 }
