@@ -1,0 +1,57 @@
+# Pipeline stage configuration
+# Each stage is a step in the issue resolution pipeline.
+#
+# Stages are run in order. Disabled stages are skipped without error.
+# This file drives the default 5-stage preflight pipeline.
+#
+# Override at runtime via SWARM_PIPELINE_CONFIG env var:
+#   SWARM_PIPELINE_CONFIG=config/pipeline-masai.toml cargo run -p swarm-agents
+
+[pipeline]
+name = "default"
+description = "Standard 5-stage pipeline"
+
+[[pipeline.stages]]
+name = "context_packing"
+enabled = true
+model_role = "Scout"          # SwarmRole to use
+strategy = "ReAct"            # ReAct | CoT | Vanilla
+tool_access = true            # Whether model gets tool definitions
+max_turns = 10
+timeout_secs = 300
+
+[[pipeline.stages]]
+name = "knowledge_enrichment"
+enabled = true
+model_role = "Scout"
+strategy = "Vanilla"
+tool_access = false
+max_turns = 1
+timeout_secs = 60
+
+[[pipeline.stages]]
+name = "plan_generation"
+enabled = true
+model_role = "ReasoningWorker"
+strategy = "CoT"
+tool_access = false            # MASAI Fixer pattern: no tools for planning
+max_turns = 5
+timeout_secs = 180
+
+[[pipeline.stages]]
+name = "verifier_hint_staging"
+enabled = true
+model_role = "Scout"
+strategy = "Vanilla"
+tool_access = false
+max_turns = 1
+timeout_secs = 30
+
+[[pipeline.stages]]
+name = "prompt_assembly"
+enabled = true
+model_role = "Scout"
+strategy = "Vanilla"
+tool_access = false
+max_turns = 1
+timeout_secs = 30

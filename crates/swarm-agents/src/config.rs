@@ -606,6 +606,11 @@ pub struct SwarmConfig {
     /// Based on ARXIV:2510.21513 — 2 candidates captures ~95% of ensemble benefit.
     /// Populated from `SWARM_CANDIDATE_COUNT` env var (default: 1 = disabled).
     pub candidate_count: usize,
+    /// Path to the TOML pipeline stage registry.
+    /// Selects which pipeline stages run and with what parameters, enabling A/B testing
+    /// of different pipeline configurations without recompilation.
+    /// Populated from `SWARM_PIPELINE_CONFIG` env var (default: `config/pipeline-stages.toml`).
+    pub pipeline_config_path: Option<PathBuf>,
 }
 
 impl Default for SwarmConfig {
@@ -784,6 +789,19 @@ impl Default for SwarmConfig {
                 .and_then(|s| s.parse().ok())
                 .filter(|v: &usize| *v > 0)
                 .unwrap_or(1),
+            pipeline_config_path: std::env::var("SWARM_PIPELINE_CONFIG")
+                .ok()
+                .filter(|s| !s.trim().is_empty())
+                .map(PathBuf::from)
+                .or_else(|| {
+                    // Default to config/pipeline-stages.toml relative to the working directory.
+                    let default = PathBuf::from("config/pipeline-stages.toml");
+                    if default.exists() {
+                        Some(default)
+                    } else {
+                        None
+                    }
+                }),
         }
     }
 }
@@ -1056,6 +1074,9 @@ impl SwarmConfig {
             analyze_after_resolve: true,
             judge_enabled: false,
             candidate_count: 1,
+            pipeline_config_path: None,
+            candidate_count: 1,
+            pipeline_config_path: None,
         }
     }
 }
