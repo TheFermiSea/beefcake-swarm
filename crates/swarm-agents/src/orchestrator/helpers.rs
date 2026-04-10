@@ -384,7 +384,6 @@ pub(crate) fn load_directives(repo_root: &Path) -> Vec<String> {
 // ── Reformulation helpers ────────────────────────────────────────────
 
 /// Load failure ledger entries from a worktree's `.swarm-failure-ledger.jsonl`.
-#[allow(dead_code)] // Used by reformulation pipeline (not yet wired into driver)
 pub(crate) fn load_failure_ledger(
     worktree_path: &Path,
 ) -> Vec<crate::telemetry::FailureLedgerEntry> {
@@ -399,7 +398,6 @@ pub(crate) fn load_failure_ledger(
 }
 
 /// List files changed in the worktree relative to main (via `git diff --name-only`).
-#[allow(dead_code)] // Used by reformulation pipeline (not yet wired into driver)
 pub(crate) fn list_changed_files(worktree_path: &Path) -> Vec<String> {
     match std::process::Command::new("git")
         .args(["diff", "--name-only", "main"])
