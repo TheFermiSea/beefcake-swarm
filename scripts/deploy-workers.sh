@@ -88,7 +88,7 @@ deploy_node() {
         echo "Installing bd..."
         curl -fsSL https://raw.githubusercontent.com/steveyegge/beads/main/scripts/install.sh | bash
     }
-    bd --version 2>/dev/null || echo "bd install failed"
+    bd --version 2>/dev/null || command -v bd >/dev/null 2>&1 && echo "bd installed" || echo "bd install failed"
     '
 
     # ── 4. sccache ───────────────────────────────────────────────────
@@ -104,8 +104,7 @@ deploy_node() {
     log "[$name] Setting up local repo clone..."
     $ssh 'mkdir -p /root/code
     # Allow NFS-owned repos
-    git config --global --add safe.directory /cluster/shared/code/beefcake-swarm 2>/dev/null || true
-    git config --global --add safe.directory /root/code/beefcake-swarm 2>/dev/null || true
+    git config --global --add safe.directory "*" 2>/dev/null || true
     if [[ ! -d /root/code/beefcake-swarm/.git ]]; then
         echo "Cloning from NFS..."
         git clone --local /cluster/shared/code/beefcake-swarm /root/code/beefcake-swarm
