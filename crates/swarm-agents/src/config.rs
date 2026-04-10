@@ -51,6 +51,14 @@ pub enum SwarmRole {
     Strategist,
     LocalManagerFallback,
     Council,
+    /// Chain-of-Thought only planner/evaluator — Devstral-24B on vasp-02 with NO tools.
+    ///
+    /// Based on the MASAI "Fixer without tools" pattern (ICLR 2025): removing environment
+    /// access from the patch-generation stage improves results because the model reasons
+    /// better without exploration distractions. Devstral's 10% edit rate was caused by
+    /// exploration loops; as a CoT-only planner it produces structured plans or unified-diff
+    /// patches from full context provided in the prompt.
+    CoTPlanner,
 }
 
 /// Governance tier controls how many RuntimeAdapter checks fire per tool call.
@@ -822,6 +830,9 @@ impl SwarmConfig {
                 | SwarmRole::Planner
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()), // Use coder/reasoning pool via factory
+                // CoTPlanner always routes to the reasoning endpoint (vasp-02, Devstral-24B).
+                // No tool calls — context is provided in the prompt, output is a plan or patch.
+                SwarmRole::CoTPlanner => Ok(clients.reasoning.clone()),
                 SwarmRole::Council => clients
                     .cloud_tz
                     .clone()
@@ -842,6 +853,8 @@ impl SwarmConfig {
                 SwarmRole::GeneralWorker
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()),
+                // CoTPlanner always pins to Devstral-24B on vasp-02.
+                SwarmRole::CoTPlanner => Ok(clients.reasoning.clone()),
                 SwarmRole::Council => clients
                     .cloud_tz
                     .clone()
@@ -861,6 +874,8 @@ impl SwarmConfig {
                 | SwarmRole::Planner
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => Ok(clients.coder.clone()),
+                // CoTPlanner always pins to Devstral-24B on vasp-02.
+                SwarmRole::CoTPlanner => Ok(clients.reasoning.clone()),
                 SwarmRole::Strategist => clients.strategist.clone().context(
                     "Strategist role requested for StrategistHybridV1 but SWARM_STRATEGIST_URL is not set",
                 ),
@@ -893,7 +908,9 @@ impl SwarmConfig {
                     "tensorzero::function_name::worker_code_edit"
                 }
                 SwarmRole::Fixer => "tensorzero::function_name::code_fixing",
-                SwarmRole::Planner => "tensorzero::function_name::task_planning",
+                SwarmRole::Planner | SwarmRole::CoTPlanner => {
+                    "tensorzero::function_name::task_planning"
+                }
                 SwarmRole::ReasoningWorker => "tensorzero::function_name::deep_reasoning",
                 SwarmRole::Strategist => "tensorzero::function_name::deep_reasoning",
                 SwarmRole::LocalManagerFallback => "tensorzero::function_name::worker_code_edit",
@@ -911,6 +928,8 @@ impl SwarmConfig {
                 | SwarmRole::Planner
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => &self.coder_endpoint.model,
+                // CoTPlanner always routes to Devstral-24B on vasp-02 (reasoning endpoint).
+                SwarmRole::CoTPlanner => &self.reasoning_endpoint.model,
                 SwarmRole::Council => self
                     .cloud_endpoint
                     .as_ref()
@@ -932,6 +951,8 @@ impl SwarmConfig {
                 SwarmRole::GeneralWorker
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => &self.coder_endpoint.model,
+                // CoTPlanner always routes to Devstral-24B on vasp-02 (reasoning endpoint).
+                SwarmRole::CoTPlanner => &self.reasoning_endpoint.model,
                 SwarmRole::Council => self
                     .cloud_endpoint
                     .as_ref()
@@ -953,6 +974,8 @@ impl SwarmConfig {
                 | SwarmRole::Planner
                 | SwarmRole::ReasoningWorker
                 | SwarmRole::LocalManagerFallback => &self.coder_endpoint.model,
+                // CoTPlanner always routes to Devstral-24B on vasp-02 (reasoning endpoint).
+                SwarmRole::CoTPlanner => &self.reasoning_endpoint.model,
                 SwarmRole::Strategist => self
                     .strategist_endpoint
                     .as_ref()

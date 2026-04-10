@@ -24,6 +24,15 @@ pub enum CoderRoute {
     /// GLM-4.7-Flash fast tier for simple errors on retry iterations
     /// (reasoning sandwich: save coder budget for first attempts and complex errors)
     FastFixer,
+    /// Devstral-24B as CoT-only planner/evaluator with NO tools.
+    ///
+    /// Routes to vasp-02 (Devstral-Small-2-24B). No environment access — the model
+    /// reasons from full context provided in the prompt and outputs a `SubtaskPlan`
+    /// JSON or unified-diff patch. Based on MASAI "Fixer without tools" (ICLR 2025).
+    ///
+    /// Triggered when the task requires decomposition (DecompositionRequired failure),
+    /// touches many files, or involves cross-crate architectural decisions.
+    CoTPlanner,
 }
 
 /// Route to the appropriate coder based on error category distribution and iteration.
@@ -86,6 +95,63 @@ pub fn route_to_coder(error_cats: &[ErrorCategory], iteration: u32) -> CoderRout
     } else {
         CoderRoute::GeneralCoder
     }
+}
+
+/// Whether the task should be routed to the CoT-only planner (Devstral-24B, no tools).
+///
+/// Returns `true` when the task exhibits signals that call for pure CoT reasoning
+/// rather than tool-assisted implementation:
+/// - `decomposition_required`: task was classified as `DecompositionRequired` by reformulation
+/// - `files_changed` ≥ 8: many-file tasks benefit from architectural planning before coding
+/// - `is_architectural`: task description mentions cross-crate reasoning keywords
+///
+/// Based on MASAI "Fixer without tools" (ICLR 2025): environment access hurts patch quality
+/// when the model should be reasoning from provided context, not exploring.
+pub fn needs_cot_planner(
+    decomposition_required: bool,
+    files_changed: usize,
+    objective: &str,
+) -> bool {
+    if decomposition_required {
+        info!(
+            files_changed,
+            "CoT planner triggered: DecompositionRequired failure signal"
+        );
+        return true;
+    }
+    // Many-file tasks: architectural planning before coding avoids thrash.
+    // Threshold mirrors escalation/coordinator's >8-files-changed rule.
+    if files_changed >= 8 {
+        info!(
+            files_changed,
+            "CoT planner triggered: high file count indicates architectural scope"
+        );
+        return true;
+    }
+    // Keyword signals that indicate cross-crate reasoning or architectural decisions.
+    let arch_keywords = [
+        "refactor",
+        "redesign",
+        "architecture",
+        "cross-crate",
+        "decompose",
+        "subtask",
+        "plan",
+        "modularize",
+        "extract module",
+        "split module",
+        "move trait",
+        "move type",
+    ];
+    let lower = objective.to_lowercase();
+    let is_architectural = arch_keywords.iter().any(|kw| lower.contains(kw));
+    if is_architectural {
+        debug!(
+            objective,
+            "CoT planner triggered: architectural keyword detected in objective"
+        );
+    }
+    is_architectural
 }
 
 /// Whether an error category is "simple" — fixable by the fast tier without

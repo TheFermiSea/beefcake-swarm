@@ -345,3 +345,53 @@ pub fn build_general_coder_for_language(
         .default_max_turns(worker_max_turns())
         .build()
 }
+
+/// CoT-only planner for Devstral-24B (MASAI "Fixer without tools" pattern, ICLR 2025).
+///
+/// No tools are registered. The model receives full code context in the prompt and
+/// reasons to produce either a `SubtaskPlan` JSON or a unified-diff patch.
+/// `ToolChoice::None` is enforced to prevent the model from requesting tool calls.
+///
+/// This eliminates the exploration loops that caused Devstral's 10% edit rate in
+/// tool-equipped mode: without environment access the model reasons from provided
+/// context instead of getting distracted by exploration.
+pub fn build_cot_planner(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+) -> OaiAgent {
+    build_cot_planner_for_language(client, model, wt_path, "cot_planner", None)
+}
+
+/// Build the CoT-only planner with language-aware prompts.
+pub fn build_cot_planner_for_language(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+    name: &str,
+    language: Option<&str>,
+) -> OaiAgent {
+    let preamble = prompts::build_full_worker_preamble(
+        "cot_planner",
+        wt_path,
+        prompts::COT_PLANNER_PREAMBLE,
+        language,
+    );
+    // CoT-only: ToolChoice::None enforces that no tools are called.
+    // The model must reason and produce structured output from provided context.
+    // Temperature 0.3 gives Devstral sufficient exploration in its chain-of-thought
+    // without the stochasticity that hurts tool-call reliability.
+    client
+        .agent(model)
+        .name(name)
+        .description(
+            "CoT-only planner/evaluator for Devstral-24B — produces SubtaskPlan JSON or \
+             unified-diff patches without tool access (MASAI Fixer pattern)",
+        )
+        .preamble(&preamble)
+        .temperature(0.3)
+        .tool_choice(ToolChoice::None)
+        .additional_params(worker_sampling_params())
+        .default_max_turns(1)
+        .build()
+}

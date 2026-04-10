@@ -858,6 +858,39 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                     };
                     (result, adapter)
                 }
+                CoderRoute::CoTPlanner => {
+                    info!(
+                        iteration,
+                        "Routing to CoT planner (Devstral-24B, no tools — state driver)"
+                    );
+                    ctx.metrics.record_coder_route("CoTPlanner");
+                    ctx.metrics
+                        .record_agent_metrics("Devstral-CoTPlanner", 0, 0);
+                    let cot_planner = ctx.factory.build_cot_planner(&ctx.wt_path);
+                    let adapter = RuntimeAdapter::new(AdapterConfig {
+                        agent_name: "Devstral-CoTPlanner".into(),
+                        deadline: Some(Instant::now() + ctx.worker_timeout),
+                        ..Default::default()
+                    });
+                    let result = match tokio::time::timeout(
+                        ctx.worker_timeout,
+                        crate::orchestrator::prompt_with_hook_and_retry(
+                            &cot_planner,
+                            &task_prompt,
+                            2,
+                            adapter.clone(),
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => {
+                            warn!(iteration, "cot_planner timed out (state driver)");
+                            Ok("cot_planner timed out. No plan produced.".into())
+                        }
+                    };
+                    (result, adapter)
+                }
             }
         }
         SwarmTier::Strategist => {
