@@ -28,8 +28,9 @@ use super::patch_tool::EditFileTool;
 use super::proxy_wrappers::{
     ProxyAstGrep, ProxyColGrep, ProxyEditFile, ProxyGetDiff, ProxyGraphContext,
     ProxyListChangedFiles, ProxyListFiles, ProxyQueryNotebook, ProxyReadFile, ProxyRunCommand,
-    ProxyRunVerifier, ProxySearchCode, ProxyWriteFile,
+    ProxyQuickCheck, ProxyRunVerifier, ProxySearchCode, ProxyWriteFile,
 };
+use super::quick_check::QuickCheckTool;
 use super::search_code_tool::SearchCodeTool;
 use super::verifier_tool::RunVerifierTool;
 use super::workpad_tool::{AnnounceTool, CheckAnnouncementsTool};
@@ -184,6 +185,8 @@ pub fn kernel_strategy_tools(
                     .with_packages(verifier_packages.to_vec())
                     .with_language_profile(profile.clone()),
             )),
+            Box::new(ProxyQuickCheck(QuickCheckTool::new(wt_path)
+                .with_packages(verifier_packages.to_vec()))),
             Box::new(ProxyGetDiff(GetDiffTool::new(wt_path))),
             Box::new(ProxyListChangedFiles(ListChangedFilesTool::new(wt_path))),
         ]
@@ -194,6 +197,8 @@ pub fn kernel_strategy_tools(
                     .with_packages(verifier_packages.to_vec())
                     .with_language_profile(profile),
             ),
+            Box::new(QuickCheckTool::new(wt_path)
+                .with_packages(verifier_packages.to_vec())),
             Box::new(GetDiffTool::new(wt_path)),
             Box::new(ListChangedFilesTool::new(wt_path)),
         ]
@@ -364,11 +369,11 @@ mod tests {
     fn test_manager_local_has_strategy_tools() {
         let dir = tempfile::tempdir().unwrap();
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], false);
-        // verifier, get_diff, list_changed_files = 3 (no search tools — manager must delegate)
+        // verifier, quick_check, get_diff, list_changed_files = 4 (no search tools — manager must delegate)
         assert_eq!(
             tools.len(),
-            3,
-            "Local manager should have 3 strategy tools (verifier, get_diff, list_changed_files)"
+            4,
+            "Local manager should have 4 strategy tools (verifier, quick_check, get_diff, list_changed_files)"
         );
     }
 
@@ -378,8 +383,8 @@ mod tests {
         let tools = manager_tools(dir.path(), &["test-pkg".to_string()], true);
         assert_eq!(
             tools.len(),
-            3,
-            "Cloud manager should have 3 strategy tools (verifier, diff, changed_files)"
+            4,
+            "Cloud manager should have 4 strategy tools (verifier, quick_check, diff, changed_files)"
         );
     }
 
@@ -512,14 +517,15 @@ mod tests {
     fn test_kernel_strategy_tools_local() {
         let dir = tempfile::tempdir().unwrap();
         let tools = kernel_strategy_tools(dir.path(), &[], false);
-        // verifier, get_diff, list_changed_files = 3 (no search tools — manager must delegate)
+        // verifier, quick_check, get_diff, list_changed_files = 4 (no search tools — manager must delegate)
         assert_eq!(
             tools.len(),
-            3,
-            "Strategy bundle: verifier, get_diff, list_changed_files (no search tools)"
+            4,
+            "Strategy bundle: verifier, quick_check, get_diff, list_changed_files (no search tools)"
         );
         let names: Vec<String> = tools.iter().map(|t| t.name()).collect();
         assert!(names.iter().any(|n| n.contains("verifier")));
+        assert!(names.iter().any(|n| n.contains("quick_check")));
         assert!(names.iter().any(|n| n.contains("get_diff")));
         assert!(names.iter().any(|n| n.contains("list_changed_files")));
     }
@@ -528,7 +534,7 @@ mod tests {
     fn test_kernel_strategy_tools_proxy() {
         let dir = tempfile::tempdir().unwrap();
         let tools = kernel_strategy_tools(dir.path(), &["pkg".to_string()], true);
-        assert_eq!(tools.len(), 3);
+        assert_eq!(tools.len(), 4);
         for tool in &tools {
             assert!(
                 tool.name().starts_with("proxy_"),

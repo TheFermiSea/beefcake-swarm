@@ -48,6 +48,7 @@ use super::graph_context_tool::GraphContextTool;
 use super::notebook_tool::QueryNotebookTool;
 use super::patch_tool::EditFileTool;
 use super::search_code_tool::SearchCodeTool;
+use super::quick_check::QuickCheckTool;
 use super::verifier_tool::RunVerifierTool;
 
 // Manager tools (proxy-prefixed for CLIAPIProxy compatibility)
@@ -64,3 +65,4 @@ proxy_tool!(ProxySearchCode wraps SearchCodeTool as "proxy_search_code");
 proxy_tool!(ProxyColGrep wraps ColGrepTool as "proxy_colgrep");
 proxy_tool!(ProxyAstGrep wraps AstGrepTool as "proxy_ast_grep");
 proxy_tool!(ProxyGraphContext wraps GraphContextTool as "proxy_graph_context");
+proxy_tool!(ProxyQuickCheck wraps QuickCheckTool as "proxy_quick_check");
