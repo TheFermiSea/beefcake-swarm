@@ -40,6 +40,7 @@ pub mod prompts;
 pub mod recommendations;
 pub mod reformulation;
 pub mod runtime_adapter;
+pub mod session;
 pub mod state_machine;
 pub mod str_util;
 pub mod subtask;
