@@ -849,7 +849,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
             // through to the standard error-driven routing.
             let decomposition_required = ctx
                 .reformulation_store
-                .last_classification()
+                .last_classification(&ctx.issue.id)
                 .map(|c| matches!(c, crate::reformulation::FailureClassification::DecompositionRequired { .. }))
                 .unwrap_or(false);
             let changed_file_count = crate::orchestrator::helpers::list_changed_files(&ctx.wt_path).len();
