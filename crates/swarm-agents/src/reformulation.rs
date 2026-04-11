@@ -245,6 +245,18 @@ impl ReformulationStore {
             .count() as u32
     }
 
+    /// Return the most recent failure classification (any issue), if any.
+    ///
+    /// Used by the complexity-gated CoT planner to check whether the last
+    /// failure was `DecompositionRequired` — the signal to switch Devstral
+    /// from tool-equipped worker to pure-reasoning planner.
+    pub fn last_classification(&self) -> Option<FailureClassification> {
+        load_jsonl::<ReformulationRecord>(&self.reformulations_path)
+            .into_iter()
+            .last()
+            .map(|r| r.classification)
+    }
+
     /// Load all reformulation records for an issue.
     pub fn records_for_issue(&self, issue_id: &str) -> Vec<ReformulationRecord> {
         load_jsonl::<ReformulationRecord>(&self.reformulations_path)
