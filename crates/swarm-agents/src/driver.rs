@@ -133,10 +133,23 @@ pub struct OrchestratorContext<'a> {
     pub process_start: Instant,
 
     // ── Event-sourced session log ──
-    pub session_log: crate::session::SessionLog,
+    /// Opened lazily in handle_preparing_worktree() once the worktree exists.
+    pub session_log: Option<crate::session::SessionLog>,
+
+    // ── Lazy provisioning flag ──
+    /// Whether the worktree has been created yet. Set to true in
+    /// handle_preparing_worktree() after worktree_bridge.create() succeeds.
+    pub worktree_provisioned: bool,
 }
 
 impl<'a> OrchestratorContext<'a> {
+    /// Safely append an event to the session log (no-op if log not yet opened).
+    pub fn log_event(&self, kind: crate::session::EventKind) {
+        if let Some(ref log) = self.session_log {
+            let _ = log.append(kind);
+        }
+    }
+
     /// Build the context from the same inputs as `process_issue()`.
     ///
     /// Performs all one-time initialization: feature flags, worktree creation,
@@ -223,41 +236,17 @@ impl<'a> OrchestratorContext<'a> {
                 },
             );
 
-        // We defer worktree creation, session init, agent builds, and health
-        // checks to the state handlers (handle_selecting_issue / handle_preparing_worktree).
-        // For now, create placeholder values that will be set during those states.
-        //
-        // Actually — the legacy path does all of this upfront. For a clean
-        // refactor, we mirror that: do it all here, just like the legacy path.
+        // Lazy worktree provisioning (Managed Agents "sandbox as tool" pattern):
+        // Compute the planned worktree path but DON'T create it yet.
+        // The actual `git worktree add` happens in handle_preparing_worktree().
+        // This is safe because tools store wt_path at construction but only
+        // validate filesystem access when called (after worktree exists).
+        let wt_path = worktree_bridge.worktree_path(&issue.id);
+        info!(path = %wt_path.display(), "Planned worktree path (deferred creation)");
 
-        // Worktree — created eagerly so agent builders have a path
-        let wt_path = worktree_bridge.create(&issue.id)?;
-        info!(path = %wt_path.display(), "Created worktree (state driver)");
-
-        // Event-sourced session log — append-only JSONL for crash recovery.
-        let session_log_path = wt_path.join(crate::session::SESSION_LOG_FILENAME);
-        let session_log = crate::session::SessionLog::open(&session_log_path)
-            .with_context(|| format!("opening session log at {}", session_log_path.display()))?;
-
-        // Emit session-started and worktree-provisioned events.
-        let base_commit = std::process::Command::new("git")
-            .args(["rev-parse", "HEAD"])
-            .current_dir(&wt_path)
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| s.trim().to_string());
-
-        let _ = session_log.append(crate::session::EventKind::SessionStarted {
-            issue_id: issue.id.clone(),
-            objective: issue.title.clone(),
-            base_commit: base_commit.clone(),
-        });
-        let _ = session_log.append(crate::session::EventKind::WorktreeProvisioned {
-            path: wt_path.display().to_string(),
-            branch: format!("swarm/{}", issue.id),
-            commit: base_commit.unwrap_or_default(),
-        });
+        // Session log is also deferred — opened in handle_preparing_worktree()
+        // once the worktree directory exists on disk.
+        let session_log: Option<crate::session::SessionLog> = None;
 
         // Intent contract (reformulation engine Phase 1) — capture original goal on first pickup.
         // The contract is append-only: subsequent retries of the same issue reuse the stored one.
@@ -306,14 +295,11 @@ impl<'a> OrchestratorContext<'a> {
             "v1",
         );
 
-        // Verifier config
-        let initial_packages = if config.verifier_packages.is_empty() {
-            detect_changed_packages(&wt_path, true)
-        } else {
-            config.verifier_packages.clone()
-        };
+        // Verifier config — package detection deferred to handle_preparing_worktree()
+        // (needs the worktree to exist for git diff). Use explicit packages if configured,
+        // otherwise start with empty (will be populated after worktree creation).
         let verifier_config = VerifierConfig {
-            packages: initial_packages,
+            packages: config.verifier_packages.clone(),
             check_clippy: !bool_from_env("SWARM_SKIP_CLIPPY", false),
             check_test: !bool_from_env("SWARM_SKIP_TESTS", false),
             ..VerifierConfig::default()
@@ -371,6 +357,7 @@ impl<'a> OrchestratorContext<'a> {
             process_span,
             process_start,
             session_log,
+            worktree_provisioned: false,
         })
     }
 
@@ -579,7 +566,8 @@ impl<'a> OrchestratorContext<'a> {
             max_validator_failures,
             process_span,
             process_start,
-            session_log,
+            session_log: Some(session_log),
+            worktree_provisioned: true, // wake() always has an existing worktree
         }))
     }
 }
@@ -637,6 +625,61 @@ pub async fn handle_preparing_worktree(
                 ctx.cluster_health.summary().await
             ),
         });
+    }
+
+    // ── Lazy worktree provisioning ──
+    // Create the worktree now (deferred from OrchestratorContext::new).
+    // Failures become clean StateTransition::Fail instead of crashing new().
+    if !ctx.worktree_provisioned {
+        match ctx.worktree_bridge.create(&ctx.issue.id) {
+            Ok(created_path) => {
+                // Update wt_path to the actual path (should match planned path).
+                ctx.wt_path = created_path;
+                ctx.worktree_provisioned = true;
+                info!(path = %ctx.wt_path.display(), "Worktree provisioned (lazy)");
+            }
+            Err(e) => {
+                warn!(issue = %ctx.issue.id, error = %e, "Worktree creation failed");
+                let _ = ctx.beads.update_status(&ctx.issue.id, "open");
+                return Ok(StateTransition::Fail {
+                    reason: format!("worktree creation failed: {e}"),
+                });
+            }
+        }
+
+        // Open session log now that the worktree directory exists.
+        let session_log_path = ctx.wt_path.join(crate::session::SESSION_LOG_FILENAME);
+        match crate::session::SessionLog::open(&session_log_path) {
+            Ok(log) => {
+                // Emit the deferred startup events.
+                let base_commit = ctx.git_mgr.current_commit_full().ok();
+                let _ = log.append(crate::session::EventKind::SessionStarted {
+                    issue_id: ctx.issue.id.clone(),
+                    objective: ctx.issue.title.clone(),
+                    base_commit: base_commit.clone(),
+                });
+                let _ = log.append(crate::session::EventKind::WorktreeProvisioned {
+                    path: ctx.wt_path.display().to_string(),
+                    branch: format!("swarm/{}", ctx.issue.id),
+                    commit: base_commit.unwrap_or_default(),
+                });
+                ctx.session_log = Some(log);
+            }
+            Err(e) => {
+                warn!(error = %e, "Failed to open session log (non-fatal)");
+            }
+        }
+
+        // Detect changed packages now that the worktree has files.
+        if ctx.verifier_config.packages.is_empty() {
+            ctx.verifier_config.packages = detect_changed_packages(&ctx.wt_path, true);
+        }
+
+        // Re-initialize git manager with the actual worktree path.
+        ctx.git_mgr = GitManager::new(&ctx.wt_path, "[swarm]");
+        if let Ok(commit) = ctx.git_mgr.current_commit_full() {
+            ctx.session.set_initial_commit(commit);
+        }
     }
 
     // Spawn background health monitor
@@ -2206,9 +2249,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
             warn!(state = %current, %reason, "Budget exhausted (state driver)");
             let reason_str = reason.to_string();
             ctx.state_machine.fail(&reason_str)?;
-            let _ = ctx
-                .session_log
-                .append(crate::session::EventKind::StateTransition {
+            ctx.log_event(crate::session::EventKind::StateTransition {
                     from: current,
                     to: OrchestratorState::Failed,
                     iteration: ctx.state_machine.iteration(),
@@ -2236,9 +2277,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                 ctx.budget_tracker.on_state_entered(to);
 
                 // Emit state transition event to session log.
-                let _ = ctx
-                    .session_log
-                    .append(crate::session::EventKind::StateTransition {
+                ctx.log_event(crate::session::EventKind::StateTransition {
                         from,
                         to,
                         iteration: ctx.state_machine.iteration(),
@@ -2259,9 +2298,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                         }
                     }
 
-                    let _ = ctx
-                        .session_log
-                        .append(crate::session::EventKind::CheckpointWritten {
+                    ctx.log_event(crate::session::EventKind::CheckpointWritten {
                             checkpoint_id: cp.checkpoint_id,
                             state: cp.state,
                             iteration: cp.iteration,
@@ -2275,9 +2312,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                 ctx.budget_tracker
                     .on_state_entered(OrchestratorState::Merging);
 
-                let _ = ctx
-                    .session_log
-                    .append(crate::session::EventKind::StateTransition {
+                ctx.log_event(crate::session::EventKind::StateTransition {
                         from,
                         to: OrchestratorState::Merging,
                         iteration: ctx.state_machine.iteration(),
@@ -2290,9 +2325,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                     StateTransition::Advance { to, reason } => {
                         ctx.state_machine.advance(to, Some(&reason))?;
                         ctx.success = true;
-                        let _ =
-                            ctx.session_log
-                                .append(crate::session::EventKind::StateTransition {
+                        ctx.log_event(crate::session::EventKind::StateTransition {
                                     from: OrchestratorState::Merging,
                                     to,
                                     iteration: ctx.state_machine.iteration(),
@@ -2301,9 +2334,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                     }
                     StateTransition::Fail { reason } => {
                         ctx.state_machine.fail(&reason)?;
-                        let _ =
-                            ctx.session_log
-                                .append(crate::session::EventKind::StateTransition {
+                        ctx.log_event(crate::session::EventKind::StateTransition {
                                     from: OrchestratorState::Merging,
                                     to: OrchestratorState::Failed,
                                     iteration: ctx.state_machine.iteration(),
@@ -2314,9 +2345,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                         ctx.state_machine
                             .advance(OrchestratorState::Resolved, Some("merged and resolved"))?;
                         ctx.success = true;
-                        let _ =
-                            ctx.session_log
-                                .append(crate::session::EventKind::StateTransition {
+                        ctx.log_event(crate::session::EventKind::StateTransition {
                                     from: OrchestratorState::Merging,
                                     to: OrchestratorState::Resolved,
                                     iteration: ctx.state_machine.iteration(),
@@ -2329,9 +2358,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
             StateTransition::Fail { reason } => {
                 let from = ctx.state_machine.current();
                 ctx.state_machine.fail(&reason)?;
-                let _ = ctx
-                    .session_log
-                    .append(crate::session::EventKind::StateTransition {
+                ctx.log_event(crate::session::EventKind::StateTransition {
                         from,
                         to: OrchestratorState::Failed,
                         iteration: ctx.state_machine.iteration(),
@@ -2357,9 +2384,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
     } else {
         None
     };
-    let _ = ctx
-        .session_log
-        .append(crate::session::EventKind::SessionCompleted {
+    ctx.log_event(crate::session::EventKind::SessionCompleted {
             resolved: ctx.success,
             total_iterations: ctx.state_machine.iteration(),
             duration_ms,
