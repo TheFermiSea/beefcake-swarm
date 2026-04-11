@@ -8,7 +8,7 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use tracing::{debug, error, info, warn};
 
 use crate::acceptance::{self, AcceptancePolicy};
@@ -130,6 +130,9 @@ pub struct OrchestratorContext<'a> {
     // ── OTel ──
     pub process_span: tracing::Span,
     pub process_start: Instant,
+
+    // ── Event-sourced session log ──
+    pub session_log: crate::session::SessionLog,
 }
 
 impl<'a> OrchestratorContext<'a> {
@@ -229,6 +232,31 @@ impl<'a> OrchestratorContext<'a> {
         // Worktree — created eagerly so agent builders have a path
         let wt_path = worktree_bridge.create(&issue.id)?;
         info!(path = %wt_path.display(), "Created worktree (state driver)");
+
+        // Event-sourced session log — append-only JSONL for crash recovery.
+        let session_log_path = wt_path.join(crate::session::SESSION_LOG_FILENAME);
+        let session_log = crate::session::SessionLog::open(&session_log_path)
+            .with_context(|| format!("opening session log at {}", session_log_path.display()))?;
+
+        // Emit session-started and worktree-provisioned events.
+        let base_commit = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(&wt_path)
+            .output()
+            .ok()
+            .and_then(|o| String::from_utf8(o.stdout).ok())
+            .map(|s| s.trim().to_string());
+
+        let _ = session_log.append(crate::session::EventKind::SessionStarted {
+            issue_id: issue.id.clone(),
+            objective: issue.title.clone(),
+            base_commit: base_commit.clone(),
+        });
+        let _ = session_log.append(crate::session::EventKind::WorktreeProvisioned {
+            path: wt_path.display().to_string(),
+            branch: format!("swarm/{}", issue.id),
+            commit: base_commit.unwrap_or_default(),
+        });
 
         // Intent contract (reformulation engine Phase 1) — capture original goal on first pickup.
         // The contract is append-only: subsequent retries of the same issue reuse the stored one.
@@ -341,6 +369,7 @@ impl<'a> OrchestratorContext<'a> {
             max_validator_failures,
             process_span,
             process_start,
+            session_log,
         })
     }
 }
@@ -1943,7 +1972,14 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
         // Budget enforcement
         if let Some(reason) = ctx.budget_tracker.check_budget(current) {
             warn!(state = %current, %reason, "Budget exhausted (state driver)");
-            ctx.state_machine.fail(&reason.to_string())?;
+            let reason_str = reason.to_string();
+            ctx.state_machine.fail(&reason_str)?;
+            let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
+                from: current,
+                to: OrchestratorState::Failed,
+                iteration: ctx.state_machine.iteration(),
+                reason: Some(format!("budget exhausted: {reason_str}")),
+            });
             break;
         }
 
@@ -1961,50 +1997,125 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
 
         match transition {
             StateTransition::Advance { to, reason } => {
+                let from = ctx.state_machine.current();
                 ctx.state_machine.advance(to, Some(&reason))?;
                 ctx.budget_tracker.on_state_entered(to);
 
-                // Checkpoint at stable points
+                // Emit state transition event to session log.
+                let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
+                    from,
+                    to,
+                    iteration: ctx.state_machine.iteration(),
+                    reason: Some(reason),
+                });
+
+                // Checkpoint at stable points (atomic: write-tmp → fsync → rename).
                 let git_hash = ctx.git_mgr.current_commit_full().ok();
                 if let Some(cp) = ctx
                     .state_machine
                     .checkpoint(&ctx.issue.id, git_hash.as_deref())
                 {
                     let cp_path = ctx.wt_path.join(".swarm-checkpoint.json");
+                    let tmp_path = ctx.wt_path.join(".swarm-checkpoint.json.tmp");
                     if let Ok(json) = serde_json::to_string_pretty(&cp) {
-                        let _ = std::fs::write(&cp_path, json);
+                        if std::fs::write(&tmp_path, &json).is_ok() {
+                            let _ = std::fs::rename(&tmp_path, &cp_path);
+                        }
                     }
+
+                    let _ = ctx.session_log.append(crate::session::EventKind::CheckpointWritten {
+                        checkpoint_id: cp.checkpoint_id,
+                        state: cp.state,
+                        iteration: cp.iteration,
+                    });
                 }
             }
             StateTransition::Complete => {
+                let from = ctx.state_machine.current();
                 ctx.state_machine
                     .advance(OrchestratorState::Merging, Some("all gates passed"))?;
                 ctx.budget_tracker
                     .on_state_entered(OrchestratorState::Merging);
+
+                let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
+                    from,
+                    to: OrchestratorState::Merging,
+                    iteration: ctx.state_machine.iteration(),
+                    reason: Some("all gates passed".into()),
+                });
+
                 // Execute merge
                 let merge_result = handle_merging(ctx).await?;
                 match merge_result {
                     StateTransition::Advance { to, reason } => {
                         ctx.state_machine.advance(to, Some(&reason))?;
                         ctx.success = true;
+                        let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
+                            from: OrchestratorState::Merging,
+                            to,
+                            iteration: ctx.state_machine.iteration(),
+                            reason: Some(reason),
+                        });
                     }
                     StateTransition::Fail { reason } => {
                         ctx.state_machine.fail(&reason)?;
+                        let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
+                            from: OrchestratorState::Merging,
+                            to: OrchestratorState::Failed,
+                            iteration: ctx.state_machine.iteration(),
+                            reason: Some(reason),
+                        });
                     }
                     StateTransition::Complete => {
                         ctx.state_machine
                             .advance(OrchestratorState::Resolved, Some("merged and resolved"))?;
                         ctx.success = true;
+                        let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
+                            from: OrchestratorState::Merging,
+                            to: OrchestratorState::Resolved,
+                            iteration: ctx.state_machine.iteration(),
+                            reason: Some("merged and resolved".into()),
+                        });
                     }
                 }
                 break;
             }
             StateTransition::Fail { reason } => {
+                let from = ctx.state_machine.current();
                 ctx.state_machine.fail(&reason)?;
+                let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
+                    from,
+                    to: OrchestratorState::Failed,
+                    iteration: ctx.state_machine.iteration(),
+                    reason: Some(reason),
+                });
                 break;
             }
         }
     }
+
+    // Emit terminal session event.
+    let duration_ms = ctx.process_start.elapsed().as_millis() as u64;
+    let merge_commit = if ctx.success {
+        ctx.git_mgr.current_commit_full().ok()
+    } else {
+        None
+    };
+    let failure_reason = if !ctx.success {
+        ctx.state_machine
+            .transitions()
+            .last()
+            .and_then(|t| t.reason.clone())
+    } else {
+        None
+    };
+    let _ = ctx.session_log.append(crate::session::EventKind::SessionCompleted {
+        resolved: ctx.success,
+        total_iterations: ctx.state_machine.iteration(),
+        duration_ms,
+        merge_commit,
+        failure_reason,
+    });
 
     Ok(ctx.success)
 }
