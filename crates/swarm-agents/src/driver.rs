@@ -2206,12 +2206,14 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
             warn!(state = %current, %reason, "Budget exhausted (state driver)");
             let reason_str = reason.to_string();
             ctx.state_machine.fail(&reason_str)?;
-            let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
-                from: current,
-                to: OrchestratorState::Failed,
-                iteration: ctx.state_machine.iteration(),
-                reason: Some(format!("budget exhausted: {reason_str}")),
-            });
+            let _ = ctx
+                .session_log
+                .append(crate::session::EventKind::StateTransition {
+                    from: current,
+                    to: OrchestratorState::Failed,
+                    iteration: ctx.state_machine.iteration(),
+                    reason: Some(format!("budget exhausted: {reason_str}")),
+                });
             break;
         }
 
@@ -2234,12 +2236,14 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                 ctx.budget_tracker.on_state_entered(to);
 
                 // Emit state transition event to session log.
-                let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
-                    from,
-                    to,
-                    iteration: ctx.state_machine.iteration(),
-                    reason: Some(reason),
-                });
+                let _ = ctx
+                    .session_log
+                    .append(crate::session::EventKind::StateTransition {
+                        from,
+                        to,
+                        iteration: ctx.state_machine.iteration(),
+                        reason: Some(reason),
+                    });
 
                 // Checkpoint at stable points (atomic: write-tmp → fsync → rename).
                 let git_hash = ctx.git_mgr.current_commit_full().ok();
@@ -2255,11 +2259,13 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                         }
                     }
 
-                    let _ = ctx.session_log.append(crate::session::EventKind::CheckpointWritten {
-                        checkpoint_id: cp.checkpoint_id,
-                        state: cp.state,
-                        iteration: cp.iteration,
-                    });
+                    let _ = ctx
+                        .session_log
+                        .append(crate::session::EventKind::CheckpointWritten {
+                            checkpoint_id: cp.checkpoint_id,
+                            state: cp.state,
+                            iteration: cp.iteration,
+                        });
                 }
             }
             StateTransition::Complete => {
@@ -2269,12 +2275,14 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                 ctx.budget_tracker
                     .on_state_entered(OrchestratorState::Merging);
 
-                let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
-                    from,
-                    to: OrchestratorState::Merging,
-                    iteration: ctx.state_machine.iteration(),
-                    reason: Some("all gates passed".into()),
-                });
+                let _ = ctx
+                    .session_log
+                    .append(crate::session::EventKind::StateTransition {
+                        from,
+                        to: OrchestratorState::Merging,
+                        iteration: ctx.state_machine.iteration(),
+                        reason: Some("all gates passed".into()),
+                    });
 
                 // Execute merge
                 let merge_result = handle_merging(ctx).await?;
@@ -2282,32 +2290,38 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                     StateTransition::Advance { to, reason } => {
                         ctx.state_machine.advance(to, Some(&reason))?;
                         ctx.success = true;
-                        let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
-                            from: OrchestratorState::Merging,
-                            to,
-                            iteration: ctx.state_machine.iteration(),
-                            reason: Some(reason),
-                        });
+                        let _ =
+                            ctx.session_log
+                                .append(crate::session::EventKind::StateTransition {
+                                    from: OrchestratorState::Merging,
+                                    to,
+                                    iteration: ctx.state_machine.iteration(),
+                                    reason: Some(reason),
+                                });
                     }
                     StateTransition::Fail { reason } => {
                         ctx.state_machine.fail(&reason)?;
-                        let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
-                            from: OrchestratorState::Merging,
-                            to: OrchestratorState::Failed,
-                            iteration: ctx.state_machine.iteration(),
-                            reason: Some(reason),
-                        });
+                        let _ =
+                            ctx.session_log
+                                .append(crate::session::EventKind::StateTransition {
+                                    from: OrchestratorState::Merging,
+                                    to: OrchestratorState::Failed,
+                                    iteration: ctx.state_machine.iteration(),
+                                    reason: Some(reason),
+                                });
                     }
                     StateTransition::Complete => {
                         ctx.state_machine
                             .advance(OrchestratorState::Resolved, Some("merged and resolved"))?;
                         ctx.success = true;
-                        let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
-                            from: OrchestratorState::Merging,
-                            to: OrchestratorState::Resolved,
-                            iteration: ctx.state_machine.iteration(),
-                            reason: Some("merged and resolved".into()),
-                        });
+                        let _ =
+                            ctx.session_log
+                                .append(crate::session::EventKind::StateTransition {
+                                    from: OrchestratorState::Merging,
+                                    to: OrchestratorState::Resolved,
+                                    iteration: ctx.state_machine.iteration(),
+                                    reason: Some("merged and resolved".into()),
+                                });
                     }
                 }
                 break;
@@ -2315,12 +2329,14 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
             StateTransition::Fail { reason } => {
                 let from = ctx.state_machine.current();
                 ctx.state_machine.fail(&reason)?;
-                let _ = ctx.session_log.append(crate::session::EventKind::StateTransition {
-                    from,
-                    to: OrchestratorState::Failed,
-                    iteration: ctx.state_machine.iteration(),
-                    reason: Some(reason),
-                });
+                let _ = ctx
+                    .session_log
+                    .append(crate::session::EventKind::StateTransition {
+                        from,
+                        to: OrchestratorState::Failed,
+                        iteration: ctx.state_machine.iteration(),
+                        reason: Some(reason),
+                    });
                 break;
             }
         }
@@ -2341,13 +2357,15 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
     } else {
         None
     };
-    let _ = ctx.session_log.append(crate::session::EventKind::SessionCompleted {
-        resolved: ctx.success,
-        total_iterations: ctx.state_machine.iteration(),
-        duration_ms,
-        merge_commit,
-        failure_reason,
-    });
+    let _ = ctx
+        .session_log
+        .append(crate::session::EventKind::SessionCompleted {
+            resolved: ctx.success,
+            total_iterations: ctx.state_machine.iteration(),
+            duration_ms,
+            merge_commit,
+            failure_reason,
+        });
 
     Ok(ctx.success)
 }
@@ -2500,6 +2518,28 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
     let session_metrics = metrics.finalize(ctx.success, &final_tier);
     telemetry::write_session_metrics(&session_metrics, &ctx.wt_path);
     telemetry::append_telemetry(&session_metrics, ctx.worktree_bridge.repo_root());
+
+    // TensorZero feedback — post episode-level metrics so Thompson Sampling
+    // can learn from outcomes. Without this, TZ routes uniformly (no signal).
+    if let Some(tz_url) = ctx.config.tensorzero_url.as_deref() {
+        let episode_id = ctx.session.session_id();
+        let wall_secs = ctx.process_start.elapsed().as_secs_f64();
+        let tags = crate::tensorzero::FeedbackTags {
+            issue_id: Some(ctx.issue.id.clone()),
+            repo_id: ctx.config.repo_id.clone(),
+            retry_tier: Some(final_tier.clone()),
+            ..Default::default()
+        };
+        crate::tensorzero::post_episode_feedback(
+            tz_url,
+            episode_id,
+            ctx.success,
+            ctx.session.iteration(),
+            wall_secs,
+            Some(tags),
+        )
+        .await;
+    }
 
     otel::record_process_result(
         &ctx.process_span,
