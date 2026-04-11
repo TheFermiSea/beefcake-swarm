@@ -1,0 +1,14 @@
+{
+  "timestamp": "2026-04-10T15:27:37.863399+00:00",
+  "archive_summary": {
+    "total_attempts": 0,
+    "resolved": 0,
+    "failed": 0,
+    "resolution_rate": 0.0,
+    "avg_iterations": 0.0
+  },
+  "insights": [],
+  "recommendations": [],
+  "tz_directives": [],
+  "artifacts_dir": "/Users/briansquires/code/beefcake-swarm/.swarm/autopilot"
+}

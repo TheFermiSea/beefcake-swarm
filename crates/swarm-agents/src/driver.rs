@@ -850,16 +850,23 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
             let decomposition_required = ctx
                 .reformulation_store
                 .last_classification(&ctx.issue.id)
-                .map(|c| matches!(c, crate::reformulation::FailureClassification::DecompositionRequired { .. }))
+                .map(|c| {
+                    matches!(
+                        c,
+                        crate::reformulation::FailureClassification::DecompositionRequired { .. }
+                    )
+                })
                 .unwrap_or(false);
-            let changed_file_count = crate::orchestrator::helpers::list_changed_files(&ctx.wt_path).len();
-            let cot_route = needs_cot_planner(
-                decomposition_required,
-                changed_file_count,
-                &ctx.issue.title,
-            );
+            let changed_file_count =
+                crate::orchestrator::helpers::list_changed_files(&ctx.wt_path).len();
+            let cot_route =
+                needs_cot_planner(decomposition_required, changed_file_count, &ctx.issue.title);
 
-            match if cot_route { CoderRoute::CoTPlanner } else { route_to_coder(&recent_cats, iteration) } {
+            match if cot_route {
+                CoderRoute::CoTPlanner
+            } else {
+                route_to_coder(&recent_cats, iteration)
+            } {
                 CoderRoute::RustCoder => {
                     info!(iteration, "Routing to rust_coder (state driver)");
                     ctx.metrics.record_coder_route("RustCoder");
