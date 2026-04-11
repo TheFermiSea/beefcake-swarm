@@ -372,6 +372,215 @@ impl<'a> OrchestratorContext<'a> {
             session_log,
         })
     }
+
+    /// Resume an orchestrator context from a crashed session (the `wake()` pattern).
+    ///
+    /// Instead of creating a new worktree and starting from scratch, this:
+    /// 1. Verifies the worktree still exists
+    /// 2. Reopens the session log and replays events to recover state
+    /// 3. Reconstructs the state machine at the recovered position
+    /// 4. Rebuilds agents for the existing worktree
+    ///
+    /// Returns `None` if the session has already completed (nothing to resume).
+    pub async fn wake(
+        config: &'a SwarmConfig,
+        factory: &'a AgentFactory,
+        worktree_bridge: &'a WorktreeBridge,
+        issue: &'a BeadsIssue,
+        beads: &'a dyn IssueTracker,
+        knowledge_base: Option<&'a dyn KnowledgeBase>,
+        wt_path: PathBuf,
+    ) -> Result<Option<OrchestratorContext<'a>>> {
+        use crate::session;
+
+        let process_span = otel::process_issue_span(&issue.id);
+        let process_start = Instant::now();
+
+        // Verify the worktree still exists.
+        if !wt_path.exists() {
+            anyhow::bail!(
+                "worktree {} no longer exists — cannot resume",
+                wt_path.display()
+            );
+        }
+
+        // Reopen session log and replay events.
+        let session_log_path = wt_path.join(session::SESSION_LOG_FILENAME);
+        let session_log = session::SessionLog::open(&session_log_path)
+            .with_context(|| format!("reopening session log at {}", session_log_path.display()))?;
+
+        let events = session_log.load_all()?;
+        let recovered = match session::recover_from_events(&events)? {
+            Some(r) => r,
+            None => {
+                info!(issue = %issue.id, "Session already completed — nothing to resume");
+                return Ok(None);
+            }
+        };
+
+        info!(
+            issue = %issue.id,
+            state = %recovered.current_state,
+            iteration = recovered.iteration,
+            last_event = recovered.last_event_id,
+            "Waking from crashed session"
+        );
+
+        // Emit a resume note to the session log.
+        let _ = session_log.append(session::EventKind::Note {
+            message: format!(
+                "wake(): resumed from state {:?}, iteration {}, event {}",
+                recovered.current_state, recovered.iteration, recovered.last_event_id
+            ),
+        });
+
+        // Reconstruct state machine from recovered transitions.
+        let mut state_machine = StateMachine::new();
+        // Replay transitions to bring the state machine to the recovered state.
+        // We use advance() which validates each transition is legal.
+        for t in &recovered.transitions {
+            if let Err(e) = state_machine.advance(t.to, t.reason.as_deref()) {
+                warn!(
+                    from = %t.from, to = %t.to,
+                    error = %e,
+                    "Illegal transition during replay — skipping"
+                );
+            }
+        }
+        state_machine.set_iteration(recovered.iteration);
+
+        // Rebuild all the same infrastructure as new(), but skip worktree creation.
+        let worker_policy = TurnPolicy::for_tier(SwarmTier::Worker);
+        let council_policy = TurnPolicy::for_tier(SwarmTier::Council);
+        let worker_timeout =
+            orchestrator::timeout_from_env("SWARM_WORKER_TIMEOUT_SECS", worker_policy.timeout_secs);
+        let manager_timeout = orchestrator::timeout_from_env(
+            "SWARM_MANAGER_TIMEOUT_SECS",
+            council_policy.timeout_secs,
+        );
+
+        let feature_flags = FeatureFlags::from_env();
+        let acceptance_policy = AcceptancePolicy::default();
+        let local_validator_enabled = bool_from_env("SWARM_LOCAL_VALIDATOR", true);
+        let max_validator_failures = orchestrator::u32_from_env("SWARM_MAX_VALIDATOR_FAILURES", 3);
+        let cluster_health = ClusterHealth::from_config(config);
+        let budget_tracker = BudgetTracker::with_defaults();
+
+        let recommendation = classify_initial_tier(&issue.title, &[]);
+        let worker_first_tier = recommendation.tier;
+        let default_tier = orchestrator::default_initial_tier(
+            feature_flags.worker_first_enabled,
+            worker_first_tier,
+        );
+        let initial_tier = orchestrator::tier_from_env("SWARM_INITIAL_TIER", default_tier);
+
+        let council_budget_iterations =
+            orchestrator::u32_from_env("SWARM_COUNCIL_MAX_ITERATIONS", 6);
+        let council_budget_consultations =
+            orchestrator::u32_from_env("SWARM_COUNCIL_MAX_CONSULTATIONS", 6);
+        let escalation = EscalationState::new(&issue.id)
+            .with_initial_tier(initial_tier)
+            .with_budget(
+                SwarmTier::Council,
+                TierBudget {
+                    max_iterations: council_budget_iterations,
+                    max_consultations: council_budget_consultations,
+                },
+            );
+
+        let reformulation_store = ReformulationStore::new(worktree_bridge.repo_root());
+        let intent_contract =
+            IntentContract::from_issue(&issue.id, &issue.title, issue.description.as_deref());
+
+        let mut session = SessionManager::new(wt_path.clone(), config.max_retries);
+        let git_mgr = GitManager::new(&wt_path, "[swarm]");
+        let progress = ProgressTracker::new(wt_path.join(".swarm-progress.txt"));
+
+        if let Ok(commit) = git_mgr.current_commit_full() {
+            session.set_initial_commit(commit);
+        }
+        if let Err(e) = session.start() {
+            warn!("Failed to start harness session on wake: {e}");
+        }
+        session.set_current_feature(&issue.id);
+
+        let stack_profile_str = serde_json::to_string(&config.stack_profile)
+            .unwrap_or_else(|_| "unknown".to_string())
+            .replace('"', "");
+        let metrics = MetricsCollector::new(
+            session.session_id(),
+            &issue.id,
+            &issue.title,
+            &stack_profile_str,
+            config.repo_id.clone(),
+            config.adapter_id.clone(),
+            "v1",
+        );
+
+        let initial_packages = if config.verifier_packages.is_empty() {
+            detect_changed_packages(&wt_path, true)
+        } else {
+            config.verifier_packages.clone()
+        };
+        let verifier_config = VerifierConfig {
+            packages: initial_packages,
+            check_clippy: !bool_from_env("SWARM_SKIP_CLIPPY", false),
+            check_test: !bool_from_env("SWARM_SKIP_TESTS", false),
+            ..VerifierConfig::default()
+        };
+
+        let rust_coder = factory.build_rust_coder(&wt_path);
+        let general_coder = factory.build_general_coder(&wt_path);
+        let reviewer = factory.build_reviewer();
+        let manager = factory.build_manager(&wt_path);
+
+        Ok(Some(OrchestratorContext {
+            config,
+            issue,
+            wt_path,
+            verifier_config,
+            acceptance_policy,
+            feature_flags,
+            worker_timeout,
+            manager_timeout,
+            rust_coder,
+            general_coder,
+            reviewer,
+            manager,
+            session,
+            git_mgr,
+            progress,
+            state_machine,
+            budget_tracker,
+            escalation,
+            metrics,
+            span_summary: SpanSummary::new(),
+            success: false,
+            last_report: None,
+            last_validator_feedback: Vec::new(),
+            consecutive_validator_failures: 0,
+            pre_worker_commit: None,
+            router: DynamicRouter::new(),
+            correction_loop: {
+                let mut cl = TieredCorrectionLoop::new();
+                cl.start();
+                cl
+            },
+            auto_fix_applied: false,
+            reformulation_store,
+            intent_contract,
+            factory,
+            beads,
+            knowledge_base,
+            worktree_bridge,
+            cluster_health,
+            local_validator_enabled,
+            max_validator_failures,
+            process_span,
+            process_start,
+            session_log,
+        }))
+    }
 }
 
 // ---------------------------------------------------------------------------

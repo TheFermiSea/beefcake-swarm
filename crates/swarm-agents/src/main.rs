@@ -52,6 +52,11 @@ struct CliArgs {
     #[arg(long)]
     issues: Vec<String>,
 
+    /// Resume a crashed session from its event log instead of starting fresh.
+    /// Requires --issue and an existing worktree with .swarm-session.jsonl.
+    #[arg(long)]
+    resume: bool,
+
     /// Cloud-only mode: skip local endpoint health checks, route all work through cloud.
     /// Requires SWARM_CLOUD_URL to be configured.
     #[arg(long)]

@@ -41,9 +41,11 @@
 
 pub mod events;
 pub mod log;
+pub mod recovery;
 
 pub use events::{EventId, EventKind, SessionEvent};
 pub use log::SessionLog;
+pub use recovery::{recover_from_events, has_resumable_session, RecoveredState};
 
 /// Default filename for the session log within a worktree.
 pub const SESSION_LOG_FILENAME: &str = ".swarm-session.jsonl";

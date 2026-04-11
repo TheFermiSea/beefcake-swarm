@@ -552,6 +552,21 @@ run_issue() {
   # We rely on swarm-agents to fetch the full issue packet directly via BeadsBridge.
   issue_args=(--issue "$issue_id" "${EXTRA_SWARM_ARGS[@]}")
 
+  # Auto-resume: if the worktree has an active session log, pass --resume
+  # so swarm-agents calls wake() instead of starting from scratch.
+  local wt_base_name
+  wt_base_name="$(basename "$REPO_ROOT")"
+  for _wt_dir in "/tmp/swarm-wt/$wt_base_name/$issue_id" "/tmp/beefcake-wt/$issue_id"; do
+    if [[ -f "$_wt_dir/.swarm-session.jsonl" ]]; then
+      # Quick check: session log exists and isn't completed (no session_completed line).
+      if ! grep -q '"session_completed"' "$_wt_dir/.swarm-session.jsonl" 2>/dev/null; then
+        log "  [run $run_num] RESUME: found active session in $_wt_dir"
+        issue_args+=(--resume)
+        break
+      fi
+    fi
+  done
+
   # Fetch title just for the warning check
   issue_title=$(bd_cmd show "$issue_id" --json 2>/dev/null | parse_bdh_json field title 1000 2>/dev/null || echo "")
 
