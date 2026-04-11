@@ -31,8 +31,8 @@ nohup numactl --interleave=all apptainer run --nv --bind /scratch/ai:/scratch/ai
   --host 0.0.0.0 --port 8081 \
   --ctx-size 32768 --n-gpu-layers 999 \
   --threads 32 --batch-size 4096 --ubatch-size 4096 \
-  --cache-type-k q8_0 --cache-type-v q8_0 \
-  --cache-prompt -fa on --parallel 4 --mlock --cont-batching --metrics --jinja \
+  --cache-type-k q4_0 --cache-type-v q4_0 \
+  --cache-prompt -fa on --parallel 2 --mlock --cont-batching --metrics --jinja \
   > "${LOG_PATH}" 2>&1 &
 
 echo "Started Devstral-Small-2-24B PID=$! container=${CONTAINER}"
