@@ -27,8 +27,8 @@ use super::notebook_tool::QueryNotebookTool;
 use super::patch_tool::EditFileTool;
 use super::proxy_wrappers::{
     ProxyAstGrep, ProxyColGrep, ProxyEditFile, ProxyGetDiff, ProxyGraphContext,
-    ProxyListChangedFiles, ProxyListFiles, ProxyQueryNotebook, ProxyReadFile, ProxyRunCommand,
-    ProxyQuickCheck, ProxyRunVerifier, ProxySearchCode, ProxyWriteFile,
+    ProxyListChangedFiles, ProxyListFiles, ProxyQueryNotebook, ProxyQuickCheck, ProxyReadFile,
+    ProxyRunCommand, ProxyRunVerifier, ProxySearchCode, ProxyWriteFile,
 };
 use super::quick_check::QuickCheckTool;
 use super::search_code_tool::SearchCodeTool;
@@ -185,8 +185,9 @@ pub fn kernel_strategy_tools(
                     .with_packages(verifier_packages.to_vec())
                     .with_language_profile(profile.clone()),
             )),
-            Box::new(ProxyQuickCheck(QuickCheckTool::new(wt_path)
-                .with_packages(verifier_packages.to_vec()))),
+            Box::new(ProxyQuickCheck(
+                QuickCheckTool::new(wt_path).with_packages(verifier_packages.to_vec()),
+            )),
             Box::new(ProxyGetDiff(GetDiffTool::new(wt_path))),
             Box::new(ProxyListChangedFiles(ListChangedFilesTool::new(wt_path))),
         ]
@@ -197,8 +198,7 @@ pub fn kernel_strategy_tools(
                     .with_packages(verifier_packages.to_vec())
                     .with_language_profile(profile),
             ),
-            Box::new(QuickCheckTool::new(wt_path)
-                .with_packages(verifier_packages.to_vec())),
+            Box::new(QuickCheckTool::new(wt_path).with_packages(verifier_packages.to_vec())),
             Box::new(GetDiffTool::new(wt_path)),
             Box::new(ListChangedFilesTool::new(wt_path)),
         ]

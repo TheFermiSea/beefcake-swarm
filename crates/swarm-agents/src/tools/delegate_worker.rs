@@ -61,7 +61,11 @@ impl DelegateWorkerTool {
     }
 
     /// Register a worker for a given role.
-    pub fn register(mut self, role: impl Into<String>, worker: CondensedAgentTool<WorkerModel>) -> Self {
+    pub fn register(
+        mut self,
+        role: impl Into<String>,
+        worker: CondensedAgentTool<WorkerModel>,
+    ) -> Self {
         let role = role.into();
         if !self.available_roles.contains(&role) {
             self.available_roles.push(role.clone());
