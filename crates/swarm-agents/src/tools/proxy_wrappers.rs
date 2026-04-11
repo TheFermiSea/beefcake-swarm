@@ -47,8 +47,8 @@ use super::git_tools::{GetDiffTool, ListChangedFilesTool};
 use super::graph_context_tool::GraphContextTool;
 use super::notebook_tool::QueryNotebookTool;
 use super::patch_tool::EditFileTool;
-use super::search_code_tool::SearchCodeTool;
 use super::quick_check::QuickCheckTool;
+use super::search_code_tool::SearchCodeTool;
 use super::verifier_tool::RunVerifierTool;
 
 // Manager tools (proxy-prefixed for CLIAPIProxy compatibility)
