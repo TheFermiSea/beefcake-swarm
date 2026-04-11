@@ -50,10 +50,7 @@ pub enum EventKind {
     },
 
     /// A new iteration of the implement→verify loop started.
-    IterationStarted {
-        number: u32,
-        tier: Tier,
-    },
+    IterationStarted { number: u32, tier: Tier },
 
     /// Git worktree was provisioned for this session.
     WorktreeProvisioned {
@@ -159,9 +156,7 @@ pub enum EventKind {
     },
 
     /// Free-form annotation (for debugging, not replay).
-    Note {
-        message: String,
-    },
+    Note { message: String },
 }
 
 impl SessionEvent {
@@ -194,7 +189,9 @@ impl std::fmt::Display for EventKind {
             EventKind::LlmTurnCompleted { agent, turn, .. } => {
                 write!(f, "llm_turn({}, #{})", agent, turn)
             }
-            EventKind::ToolCallCompleted { tool_name, success, .. } => {
+            EventKind::ToolCallCompleted {
+                tool_name, success, ..
+            } => {
                 write!(f, "tool_call({}, ok={})", tool_name, success)
             }
             EventKind::WorkerDelegated { role, model, .. } => {
@@ -206,16 +203,22 @@ impl std::fmt::Display for EventKind {
             EventKind::VerifierResult { passed, .. } => {
                 write!(f, "verifier(passed={})", passed)
             }
-            EventKind::EscalationTriggered { from_tier, to_tier, .. } => {
+            EventKind::EscalationTriggered {
+                from_tier, to_tier, ..
+            } => {
                 write!(f, "escalation({:?} → {:?})", from_tier, to_tier)
             }
-            EventKind::IterationCompleted { number, verified, .. } => {
+            EventKind::IterationCompleted {
+                number, verified, ..
+            } => {
                 write!(f, "iteration_completed(#{}, verified={})", number, verified)
             }
             EventKind::ContextRebuilt { strategy, .. } => {
                 write!(f, "context_rebuilt({})", strategy)
             }
-            EventKind::NoChangeDetected { consecutive_count, .. } => {
+            EventKind::NoChangeDetected {
+                consecutive_count, ..
+            } => {
                 write!(f, "no_change({})", consecutive_count)
             }
             EventKind::SessionCompleted { resolved, .. } => {

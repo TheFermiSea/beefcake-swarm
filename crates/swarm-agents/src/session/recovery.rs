@@ -219,9 +219,9 @@ pub fn has_resumable_session(worktree_path: &std::path::Path) -> bool {
     match crate::session::SessionLog::load_from_path(&log_path) {
         Ok(events) => {
             // Check if any SessionCompleted event exists.
-            let completed = events.iter().any(|e| {
-                matches!(e.kind, EventKind::SessionCompleted { .. })
-            });
+            let completed = events
+                .iter()
+                .any(|e| matches!(e.kind, EventKind::SessionCompleted { .. }));
             if completed {
                 return false;
             }
@@ -262,38 +262,56 @@ mod tests {
     #[test]
     fn test_recover_basic_session() {
         let events = vec![
-            make_event(1, EventKind::SessionStarted {
-                issue_id: "test-123".into(),
-                objective: "Fix the bug".into(),
-                base_commit: Some("abc".into()),
-            }),
-            make_event(2, EventKind::WorktreeProvisioned {
-                path: "/tmp/wt/test-123".into(),
-                branch: "swarm/test-123".into(),
-                commit: "abc".into(),
-            }),
-            make_event(3, EventKind::StateTransition {
-                from: OrchestratorState::SelectingIssue,
-                to: OrchestratorState::PreparingWorktree,
-                iteration: 0,
-                reason: Some("issue selected".into()),
-            }),
-            make_event(4, EventKind::StateTransition {
-                from: OrchestratorState::PreparingWorktree,
-                to: OrchestratorState::Planning,
-                iteration: 0,
-                reason: Some("worktree ready".into()),
-            }),
-            make_event(5, EventKind::IterationStarted {
-                number: 1,
-                tier: Tier::Coder,
-            }),
-            make_event(6, EventKind::StateTransition {
-                from: OrchestratorState::Planning,
-                to: OrchestratorState::Implementing,
-                iteration: 1,
-                reason: Some("plan ready".into()),
-            }),
+            make_event(
+                1,
+                EventKind::SessionStarted {
+                    issue_id: "test-123".into(),
+                    objective: "Fix the bug".into(),
+                    base_commit: Some("abc".into()),
+                },
+            ),
+            make_event(
+                2,
+                EventKind::WorktreeProvisioned {
+                    path: "/tmp/wt/test-123".into(),
+                    branch: "swarm/test-123".into(),
+                    commit: "abc".into(),
+                },
+            ),
+            make_event(
+                3,
+                EventKind::StateTransition {
+                    from: OrchestratorState::SelectingIssue,
+                    to: OrchestratorState::PreparingWorktree,
+                    iteration: 0,
+                    reason: Some("issue selected".into()),
+                },
+            ),
+            make_event(
+                4,
+                EventKind::StateTransition {
+                    from: OrchestratorState::PreparingWorktree,
+                    to: OrchestratorState::Planning,
+                    iteration: 0,
+                    reason: Some("worktree ready".into()),
+                },
+            ),
+            make_event(
+                5,
+                EventKind::IterationStarted {
+                    number: 1,
+                    tier: Tier::Coder,
+                },
+            ),
+            make_event(
+                6,
+                EventKind::StateTransition {
+                    from: OrchestratorState::Planning,
+                    to: OrchestratorState::Implementing,
+                    iteration: 1,
+                    reason: Some("plan ready".into()),
+                },
+            ),
         ];
 
         let recovered = recover_from_events(&events).unwrap().unwrap();
@@ -307,18 +325,24 @@ mod tests {
     #[test]
     fn test_recover_completed_session_returns_none() {
         let events = vec![
-            make_event(1, EventKind::SessionStarted {
-                issue_id: "test-456".into(),
-                objective: "Done".into(),
-                base_commit: None,
-            }),
-            make_event(2, EventKind::SessionCompleted {
-                resolved: true,
-                total_iterations: 2,
-                duration_ms: 30000,
-                merge_commit: Some("xyz".into()),
-                failure_reason: None,
-            }),
+            make_event(
+                1,
+                EventKind::SessionStarted {
+                    issue_id: "test-456".into(),
+                    objective: "Done".into(),
+                    base_commit: None,
+                },
+            ),
+            make_event(
+                2,
+                EventKind::SessionCompleted {
+                    resolved: true,
+                    total_iterations: 2,
+                    duration_ms: 30000,
+                    merge_commit: Some("xyz".into()),
+                    failure_reason: None,
+                },
+            ),
         ];
 
         let result = recover_from_events(&events).unwrap();
@@ -328,17 +352,23 @@ mod tests {
     #[test]
     fn test_recover_failed_terminal_returns_none() {
         let events = vec![
-            make_event(1, EventKind::SessionStarted {
-                issue_id: "test-789".into(),
-                objective: "Will fail".into(),
-                base_commit: None,
-            }),
-            make_event(2, EventKind::StateTransition {
-                from: OrchestratorState::Implementing,
-                to: OrchestratorState::Failed,
-                iteration: 3,
-                reason: Some("budget exhausted".into()),
-            }),
+            make_event(
+                1,
+                EventKind::SessionStarted {
+                    issue_id: "test-789".into(),
+                    objective: "Will fail".into(),
+                    base_commit: None,
+                },
+            ),
+            make_event(
+                2,
+                EventKind::StateTransition {
+                    from: OrchestratorState::Implementing,
+                    to: OrchestratorState::Failed,
+                    iteration: 3,
+                    reason: Some("budget exhausted".into()),
+                },
+            ),
         ];
 
         let result = recover_from_events(&events).unwrap();
@@ -354,39 +384,54 @@ mod tests {
     #[test]
     fn test_recover_tracks_tool_calls() {
         let events = vec![
-            make_event(1, EventKind::SessionStarted {
-                issue_id: "test-tc".into(),
-                objective: "Tool tracking".into(),
-                base_commit: None,
-            }),
-            make_event(2, EventKind::StateTransition {
-                from: OrchestratorState::SelectingIssue,
-                to: OrchestratorState::Implementing,
-                iteration: 1,
-                reason: None,
-            }),
-            make_event(3, EventKind::ToolCallCompleted {
-                agent: "coder".into(),
-                tool_name: "read_file".into(),
-                success: true,
-                duration_ms: 50,
-                result_preview: "...".into(),
-            }),
-            make_event(4, EventKind::ToolCallCompleted {
-                agent: "coder".into(),
-                tool_name: "write_file".into(),
-                success: true,
-                duration_ms: 100,
-                result_preview: "ok".into(),
-            }),
-            make_event(5, EventKind::LlmTurnCompleted {
-                agent: "manager".into(),
-                model: "claude-opus-4-6".into(),
-                turn: 1,
-                tokens_in: Some(1000),
-                tokens_out: Some(500),
-                duration_ms: 2000,
-            }),
+            make_event(
+                1,
+                EventKind::SessionStarted {
+                    issue_id: "test-tc".into(),
+                    objective: "Tool tracking".into(),
+                    base_commit: None,
+                },
+            ),
+            make_event(
+                2,
+                EventKind::StateTransition {
+                    from: OrchestratorState::SelectingIssue,
+                    to: OrchestratorState::Implementing,
+                    iteration: 1,
+                    reason: None,
+                },
+            ),
+            make_event(
+                3,
+                EventKind::ToolCallCompleted {
+                    agent: "coder".into(),
+                    tool_name: "read_file".into(),
+                    success: true,
+                    duration_ms: 50,
+                    result_preview: "...".into(),
+                },
+            ),
+            make_event(
+                4,
+                EventKind::ToolCallCompleted {
+                    agent: "coder".into(),
+                    tool_name: "write_file".into(),
+                    success: true,
+                    duration_ms: 100,
+                    result_preview: "ok".into(),
+                },
+            ),
+            make_event(
+                5,
+                EventKind::LlmTurnCompleted {
+                    agent: "manager".into(),
+                    model: "claude-opus-4-6".into(),
+                    turn: 1,
+                    tokens_in: Some(1000),
+                    tokens_out: Some(500),
+                    duration_ms: 2000,
+                },
+            ),
         ];
 
         let recovered = recover_from_events(&events).unwrap().unwrap();
