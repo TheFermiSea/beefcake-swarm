@@ -90,7 +90,8 @@ impl std::fmt::Display for GovernanceTier {
 }
 
 /// Inference tier for model routing.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Tier {
     /// OmniCoder-9B on vasp-03 — Scout/fast tier (32K context, dense GPU-resident, ~66 tok/s)
     Fast,
