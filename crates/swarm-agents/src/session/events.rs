@@ -228,7 +228,14 @@ impl std::fmt::Display for EventKind {
                 write!(f, "checkpoint(#{})", checkpoint_id)
             }
             EventKind::Note { message } => {
-                write!(f, "note({})", &message[..message.len().min(50)])
+                // Truncate at a char boundary to avoid panic on multi-byte UTF-8.
+                let end = message
+                    .char_indices()
+                    .take_while(|(i, _)| *i < 50)
+                    .last()
+                    .map(|(i, c)| i + c.len_utf8())
+                    .unwrap_or(0);
+                write!(f, "note({})", &message[..end])
             }
         }
     }

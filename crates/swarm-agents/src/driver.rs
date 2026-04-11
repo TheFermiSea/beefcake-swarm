@@ -2293,7 +2293,12 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                     let cp_path = ctx.wt_path.join(".swarm-checkpoint.json");
                     let tmp_path = ctx.wt_path.join(".swarm-checkpoint.json.tmp");
                     if let Ok(json) = serde_json::to_string_pretty(&cp) {
-                        if std::fs::write(&tmp_path, &json).is_ok() {
+                        if let Ok(()) = std::fs::write(&tmp_path, &json) {
+                            // fsync the temp file before rename to ensure data reaches
+                            // stable storage (CodeRabbit review feedback on PR #132).
+                            if let Ok(f) = std::fs::File::open(&tmp_path) {
+                                let _ = f.sync_all();
+                            }
                             let _ = std::fs::rename(&tmp_path, &cp_path);
                         }
                     }

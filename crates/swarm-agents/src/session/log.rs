@@ -22,6 +22,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use anyhow::{Context, Result};
 use tracing::{debug, warn};
@@ -29,11 +30,15 @@ use tracing::{debug, warn};
 use super::events::{EventId, EventKind, SessionEvent};
 
 /// Append-only session log backed by a JSONL file.
+///
+/// Thread-safety: writes are serialized via a Mutex to prevent
+/// interleaved JSONL lines from concurrent callers.
 pub struct SessionLog {
     /// Path to the JSONL file.
     path: PathBuf,
-    /// Open file handle for appending (None if read-only).
-    writer: Option<File>,
+    /// Open file handle for appending, guarded by Mutex for thread safety.
+    /// None if opened in read-only mode.
+    writer: Option<Mutex<File>>,
     /// Next event ID to assign (monotonically increasing).
     next_id: AtomicU64,
 }
@@ -74,7 +79,7 @@ impl SessionLog {
 
         Ok(Self {
             path,
-            writer: Some(writer),
+            writer: Some(Mutex::new(writer)),
             next_id: AtomicU64::new(max_id + 1),
         })
     }
@@ -98,7 +103,7 @@ impl SessionLog {
     /// Assigns a monotonically increasing ID, serializes to JSON,
     /// writes the line, and fsyncs. Returns the assigned event ID.
     pub fn append(&self, kind: EventKind) -> Result<EventId> {
-        let writer = self
+        let writer_mutex = self
             .writer
             .as_ref()
             .context("session log opened in read-only mode")?;
@@ -109,11 +114,21 @@ impl SessionLog {
         let mut line = serde_json::to_string(&event).context("serializing session event")?;
         line.push('\n');
 
+        // Lock the writer for thread-safe serialized writes.
+        let mut writer = writer_mutex
+            .lock()
+            .map_err(|e| anyhow::anyhow!("session log writer lock poisoned: {e}"))?;
+
         // Write + fsync for durability.
-        (&*writer)
+        writer
             .write_all(line.as_bytes())
             .with_context(|| format!("writing to session log: {}", self.path.display()))?;
         writer
+            .flush()
+            .with_context(|| format!("flushing session log: {}", self.path.display()))?;
+        // sync_data requires &File, not &mut File — drop the Write ref.
+        let file_ref: &File = &writer;
+        file_ref
             .sync_data()
             .with_context(|| format!("fsyncing session log: {}", self.path.display()))?;
 
@@ -233,6 +248,12 @@ impl SessionLog {
 
 /// Extract the event ID from a JSON line without full deserialization.
 /// Looks for `"id":N` near the start of the line.
+///
+/// ASSUMPTION: `id` is the first field in the JSON object, which is
+/// guaranteed by serde's default struct serialization order. If the
+/// serialization format ever changes, `scan_max_id()` will still work
+/// correctly (just slower) because it falls back gracefully when this
+/// returns `None`.
 fn extract_id_fast(line: &str) -> Option<EventId> {
     // The ID is always the first field: {"id":123,...
     let start = line.find("\"id\":")?;
@@ -402,5 +423,40 @@ mod tests {
         })
         .unwrap();
         assert!(SessionLog::exists_with_events(&path));
+    }
+
+    #[test]
+    fn test_event_type_tag_matches_serde() {
+        // Verify that event_type_tag() returns the same tag as serde serialization.
+        // This catches drift between the manual mapping and #[serde(tag = "type")].
+        let test_events: Vec<EventKind> = vec![
+            EventKind::SessionStarted { issue_id: "x".into(), objective: "x".into(), base_commit: None },
+            EventKind::StateTransition { from: OrchestratorState::SelectingIssue, to: OrchestratorState::Planning, iteration: 0, reason: None },
+            EventKind::IterationStarted { number: 1, tier: crate::config::Tier::Coder },
+            EventKind::WorktreeProvisioned { path: "x".into(), branch: "x".into(), commit: "x".into() },
+            EventKind::LlmTurnCompleted { agent: "x".into(), model: "x".into(), turn: 1, tokens_in: None, tokens_out: None, duration_ms: 0 },
+            EventKind::ToolCallCompleted { agent: "x".into(), tool_name: "x".into(), success: true, duration_ms: 0, result_preview: "x".into() },
+            EventKind::WorkerDelegated { role: "x".into(), model: "x".into(), prompt_preview: "x".into() },
+            EventKind::WorkerCompleted { role: "x".into(), model: "x".into(), success: true, files_changed: 0, duration_ms: 0 },
+            EventKind::VerifierResult { passed: true, gates_passed: vec![], gates_failed: vec![], error_count: 0, warning_count: 0 },
+            EventKind::EscalationTriggered { from_tier: crate::config::Tier::Coder, to_tier: crate::config::Tier::Cloud, reason: "x".into() },
+            EventKind::IterationCompleted { number: 1, verified: true, files_changed: vec![], duration_ms: 0 },
+            EventKind::ContextRebuilt { strategy: "x".into(), tokens_used: 0, tokens_budget: 0 },
+            EventKind::NoChangeDetected { consecutive_count: 1, max_allowed: 3 },
+            EventKind::SessionCompleted { resolved: true, total_iterations: 1, duration_ms: 0, merge_commit: None, failure_reason: None },
+            EventKind::CheckpointWritten { checkpoint_id: 1, state: OrchestratorState::Implementing, iteration: 1 },
+            EventKind::Note { message: "x".into() },
+        ];
+
+        for kind in test_events {
+            let tag = event_type_tag(&kind);
+            let json = serde_json::to_string(&kind).unwrap();
+            let expected = format!("\"type\":\"{}\"", tag);
+            assert!(
+                json.contains(&expected),
+                "event_type_tag() returned '{}' but serde produced: {}",
+                tag, json
+            );
+        }
     }
 }
