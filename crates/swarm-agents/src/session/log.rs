@@ -106,8 +106,7 @@ impl SessionLog {
         let id = self.next_id.fetch_add(1, Ordering::SeqCst);
         let event = SessionEvent::new(id, kind);
 
-        let mut line = serde_json::to_string(&event)
-            .context("serializing session event")?;
+        let mut line = serde_json::to_string(&event).context("serializing session event")?;
         line.push('\n');
 
         // Write + fsync for durability.
@@ -134,8 +133,8 @@ impl SessionLog {
             return Ok(Vec::new());
         }
 
-        let file = File::open(path)
-            .with_context(|| format!("reading session log: {}", path.display()))?;
+        let file =
+            File::open(path).with_context(|| format!("reading session log: {}", path.display()))?;
         let reader = BufReader::new(file);
         let mut events = Vec::new();
 
