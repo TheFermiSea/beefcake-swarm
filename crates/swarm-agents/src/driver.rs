@@ -24,8 +24,9 @@ use crate::orchestrator::{
     self, bool_from_env, cloud_validate, collect_artifacts_from_diff, count_diff_lines,
     create_stuck_intervention, extract_local_validator_feedback, extract_validator_feedback,
     format_compact_task_prompt, format_task_prompt, git_commit_changes, land_issue_or_reopen,
-    local_validate, prompt_with_hook_and_retry, query_kb_with_failsafe, route_to_coder,
-    should_reject_auto_fix, try_auto_fix, try_scaffold_fallback, CoderRoute, SwarmResumeFile,
+    local_validate, needs_cot_planner, prompt_with_hook_and_retry, query_kb_with_failsafe,
+    route_to_coder, should_reject_auto_fix, try_auto_fix, try_scaffold_fallback, CoderRoute,
+    SwarmResumeFile,
 };
 use crate::reformulation::{IntentContract, ReformulationStore};
 use crate::runtime_adapter::{AdapterConfig, RuntimeAdapter};
@@ -872,7 +873,29 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                 .cloned()
                 .unwrap_or_default();
 
-            match route_to_coder(&recent_cats, iteration) {
+            // Complexity-gated CoT planner: check if this task should use
+            // Devstral-24B in pure-reasoning mode (no tools) before falling
+            // through to the standard error-driven routing.
+            let decomposition_required = ctx
+                .reformulation_store
+                .last_classification(&ctx.issue.id)
+                .map(|c| {
+                    matches!(
+                        c,
+                        crate::reformulation::FailureClassification::DecompositionRequired { .. }
+                    )
+                })
+                .unwrap_or(false);
+            let changed_file_count =
+                crate::orchestrator::helpers::list_changed_files(&ctx.wt_path).len();
+            let cot_route =
+                needs_cot_planner(decomposition_required, changed_file_count, &ctx.issue.title);
+
+            match if cot_route {
+                CoderRoute::CoTPlanner
+            } else {
+                route_to_coder(&recent_cats, iteration)
+            } {
                 CoderRoute::RustCoder => {
                     info!(iteration, "Routing to rust_coder (state driver)");
                     ctx.metrics.record_coder_route("RustCoder");
