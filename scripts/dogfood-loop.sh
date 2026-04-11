@@ -261,6 +261,115 @@ maybe_enrich_cognition() {
   fi
 }
 
+# --- Worktree hygiene: prune stale worktrees between batches ---
+# Removes worktrees left over from completed/crashed runs that block branch
+# re-creation ("Cannot delete branch 'swarm/X' checked out at '/tmp/...'").
+#
+# Safety guarantees:
+#   1. Skips any worktree whose issue-id matches a running swarm-agents process
+#   2. Uses git branch -D (force) but commits survive in git reflog for 90 days
+#   3. Only runs between batches, never during active parallel dispatch
+#   4. All errors are non-fatal (|| true) — cleanup failure never stops the loop
+WORKTREE_CLEANUP_STAMP_FILE="/tmp/dogfood-loop${_LOCK_SUFFIX:-}.worktree-cleanup.last_run"
+WORKTREE_CLEANUP_INTERVAL="${DOGFOOD_WORKTREE_CLEANUP_INTERVAL:-300}"  # every 5 minutes
+
+prune_stale_worktrees() {
+  # Collect all possible worktree base directories
+  local wt_dirs=()
+  [[ -d "/tmp/beefcake-wt" ]] && wt_dirs+=("/tmp/beefcake-wt")
+  local repo_name
+  repo_name="$(basename "$REPO_ROOT")"
+  [[ -d "/tmp/swarm-wt/$repo_name" ]] && wt_dirs+=("/tmp/swarm-wt/$repo_name")
+  if [[ -n "${SWARM_WORKTREE_DIR:-}" && -d "$SWARM_WORKTREE_DIR" ]]; then
+    wt_dirs+=("$SWARM_WORKTREE_DIR")
+  fi
+
+  # Nothing to clean if no worktree directories exist
+  [[ ${#wt_dirs[@]} -eq 0 ]] && return 0
+
+  # Build set of issue IDs actively used by running swarm-agents processes.
+  # We match the --issue argument from /proc/<pid>/cmdline.
+  local active_issues=()
+  local pid cmdline issue_id
+  for pid in $(pgrep -f 'swarm-agents' 2>/dev/null || true); do
+    cmdline=$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)
+    # Extract the token after --issue
+    issue_id=$(echo "$cmdline" | grep -oP '(?<=--issue )\S+' 2>/dev/null || true)
+    [[ -n "$issue_id" ]] && active_issues+=("$issue_id")
+  done
+
+  local cleaned=0 skipped=0
+  local wt_path dir_name in_use active_id
+  for base in "${wt_dirs[@]}"; do
+    for wt_path in "$base"/*/; do
+      [[ -d "$wt_path" ]] || continue
+      wt_path="${wt_path%/}"
+      dir_name="$(basename "$wt_path")"
+
+      # Safety: skip if any active process is working on this issue
+      in_use=0
+      for active_id in "${active_issues[@]}"; do
+        if [[ "$dir_name" == "$active_id" ]]; then
+          in_use=1
+          break
+        fi
+      done
+      if [[ "$in_use" -eq 1 ]]; then
+        skipped=$((skipped + 1))
+        continue
+      fi
+
+      rm -rf "$wt_path"
+      cleaned=$((cleaned + 1))
+    done
+  done
+
+  # Tell git to forget about the removed worktree directories
+  git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+
+  # Delete orphaned swarm/* branches (safe now that worktrees are gone).
+  # Uses -D (force) because the branch may not be merged — the swarm already
+  # decided the outcome. Commits remain in git reflog for 90 days.
+  local branch branch_count=0 branch_in_use
+  while IFS= read -r branch; do
+    branch="${branch#  }"  # trim leading whitespace from git branch output
+    [[ -z "$branch" ]] && continue
+    # Safety: skip branches matching active issues
+    branch_in_use=0
+    for active_id in "${active_issues[@]}"; do
+      if [[ "$branch" == "swarm/$active_id" ]]; then
+        branch_in_use=1
+        break
+      fi
+    done
+    [[ "$branch_in_use" -eq 1 ]] && continue
+    git -C "$REPO_ROOT" branch -D "$branch" 2>/dev/null || true
+    branch_count=$((branch_count + 1))
+  done < <(git -C "$REPO_ROOT" branch --list 'swarm/*' 2>/dev/null || true)
+
+  if [[ $cleaned -gt 0 || $branch_count -gt 0 ]]; then
+    log "  [worktree-cleanup] Pruned $cleaned worktrees, $branch_count branches (skipped $skipped active)"
+  fi
+}
+
+# Throttled wrapper: avoids running cleanup every single iteration in serial mode.
+maybe_prune_worktrees() {
+  local now last_run elapsed
+  now=$(date +%s)
+  last_run=0
+  if [[ -f "$WORKTREE_CLEANUP_STAMP_FILE" ]]; then
+    last_run=$(cat "$WORKTREE_CLEANUP_STAMP_FILE" 2>/dev/null || echo "0")
+  fi
+  if [[ "$last_run" =~ ^[0-9]+$ ]]; then
+    elapsed=$((now - last_run))
+    if (( elapsed < WORKTREE_CLEANUP_INTERVAL )); then
+      return 0
+    fi
+  fi
+  prune_stale_worktrees
+  printf '%s\n' "$now" > "$WORKTREE_CLEANUP_STAMP_FILE"
+}
+
 # --- Circuit breaker: defer issues that fail too many times ---
 # Counts consecutive recent failures for an issue in the summary JSONL.
 # Returns 0 (true) if the issue has exceeded MAX_ISSUE_FAILURES.
@@ -323,6 +432,10 @@ else
   ISSUES=()
   log "  Issues:   auto (from bdh ready)"
 fi
+
+# Startup worktree cleanup: remove stale worktrees from previous sessions.
+# This is unconditional (not throttled) because it only runs once at startup.
+prune_stale_worktrees
 
 # Verify toolchain
 if ! command -v cargo &>/dev/null; then
@@ -647,6 +760,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
 
     maybe_reconcile
     maybe_enrich_cognition
+    maybe_prune_worktrees
     log "  Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
   done
@@ -788,10 +902,11 @@ else
       fi
     done
 
-    # Pool drained — refresh backlog and reconcile zombie issues, then cooldown.
+    # Pool drained — refresh backlog, reconcile zombie issues, clean worktrees.
     maybe_run_stringer || true
     maybe_reconcile
     maybe_enrich_cognition
+    maybe_prune_worktrees
     log "  Pool drained. Cooling down ${COOLDOWN}s..."
     sleep "$COOLDOWN"
 
