@@ -430,22 +430,95 @@ mod tests {
         // Verify that event_type_tag() returns the same tag as serde serialization.
         // This catches drift between the manual mapping and #[serde(tag = "type")].
         let test_events: Vec<EventKind> = vec![
-            EventKind::SessionStarted { issue_id: "x".into(), objective: "x".into(), base_commit: None },
-            EventKind::StateTransition { from: OrchestratorState::SelectingIssue, to: OrchestratorState::Planning, iteration: 0, reason: None },
-            EventKind::IterationStarted { number: 1, tier: crate::config::Tier::Coder },
-            EventKind::WorktreeProvisioned { path: "x".into(), branch: "x".into(), commit: "x".into() },
-            EventKind::LlmTurnCompleted { agent: "x".into(), model: "x".into(), turn: 1, tokens_in: None, tokens_out: None, duration_ms: 0 },
-            EventKind::ToolCallCompleted { agent: "x".into(), tool_name: "x".into(), success: true, duration_ms: 0, result_preview: "x".into() },
-            EventKind::WorkerDelegated { role: "x".into(), model: "x".into(), prompt_preview: "x".into() },
-            EventKind::WorkerCompleted { role: "x".into(), model: "x".into(), success: true, files_changed: 0, duration_ms: 0 },
-            EventKind::VerifierResult { passed: true, gates_passed: vec![], gates_failed: vec![], error_count: 0, warning_count: 0 },
-            EventKind::EscalationTriggered { from_tier: crate::config::Tier::Coder, to_tier: crate::config::Tier::Cloud, reason: "x".into() },
-            EventKind::IterationCompleted { number: 1, verified: true, files_changed: vec![], duration_ms: 0 },
-            EventKind::ContextRebuilt { strategy: "x".into(), tokens_used: 0, tokens_budget: 0 },
-            EventKind::NoChangeDetected { consecutive_count: 1, max_allowed: 3 },
-            EventKind::SessionCompleted { resolved: true, total_iterations: 1, duration_ms: 0, merge_commit: None, failure_reason: None },
-            EventKind::CheckpointWritten { checkpoint_id: 1, state: OrchestratorState::Implementing, iteration: 1 },
-            EventKind::Note { message: "x".into() },
+            EventKind::SessionStarted {
+                issue_id: "x".into(),
+                objective: "x".into(),
+                base_commit: None,
+            },
+            EventKind::StateTransition {
+                from: OrchestratorState::SelectingIssue,
+                to: OrchestratorState::Planning,
+                iteration: 0,
+                reason: None,
+            },
+            EventKind::IterationStarted {
+                number: 1,
+                tier: crate::config::Tier::Coder,
+            },
+            EventKind::WorktreeProvisioned {
+                path: "x".into(),
+                branch: "x".into(),
+                commit: "x".into(),
+            },
+            EventKind::LlmTurnCompleted {
+                agent: "x".into(),
+                model: "x".into(),
+                turn: 1,
+                tokens_in: None,
+                tokens_out: None,
+                duration_ms: 0,
+            },
+            EventKind::ToolCallCompleted {
+                agent: "x".into(),
+                tool_name: "x".into(),
+                success: true,
+                duration_ms: 0,
+                result_preview: "x".into(),
+            },
+            EventKind::WorkerDelegated {
+                role: "x".into(),
+                model: "x".into(),
+                prompt_preview: "x".into(),
+            },
+            EventKind::WorkerCompleted {
+                role: "x".into(),
+                model: "x".into(),
+                success: true,
+                files_changed: 0,
+                duration_ms: 0,
+            },
+            EventKind::VerifierResult {
+                passed: true,
+                gates_passed: vec![],
+                gates_failed: vec![],
+                error_count: 0,
+                warning_count: 0,
+            },
+            EventKind::EscalationTriggered {
+                from_tier: crate::config::Tier::Coder,
+                to_tier: crate::config::Tier::Cloud,
+                reason: "x".into(),
+            },
+            EventKind::IterationCompleted {
+                number: 1,
+                verified: true,
+                files_changed: vec![],
+                duration_ms: 0,
+            },
+            EventKind::ContextRebuilt {
+                strategy: "x".into(),
+                tokens_used: 0,
+                tokens_budget: 0,
+            },
+            EventKind::NoChangeDetected {
+                consecutive_count: 1,
+                max_allowed: 3,
+            },
+            EventKind::SessionCompleted {
+                resolved: true,
+                total_iterations: 1,
+                duration_ms: 0,
+                merge_commit: None,
+                failure_reason: None,
+            },
+            EventKind::CheckpointWritten {
+                checkpoint_id: 1,
+                state: OrchestratorState::Implementing,
+                iteration: 1,
+            },
+            EventKind::Note {
+                message: "x".into(),
+            },
         ];
 
         for kind in test_events {
@@ -455,7 +528,8 @@ mod tests {
             assert!(
                 json.contains(&expected),
                 "event_type_tag() returned '{}' but serde produced: {}",
-                tag, json
+                tag,
+                json
             );
         }
     }
