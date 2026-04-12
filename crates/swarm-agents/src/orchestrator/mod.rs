@@ -2953,12 +2953,22 @@ async fn process_issue_core(
             let since = now_secs - iter_start.elapsed().as_secs_f64() - 5.0;
             let inf_ids = crate::tensorzero::resolve_recent_inference_ids(pg_url, since, 1).await;
             if let Some(inf_id) = inf_ids.first() {
+                // Build segmentation tags for inference-level feedback so TZ can
+                // slice verifier_pass/edit_accuracy by issue, iteration, and error category.
+                let primary_err = report.unique_error_categories().into_iter().next()
+                    .map(|c| format!("{c:?}"));
+                let iter_tags = crate::tensorzero::FeedbackTags {
+                    issue_id: Some(issue.id.clone()),
+                    error_category: primary_err,
+                    prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
+                    ..Default::default()
+                };
                 crate::tensorzero::post_inference_feedback(
                     tz_url,
                     inf_id,
                     "verifier_pass",
                     serde_json::Value::Bool(report.all_green),
-                    None,
+                    Some(iter_tags.clone()),
                 )
                 .await;
                 crate::tensorzero::post_inference_feedback(
@@ -2966,7 +2976,7 @@ async fn process_issue_core(
                     inf_id,
                     "edit_accuracy",
                     serde_json::json!(report.health_score()),
-                    None,
+                    Some(iter_tags),
                 )
                 .await;
             }
