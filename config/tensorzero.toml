@@ -391,6 +391,10 @@ candidate_variants = { opus_verbose = 0.7, sonnet_concise = 0.3 }
 # --- Editor: applies Architect's SEARCH/REPLACE blocks ---
 # A/B test between vasp-01 (coder) and vasp-02 (reasoning) — same model,
 # different node. Tests whether load balancing or sticky routing is better.
+# DEPRECATED 2026-04-12: editor_apply is dormant — no feedback pipeline, no SwarmRole
+# mapping, no TZ episode recording. The direct apply_plan path (deterministic, ~0.1s)
+# handles plan application. Reactivation requires: SwarmRole::Editor, feedback emission,
+# TZ function routing. See PR #141 investigation.
 [functions.editor_apply]
 type = "chat"
 
@@ -402,11 +406,12 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "qwen_reasoning"
 
-[functions.editor_apply.experimentation]
-type = "adaptive"
-candidate_variants = ["qwen_coder", "qwen_reasoning"]
-metric = "task_resolved"
-update_period_s = 300
+# Experimentation disabled — no feedback reaching TZ for this function.
+# [functions.editor_apply.experimentation]
+# type = "adaptive"
+# candidate_variants = ["qwen_coder", "qwen_reasoning"]
+# metric = "task_resolved"
+# update_period_s = 300
 
 # --- Worker Code Edit: 4-variant adaptive experiment ---
 # Current: qwen35_27b (0.640, n=4422), devstral_24b (0.634, n=5518), sera_14b_worker (0.774, n=944).
@@ -533,11 +538,12 @@ model = "omnicoder"
 type = "chat_completion"
 model = "gemma_31b"
 
-# Adaptive — Gemma experiment active, devstral+omnicoder on vasp-02 swapped out.
-# Normal candidates: ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer"]
+# Adaptive — gemma_31b_fixer removed (0% task_resolved, experiment concluded 2026-04-12).
+# Restored strong performers: omnicoder_fixer, devstral_fixer.
+# Added: strand_rust_fixer (historically excellent), qwen_reasoning_fixer (strong).
 [functions.code_fixing.experimentation]
 type = "adaptive"
-candidate_variants = ["gemma_31b_fixer", "qwen35_fixer", "sera_14b_fixer"]
+candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer"]
 metric = "task_resolved"
 update_period_s = 300
 
