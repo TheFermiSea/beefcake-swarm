@@ -11,6 +11,30 @@ use tracing::{info, warn};
 use crate::session::events::{EventKind, SessionEvent};
 use crate::state_machine::OrchestratorState;
 
+/// Tool names (and proxy-prefixed variants) that produce file writes.
+/// Checked by name rather than substring to avoid false positives from
+/// tools like "delegate_worker" whose name contains no write-related words
+/// but whose inner worker may write files.
+fn is_write_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "write_file"
+            | "edit_file"
+            | "patch"
+            | "apply_plan"
+            | "proxy_write_file"
+            | "proxy_edit_file"
+            // Worker delegation tools always produce file changes when they succeed.
+            | "rust_coder"
+            | "general_coder"
+            | "fixer"
+            | "delegate_worker"
+            | "proxy_rust_coder"
+            | "proxy_general_coder"
+            | "proxy_fixer"
+    )
+}
+
 /// State recovered from replaying session events.
 ///
 /// Contains enough information to reconstruct an `OrchestratorContext`
@@ -122,13 +146,8 @@ pub fn recover_from_events(events: &[SessionEvent]) -> Result<Option<RecoveredSt
                 tool_name, success, ..
             } => {
                 tool_call_count += 1;
-                if *success {
-                    let is_write = tool_name.contains("write")
-                        || tool_name.contains("edit")
-                        || tool_name.contains("patch");
-                    if is_write {
-                        has_written = true;
-                    }
+                if *success && is_write_tool(tool_name) {
+                    has_written = true;
                 }
             }
 

@@ -139,23 +139,32 @@ const FORBIDDEN_FILES: &[&str] = &[
 ///
 /// Returns the canonicalized path on success.
 pub fn sandbox_check(working_dir: &Path, relative_path: &str) -> Result<PathBuf, ToolError> {
-    // Block access to forbidden files at the worktree root.
-    for forbidden in FORBIDDEN_FILES {
-        if relative_path == *forbidden {
-            return Err(ToolError::Sandbox(format!(
-                "path `{relative_path}` is a protected swarm infrastructure file"
-            )));
+    // Normalize the path to catch tricks like "./.swarm-session.jsonl" or
+    // "foo/../.beads/config.yaml". Component iteration strips `.` and
+    // resolves `..`, and Normal segments never contain `/`.
+    let normalized = Path::new(relative_path);
+
+    // Block access to forbidden files (checked against the final filename
+    // component, not the raw string, to catch "./", "../" prefix bypasses).
+    if let Some(filename) = normalized.file_name() {
+        let filename_str = filename.to_string_lossy();
+        for forbidden in FORBIDDEN_FILES {
+            if filename_str == *forbidden {
+                return Err(ToolError::Sandbox(format!(
+                    "path `{relative_path}` is a protected swarm infrastructure file"
+                )));
+            }
         }
     }
 
-    // Block access to forbidden directories before any filesystem operations.
-    // Normalize the path to catch tricks like "foo/../.beads/config.yaml".
-    let normalized = Path::new(relative_path);
+    // Block access to forbidden directories. Normal components never contain
+    // `/` (separators are stripped by Path::components), so the equality
+    // check is sufficient — no need for starts_with("prefix/").
     for component in normalized.components() {
         if let std::path::Component::Normal(seg) = component {
             let seg_str = seg.to_string_lossy();
             for prefix in FORBIDDEN_PREFIXES {
-                if seg_str == *prefix || seg_str.starts_with(&format!("{prefix}/")) {
+                if seg_str == *prefix {
                     return Err(ToolError::Sandbox(format!(
                         "path `{relative_path}` touches forbidden directory `{prefix}/`"
                     )));

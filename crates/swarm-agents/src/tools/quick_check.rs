@@ -91,12 +91,17 @@ impl Tool for QuickCheckTool {
             "Running quick_check (cargo check)"
         );
 
-        let output = cmd.output();
+        // spawn_blocking to avoid starving the tokio runtime during cargo check (~5s).
+        let output = tokio::task::spawn_blocking(move || cmd.output()).await;
         let elapsed_ms = start.elapsed().as_millis();
+
+        let output = match output {
+            Ok(result) => result,
+            Err(e) => return Ok(format!("ERROR — spawn_blocking panicked: {e}")),
+        };
 
         match output {
             Ok(out) => {
-                let _stdout = String::from_utf8_lossy(&out.stdout);
                 let stderr = String::from_utf8_lossy(&out.stderr);
 
                 if out.status.success() {
