@@ -3924,7 +3924,7 @@ async fn process_issue_core(
         } else {
             "fresh"
         };
-        let tz_tags = crate::tensorzero::FeedbackTags {
+        let mut tz_tags = crate::tensorzero::FeedbackTags {
             issue_id: Some(issue.id.clone()),
             language: Some(triage_result.language.to_string()),
             triage_complexity: Some(triage_result.complexity.to_string()),
@@ -3948,6 +3948,9 @@ async fn process_issue_core(
             },
             fix_mode: Some(fix_mode.to_string()),
         };
+        // Populate harness parameter tags so TZ Autopilot can correlate
+        // harness settings with task_resolved outcomes (Meta-Harness optimization).
+        crate::tensorzero::HarnessPreset::select_uniform().apply_to_tags(&mut tz_tags);
 
         if let Some(ref pg_url) = config.tensorzero_pg_url {
             // Resolve episode IDs once — reused for both feedback calls below.
