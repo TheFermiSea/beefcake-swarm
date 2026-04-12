@@ -2549,26 +2549,50 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
     telemetry::write_session_metrics(&session_metrics, &ctx.wt_path);
     telemetry::append_telemetry(&session_metrics, ctx.worktree_bridge.repo_root());
 
-    // TensorZero feedback — post episode-level metrics so Thompson Sampling
-    // can learn from outcomes. Without this, TZ routes uniformly (no signal).
+    // TensorZero feedback — health-gated to prevent data poisoning.
+    //
+    // Only post feedback when the outcome reflects model quality, not infrastructure
+    // failures. Infrastructure issues (0 iterations, <10s wall time on failure,
+    // empty-response errors) would pollute Thompson Sampling with false negatives
+    // that blame the model for crashes, hangs, or context overflow.
+    //
+    // Design: docs/research/self-improving-swarm-architecture.md Layer 1.
     if let Some(tz_url) = ctx.config.tensorzero_url.as_deref() {
-        let episode_id = ctx.session.session_id();
         let wall_secs = ctx.process_start.elapsed().as_secs_f64();
-        let tags = crate::tensorzero::FeedbackTags {
-            issue_id: Some(ctx.issue.id.clone()),
-            repo_id: ctx.config.repo_id.clone(),
-            retry_tier: Some(final_tier.clone()),
-            ..Default::default()
-        };
-        crate::tensorzero::post_episode_feedback(
-            tz_url,
-            episode_id,
-            ctx.success,
-            ctx.session.iteration(),
-            wall_secs,
-            Some(tags),
-        )
-        .await;
+        let iterations = ctx.session.iteration();
+
+        // Health gate: determine if this outcome is meaningful model signal.
+        // Infrastructure failures have characteristic signatures:
+        // - 0 iterations completed (crashed before any LLM call)
+        // - Very short wall time on failure (<30s means crash, not failed attempt)
+        // - Success always gets posted (it's always real signal)
+        let is_infra_failure = !ctx.success && (iterations == 0 || wall_secs < 30.0);
+
+        if is_infra_failure {
+            info!(
+                id = %ctx.issue.id,
+                iterations,
+                wall_secs = format!("{wall_secs:.0}"),
+                "Skipping TZ feedback: likely infrastructure failure (0 iters or <30s)"
+            );
+        } else {
+            let episode_id = ctx.session.session_id();
+            let tags = crate::tensorzero::FeedbackTags {
+                issue_id: Some(ctx.issue.id.clone()),
+                repo_id: ctx.config.repo_id.clone(),
+                retry_tier: Some(final_tier.clone()),
+                ..Default::default()
+            };
+            crate::tensorzero::post_episode_feedback(
+                tz_url,
+                episode_id,
+                ctx.success,
+                iterations,
+                wall_secs,
+                Some(tags),
+            )
+            .await;
+        }
     }
 
     otel::record_process_result(
