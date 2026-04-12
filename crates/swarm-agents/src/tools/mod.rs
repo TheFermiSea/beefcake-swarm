@@ -120,11 +120,34 @@ pub(crate) async fn run_command_with_timeout(
 /// 100% dogfood failure rate on 2026-03-14. `.git/` is obviously off-limits.
 const FORBIDDEN_PREFIXES: &[&str] = &[".beads", ".git", ".dolt"];
 
+/// Root-level files that agents must not read or modify.
+/// These are swarm infrastructure files — editing them causes data corruption
+/// or session state loss. Workers were observed editing `.swarm-session.jsonl`
+/// (the session log) and `.swarm-checkpoint.json` during dogfood runs.
+const FORBIDDEN_FILES: &[&str] = &[
+    ".swarm-session.jsonl",
+    ".swarm-checkpoint.json",
+    ".swarm-checkpoint.json.tmp",
+    ".swarm-progress.txt",
+    ".swarm-events.jsonl",
+    ".swarm-telemetry.jsonl",
+    ".swarm-hook-events.jsonl",
+];
+
 /// Validate that a resolved path stays within the sandbox root and does not
-/// touch forbidden directories (`.beads/`, `.git/`, etc.).
+/// touch forbidden directories (`.beads/`, `.git/`, etc.) or protected files.
 ///
 /// Returns the canonicalized path on success.
 pub fn sandbox_check(working_dir: &Path, relative_path: &str) -> Result<PathBuf, ToolError> {
+    // Block access to forbidden files at the worktree root.
+    for forbidden in FORBIDDEN_FILES {
+        if relative_path == *forbidden {
+            return Err(ToolError::Sandbox(format!(
+                "path `{relative_path}` is a protected swarm infrastructure file"
+            )));
+        }
+    }
+
     // Block access to forbidden directories before any filesystem operations.
     // Normalize the path to catch tricks like "foo/../.beads/config.yaml".
     let normalized = Path::new(relative_path);
