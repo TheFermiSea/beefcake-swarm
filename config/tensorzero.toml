@@ -553,9 +553,13 @@ model = "qwen_fast"
 type = "chat_completion"
 model = "qwen_coder"
 
+[functions.task_planning.variants.devstral_planner]
+type = "chat_completion"
+model = "devstral"
+
 [functions.task_planning.experimentation]
 type = "adaptive"
-candidate_variants = ["qwen_fast_planner", "qwen_planner"]
+candidate_variants = ["qwen_fast_planner", "qwen_planner", "devstral_planner"]
 metric = "task_resolved"
 update_period_s = 300
 

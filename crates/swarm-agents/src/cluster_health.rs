@@ -23,6 +23,9 @@ const HEALTH_CHECK_INTERVAL_SECS: u64 = 30;
 /// Timeout for a single health check request.
 const HEALTH_CHECK_TIMEOUT_SECS: u64 = 5;
 
+/// Timeout for a deep completion probe (verifies model isn't hung).
+const DEEP_PROBE_TIMEOUT_SECS: u64 = 10;
+
 /// Status of an inference endpoint.
 #[derive(Debug, Clone)]
 pub enum EndpointStatus {
@@ -223,6 +226,47 @@ impl ClusterHealth {
         map.values().filter(|s| s.is_usable()).count()
     }
 
+    /// Deep-probe a specific tier before delegating work to it.
+    ///
+    /// Goes beyond `/health` — sends a tiny completion request to verify the
+    /// model can actually generate output (not hung with busy slots).
+    /// Returns `true` if the model responds within `DEEP_PROBE_TIMEOUT_SECS`.
+    ///
+    /// Call this before worker delegation to prevent routing to hung models.
+    /// Design: docs/research/self-improving-swarm-architecture.md Layer 2.
+    pub async fn deep_probe_tier(&self, tier_name: &str) -> bool {
+        let ep = match self.endpoints.iter().find(|e| e.name == tier_name) {
+            Some(ep) => ep,
+            None => return false,
+        };
+
+        // Skip deep probe if basic health is already down
+        if !self.is_tier_usable(tier_name).await {
+            return false;
+        }
+
+        let result = deep_probe_endpoint(&ep.url, ep.api_key.as_deref()).await;
+
+        // Update status if deep probe fails (model is hung)
+        if !result {
+            warn!(
+                tier = %tier_name,
+                url = %ep.url,
+                "Deep probe failed: model appears hung, marking as down"
+            );
+            self.status.write().await.insert(
+                tier_name.to_string(),
+                EndpointStatus::Down {
+                    reason: "deep probe timeout (model hung)".to_string(),
+                    since: Instant::now(),
+                    last_check: Instant::now(),
+                },
+            );
+        }
+
+        result
+    }
+
     /// Spawn a background task that periodically checks all endpoints.
     ///
     /// Returns a `JoinHandle` that can be aborted to stop monitoring.
@@ -381,6 +425,61 @@ async fn probe_endpoint(base_url: &str, api_key: Option<&str>) -> ProbeResult {
                     reason: format!("unreachable: {e2}"),
                 },
             }
+        }
+    }
+}
+
+/// Deep probe: send a tiny completion request to verify the model isn't hung.
+///
+/// `/health` returns OK even when all slots are stuck processing. This sends
+/// an actual `max_tokens=1` request to verify the model can generate output.
+/// Returns `true` if the model responds within `DEEP_PROBE_TIMEOUT_SECS`.
+///
+/// Design: docs/research/self-improving-swarm-architecture.md Layer 2.
+pub async fn deep_probe_endpoint(base_url: &str, api_key: Option<&str>) -> bool {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(DEEP_PROBE_TIMEOUT_SECS))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    let completions_url = if base_url.ends_with("/v1") {
+        format!("{base_url}/chat/completions")
+    } else {
+        format!("{base_url}/v1/chat/completions")
+    };
+
+    let body = serde_json::json!({
+        "model": "probe",
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 1
+    });
+
+    let mut req = client.post(&completions_url).json(&body);
+    if let Some(key) = api_key {
+        req = req.bearer_auth(key).header("x-api-key", key);
+    }
+
+    match req.send().await {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                debug!(url = %completions_url, "Deep probe: model responsive");
+                true
+            } else if status.as_u16() == 400 {
+                // 400 = model name mismatch or bad request, but server IS responsive
+                debug!(url = %completions_url, "Deep probe: server responsive (400 on probe model name)");
+                true
+            } else {
+                warn!(url = %completions_url, status = %status, "Deep probe: unhealthy response");
+                false
+            }
+        }
+        Err(e) => {
+            warn!(url = %completions_url, error = %e, "Deep probe: model unresponsive (hung or timeout)");
+            false
         }
     }
 }
