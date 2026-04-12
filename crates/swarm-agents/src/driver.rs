@@ -2878,4 +2878,53 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
             }
         }
     }
+
+    // --- Self-assessment (Layer 3) ---
+    //
+    // Periodically query TZ for variant performance and detect anomalies.
+    // Uses a static counter to trigger every ASSESSMENT_INTERVAL issues.
+    // **NOT YET VALIDATED** — corrective actions are logged only.
+    // Design: docs/research/self-improving-swarm-architecture.md Layer 3.
+    {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        static COMPLETED_COUNT: AtomicUsize = AtomicUsize::new(0);
+        let count = COMPLETED_COUNT.fetch_add(1, Ordering::Relaxed) + 1;
+
+        if count.is_multiple_of(crate::self_assessment::ASSESSMENT_INTERVAL) {
+            info!(
+                completed = count,
+                "Triggering periodic self-assessment (every {} issues)",
+                crate::self_assessment::ASSESSMENT_INTERVAL
+            );
+            let tz_pg = ctx.config.tensorzero_pg_url.as_deref().or(Some(
+                "postgresql://tensorzero:tensorzero@localhost:5433/tensorzero",
+            ));
+            if let Some(report) =
+                crate::self_assessment::run_assessment(tz_pg, ctx.worktree_bridge.repo_root()).await
+            {
+                if report.degradation_detected {
+                    error!(
+                        window = format!("{:.1}%", report.window_success_rate),
+                        baseline = format!("{:.1}%", report.baseline_success_rate),
+                        "SELF-ASSESSMENT: degradation detected — check TZ variant performance"
+                    );
+                }
+                if !report.broken_variants.is_empty() {
+                    warn!(
+                        variants = ?report.broken_variants,
+                        "SELF-ASSESSMENT: broken variants detected (0% success)"
+                    );
+                }
+                if report.traffic_concentrated {
+                    if let Some((ref variant, pct)) = report.dominant_variant {
+                        warn!(
+                            variant = %variant,
+                            pct = format!("{pct:.1}%"),
+                            "SELF-ASSESSMENT: traffic overly concentrated on single variant"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

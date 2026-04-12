@@ -111,6 +111,34 @@ This requires:
 
 This is the most ambitious layer and should come after Layers 1-3 are stable.
 
+## Implementation Status
+
+| Layer | PR | Status | Validated? |
+|-------|-----|--------|-----------|
+| **1: Health-gated feedback** | [#144](https://github.com/TheFermiSea/beefcake-swarm/pull/144) | Implemented | **NOT YET VALIDATED** — needs deployment and verification that infra failures skip feedback while successes still post. Edge cases to test: what about partial failures (1 iteration, then crash at 25s)? Current threshold is `iterations==0 OR wall_time<30s`. |
+| **2: Model health probes** | [#145](https://github.com/TheFermiSea/beefcake-swarm/pull/145) | Implemented | **NOT YET VALIDATED** — needs deployment and testing with a deliberately hung model. Concerns: (a) 10s probe timeout adds latency to every worker delegation, (b) probe uses "probe" as model name which may behave differently across TZ routing vs direct, (c) the probe itself could get stuck if the model accepts the connection but never responds. |
+| **3: Periodic self-assessment** | In progress | Implementation below | N/A |
+| **4: GEPA prompt optimization** | In progress | Implementation below | N/A |
+
+### Validation Plan for Layers 1-2
+
+Before declaring Layers 1-2 production-ready:
+
+1. **Layer 1 validation:**
+   - Deploy to ai-proxy
+   - Deliberately crash the swarm (e.g., kill TZ gateway mid-run)
+   - Verify TZ receives NO new false-negative feedback during the crash period
+   - Run a successful issue and verify TZ DOES receive the positive feedback
+   - Check edge: kill the model mid-iteration (iteration=1, wall_time=45s) — should this post feedback?
+
+2. **Layer 2 validation:**
+   - Deploy to ai-proxy
+   - Deliberately hang a model (send it an infinite-generation request)
+   - Verify the deep probe detects it within 10s and marks tier as Down
+   - Verify subsequent routing skips the hung tier
+   - Measure probe latency overhead on healthy models (target: <100ms)
+   - Test: what happens when the probe itself hangs? (reqwest timeout should handle this)
+
 ## Implementation Priority
 
 | Layer | Effort | Impact | Dependency |
