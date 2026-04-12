@@ -94,17 +94,26 @@ fn is_legal_transition(from: OrchestratorState, to: OrchestratorState) -> bool {
             | (PreparingWorktree, Planning)
             | (Planning, Implementing)
             | (Implementing, Verifying)
+            // Retry loop: any post-implementation state can return to Planning
+            // for context rebuild + re-implementation. The iteration loop is:
+            //   Planning → Implementing → Verifying → [retry] → Planning
+            | (Implementing, Planning)
             // After verifying: green → validate or merge; errors → retry or escalate
             | (Verifying, Validating)
             | (Verifying, Implementing)
+            | (Verifying, Planning)
             | (Verifying, Escalating)
             | (Verifying, Merging)
             // After validating: pass → merge; fail → retry or escalate
             | (Validating, Merging)
             | (Validating, Implementing)
+            | (Validating, Planning)
             | (Validating, Escalating)
-            // After escalating: re-enter implementation at new tier
+            // After escalating: re-enter at Planning (rebuild context for new tier)
             | (Escalating, Implementing)
+            | (Escalating, Planning)
+            // Merge failure → retry
+            | (Merging, Planning)
             // Merge → resolved
             | (Merging, Resolved)
     )
@@ -2028,11 +2037,16 @@ mod tests {
             OrchestratorState::Implementing
         ));
 
+        // Escalating can also go to Planning (rebuild context for new tier)
+        assert!(is_legal_transition(
+            OrchestratorState::Escalating,
+            OrchestratorState::Planning
+        ));
+
         // No other non-fail transitions from Escalating
         for state in [
             OrchestratorState::SelectingIssue,
             OrchestratorState::PreparingWorktree,
-            OrchestratorState::Planning,
             OrchestratorState::Verifying,
             OrchestratorState::Validating,
             OrchestratorState::Escalating,
