@@ -1114,6 +1114,22 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         );
     }
 
+    // Pre-flight deep probe: verify the target model can actually generate
+    // (not just /health OK with hung slots). Prevents routing to hung models.
+    // Design: docs/research/self-improving-swarm-architecture.md Layer 2.
+    if tier == SwarmTier::Worker {
+        // Probe the coder endpoint (primary worker target)
+        if !ctx.cluster_health.deep_probe_tier("coder").await {
+            warn!(
+                iteration,
+                "Deep probe failed for coder tier — model may be hung (state driver)"
+            );
+            // Don't abort — the worker might still respond. The probe failure
+            // is logged and the tier is marked down, so the next iteration's
+            // routing can skip it.
+        }
+    }
+
     // Route to agent
     let agent_start = Instant::now();
     let (agent_future, adapter) = match tier {
