@@ -2953,10 +2953,9 @@ async fn process_issue_core(
             let since = now_secs - iter_start.elapsed().as_secs_f64() - 5.0;
             let inf_ids = crate::tensorzero::resolve_recent_inference_ids(pg_url, since, 1).await;
             if let Some(inf_id) = inf_ids.first() {
-                // Build segmentation tags for inference-level feedback so TZ can
-                // slice verifier_pass/edit_accuracy by issue, iteration, and error category.
+                // Segmentation tags — must use Display (snake_case) to match episode-level convention.
                 let primary_err = report.unique_error_categories().into_iter().next()
-                    .map(|c| format!("{c:?}"));
+                    .map(|c| c.to_string());
                 let iter_tags = crate::tensorzero::FeedbackTags {
                     issue_id: Some(issue.id.clone()),
                     error_category: primary_err,
