@@ -477,6 +477,11 @@ pub fn run_initial(
         acceptance_criteria: None,
     };
 
+    // Blast-radius enrichment: if code-review-graph has been built, use it
+    // to identify affected files and inject them into the work packet's
+    // relevant_heuristics as localization context for the worker.
+    ctx = stage_blast_radius_enrichment(ctx, wt_path);
+
     if config.enable_kb_enrichment {
         ctx = stage_knowledge_enrichment(ctx, issue_id, issue_title, None, knowledge_base);
     }
@@ -518,6 +523,107 @@ pub fn run_with_stage_config(
         knowledge_base,
         &preflight_cfg,
     )
+}
+
+/// Stage: Enrich the work packet with blast-radius analysis from code-review-graph.
+///
+/// If a `.code-review-graph/` directory exists (graph has been built), runs the
+/// `code-review-graph impact` command to find all files affected by the issue's
+/// target files. Injects the results into `packet.relevant_heuristics` so the
+/// worker knows which files to focus on.
+///
+/// Degrades gracefully: if the graph doesn't exist or the CLI fails, the stage
+/// is skipped and the worker falls back to the existing file targeting heuristics.
+fn stage_blast_radius_enrichment(
+    mut ctx: PreflightContext,
+    wt_path: &std::path::Path,
+) -> PreflightContext {
+    let graph_dir = wt_path.join(".code-review-graph");
+    if !graph_dir.exists() {
+        return ctx;
+    }
+
+    // Collect target files from the work packet's file_contexts
+    let target_files: Vec<&str> = ctx
+        .packet
+        .file_contexts
+        .iter()
+        .filter(|fc| fc.priority <= 1) // Only high-priority (error/modified) files
+        .map(|fc| fc.file.as_str())
+        .collect();
+
+    if target_files.is_empty() {
+        return ctx;
+    }
+
+    let files_arg = target_files.join(",");
+
+    // Run code-review-graph impact with a 10s timeout to prevent blocking
+    // the preflight pipeline if the sidecar hangs.
+    let wt = wt_path.to_path_buf();
+    let tf = target_files.clone();
+    let output = std::thread::scope(|s| {
+        s.spawn(move || {
+            std::process::Command::new("code-review-graph")
+                .args([
+                    "impact",
+                    "--depth",
+                    "3",
+                    "--max-files",
+                    "20",
+                    "--json",
+                    "--",
+                ])
+                .args(&tf)
+                .current_dir(&wt)
+                .output()
+        })
+        .join()
+    });
+    let output = match output {
+        Ok(inner) => inner,
+        Err(_) => {
+            warn!("Blast-radius enrichment thread panicked (non-fatal)");
+            return ctx;
+        }
+    };
+
+    match output {
+        Ok(out) if out.status.success() => {
+            let stdout = String::from_utf8_lossy(&out.stdout);
+            if !stdout.trim().is_empty() {
+                // Inject blast-radius results as a heuristic hint
+                let hint = format!(
+                    "## Blast Radius Analysis (code-review-graph)\n\
+                     Changed files: {}\n\
+                     Affected files and dependencies:\n{}",
+                    files_arg,
+                    stdout.trim()
+                );
+                ctx.packet.relevant_heuristics.push(hint);
+                ctx.stages_run.push("blast_radius_enrichment".into());
+                info!(
+                    target_files = target_files.len(),
+                    "Blast-radius enrichment completed"
+                );
+            }
+        }
+        Ok(out) => {
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            warn!(
+                error = %stderr.trim(),
+                "Blast-radius enrichment failed (non-fatal)"
+            );
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                "code-review-graph not available (non-fatal)"
+            );
+        }
+    }
+
+    ctx
 }
 
 /// Stage: Extract actionable hints from the last verifier report.

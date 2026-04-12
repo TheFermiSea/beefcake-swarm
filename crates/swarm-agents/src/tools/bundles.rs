@@ -18,6 +18,7 @@ use rig::tool::ToolDyn;
 use coordination::context_packer::SemanticCodeGraph;
 
 use super::astgrep_tool::AstGrepTool;
+use super::blast_radius_tool::{BlastRadiusTool, GraphQueryTool, ReviewContextTool};
 use super::colgrep_tool::ColGrepTool;
 use super::exec_tool::RunCommandTool;
 use super::fs_tools::{ListFilesTool, ReadFileTool, WriteFileTool};
@@ -102,6 +103,14 @@ pub fn subtask_worker_tools(
     // Graph context tool for dependency analysis (when graph is available).
     if let Some(g) = graph {
         tools.push(Box::new(GraphContextTool::new(wt_path, g)));
+    }
+
+    // Blast-radius tools via code-review-graph sidecar (when graph DB exists).
+    // These provide persistent, incremental dependency analysis across sessions.
+    if wt_path.join(".code-review-graph").exists() {
+        tools.push(Box::new(BlastRadiusTool::new(wt_path)));
+        tools.push(Box::new(ReviewContextTool::new(wt_path)));
+        tools.push(Box::new(GraphQueryTool::new(wt_path)));
     }
 
     // Workpad tools for inter-worker communication during concurrent dispatch.
@@ -290,6 +299,15 @@ pub fn process_tactical_tools(
         } else {
             tools.push(Box::new(GraphContextTool::new(wt_path, g)));
         }
+    }
+
+    // Blast-radius tools via code-review-graph sidecar.
+    // Skip in proxy mode — no proxy wrappers defined yet; raw tool names would
+    // break the CLIAPIProxy contract.
+    if !proxy && wt_path.join(".code-review-graph").exists() {
+        tools.push(Box::new(BlastRadiusTool::new(wt_path)));
+        tools.push(Box::new(ReviewContextTool::new(wt_path)));
+        tools.push(Box::new(GraphQueryTool::new(wt_path)));
     }
 
     tools
