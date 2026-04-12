@@ -512,14 +512,16 @@ model = "strand_rust_14b"
 # Adaptive: Thompson Sampling — top performers + strand when available.
 # Removed 2026-04-11: gemma_31b_worker (0.0% resolved, n=468) — experiment concluded.
 # Retired 2026-04-07: qwen35_direct (0.0% resolved, n=192), devstral_structured (0.0% resolved, n=189).
-# Rankings: omnicoder_9b (60.4%), sera_14b_worker (43.6%), devstral_24b (38.7%), qwen35_27b (31.9%).
-# strand_rust_14b kept in fallback — only used when SLURM job is active.
+# Rankings (clean data, poisoned Apr 7-10 feedback purged — 36K false negatives from
+# tokio panic, TZ gateway down, context overflow, hung OmniCoder):
+# omnicoder_9b (60.4%), sera_14b_worker (43.6%), devstral_24b (38.7%), qwen35_27b (31.9%).
+# Using static weights to prevent single-variant lock-in (adaptive TS converged on
+# omnicoder exclusively, causing cascading failure when it hung).
+# strand_rust_14b in fallback — only used when SLURM job is active on vasp-02:8080.
 [functions.worker_code_edit.experimentation]
-type = "adaptive"
-candidate_variants = ["omnicoder_9b", "sera_14b_worker", "devstral_24b", "qwen35_27b"]
+type = "static"
+candidate_variants = { omnicoder_9b = 0.35, sera_14b_worker = 0.25, devstral_24b = 0.22, qwen35_27b = 0.18 }
 fallback_variants = ["strand_rust_14b"]
-metric = "task_resolved"
-update_period_s = 300
 
 # --- Code Review: blind reviewer ---
 [functions.code_review]
