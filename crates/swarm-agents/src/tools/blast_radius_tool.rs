@@ -21,7 +21,7 @@ use serde::Deserialize;
 use super::{run_command_with_timeout, ToolError};
 
 const CRG_TIMEOUT_SECS: u64 = 30;
-const CRG_BIN: &str = "code-review-graph";
+pub const CRG_BIN: &str = "code-review-graph";
 
 /// Parse a comma-separated file list, trimming whitespace and filtering empties.
 fn parse_file_list(input: &str) -> Vec<String> {
@@ -217,12 +217,36 @@ impl Tool for ReviewContextTool {
 // Tool 3: Graph Query
 // ---------------------------------------------------------------------------
 
+/// Valid query kinds for the dependency graph.
+#[derive(Deserialize, Default, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum QueryKind {
+    #[default]
+    Callers,
+    Callees,
+    Dependencies,
+    Dependents,
+    Tests,
+}
+
+impl QueryKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Callers => "callers",
+            Self::Callees => "callees",
+            Self::Dependencies => "dependencies",
+            Self::Dependents => "dependents",
+            Self::Tests => "tests",
+        }
+    }
+}
+
 #[derive(Deserialize)]
 pub struct GraphQueryInput {
     /// The symbol name or pattern to query.
     pub target: String,
-    /// Query kind: "callers", "callees", "dependencies", "dependents", "tests".
-    pub kind: Option<String>,
+    /// Query kind (default: callers).
+    pub kind: Option<QueryKind>,
     /// Maximum traversal depth (default 2).
     pub depth: Option<u32>,
 }
@@ -275,7 +299,7 @@ impl Tool for GraphQueryTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let kind = args.kind.as_deref().unwrap_or("callers");
+        let kind = args.kind.unwrap_or_default().as_str();
         let depth = args.depth.unwrap_or(2).to_string();
         run_crg(
             "query",
@@ -287,19 +311,3 @@ impl Tool for GraphQueryTool {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Utility: check if code-review-graph is available
-// ---------------------------------------------------------------------------
-
-/// Check if code-review-graph CLI is installed and a graph exists for this repo.
-pub async fn is_graph_available(working_dir: &Path) -> bool {
-    if !working_dir.join(".code-review-graph").exists() {
-        return false;
-    }
-    // run_command_with_timeout returns Ok even on non-zero exit.
-    // Check that the output contains a version string (not an error message).
-    match run_command_with_timeout(CRG_BIN, &["--version"], working_dir, 5).await {
-        Ok(output) => !output.starts_with("Exit code:"),
-        Err(_) => false,
-    }
-}

@@ -538,6 +538,8 @@ fn stage_blast_radius_enrichment(
     mut ctx: PreflightContext,
     wt_path: &std::path::Path,
 ) -> PreflightContext {
+    use crate::tools::blast_radius_tool::CRG_BIN;
+
     let graph_dir = wt_path.join(".code-review-graph");
     if !graph_dir.exists() {
         return ctx;
@@ -558,32 +560,25 @@ fn stage_blast_radius_enrichment(
 
     let files_arg = target_files.join(",");
 
-    // Run code-review-graph impact with a 10s timeout to prevent blocking
-    // the preflight pipeline if the sidecar hangs.
+    // Run code-review-graph impact with a real 10s timeout.
+    // Uses channel + recv_timeout (sync-safe) rather than the async run_crg()
+    // helper, because this stage runs in a sync pipeline context.
     let wt = wt_path.to_path_buf();
-    let tf = target_files.clone();
-    let output = std::thread::scope(|s| {
-        s.spawn(move || {
-            std::process::Command::new("code-review-graph")
-                .args([
-                    "impact",
-                    "--depth",
-                    "3",
-                    "--max-files",
-                    "20",
-                    "--json",
-                    "--",
-                ])
-                .args(&tf)
-                .current_dir(&wt)
-                .output()
-        })
-        .join()
+    let tf: Vec<String> = target_files.iter().map(|s| s.to_string()).collect();
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = std::process::Command::new(CRG_BIN)
+            .args(["impact", "--depth", "3", "--max-files", "20", "--json", "--"])
+            .args(&tf)
+            .current_dir(&wt)
+            .output();
+        let _ = tx.send(result);
     });
-    let output = match output {
-        Ok(inner) => inner,
+
+    let output = match rx.recv_timeout(std::time::Duration::from_secs(10)) {
+        Ok(result) => result,
         Err(_) => {
-            warn!("Blast-radius enrichment thread panicked (non-fatal)");
+            warn!("Blast-radius enrichment timed out after 10s (non-fatal)");
             return ctx;
         }
     };
@@ -592,7 +587,6 @@ fn stage_blast_radius_enrichment(
         Ok(out) if out.status.success() => {
             let stdout = String::from_utf8_lossy(&out.stdout);
             if !stdout.trim().is_empty() {
-                // Inject blast-radius results as a heuristic hint
                 let hint = format!(
                     "## Blast Radius Analysis (code-review-graph)\n\
                      Changed files: {}\n\
