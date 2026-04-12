@@ -2954,7 +2954,10 @@ async fn process_issue_core(
             let inf_ids = crate::tensorzero::resolve_recent_inference_ids(pg_url, since, 1).await;
             if let Some(inf_id) = inf_ids.first() {
                 // Segmentation tags — must use Display (snake_case) to match episode-level convention.
-                let primary_err = report.unique_error_categories().into_iter().next()
+                let primary_err = report
+                    .unique_error_categories()
+                    .into_iter()
+                    .next()
                     .map(|c| c.to_string());
                 let iter_tags = crate::tensorzero::FeedbackTags {
                     issue_id: Some(issue.id.clone()),
