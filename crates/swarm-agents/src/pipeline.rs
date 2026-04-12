@@ -568,7 +568,15 @@ fn stage_blast_radius_enrichment(
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let result = std::process::Command::new(CRG_BIN)
-            .args(["impact", "--depth", "3", "--max-files", "20", "--json", "--"])
+            .args([
+                "impact",
+                "--depth",
+                "3",
+                "--max-files",
+                "20",
+                "--json",
+                "--",
+            ])
             .args(&tf)
             .current_dir(&wt)
             .output();

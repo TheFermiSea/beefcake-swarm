@@ -1,0 +1,60 @@
+# Structure of crates/swarm-agents/src/pipeline.rs
+
+## ImplementationPlan (line 104)
+```rust
+pub struct ImplementationPlan {
+    pub approach: String,           // High-level approach description
+    pub steps: Vec<PlanStep>,       // Ordered steps to implement
+    pub target_files: Vec<String>,  // Files expected to be modified
+    pub risk: PlanRisk,             // Estimated risk level (low/medium/high)
+}
+```
+
+## ArchitectPlan (line 150)
+```rust
+pub struct ArchitectPlan {
+    pub summary: String,            // High-level summary of what this plan does and why
+    pub edits: Vec<ArchitectEdit>,  // Ordered list of edits to apply
+    pub target_files: Vec<String>,  // Files that will be modified (derived from edits)
+}
+```
+
+## DirectApplyResult (line 374)
+```rust
+pub struct DirectApplyResult {
+    pub applied: Vec<String>,  // Edits that were successfully applied
+    pub failed: Vec<String>,   // Edits that failed with reasons
+}
+```
+
+## VerifierHint (line 403)
+```rust
+pub struct VerifierHint {
+    pub gate: String,           // Which gate produced this hint (fmt, clippy, check, test)
+    pub message: String,        // The actionable message
+    pub file: Option<String>,   // Optional file location
+    pub line: Option<usize>,    // Optional line number
+}
+```
+
+## DirectApplyResult Construction in direct_apply_plan
+
+The `direct_apply_plan` function starts at line 243 and constructs `DirectApplyResult` at line 369:
+
+```rust
+pub fn direct_apply_plan(plan: &ArchitectPlan, wt_path: &std::path::Path) -> DirectApplyResult {
+    let mut applied = Vec::new();
+    let mut failed = Vec::new();
+
+    // ... processes each edit in plan.edits ...
+
+    DirectApplyResult { applied, failed }  // Line 369
+}
+```
+
+The function:
+1. Iterates through `plan.edits`
+2. For each edit, attempts to read the file, find the search block, and apply the replacement
+3. On success, pushes a formatted string to `applied`
+4. On failure, pushes an error message to `failed`
+5. Returns `DirectApplyResult { applied, failed }` at line 369

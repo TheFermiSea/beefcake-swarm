@@ -1,0 +1,7 @@
+{"id":1,"timestamp":"2026-04-12T17:08:12.192259663Z","kind":{"type":"session_started","issue_id":"beefcake-zhw1y","objective":"Wire planner→worker feedback attribution for downstream correlation","base_commit":"2f247ae729bc2baad23f0a494e363ddaca31f69a"}}
+{"id":2,"timestamp":"2026-04-12T17:08:12.193893139Z","kind":{"type":"worktree_provisioned","path":"/tmp/swarm-wt/beefcake-swarm/beefcake-zhw1y","branch":"swarm/beefcake-zhw1y","commit":"2f247ae729bc2baad23f0a494e363ddaca31f69a"}}
+{"id":3,"timestamp":"2026-04-12T17:08:12.280992311Z","kind":{"type":"state_transition","from":"preparing_worktree","to":"planning","iteration":0,"reason":"worktree ready, endpoints healthy"}}
+{"id":4,"timestamp":"2026-04-12T17:08:12.286524086Z","kind":{"type":"state_transition","from":"planning","to":"implementing","iteration":1,"reason":"iteration 1 planned, tier=Worker"}}
+{"id":5,"timestamp":"2026-04-12T17:08:12.292753027Z","kind":{"type":"checkpoint_written","checkpoint_id":3,"state":"implementing","iteration":1}}
+{"id":6,"timestamp":"2026-04-12T17:11:03.235739818Z","kind":{"type":"state_transition","from":"implementing","to":"verifying","iteration":1,"reason":"agent produced changes, ready for verification"}}
+{"id":7,"timestamp":"2026-04-12T17:11:03.245301551Z","kind":{"type":"checkpoint_written","checkpoint_id":4,"state":"verifying","iteration":1}}
