@@ -21,6 +21,47 @@ use serde::Deserialize;
 use super::{run_command_with_timeout, ToolError};
 
 const CRG_TIMEOUT_SECS: u64 = 30;
+const CRG_BIN: &str = "code-review-graph";
+
+/// Parse a comma-separated file list, trimming whitespace and filtering empties.
+fn parse_file_list(input: &str) -> Vec<String> {
+    input
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect()
+}
+
+/// Run a code-review-graph subcommand with standard timeout and error handling.
+async fn run_crg(
+    subcommand: &str,
+    flags: &[&str],
+    positional: &[String],
+    working_dir: &Path,
+) -> Result<String, ToolError> {
+    let mut cmd_args: Vec<&str> = vec![subcommand];
+    cmd_args.extend_from_slice(flags);
+    // `--` terminates option parsing so file paths starting with `-` aren't
+    // misinterpreted as flags.
+    cmd_args.push("--");
+    let positional_refs: Vec<&str> = positional.iter().map(|s| s.as_str()).collect();
+    cmd_args.extend_from_slice(&positional_refs);
+
+    let output =
+        run_command_with_timeout(CRG_BIN, &cmd_args, working_dir, CRG_TIMEOUT_SECS).await?;
+
+    if output.is_empty() {
+        return Ok("No dependency graph found. Run `code-review-graph build` first.".into());
+    }
+    // run_command_with_timeout returns Ok even on non-zero exit (with stderr in output).
+    // Check for the common error prefix to surface failures clearly.
+    if output.starts_with("Exit code:") {
+        return Err(ToolError::External(format!(
+            "code-review-graph {subcommand} failed: {output}"
+        )));
+    }
+    Ok(output)
+}
 
 // ---------------------------------------------------------------------------
 // Tool 1: Blast Radius
@@ -37,10 +78,6 @@ pub struct BlastRadiusInput {
 }
 
 /// Find all files affected by a set of changes via dependency graph traversal.
-///
-/// Uses code-review-graph's SQLite-backed dependency graph to perform BFS
-/// from changed files through call, import, inheritance, and test edges.
-/// Returns the minimal set of files that could be impacted.
 pub struct BlastRadiusTool {
     pub working_dir: PathBuf,
 }
@@ -72,7 +109,7 @@ impl Tool for BlastRadiusTool {
                 "properties": {
                     "changed_files": {
                         "type": "string",
-                        "description": "Comma-separated list of changed file paths relative to repo root (e.g. 'src/config.rs,src/driver.rs')"
+                        "description": "Comma-separated list of changed file paths relative to repo root"
                     },
                     "max_depth": {
                         "type": "integer",
@@ -91,36 +128,17 @@ impl Tool for BlastRadiusTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let depth = args.max_depth.unwrap_or(3).to_string();
         let max_files = args.max_files.unwrap_or(30).to_string();
-
-        // code-review-graph CLI: `code-review-graph impact <files> --depth N --max-files N --json`
-        let mut cmd_args = vec![
+        let files = parse_file_list(&args.changed_files);
+        if files.is_empty() {
+            return Ok("No files specified.".into());
+        }
+        run_crg(
             "impact",
-            "--depth",
-            &depth,
-            "--max-files",
-            &max_files,
-            "--json",
-        ];
-
-        // Split changed_files and add each as a positional arg
-        let files: Vec<&str> = args.changed_files.split(',').map(|s| s.trim()).collect();
-        for f in &files {
-            cmd_args.push(f);
-        }
-
-        let output = run_command_with_timeout(
-            "code-review-graph",
-            &cmd_args,
+            &["--depth", &depth, "--max-files", &max_files, "--json"],
+            &files,
             &self.working_dir,
-            CRG_TIMEOUT_SECS,
         )
-        .await?;
-
-        if output.is_empty() {
-            return Ok("No dependency graph found. Run `code-review-graph build` first.".into());
-        }
-
-        Ok(output)
+        .await
     }
 }
 
@@ -137,10 +155,6 @@ pub struct ReviewContextInput {
 }
 
 /// Get a token-optimized summary of code affected by changes.
-///
-/// Combines blast-radius analysis with smart context extraction to produce
-/// a compact summary of affected functions, their signatures, and relationships.
-/// Designed to fit within LLM context windows while preserving essential information.
 pub struct ReviewContextTool {
     pub working_dir: PathBuf,
 }
@@ -164,8 +178,7 @@ impl Tool for ReviewContextTool {
             name: "review_context".into(),
             description: "Get a token-optimized summary of code affected by changes. \
                           Returns function signatures, call relationships, and test coverage \
-                          for the blast radius of changed files. Use this to understand what \
-                          your changes affect without reading entire files."
+                          for the blast radius of changed files."
                 .into(),
             parameters: serde_json::json!({
                 "type": "object",
@@ -186,27 +199,17 @@ impl Tool for ReviewContextTool {
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let max_tokens = args.max_tokens.unwrap_or(8000).to_string();
-
-        let mut cmd_args = vec!["review", "--max-tokens", &max_tokens, "--json"];
-
-        let files: Vec<&str> = args.changed_files.split(',').map(|s| s.trim()).collect();
-        for f in &files {
-            cmd_args.push(f);
+        let files = parse_file_list(&args.changed_files);
+        if files.is_empty() {
+            return Ok("No files specified.".into());
         }
-
-        let output = run_command_with_timeout(
-            "code-review-graph",
-            &cmd_args,
+        run_crg(
+            "review",
+            &["--max-tokens", &max_tokens, "--json"],
+            &files,
             &self.working_dir,
-            CRG_TIMEOUT_SECS,
         )
-        .await?;
-
-        if output.is_empty() {
-            return Ok("No dependency graph found. Run `code-review-graph build` first.".into());
-        }
-
-        Ok(output)
+        .await
     }
 }
 
@@ -216,7 +219,7 @@ impl Tool for ReviewContextTool {
 
 #[derive(Deserialize)]
 pub struct GraphQueryInput {
-    /// The symbol name or pattern to query (e.g. "SwarmConfig", "handle_implementing").
+    /// The symbol name or pattern to query.
     pub target: String,
     /// Query kind: "callers", "callees", "dependencies", "dependents", "tests".
     pub kind: Option<String>,
@@ -225,9 +228,6 @@ pub struct GraphQueryInput {
 }
 
 /// Query the code dependency graph for a specific symbol.
-///
-/// Returns callers, callees, dependencies, or test coverage for a target symbol.
-/// Uses the persistent SQLite graph built by code-review-graph.
 pub struct GraphQueryTool {
     pub working_dir: PathBuf,
 }
@@ -250,15 +250,14 @@ impl Tool for GraphQueryTool {
         ToolDefinition {
             name: "graph_query".into(),
             description: "Query the code dependency graph for a symbol. Find callers, callees, \
-                          dependencies, dependents, or tests for any function, struct, or trait. \
-                          Use this to understand how a symbol is used across the codebase."
+                          dependencies, dependents, or tests for any function, struct, or trait."
                 .into(),
             parameters: serde_json::json!({
                 "type": "object",
                 "properties": {
                     "target": {
                         "type": "string",
-                        "description": "The symbol name or pattern to query (e.g. 'SwarmConfig', 'handle_implementing')"
+                        "description": "The symbol name or pattern to query"
                     },
                     "kind": {
                         "type": "string",
@@ -278,30 +277,13 @@ impl Tool for GraphQueryTool {
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
         let kind = args.kind.as_deref().unwrap_or("callers");
         let depth = args.depth.unwrap_or(2).to_string();
-
-        let cmd_args = vec![
+        run_crg(
             "query",
-            "--kind",
-            kind,
-            "--depth",
-            &depth,
-            "--json",
-            &args.target,
-        ];
-
-        let output = run_command_with_timeout(
-            "code-review-graph",
-            &cmd_args,
+            &["--kind", kind, "--depth", &depth, "--json"],
+            &[args.target],
             &self.working_dir,
-            CRG_TIMEOUT_SECS,
         )
-        .await?;
-
-        if output.is_empty() {
-            return Ok("No dependency graph found. Run `code-review-graph build` first.".into());
-        }
-
-        Ok(output)
+        .await
     }
 }
 
@@ -311,14 +293,13 @@ impl Tool for GraphQueryTool {
 
 /// Check if code-review-graph CLI is installed and a graph exists for this repo.
 pub async fn is_graph_available(working_dir: &Path) -> bool {
-    // Check if the .code-review-graph directory exists (graph has been built)
-    let graph_dir = working_dir.join(".code-review-graph");
-    if !graph_dir.exists() {
+    if !working_dir.join(".code-review-graph").exists() {
         return false;
     }
-
-    // Verify the CLI is installed
-    run_command_with_timeout("code-review-graph", &["--version"], working_dir, 5)
-        .await
-        .is_ok()
+    // run_command_with_timeout returns Ok even on non-zero exit.
+    // Check that the output contains a version string (not an error message).
+    match run_command_with_timeout(CRG_BIN, &["--version"], working_dir, 5).await {
+        Ok(output) => !output.starts_with("Exit code:"),
+        Err(_) => false,
+    }
 }

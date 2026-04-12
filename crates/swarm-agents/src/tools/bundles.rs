@@ -302,7 +302,9 @@ pub fn process_tactical_tools(
     }
 
     // Blast-radius tools via code-review-graph sidecar.
-    if wt_path.join(".code-review-graph").exists() {
+    // Skip in proxy mode — no proxy wrappers defined yet; raw tool names would
+    // break the CLIAPIProxy contract.
+    if !proxy && wt_path.join(".code-review-graph").exists() {
         tools.push(Box::new(BlastRadiusTool::new(wt_path)));
         tools.push(Box::new(ReviewContextTool::new(wt_path)));
         tools.push(Box::new(GraphQueryTool::new(wt_path)));

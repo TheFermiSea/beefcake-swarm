@@ -558,12 +558,35 @@ fn stage_blast_radius_enrichment(
 
     let files_arg = target_files.join(",");
 
-    // Run code-review-graph impact synchronously (it's fast — <2s for incremental)
-    let output = std::process::Command::new("code-review-graph")
-        .args(["impact", "--depth", "3", "--max-files", "20", "--json"])
-        .args(&target_files)
-        .current_dir(wt_path)
-        .output();
+    // Run code-review-graph impact with a 10s timeout to prevent blocking
+    // the preflight pipeline if the sidecar hangs.
+    let wt = wt_path.to_path_buf();
+    let tf = target_files.clone();
+    let output = std::thread::scope(|s| {
+        s.spawn(move || {
+            std::process::Command::new("code-review-graph")
+                .args([
+                    "impact",
+                    "--depth",
+                    "3",
+                    "--max-files",
+                    "20",
+                    "--json",
+                    "--",
+                ])
+                .args(&tf)
+                .current_dir(&wt)
+                .output()
+        })
+        .join()
+    });
+    let output = match output {
+        Ok(inner) => inner,
+        Err(_) => {
+            warn!("Blast-radius enrichment thread panicked (non-fatal)");
+            return ctx;
+        }
+    };
 
     match output {
         Ok(out) if out.status.success() => {
