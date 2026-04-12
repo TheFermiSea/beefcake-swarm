@@ -1117,18 +1117,35 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     // Pre-flight deep probe: verify the target model can actually generate
     // (not just /health OK with hung slots). Prevents routing to hung models.
     // Design: docs/research/self-improving-swarm-architecture.md Layer 2.
-    if tier == SwarmTier::Worker {
+    let tier = if tier == SwarmTier::Worker {
         // Probe the coder endpoint (primary worker target)
         if !ctx.cluster_health.deep_probe_tier("coder").await {
             warn!(
                 iteration,
-                "Deep probe failed for coder tier — model may be hung (state driver)"
+                "Deep probe failed for coder tier — escalating Worker→Council (state driver)"
             );
-            // Don't abort — the worker might still respond. The probe failure
-            // is logged and the tier is marked down, so the next iteration's
-            // routing can skip it.
+            // Escalate to Council tier — the cloud manager can still function
+            // even when local workers are hung, because it delegates via proxy
+            // tools which have their own timeouts.
+            if ctx.config.cloud_endpoint.is_some() {
+                info!(
+                    iteration,
+                    "Deep probe escalation: using Council tier instead of Worker"
+                );
+                SwarmTier::Council
+            } else {
+                warn!(
+                    iteration,
+                    "Deep probe: no cloud endpoint for escalation, proceeding with Worker"
+                );
+                tier
+            }
+        } else {
+            tier
         }
-    }
+    } else {
+        tier
+    };
 
     // Route to agent
     let agent_start = Instant::now();
