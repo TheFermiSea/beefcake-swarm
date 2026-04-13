@@ -436,13 +436,14 @@ SLURM_WORKER_SCRIPT="${SLURM_NFS_REPO}/scripts/slurm-agent-worker.sh"
 
 # Track SLURM node assignment (round-robin across available nodes)
 IFS=',' read -ra _SLURM_NODE_LIST <<< "$SLURM_NODES"
-_SLURM_NODE_IDX=0
 
-# Get the next SLURM node in round-robin order.
-next_slurm_node() {
-  local node="${_SLURM_NODE_LIST[$_SLURM_NODE_IDX]}"
-  _SLURM_NODE_IDX=$(( (_SLURM_NODE_IDX + 1) % ${#_SLURM_NODE_LIST[@]} ))
-  echo "$node"
+# Get the SLURM node for a given run number (deterministic round-robin).
+# Uses run_num instead of a mutable counter because dispatch_issue runs
+# in background subshells where counter increments don't propagate.
+slurm_node_for_run() {
+  local run_num="${1:-0}"
+  local idx=$(( (run_num - 1) % ${#_SLURM_NODE_LIST[@]} ))
+  echo "${_SLURM_NODE_LIST[$idx]}"
 }
 
 # Submit a single issue to SLURM and wait for the job to complete.
@@ -466,9 +467,9 @@ run_issue_slurm() {
   local objective_b64
   objective_b64=$(printf "%s" "$issue_title" | base64 | tr -d '\n')
 
-  # Pick a node (round-robin)
+  # Pick a node (deterministic round-robin based on run number)
   local target_node
-  target_node=$(next_slurm_node)
+  target_node=$(slurm_node_for_run "$run_num")
 
   mkdir -p "$SLURM_LOG_DIR"
 
@@ -540,10 +541,18 @@ run_issue_slurm() {
   run_end=$(date +%s)
   elapsed=$((run_end - run_start))
 
-  # Copy SLURM log to our run log
-  local slurm_log_file="${SLURM_LOG_DIR}/agent-${job_id}-${issue_id##*-}.log"
-  if [[ -f "$slurm_log_file" ]]; then
-    cp "$slurm_log_file" "$run_log" 2>/dev/null || true
+  # Fetch SLURM log from NFS (via SSH to slurm-ctl) to local ai-proxy log dir.
+  # The log file is on NFS /home which ai-proxy does not mount directly.
+  local slurm_log_nfs="${SLURM_NFS_LOG_DIR}/agent-${job_id}-${issue_id##*-}.log"
+  local slurm_err_nfs="${SLURM_NFS_LOG_DIR}/agent-${job_id}-${issue_id##*-}.err"
+  ssh -o ConnectTimeout=10 -o BatchMode=yes "$SLURM_CTL_HOST" \
+    "cat '$slurm_log_nfs' 2>/dev/null" > "$run_log" 2>/dev/null || true
+  # Append stderr log if non-empty
+  local err_content
+  err_content=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "$SLURM_CTL_HOST" \
+    "cat '$slurm_err_nfs' 2>/dev/null" 2>/dev/null || true)
+  if [[ -n "$err_content" ]]; then
+    printf '\n=== STDERR ===\n%s\n' "$err_content" >> "$run_log" 2>/dev/null || true
   fi
 
   # Map SLURM state to exit code
@@ -575,6 +584,105 @@ run_issue_slurm() {
 run_issue_slurm_async() {
   local run_num="$1" issue_id="$2"
   run_issue_slurm "$run_num" "$issue_id"
+}
+
+# --- SLURM NFS sync: push ai-proxy's repo state to NFS for compute nodes ---
+# ai-proxy has its own /home (not NFS-mounted), so the NFS repo on slurm-ctl
+# must be kept in sync. This function pushes the current branch to the NFS
+# repo via git push and optionally rebuilds the release binary.
+sync_to_nfs() {
+  local nfs_repo="$SLURM_NFS_REPO"
+  log "[nfs-sync] Syncing ai-proxy repo to NFS ($nfs_repo)..."
+
+  # Push current HEAD to a bare-style remote on slurm-ctl.
+  # We add slurm-ctl as a git remote if not already configured.
+  local remote_name="nfs-slurm"
+  if ! git -C "$REPO_ROOT" remote get-url "$remote_name" &>/dev/null; then
+    git -C "$REPO_ROOT" remote add "$remote_name" "ssh://root@10.0.0.5${nfs_repo}" 2>/dev/null || true
+  fi
+
+  # Push current branch to the NFS repo (force to overwrite any divergence)
+  local current_branch
+  current_branch=$(git -C "$REPO_ROOT" branch --show-current 2>/dev/null || echo "main")
+  if git -C "$REPO_ROOT" push "$remote_name" "${current_branch}:${current_branch}" --force 2>&1 | sed 's/^/  /'; then
+    log "[nfs-sync] Push succeeded"
+  else
+    log "[nfs-sync] WARNING: git push to NFS failed — falling back to rsync"
+    # Fallback: rsync the repo (slower but reliable)
+    rsync -a --delete \
+      --exclude='.git' --exclude='target/' --exclude='logs/' --exclude='.swarm/' \
+      "$REPO_ROOT/" "root@10.0.0.5:${nfs_repo}/" 2>&1 | tail -3 | sed 's/^/  /' || true
+  fi
+
+  # Checkout the pushed branch on the NFS repo
+  ssh -o ConnectTimeout=10 -o BatchMode=yes "$SLURM_CTL_HOST" \
+    "git -C '$nfs_repo' checkout '${current_branch}' --force 2>&1" | sed 's/^/  /' || true
+}
+
+# Rebuild the release binary on a compute node via SLURM.
+# Uses the NFS repo and shared cargo target dir so the binary lands at
+# /cluster/shared/ai/bin/swarm-agents (accessible from all nodes).
+rebuild_release_binary() {
+  log "[build] Submitting release build to SLURM..."
+  local build_output build_job_id
+  build_output=$(sbatch \
+    --job-name="swarm-build" \
+    --nodelist="vasp-01" \
+    --partition="$SLURM_PARTITION" \
+    --qos="$SLURM_QOS" \
+    --time="00:30:00" \
+    --cpus-per-task=8 \
+    --mem=32G \
+    --uid=brian \
+    --gid=hpc \
+    --output="${SLURM_NFS_LOG_DIR}/build-%j.log" \
+    --error="${SLURM_NFS_LOG_DIR}/build-%j.err" \
+    --wrap="bash -c '
+      source \$HOME/.cargo/env 2>/dev/null || true
+      export CARGO_TARGET_DIR=/cluster/shared/cargo-cache/beefcake-target
+      cd ${SLURM_NFS_REPO}
+      cargo build -p swarm-agents --release 2>&1
+      if [[ -f \$CARGO_TARGET_DIR/release/swarm-agents ]]; then
+        cp \$CARGO_TARGET_DIR/release/swarm-agents /cluster/shared/ai/bin/swarm-agents
+        echo \"[build] Binary installed at /cluster/shared/ai/bin/swarm-agents\"
+      fi
+    '" 2>&1)
+
+  build_job_id=$(echo "$build_output" | grep -oP '\d+' | head -1)
+  if [[ -z "$build_job_id" ]]; then
+    log "[build] ERROR: Failed to submit build job: $build_output"
+    return 1
+  fi
+
+  log "[build] Build job $build_job_id submitted — waiting for completion..."
+
+  # Wait for build job
+  local build_state
+  while true; do
+    build_state=$(squeue -j "$build_job_id" --noheader --format="%T" 2>/dev/null | tr -d ' ' || echo "")
+    if [[ -z "$build_state" ]]; then
+      # Job finished — check sacct
+      build_state=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "$SLURM_CTL_HOST" \
+        "/usr/local/bin/sacct -j $build_job_id --noheader --format=State --parsable2" 2>/dev/null \
+        | head -1 | tr -d ' ' || echo "COMPLETED")
+      break
+    fi
+    if [[ "$build_state" =~ ^(COMPLETED|FAILED|CANCELLED|TIMEOUT)$ ]]; then
+      break
+    fi
+    sleep 10
+  done
+
+  if [[ "$build_state" == "COMPLETED" ]]; then
+    log "[build] Release binary built successfully"
+    return 0
+  else
+    log "[build] ERROR: Build job $build_job_id ended with state=$build_state"
+    # Print build log
+    ssh -o ConnectTimeout=10 -o BatchMode=yes "$SLURM_CTL_HOST" \
+      "cat ${SLURM_NFS_LOG_DIR}/build-${build_job_id}.log 2>/dev/null | tail -20" 2>/dev/null | sed 's/^/  /' || true
+    return 1
+  fi
 }
 
 # --- Pre-flight ---
@@ -627,6 +735,26 @@ elif [[ "$DISPATCH" == "slurm" ]]; then
   if ! sinfo -N -p "$SLURM_PARTITION" --noheader &>/dev/null; then
     echo "ERROR: Cannot reach SLURM controller. Check SSH to slurm-ctl." >&2
     exit 1
+  fi
+  # Verify NFS repo exists on slurm-ctl
+  if ! ssh -o ConnectTimeout=10 -o BatchMode=yes "$SLURM_CTL_HOST" \
+    "test -d '${SLURM_NFS_REPO}/.git'" 2>/dev/null; then
+    echo "ERROR: NFS repo not found at ${SLURM_NFS_REPO} on slurm-ctl." >&2
+    echo "Clone it: ssh $SLURM_CTL_HOST 'su - brian -c \"git clone git@github.com:TheFermiSea/beefcake-swarm.git ${SLURM_NFS_REPO}\"'" >&2
+    exit 1
+  fi
+  # Sync ai-proxy repo to NFS and optionally rebuild binary
+  sync_to_nfs
+  # Check if release binary exists; rebuild if missing or stale
+  _nfs_bin_mtime=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "$SLURM_CTL_HOST" \
+    "stat -c %Y /cluster/shared/ai/bin/swarm-agents 2>/dev/null || echo 0" 2>/dev/null)
+  _nfs_head_mtime=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "$SLURM_CTL_HOST" \
+    "stat -c %Y '${SLURM_NFS_REPO}/.git/refs/heads/main' 2>/dev/null || echo 0" 2>/dev/null)
+  if [[ "${_nfs_bin_mtime:-0}" -lt "${_nfs_head_mtime:-1}" ]]; then
+    log "[build] Release binary is older than repo HEAD — rebuilding..."
+    rebuild_release_binary || log "[build] WARNING: Build failed — workers will use cargo run (slow)"
+  else
+    log "[build] Release binary is up-to-date"
   fi
 fi
 if ! command -v "$ISSUE_QUERY_BIN" &>/dev/null; then
