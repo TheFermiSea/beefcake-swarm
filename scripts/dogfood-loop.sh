@@ -8,10 +8,18 @@
 #   ./scripts/dogfood-loop.sh --parallel 3       # Run up to 3 issues concurrently
 #   ./scripts/dogfood-loop.sh --issue-list "beefcake-w70b.3.5.1 beefcake-w70b.6.4.2"
 #                                                # Work specific issues in order
+#   DOGFOOD_DISPATCH=slurm ./scripts/dogfood-loop.sh --discover --parallel 3
+#                                                # Dispatch via SLURM to compute nodes
 #
 # Parallel mode launches N issues simultaneously, each in its own worktree.
 # Issues are distributed across cluster nodes (vasp-01/02/03) via the
 # round-robin of Qwen3.5-397B endpoints configured in run-swarm.sh.
+#
+# SLURM dispatch mode (--dispatch slurm or DOGFOOD_DISPATCH=slurm):
+#   Instead of running cargo locally, submits SLURM jobs to compute nodes.
+#   Each node runs inference locally AND executes agent tool calls, avoiding
+#   network round-trips. Requires sbatch (SSH wrapper in ~/.local/bin/).
+#   The prebuilt binary at /cluster/shared/ai/bin/swarm-agents is used.
 #
 # Environment:
 #   SWARM_CLOUD_API_KEY    Required (passed through to run-swarm.sh)
@@ -20,6 +28,7 @@
 #   DOGFOOD_COOLDOWN       Seconds between batches (default: 30)
 #   DOGFOOD_ISSUE_LIST     Space-separated issue IDs to work in order
 #   DOGFOOD_PARALLEL       Concurrent issue limit (default: 1)
+#   DOGFOOD_DISPATCH       Dispatch mode: "local" (default) or "slurm"
 #   DOGFOOD_STRINGER_INTERVAL  Seconds between stringer backlog refreshes (default: 86400)
 #   DOGFOOD_WORKER_FIRST   Prefer worker-first routing for dogfood runs (default: 1)
 #   DOGFOOD_ALLOW_DIRTY_TARGET  Allow tracked changes in --repo-root target (default: 0)
@@ -59,6 +68,7 @@ STRINGER_INTERVAL="${DOGFOOD_STRINGER_INTERVAL:-86400}"
 DOGFOOD_WORKER_FIRST="${DOGFOOD_WORKER_FIRST:-1}"
 ALLOW_DIRTY_TARGET="${DOGFOOD_ALLOW_DIRTY_TARGET:-0}"
 ISSUE_SELECTION="${SWARM_ISSUE_SELECTION:-ucb1}"  # ucb1, priority, random
+DISPATCH="${DOGFOOD_DISPATCH:-local}"             # local or slurm
 
 # CLI overrides
 while [[ $# -gt 0 ]]; do
@@ -71,6 +81,7 @@ while [[ $# -gt 0 ]]; do
     --discover)    DISCOVER=1; shift ;;
     --repo-root)   TARGET_REPO="$2"; shift 2 ;;
     --max-issue-failures) MAX_ISSUE_FAILURES="$2"; shift 2 ;;
+    --dispatch)    DISPATCH="$2"; shift 2 ;;
     *)             echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -408,6 +419,164 @@ defer_exhausted_issue() {
   bd_cmd update "$issue_id" --status=deferred 2>/dev/null || true
 }
 
+# --- SLURM dispatch configuration ---
+SLURM_PARTITION="${SLURM_PARTITION:-gpu_ai}"
+SLURM_QOS="${SLURM_QOS:-ai_opportunistic}"
+SLURM_NODES="${SLURM_NODES:-vasp-01,vasp-02,vasp-03}"
+SLURM_TIME="${SLURM_TIME:-02:00:00}"
+SLURM_CTL_HOST="${SLURM_CTL_HOST:-root@10.0.0.5}"
+# NFS repo path (visible from compute nodes where SLURM runs).
+# ai-proxy has its OWN /home (not NFS), so SLURM --output/--error paths
+# must use the NFS path. Logs are fetched back to ai-proxy via SSH.
+SLURM_NFS_REPO="/home/brian/code/beefcake-swarm"
+SLURM_NFS_LOG_DIR="${SLURM_NFS_REPO}/logs/slurm-agents"
+# Local log dir on ai-proxy where we copy SLURM logs for processing
+SLURM_LOG_DIR="${SLURM_LOG_DIR:-${LOG_DIR}/slurm-agents}"
+SLURM_WORKER_SCRIPT="${SLURM_NFS_REPO}/scripts/slurm-agent-worker.sh"
+
+# Track SLURM node assignment (round-robin across available nodes)
+IFS=',' read -ra _SLURM_NODE_LIST <<< "$SLURM_NODES"
+_SLURM_NODE_IDX=0
+
+# Get the next SLURM node in round-robin order.
+next_slurm_node() {
+  local node="${_SLURM_NODE_LIST[$_SLURM_NODE_IDX]}"
+  _SLURM_NODE_IDX=$(( (_SLURM_NODE_IDX + 1) % ${#_SLURM_NODE_LIST[@]} ))
+  echo "$node"
+}
+
+# Submit a single issue to SLURM and wait for the job to complete.
+# Returns the job's exit code.
+run_issue_slurm() {
+  local run_num="$1" issue_id="$2"
+  local run_log="${LOG_DIR}/run-${run_num}-${issue_id}-$(date +%Y%m%d-%H%M%S).log"
+  local run_start run_end elapsed exit_code
+
+  # Early check: skip if issue already closed
+  local issue_status
+  issue_status=$(bd_cmd show "$issue_id" --json 2>/dev/null | parse_bdh_json field status 50 2>/dev/null || echo "")
+  if [[ "$issue_status" == "closed" ]]; then
+    log "  [run $run_num] SKIP issue=$issue_id (already closed)"
+    return 0
+  fi
+
+  # Fetch title for objective
+  local issue_title
+  issue_title=$(bd_cmd show "$issue_id" --json 2>/dev/null | parse_bdh_json field title 1000 2>/dev/null || echo "$issue_id")
+  local objective_b64
+  objective_b64=$(printf "%s" "$issue_title" | base64 | tr -d '\n')
+
+  # Pick a node (round-robin)
+  local target_node
+  target_node=$(next_slurm_node)
+
+  mkdir -p "$SLURM_LOG_DIR"
+
+  log "  [run $run_num] SLURM dispatch: issue=$issue_id node=$target_node"
+
+  # Ensure NFS log directory exists (created on slurm-ctl/NFS)
+  ssh -o ConnectTimeout=10 -o BatchMode=yes "$SLURM_CTL_HOST" \
+    "su - brian -c 'mkdir -p $SLURM_NFS_LOG_DIR'" 2>/dev/null || true
+
+  # Build environment export list (pass through all SWARM_* env vars)
+  local export_vars="ALL"
+  export_vars+=",ISSUE_ID=${issue_id}"
+  export_vars+=",ISSUE_OBJECTIVE_B64=${objective_b64}"
+  export_vars+=",DISPATCH_NODE=${target_node}"
+  export_vars+=",REPO_ROOT=${SLURM_NFS_REPO}"
+
+  # Submit SLURM job
+  # --output/--error use NFS paths (resolved by compute nodes, not ai-proxy)
+  local sbatch_output job_id
+  run_start=$(date +%s)
+  sbatch_output=$(sbatch \
+    --job-name="swarm-agent-${issue_id##*-}" \
+    --nodelist="$target_node" \
+    --partition="$SLURM_PARTITION" \
+    --qos="$SLURM_QOS" \
+    --time="$SLURM_TIME" \
+    --output="${SLURM_NFS_LOG_DIR}/agent-%j-${issue_id##*-}.log" \
+    --error="${SLURM_NFS_LOG_DIR}/agent-%j-${issue_id##*-}.err" \
+    --export="$export_vars" \
+    "$SLURM_WORKER_SCRIPT" 2>&1)
+
+  job_id=$(echo "$sbatch_output" | grep -oP '\d+' | head -1)
+
+  if [[ -z "$job_id" ]]; then
+    log "  [run $run_num] ERROR: Failed to submit SLURM job: $sbatch_output"
+    record_run "$run_num" "$issue_id" "1" "0" "$run_log"
+    return 1
+  fi
+
+  log "  [run $run_num] Submitted SLURM job $job_id on $target_node"
+
+  # Poll for job completion
+  local job_state poll_count=0
+  while true; do
+    job_state=$(squeue -j "$job_id" --noheader --format="%T" 2>/dev/null | tr -d ' ' || echo "UNKNOWN")
+
+    if [[ -z "$job_state" || "$job_state" == "UNKNOWN" ]]; then
+      # Job no longer in queue — check sacct for final state
+      job_state=$(ssh -o ConnectTimeout=10 -o BatchMode=yes "${SLURM_CTL_HOST:-root@10.0.0.5}" \
+        "/usr/local/bin/sacct -j $job_id --noheader --format=State --parsable2" 2>/dev/null \
+        | head -1 | tr -d ' ' || echo "COMPLETED")
+      break
+    fi
+
+    if [[ "$job_state" == "COMPLETED" || "$job_state" == "FAILED" || \
+          "$job_state" == "CANCELLED" || "$job_state" == "TIMEOUT" || \
+          "$job_state" == "PREEMPTED" || "$job_state" == "NODE_FAIL" || \
+          "$job_state" == "OUT_OF_MEMORY" ]]; then
+      break
+    fi
+
+    poll_count=$((poll_count + 1))
+    if (( poll_count % 30 == 0 )); then
+      log "  [run $run_num] Job $job_id still $job_state (${poll_count}x30s = $((poll_count * 30))s)"
+    fi
+    sleep 30
+  done
+
+  run_end=$(date +%s)
+  elapsed=$((run_end - run_start))
+
+  # Copy SLURM log to our run log
+  local slurm_log_file="${SLURM_LOG_DIR}/agent-${job_id}-${issue_id##*-}.log"
+  if [[ -f "$slurm_log_file" ]]; then
+    cp "$slurm_log_file" "$run_log" 2>/dev/null || true
+  fi
+
+  # Map SLURM state to exit code
+  exit_code=0
+  case "$job_state" in
+    COMPLETED)
+      exit_code=0
+      log "  [run $run_num] SUCCESS issue=$issue_id job=$job_id (${elapsed}s)"
+      SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+      ;;
+    FAILED|CANCELLED|TIMEOUT|PREEMPTED|NODE_FAIL|OUT_OF_MEMORY)
+      exit_code=1
+      log "  [run $run_num] FAILED  issue=$issue_id job=$job_id state=$job_state (${elapsed}s)"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      ;;
+    *)
+      exit_code=1
+      log "  [run $run_num] UNKNOWN issue=$issue_id job=$job_id state=$job_state (${elapsed}s)"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      ;;
+  esac
+
+  record_run "$run_num" "$issue_id" "$exit_code" "$elapsed" "$run_log"
+  return $exit_code
+}
+
+# Submit a SLURM job for an issue and return immediately (for parallel pool).
+# The background polling wrapper makes it compatible with the pool's wait -n pattern.
+run_issue_slurm_async() {
+  local run_num="$1" issue_id="$2"
+  run_issue_slurm "$run_num" "$issue_id"
+}
+
 # --- Pre-flight ---
 log "Dogfood loop starting"
 log "  Engine:   $REPO_ROOT"
@@ -423,7 +592,13 @@ log "  Max runs: $([ "$MAX_RUNS" -eq 0 ] && echo 'unlimited' || echo "$MAX_RUNS"
 log "  Discover: $([ "$DISCOVER" -eq 1 ] && echo 'ON (auto-fetch new issues)' || echo 'OFF')"
 log "  Stringer refresh: ${STRINGER_INTERVAL}s"
 log "  Worker-first: ${DOGFOOD_WORKER_FIRST}"
+log "  Dispatch: ${DISPATCH}"
 log "  Selection:  ${ISSUE_SELECTION}"
+if [[ "$DISPATCH" == "slurm" ]]; then
+  log "  SLURM partition: ${SLURM_PARTITION}"
+  log "  SLURM nodes: ${SLURM_NODES}"
+  log "  SLURM time: ${SLURM_TIME}"
+fi
 
 if [[ -n "$ISSUE_LIST" ]]; then
   read -ra ISSUES <<< "$ISSUE_LIST"
@@ -438,9 +613,21 @@ fi
 prune_stale_worktrees
 
 # Verify toolchain
-if ! command -v cargo &>/dev/null; then
-  echo "ERROR: cargo not found. Install Rust toolchain first." >&2
-  exit 1
+if [[ "$DISPATCH" == "local" ]]; then
+  if ! command -v cargo &>/dev/null; then
+    echo "ERROR: cargo not found. Install Rust toolchain first." >&2
+    exit 1
+  fi
+elif [[ "$DISPATCH" == "slurm" ]]; then
+  if ! command -v sbatch &>/dev/null; then
+    echo "ERROR: sbatch not found. Install SLURM client or add ~/.local/bin to PATH." >&2
+    exit 1
+  fi
+  # Quick connectivity check to SLURM controller
+  if ! sinfo -N -p "$SLURM_PARTITION" --noheader &>/dev/null; then
+    echo "ERROR: Cannot reach SLURM controller. Check SSH to slurm-ctl." >&2
+    exit 1
+  fi
 fi
 if ! command -v "$ISSUE_QUERY_BIN" &>/dev/null; then
   echo "WARNING: $ISSUE_QUERY_BIN not found. Issue objectives will fall back to issue IDs." >&2
@@ -648,6 +835,15 @@ run_issue() {
   return $exit_code
 }
 
+# --- Dispatch wrapper: routes to local or SLURM based on DISPATCH mode ---
+dispatch_issue() {
+  if [[ "$DISPATCH" == "slurm" ]]; then
+    run_issue_slurm "$@"
+  else
+    run_issue "$@"
+  fi
+}
+
 # --- Main loop ---
 # Track child PIDs for the trap handler
 CHILD_PIDS=()
@@ -658,6 +854,11 @@ cleanup() {
   for pid in "${CHILD_PIDS[@]}"; do
     kill "$pid" 2>/dev/null || true
   done
+  # Cancel any pending SLURM jobs submitted by this loop
+  if [[ "$DISPATCH" == "slurm" ]]; then
+    log "  Cancelling SLURM jobs with name prefix 'swarm-agent-'..."
+    scancel --name="swarm-agent-*" 2>/dev/null || true
+  fi
   # Then kill entire process group to catch any untracked descendants
   # (run-swarm.sh, swarm-agents, cargo, etc.) that would otherwise zombie.
   kill -- -$$ 2>/dev/null || true
@@ -753,7 +954,7 @@ if [[ "$PARALLEL" -le 1 ]]; then
     fi
 
     log "=== Run $RUN_COUNT: issue=$ISSUE_ID ==="
-    if run_issue "$RUN_COUNT" "$ISSUE_ID"; then
+    if dispatch_issue "$RUN_COUNT" "$ISSUE_ID"; then
       SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
     else
       FAIL_COUNT=$((FAIL_COUNT + 1))
@@ -839,7 +1040,7 @@ else
     for (( i=0; i<BATCH_SIZE && IDX < ${#ISSUES[@]}; i++ )); do
       ISSUE_ID="${ISSUES[$IDX]}"
       RUN_COUNT=$((RUN_COUNT + 1))
-      run_issue "$RUN_COUNT" "$ISSUE_ID" &
+      dispatch_issue "$RUN_COUNT" "$ISSUE_ID" &
       POOL_PIDS[$!]="$ISSUE_ID"
       log "  [slot $((i+1))] Started issue=$ISSUE_ID"
       IDX=$((IDX + 1))
@@ -866,7 +1067,7 @@ else
             if [[ $IDX -lt ${#ISSUES[@]} ]]; then
               ISSUE_ID="${ISSUES[$IDX]}"
               RUN_COUNT=$((RUN_COUNT + 1))
-              run_issue "$RUN_COUNT" "$ISSUE_ID" &
+              dispatch_issue "$RUN_COUNT" "$ISSUE_ID" &
               POOL_PIDS[$!]="$ISSUE_ID"
               log "  [pool] Backfill started issue=$ISSUE_ID (${#POOL_PIDS[@]} active)"
               IDX=$((IDX + 1))
@@ -885,7 +1086,7 @@ else
                 log "  [pool] Discovered ${#NEW_ISSUES[@]} new issues (after dedup: ${#ISSUES[@]} total)"
                 ISSUE_ID="${ISSUES[$IDX]}"
                 RUN_COUNT=$((RUN_COUNT + 1))
-                run_issue "$RUN_COUNT" "$ISSUE_ID" &
+                dispatch_issue "$RUN_COUNT" "$ISSUE_ID" &
                 POOL_PIDS[$!]="$ISSUE_ID"
                 log "  [pool] Backfill started issue=$ISSUE_ID (${#POOL_PIDS[@]} active)"
                 IDX=$((IDX + 1))
@@ -906,7 +1107,7 @@ else
             if [[ $IDX -lt ${#ISSUES[@]} ]]; then
               ISSUE_ID="${ISSUES[$IDX]}"
               RUN_COUNT=$((RUN_COUNT + 1))
-              run_issue "$RUN_COUNT" "$ISSUE_ID" &
+              dispatch_issue "$RUN_COUNT" "$ISSUE_ID" &
               POOL_PIDS[$!]="$ISSUE_ID"
               log "  [pool] Backfill started issue=$ISSUE_ID (${#POOL_PIDS[@]} active)"
               IDX=$((IDX + 1))

@@ -1,6 +1,6 @@
 #!/bin/bash
 #SBATCH --gres=gpu:v100s:1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --mem=32G
 #SBATCH --requeue
 #SBATCH --signal=B:SIGTERM@30
@@ -15,7 +15,7 @@
 # agent talks to its local model with zero network overhead.
 #
 # Cross-tier calls still reach other nodes by hostname (vasp-01/02/03:8081).
-# Cloud manager calls go to ai-proxy via CLIAPIProxy at 10.0.0.5:8317.
+# Cloud manager calls go to ai-proxy via CLIAPIProxy at 10.0.0.100:8317.
 #
 # Node → Model mapping:
 #   vasp-01 → Qwen3.5-27B (coder, SWARM_CODER_URL=localhost)
@@ -113,7 +113,7 @@ fi
 # Override the tier URL for the model running locally on this node.
 # Keep other tiers as remote hostnames so cross-tier calls still work.
 export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-03:8081/v1}"
-export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-OmniCoder-9B}"
+export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-GLM-4.7-Flash}"
 export SWARM_CODER_URL="${SWARM_CODER_URL:-http://vasp-01:8081/v1}"
 export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-27B}"
 export SWARM_REASONING_URL="${SWARM_REASONING_URL:-http://vasp-02:8081/v1}"
@@ -137,11 +137,11 @@ case "$NODE_NAME" in
         ;;
 esac
 
-# ── Cloud proxy (reachable from compute nodes via NFS gateway IP) ──
-# ai-proxy's CLIAPIProxy is at 10.0.0.5:8317 from the cluster network.
+# ── Cloud proxy (reachable from compute nodes via ai-proxy LAN IP) ──
+# ai-proxy's CLIAPIProxy is at 10.0.0.100:8317 from the cluster network.
 # Only set if not already configured via environment.
 if [[ -z "${SWARM_CLOUD_URL:-}" ]]; then
-    export SWARM_CLOUD_URL="http://10.0.0.5:8317/v1"
+    export SWARM_CLOUD_URL="http://10.0.0.100:8317/v1"
 fi
 # Load cloud API key from shared NFS if not in environment
 if [[ -z "${SWARM_CLOUD_API_KEY:-}" && -f /cluster/shared/ai/.cloud-api-key ]]; then
@@ -162,17 +162,20 @@ export GIT_COMMITTER_EMAIL="${GIT_COMMITTER_EMAIL:-swarm@beefcake.local}"
 # ── Logging ──
 export RUST_LOG="${RUST_LOG:-info}"
 
-# ── sccache + shared target dir ──
+# ── sccache + shared target dir (NFS for cross-node binary sharing) ──
 if command -v sccache &>/dev/null; then
     export RUSTC_WRAPPER=sccache
     export SCCACHE_DIR="${SCCACHE_DIR:-/tmp/beefcake-sccache}"
     mkdir -p "$SCCACHE_DIR"
 fi
-export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/tmp/beefcake-shared-target}"
-mkdir -p "$CARGO_TARGET_DIR"
+export CARGO_TARGET_DIR="${CARGO_TARGET_DIR:-/cluster/shared/cargo-cache/beefcake-target}"
+mkdir -p "$CARGO_TARGET_DIR" 2>/dev/null || true
 
-# ── PATH ──
-export PATH="$HOME/.local/bin:$PATH"
+# ── PATH (brian's NFS-mounted cargo + local tools) ──
+if [[ -f "$HOME/.cargo/env" ]]; then
+    source "$HOME/.cargo/env"
+fi
+export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
 # ── Create worktree ──
 cd "$REPO_ROOT"
@@ -200,18 +203,27 @@ echo "[worker] Worktree created at $WORKER_DIR (branch: swarm/${ISSUE_ID})"
 
 # ── Run the agent ──
 # Use prebuilt release binary if available, otherwise fall back to cargo run.
-_RELEASE_BIN="${CARGO_TARGET_DIR}/release/swarm-agents"
+# Search order: NFS shared binary → cargo target dir → cargo run from source.
+_RELEASE_BIN=""
+for _candidate in \
+    "/cluster/shared/ai/bin/swarm-agents" \
+    "${CARGO_TARGET_DIR}/release/swarm-agents"; do
+    if [[ -x "$_candidate" ]]; then
+        _RELEASE_BIN="$_candidate"
+        break
+    fi
+done
 
 echo "[worker] Starting swarm-agents for issue ${ISSUE_ID}..."
 
-if [[ -x "$_RELEASE_BIN" ]]; then
+if [[ -n "$_RELEASE_BIN" ]]; then
     echo "[worker] Using release binary: $_RELEASE_BIN"
     timeout "${SWARM_SUBTASK_TIMEOUT_SECS:-3600}" "$_RELEASE_BIN" \
         --issue "$ISSUE_ID" \
         --objective "$OBJECTIVE" \
         2>&1 &
 else
-    echo "[worker] No release binary; using cargo run"
+    echo "[worker] No release binary found; using cargo run"
     timeout "${SWARM_SUBTASK_TIMEOUT_SECS:-3600}" cargo run -p swarm-agents --release -- \
         --issue "$ISSUE_ID" \
         --objective "$OBJECTIVE" \
