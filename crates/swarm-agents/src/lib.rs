@@ -20,7 +20,6 @@ pub mod endpoint_pool;
 pub mod experiment_db;
 pub mod file_targeting;
 pub mod fix_templates;
-pub mod gepa_bridge;
 pub mod git_ops;
 pub mod handoff;
 pub mod harness_layers;

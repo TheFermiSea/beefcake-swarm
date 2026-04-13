@@ -96,8 +96,13 @@ impl Default for AssessmentTrigger {
 pub async fn run_assessment(tz_pg_url: Option<&str>, repo_root: &Path) -> Option<AssessmentReport> {
     let pg_url = tz_pg_url?;
 
-    // Query TZ Postgres for variant performance
-    let stats = match query_variant_stats(pg_url).await {
+    // Query TZ Postgres for variant performance — run both queries concurrently.
+    let (stats_result, baseline_result) = tokio::join!(
+        query_variant_stats(pg_url),
+        query_baseline_rate(pg_url),
+    );
+
+    let stats = match stats_result {
         Ok(s) => s,
         Err(e) => {
             warn!(error = %e, "Self-assessment: failed to query TZ Postgres");
@@ -105,7 +110,7 @@ pub async fn run_assessment(tz_pg_url: Option<&str>, repo_root: &Path) -> Option
         }
     };
 
-    let baseline = match query_baseline_rate(pg_url).await {
+    let baseline = match baseline_result {
         Ok(r) => r,
         Err(e) => {
             warn!(error = %e, "Self-assessment: failed to query baseline rate");

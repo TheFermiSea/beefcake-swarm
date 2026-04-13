@@ -54,6 +54,15 @@ venv/
 .swarm-hook-events.jsonl
 .swarm/cognition/
 
+# Swarm agent working files (exploration artifacts, grep dumps, plans)
+exploration-notes.*
+exploration-output.*
+grep-results.txt
+audit-report.md
+swarm-progress.txt
+temp_replacement.txt
+.architect-plan.json
+
 # Generated / external tool output
 repomix-output.xml
 GEMINI_SUGGESTIONS/

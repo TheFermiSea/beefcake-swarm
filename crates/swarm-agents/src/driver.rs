@@ -2965,9 +2965,8 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
                 "Triggering periodic self-assessment (every {} issues)",
                 crate::self_assessment::ASSESSMENT_INTERVAL
             );
-            let tz_pg = ctx.config.tensorzero_pg_url.as_deref().or(Some(
-                "postgresql://tensorzero:tensorzero@localhost:5433/tensorzero",
-            ));
+            // Respect opt-out: if TZ PG URL is not configured, skip assessment.
+            let tz_pg = ctx.config.tensorzero_pg_url.as_deref();
             if let Some(report) =
                 crate::self_assessment::run_assessment(tz_pg, ctx.worktree_bridge.repo_root()).await
             {
