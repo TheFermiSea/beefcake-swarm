@@ -898,6 +898,125 @@ impl WorktreeBridge {
         Ok(())
     }
 
+    /// Safe post-completion cleanup that preserves unpushed work.
+    ///
+    /// Unlike `cleanup()` (which force-deletes everything), this method:
+    /// 1. Checks for uncommitted changes — commits them if found
+    /// 2. Checks for unpushed commits — logs a warning but does NOT delete the branch
+    /// 3. Removes the git worktree tracking
+    /// 4. Removes the filesystem directory (including `.beads/` remnants)
+    /// 5. Only deletes the branch if it's been merged or pushed
+    ///
+    /// Safe to call after both success and failure paths.
+    pub fn safe_cleanup(&self, issue_id: &str) -> Result<()> {
+        let safe_id = Self::sanitize_id(issue_id);
+        let wt_path = self.base_dir.join(&safe_id);
+        let branch = format!("swarm/{safe_id}");
+
+        if !wt_path.exists() {
+            // Already cleaned — just prune bookkeeping
+            let _ = Command::new("git")
+                .args(["worktree", "prune"])
+                .current_dir(&self.repo_root)
+                .output();
+            return Ok(());
+        }
+
+        // Step 1: Salvage uncommitted changes
+        let status = Command::new("git")
+            .args(["status", "--porcelain"])
+            .current_dir(&wt_path)
+            .output();
+        let has_changes = status
+            .as_ref()
+            .map(|o| {
+                String::from_utf8_lossy(&o.stdout).lines().any(|line| {
+                    let path = line.get(3..).unwrap_or("");
+                    !path.starts_with(".beads")
+                        && !path.starts_with(".swarm-")
+                        && !path.starts_with(".beadhub")
+                })
+            })
+            .unwrap_or(false);
+        if has_changes {
+            tracing::info!(issue_id, "safe_cleanup: salvaging uncommitted changes");
+            let _ = Command::new("git")
+                .args(["add", "-A"])
+                .current_dir(&wt_path)
+                .output();
+            let _ = Command::new("git")
+                .args([
+                    "commit",
+                    "-m",
+                    &format!("salvage: uncommitted work ({issue_id})"),
+                ])
+                .current_dir(&wt_path)
+                .output();
+        }
+
+        // Step 2: Check for unpushed commits
+        let log_output = Command::new("git")
+            .args(["log", "--oneline", &format!("origin/main..{branch}")])
+            .current_dir(&self.repo_root)
+            .output();
+        let unpushed_count = log_output
+            .as_ref()
+            .map(|o| String::from_utf8_lossy(&o.stdout).lines().count())
+            .unwrap_or(0);
+        if unpushed_count > 0 {
+            tracing::warn!(
+                issue_id,
+                unpushed = unpushed_count,
+                branch = %branch,
+                "safe_cleanup: branch has unpushed commits — preserving branch"
+            );
+        }
+
+        // Step 3: Remove the git worktree (but not the branch if it has unpushed work)
+        let _ = Command::new("git")
+            .args([
+                "worktree",
+                "remove",
+                "--force",
+                &wt_path.display().to_string(),
+            ])
+            .current_dir(&self.repo_root)
+            .output();
+
+        // Step 4: Remove filesystem remnants (especially .beads/ which git doesn't track)
+        if wt_path.exists() {
+            if let Err(e) = std::fs::remove_dir_all(&wt_path) {
+                tracing::warn!(
+                    issue_id,
+                    path = %wt_path.display(),
+                    error = %e,
+                    "safe_cleanup: failed to remove worktree directory"
+                );
+            }
+        }
+
+        // Step 5: Prune git bookkeeping
+        let _ = Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(&self.repo_root)
+            .output();
+
+        // Step 6: Delete branch only if it has no unpushed commits
+        if unpushed_count == 0 {
+            let _ = Command::new("git")
+                .args(["branch", "-D", &branch])
+                .current_dir(&self.repo_root)
+                .output();
+        }
+
+        tracing::info!(
+            issue_id,
+            preserved_branch = unpushed_count > 0,
+            "safe_cleanup: worktree cleaned"
+        );
+        Ok(())
+    }
+
     /// Cleanup a worktree for merge failure recovery.
     ///
     /// Best-effort cleanup that:

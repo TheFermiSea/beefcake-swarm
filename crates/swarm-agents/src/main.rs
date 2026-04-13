@@ -464,6 +464,10 @@ async fn main() -> Result<()> {
         tokio::select! {
             result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &*tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                 let resolved = result?;
+                // Safe cleanup: preserves unpushed commits, removes .beads/ remnants
+                if let Err(e) = worktree_bridge.safe_cleanup(&issue.id) {
+                    warn!(id = %issue.id, error = %e, "Post-completion cleanup failed");
+                }
                 if !resolved {
                     anyhow::bail!("Issue {} NOT resolved", issue.id);
                 }
@@ -539,6 +543,10 @@ async fn main() -> Result<()> {
             tokio::select! {
                 result = orchestrator::process_issue(&config, &factory, &worktree_bridge, &issue, &*tracker, kb_ref, Arc::new(AtomicBool::new(false))) => {
                     let resolved = result?;
+                    // Safe cleanup after completion — preserves unpushed commits
+                    if let Err(e) = worktree_bridge.safe_cleanup(&issue.id) {
+                        warn!(id = %issue.id, error = %e, "Post-completion cleanup failed");
+                    }
                     if !resolved {
                         anyhow::bail!("Issue {} NOT resolved", issue.id);
                     }
@@ -625,6 +633,10 @@ async fn dispatch_parallel_issues(
                     kb_ref,
                     cancel,
                 ));
+                // Safe cleanup after each parallel issue completes
+                if let Err(e) = wb_clone.safe_cleanup(&id) {
+                    tracing::warn!(id = %id, error = %e, "Parallel dispatch: post-completion cleanup failed");
+                }
                 (id, result)
             })
         })
