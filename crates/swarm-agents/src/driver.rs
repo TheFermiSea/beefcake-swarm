@@ -605,8 +605,11 @@ pub async fn handle_selecting_issue(ctx: &mut OrchestratorContext<'_>) -> Result
         });
     }
 
-    ctx.beads.update_status(&ctx.issue.id, "in_progress")?;
-    info!(id = %ctx.issue.id, "Claimed issue (state driver)");
+    if let Err(e) = ctx.beads.update_status(&ctx.issue.id, "in_progress") {
+        warn!(id = %ctx.issue.id, error = %e, "Failed to claim issue via beads (non-fatal, may be SLURM node without Dolt)");
+    } else {
+        info!(id = %ctx.issue.id, "Claimed issue (state driver)");
+    }
 
     Ok(StateTransition::Advance {
         to: OrchestratorState::PreparingWorktree,
