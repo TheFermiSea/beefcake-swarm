@@ -2609,22 +2609,74 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
                 "Skipping TZ feedback: likely infrastructure failure (0 iters or <30s)"
             );
         } else {
-            let episode_id = ctx.session.session_id();
-            let tags = crate::tensorzero::FeedbackTags {
-                issue_id: Some(ctx.issue.id.clone()),
-                repo_id: ctx.config.repo_id.clone(),
-                retry_tier: Some(final_tier.clone()),
-                ..Default::default()
-            };
-            crate::tensorzero::post_episode_feedback(
-                tz_url,
-                episode_id,
-                ctx.success,
-                iterations,
-                wall_secs,
-                Some(tags),
-            )
-            .await;
+            // Resolve actual TZ episode IDs from Postgres — TZ auto-generates
+            // UUIDv7 episode IDs per inference, which differ from our session_id.
+            // We must post feedback to TZ's own episode IDs for Thompson Sampling
+            // to correlate feedback with the correct variant.
+            let tz_pg = ctx
+                .config
+                .tensorzero_pg_url
+                .as_deref()
+                .unwrap_or("postgresql://tensorzero:tensorzero@localhost:5433/tensorzero");
+            let session_start = ctx.process_start.elapsed().as_secs_f64();
+            let start_timestamp = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs_f64()
+                - session_start;
+            let episode_ids = crate::tensorzero::resolve_episode_ids(tz_pg, start_timestamp).await;
+
+            if episode_ids.is_empty() {
+                // Fallback: generate a UUIDv7 episode ID from our session_id.
+                // This won't correlate with TZ inferences but at least the feedback
+                // format will be valid.
+                let fallback_id =
+                    crate::tensorzero::generate_episode_id(&ctx.issue.id, ctx.session.session_id());
+                warn!(
+                    id = %ctx.issue.id,
+                    fallback_id = %fallback_id,
+                    "No TZ episode IDs resolved — using generated UUIDv7 fallback"
+                );
+                let tags = crate::tensorzero::FeedbackTags {
+                    issue_id: Some(ctx.issue.id.clone()),
+                    repo_id: ctx.config.repo_id.clone(),
+                    retry_tier: Some(final_tier.clone()),
+                    ..Default::default()
+                };
+                crate::tensorzero::post_episode_feedback(
+                    tz_url,
+                    &fallback_id,
+                    ctx.success,
+                    iterations,
+                    wall_secs,
+                    Some(tags),
+                )
+                .await;
+            } else {
+                info!(
+                    count = episode_ids.len(),
+                    success = ctx.success,
+                    "Posting TZ feedback to {} resolved episode IDs",
+                    episode_ids.len()
+                );
+                let tags = crate::tensorzero::FeedbackTags {
+                    issue_id: Some(ctx.issue.id.clone()),
+                    repo_id: ctx.config.repo_id.clone(),
+                    retry_tier: Some(final_tier.clone()),
+                    ..Default::default()
+                };
+                for ep_id in &episode_ids {
+                    crate::tensorzero::post_episode_feedback(
+                        tz_url,
+                        ep_id,
+                        ctx.success,
+                        iterations,
+                        wall_secs,
+                        Some(tags.clone()),
+                    )
+                    .await;
+                }
+            }
         }
     }
 
