@@ -311,18 +311,12 @@ api_key_location = "none"
 
 # SERA-14B tries vasp-03:8083 first (8K context). When prompt exceeds 8K,
 # SERA-14B evicted from vasp-03 (2026-04-12) to give GLM-4.7-Flash full 32GB VRAM.
-# All sera_14b traffic routes to Qwen3.5-27B on vasp-01 as fallback.
-# vasp03_sera provider kept but removed from routing to prevent accidental OOM.
+# All sera_14b traffic routes to Qwen3.5-27B on vasp-01.
+# vasp03_sera provider removed entirely (TZ requires all providers to be in routing).
 [models.sera_14b]
-routing = ["vasp01_fallback"]
+routing = ["vasp01_sera_fallback"]
 
-[models.sera_14b.providers.vasp03_sera]
-type = "openai"
-model_name = "SERA-14B-RustV1"
-api_base = "http://10.0.0.22:8083/v1"
-api_key_location = "none"
-
-[models.sera_14b.providers.vasp01_fallback]
+[models.sera_14b.providers.vasp01_sera_fallback]
 type = "openai"
 model_name = "Qwen3.5-27B"
 api_base = "http://10.0.0.20:8081/v1"
