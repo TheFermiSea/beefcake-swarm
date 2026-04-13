@@ -50,43 +50,8 @@ pub struct AssessmentReport {
     pub issues_created: Vec<String>,
 }
 
-/// Counter that tracks completed issues and triggers assessment.
-pub struct AssessmentTrigger {
-    completed_count: usize,
-    interval: usize,
-}
-
-impl AssessmentTrigger {
-    pub fn new() -> Self {
-        Self {
-            completed_count: 0,
-            interval: ASSESSMENT_INTERVAL,
-        }
-    }
-
-    /// Record a completed issue. Returns true if assessment should run.
-    pub fn record_completion(&mut self) -> bool {
-        self.completed_count += 1;
-        if self.completed_count >= self.interval {
-            self.completed_count = 0;
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Force an assessment on the next completion.
-    #[allow(dead_code)]
-    pub fn force_next(&mut self) {
-        self.completed_count = self.interval.saturating_sub(1);
-    }
-}
-
-impl Default for AssessmentTrigger {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// Assessment triggering uses a static AtomicUsize in driver.rs::handle_outcome
+// rather than a struct, since the counter must persist across issue lifetimes.
 
 /// Run a self-assessment cycle by querying TZ Postgres for variant performance.
 ///
