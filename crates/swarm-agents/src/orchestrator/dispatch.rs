@@ -112,6 +112,9 @@ pub fn needs_cot_planner(
     files_changed: usize,
     objective: &str,
 ) -> bool {
+    // The CoT planner has no tools — it produces analysis/plans via pure reasoning.
+    // driver.rs stores the plan and injects it into the next iteration's worker prompt
+    // via ctx.last_plan_output → handle_implementing() "Plan from Previous Analysis".
     if decomposition_required {
         info!(
             files_changed,
@@ -120,7 +123,6 @@ pub fn needs_cot_planner(
         return true;
     }
     // Many-file tasks: architectural planning before coding avoids thrash.
-    // Threshold mirrors escalation/coordinator's >8-files-changed rule.
     if files_changed >= 8 {
         info!(
             files_changed,
@@ -128,15 +130,13 @@ pub fn needs_cot_planner(
         );
         return true;
     }
-    // Keyword signals that indicate cross-crate reasoning or architectural decisions.
+    // Keyword signals for architectural scope.
     let arch_keywords = [
         "refactor",
         "redesign",
         "architecture",
         "cross-crate",
         "decompose",
-        "subtask",
-        "plan",
         "modularize",
         "extract module",
         "split module",
@@ -148,7 +148,7 @@ pub fn needs_cot_planner(
     if is_architectural {
         debug!(
             objective,
-            "CoT planner triggered: architectural keyword detected in objective"
+            "CoT planner triggered: architectural keyword detected"
         );
     }
     is_architectural

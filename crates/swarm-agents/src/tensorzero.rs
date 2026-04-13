@@ -378,33 +378,44 @@ pub async fn post_episode_feedback(
     ];
 
     for fb in &feedbacks {
-        match client
-            .post(&feedback_url)
-            .json(fb)
-            .timeout(std::time::Duration::from_secs(10))
-            .send()
-            .await
-        {
-            Ok(resp) if resp.status().is_success() => {
-                info!(
-                    metric = %fb.metric_name,
-                    episode_id = episode_id,
-                    "Posted TensorZero feedback"
-                );
-            }
-            Ok(resp) => {
-                warn!(
-                    metric = %fb.metric_name,
-                    status = %resp.status(),
-                    "TensorZero feedback rejected"
-                );
-            }
-            Err(e) => {
-                warn!(
-                    metric = %fb.metric_name,
-                    error = %e,
-                    "Failed to post TensorZero feedback"
-                );
+        for attempt in 0..=1u8 {
+            match client
+                .post(&feedback_url)
+                .json(fb)
+                .timeout(std::time::Duration::from_secs(10))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    info!(
+                        metric = %fb.metric_name,
+                        episode_id = episode_id,
+                        "Posted TensorZero feedback"
+                    );
+                    break;
+                }
+                Ok(resp) => {
+                    warn!(
+                        attempt,
+                        metric = %fb.metric_name,
+                        status = %resp.status(),
+                        "TensorZero feedback rejected"
+                    );
+                    if attempt == 0 {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        attempt,
+                        metric = %fb.metric_name,
+                        error = %e,
+                        "Failed to post TensorZero feedback"
+                    );
+                    if attempt == 0 {
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                    }
+                }
             }
         }
     }
@@ -704,32 +715,43 @@ pub async fn post_inference_feedback(
         tags: tags_map,
     };
 
-    match client
-        .post(&feedback_url)
-        .json(&fb)
-        .timeout(std::time::Duration::from_secs(10))
-        .send()
-        .await
-    {
-        Ok(resp) if resp.status().is_success() => {
-            info!(
-                metric = metric_name,
-                inference_id, "Posted TZ inference-level feedback"
-            );
-        }
-        Ok(resp) => {
-            warn!(
-                metric = metric_name,
-                status = %resp.status(),
-                "TZ inference feedback rejected"
-            );
-        }
-        Err(e) => {
-            warn!(
-                metric = metric_name,
-                error = %e,
-                "Failed to post TZ inference feedback"
-            );
+    for attempt in 0..=1u8 {
+        match client
+            .post(&feedback_url)
+            .json(&fb)
+            .timeout(std::time::Duration::from_secs(10))
+            .send()
+            .await
+        {
+            Ok(resp) if resp.status().is_success() => {
+                info!(
+                    metric = metric_name,
+                    inference_id, "Posted TZ inference-level feedback"
+                );
+                break;
+            }
+            Ok(resp) => {
+                warn!(
+                    attempt,
+                    metric = metric_name,
+                    status = %resp.status(),
+                    "TZ inference feedback rejected"
+                );
+                if attempt == 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
+            Err(e) => {
+                warn!(
+                    attempt,
+                    metric = metric_name,
+                    error = %e,
+                    "Failed to post TZ inference feedback"
+                );
+                if attempt == 0 {
+                    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                }
+            }
         }
     }
 }
