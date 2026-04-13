@@ -206,6 +206,7 @@ echo "[worker] Worktree created at $WORKER_DIR (branch: swarm/${ISSUE_ID})"
 # Search order: NFS shared binary → cargo target dir → cargo run from source.
 _RELEASE_BIN=""
 for _candidate in \
+    "${REPO_ROOT}/target/release/swarm-agents" \
     "/cluster/shared/ai/bin/swarm-agents" \
     "${CARGO_TARGET_DIR}/release/swarm-agents"; do
     if [[ -x "$_candidate" ]]; then
