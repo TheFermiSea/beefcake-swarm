@@ -35,7 +35,6 @@ set -euo pipefail
 
 ISSUE_ID="${ISSUE_ID:?ISSUE_ID must be set}"
 REPO_ROOT="${REPO_ROOT:-/home/brian/code/beefcake-swarm}"
-WORKER_DIR="/tmp/beefcake-wt/${ISSUE_ID}"
 NODE_NAME="$(hostname -s)"
 
 # Decode objective
@@ -52,7 +51,6 @@ echo "Node:       ${NODE_NAME}"
 echo "Issue:      ${ISSUE_ID}"
 echo "Objective:  ${OBJECTIVE}"
 echo "Repo:       ${REPO_ROOT}"
-echo "Worktree:   ${WORKER_DIR}"
 echo "==========================================="
 
 # ── Graceful shutdown ──
@@ -70,9 +68,10 @@ cleanup() {
         wait "$WORKER_PID" 2>/dev/null || true
     fi
 
-    # Attempt to salvage any uncommitted changes before removing worktree
-    if [[ -d "$WORKER_DIR" ]]; then
-        cd "$WORKER_DIR"
+    # Attempt to salvage any uncommitted changes in the agent's worktree
+    local _wt_dir="${SWARM_WORKTREE_DIR:-/tmp/beefcake-wt}/${ISSUE_ID}"
+    if [[ -d "$_wt_dir" ]]; then
+        cd "$_wt_dir"
         if git diff --quiet 2>/dev/null && git diff --cached --quiet 2>/dev/null; then
             echo "[$(date)] No uncommitted changes to salvage"
         else
@@ -82,9 +81,9 @@ cleanup() {
         fi
     fi
 
-    # Clean up worktree
+    # Clean up worktree (created by swarm-agents)
     cd "$REPO_ROOT" 2>/dev/null || true
-    git worktree remove "$WORKER_DIR" --force 2>/dev/null || true
+    git worktree remove "$_wt_dir" --force 2>/dev/null || true
     git worktree prune 2>/dev/null || true
 
     echo "[$(date)] Cleanup complete"
@@ -177,29 +176,32 @@ if [[ -f "$HOME/.cargo/env" ]]; then
 fi
 export PATH="$HOME/.local/bin:$HOME/.cargo/bin:$PATH"
 
-# ── Create worktree ──
+# ── Worktree setup ──
+# Let swarm-agents handle worktree creation via its WorktreeBridge
+# (handles .beads symlinks, session logs, etc.). We just set the base dir.
+export SWARM_WORKTREE_DIR="/tmp/beefcake-wt"
+mkdir -p "$SWARM_WORKTREE_DIR"
+
 cd "$REPO_ROOT"
 
 # Clean up any stale worktree from a previous run of this issue
-git worktree remove "$WORKER_DIR" --force 2>/dev/null || true
-rm -rf "$WORKER_DIR" 2>/dev/null || true
+git worktree remove "${SWARM_WORKTREE_DIR}/${ISSUE_ID}" --force 2>/dev/null || true
+rm -rf "${SWARM_WORKTREE_DIR}/${ISSUE_ID}" 2>/dev/null || true
 git branch -D "swarm/${ISSUE_ID}" 2>/dev/null || true
 git worktree prune 2>/dev/null || true
 
 # Ensure we're up to date
 git fetch origin main --quiet 2>/dev/null || true
 
-# Create fresh worktree
-if ! git worktree add "$WORKER_DIR" -b "swarm/${ISSUE_ID}" origin/main 2>/dev/null; then
-    # Branch might exist from a failed run — try checking it out
-    if ! git worktree add "$WORKER_DIR" "swarm/${ISSUE_ID}" 2>/dev/null; then
-        echo "ERROR: Failed to create worktree at $WORKER_DIR" >&2
-        exit 1
-    fi
-fi
+echo "[worker] Worktree will be created by swarm-agents at ${SWARM_WORKTREE_DIR}/${ISSUE_ID}"
 
-cd "$WORKER_DIR"
-echo "[worker] Worktree created at $WORKER_DIR (branch: swarm/${ISSUE_ID})"
+# ── Swarm agent config for SLURM nodes ──
+export SWARM_WORKER_FIRST_ENABLED=1
+export SWARM_REQUIRE_ANTHROPIC_OWNERSHIP=0
+export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6}"
+
+# TensorZero on ai-proxy for experiment tracking
+export SWARM_TENSORZERO_URL="${SWARM_TENSORZERO_URL:-http://10.0.0.100:3000}"
 
 # ── Run the agent ──
 # Use prebuilt release binary if available, otherwise fall back to cargo run.
