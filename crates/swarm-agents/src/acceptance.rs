@@ -201,7 +201,9 @@ pub fn check_acceptance_with_task(
                     rejections.push("Diff contains only whitespace/formatting changes".into());
                 }
                 Err(e) => {
-                    warn!("Failed to inspect whitespace-only diff: {e} — skipping whitespace check");
+                    warn!(
+                        "Failed to inspect whitespace-only diff: {e} — skipping whitespace check"
+                    );
                 }
             }
         }

@@ -1034,7 +1034,11 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
             task_prompt.push_str("\n...(plan truncated)\n");
         }
         task_prompt.push('\n');
-        info!(iteration, plan_chars = plan_budget, "Injected CoT plan into worker prompt");
+        info!(
+            iteration,
+            plan_chars = plan_budget,
+            "Injected CoT plan into worker prompt"
+        );
     }
 
     // Checkpoint before agent invocation
@@ -1770,8 +1774,7 @@ pub async fn handle_verifying(ctx: &mut OrchestratorContext<'_>) -> Result<State
             .unwrap_or_default()
             .as_secs_f64();
         let since = now_secs - verifier_elapsed.as_secs_f64() - 10.0;
-        let inf_ids =
-            crate::tensorzero::resolve_recent_inference_ids(pg_url, since, 1).await;
+        let inf_ids = crate::tensorzero::resolve_recent_inference_ids(pg_url, since, 1).await;
         if let Some(inf_id) = inf_ids.first() {
             let primary_err = error_cats.first().map(|c| c.to_string());
             let iter_tags = crate::tensorzero::FeedbackTags {
@@ -2697,7 +2700,10 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
             // to correlate feedback with the correct variant.
             // Build rich tags for TZ episode feedback (was sparse: only 3/16 fields).
             let primary_err = ctx.last_report.as_ref().and_then(|r| {
-                r.unique_error_categories().into_iter().next().map(|c| c.to_string())
+                r.unique_error_categories()
+                    .into_iter()
+                    .next()
+                    .map(|c| c.to_string())
             });
             let tags = crate::tensorzero::FeedbackTags {
                 issue_id: Some(ctx.issue.id.clone()),
