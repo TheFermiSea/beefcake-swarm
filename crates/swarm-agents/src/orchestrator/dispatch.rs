@@ -105,13 +105,28 @@ pub fn route_to_coder(error_cats: &[ErrorCategory], iteration: u32) -> CoderRout
 /// - `files_changed` ≥ 8: many-file tasks benefit from architectural planning before coding
 /// - `is_architectural`: task description mentions cross-crate reasoning keywords
 ///
+/// **Capped at 1 invocation per session** — the planner has no tools and cannot make
+/// progress on its own. After one plan, subsequent iterations must go to real workers.
+///
 /// Based on MASAI "Fixer without tools" (ICLR 2025): environment access hurts patch quality
 /// when the model should be reasoning from provided context, not exploring.
 pub fn needs_cot_planner(
     decomposition_required: bool,
     files_changed: usize,
     objective: &str,
+    cot_planner_invocations: u32,
 ) -> bool {
+    // Hard cap: only one CoT planner run per session. After that, a real worker
+    // with tools must take over. Without this cap, the planner consumes all
+    // iteration budget producing plans that never become code.
+    if cot_planner_invocations >= 1 {
+        debug!(
+            cot_planner_invocations,
+            "CoT planner suppressed: already used this session"
+        );
+        return false;
+    }
+
     // The CoT planner has no tools — it produces analysis/plans via pure reasoning.
     // driver.rs stores the plan and injects it into the next iteration's worker prompt
     // via ctx.last_plan_output → handle_implementing() "Plan from Previous Analysis".

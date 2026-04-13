@@ -111,6 +111,9 @@ pub struct OrchestratorContext<'a> {
     /// CoT planner output from the last iteration (if CoTPlanner was routed to).
     /// Injected into the next iteration's worker prompt as planning context.
     pub last_plan_output: Option<String>,
+    /// How many times the CoT planner has been invoked this session.
+    /// Capped at 1 to prevent the planner from consuming all iteration budget.
+    pub cot_planner_invocations: u32,
 
     // ── Coordination integrations (P2.2 + P2.3) ──
     pub router: DynamicRouter,
@@ -349,6 +352,7 @@ impl<'a> OrchestratorContext<'a> {
             },
             auto_fix_applied: false,
             last_plan_output: None,
+            cot_planner_invocations: 0,
             reformulation_store,
             intent_contract,
             factory,
@@ -560,6 +564,7 @@ impl<'a> OrchestratorContext<'a> {
             },
             auto_fix_applied: false,
             last_plan_output: None,
+            cot_planner_invocations: 0,
             reformulation_store,
             intent_contract,
             factory,
@@ -1197,8 +1202,12 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                 .unwrap_or(false);
             let changed_file_count =
                 crate::orchestrator::helpers::list_changed_files(&ctx.wt_path).len();
-            let cot_route =
-                needs_cot_planner(decomposition_required, changed_file_count, &ctx.issue.title);
+            let cot_route = needs_cot_planner(
+                decomposition_required,
+                changed_file_count,
+                &ctx.issue.title,
+                ctx.cot_planner_invocations,
+            );
 
             match if cot_route {
                 CoderRoute::CoTPlanner
@@ -1304,8 +1313,10 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                     (result, adapter)
                 }
                 CoderRoute::CoTPlanner => {
+                    ctx.cot_planner_invocations += 1;
                     info!(
                         iteration,
+                        invocation = ctx.cot_planner_invocations,
                         "Routing to CoT planner (Devstral-24B, no tools — state driver)"
                     );
                     ctx.metrics.record_coder_route("CoTPlanner");
@@ -1593,7 +1604,15 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         // treat it as a plan/analysis and inject it into the next iteration.
         // This enables the CoT planner (no tools) to contribute context
         // instead of being penalized by the no-change circuit breaker.
-        if response.len() > 100 {
+        //
+        // Guard: only store as plan if this is the FIRST plan-only response.
+        // If we already have a plan stored, the previous plan didn't help —
+        // don't keep accumulating plans, let the no-change circuit breaker fire.
+        let is_hallucinated = response.contains(".swarm-checkpoint")
+            || response.contains(".swarm-session")
+            || response.contains("tz_insights_join");
+        let already_has_plan = ctx.last_plan_output.is_some();
+        if response.len() > 100 && !already_has_plan && !is_hallucinated {
             info!(
                 iteration,
                 response_len = response.len(),
@@ -1608,6 +1627,13 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                     ctx.last_plan_output.as_ref().map(|p| p.len()).unwrap_or(0)
                 ),
             });
+        }
+        if is_hallucinated {
+            warn!(
+                iteration,
+                response_len = response.len(),
+                "Discarding hallucinated plan output (references swarm internals)"
+            );
         }
 
         ctx.escalation.record_no_change();

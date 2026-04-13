@@ -398,6 +398,9 @@ pub(crate) fn load_failure_ledger(
 }
 
 /// List files changed in the worktree relative to main (via `git diff --name-only`).
+///
+/// Excludes swarm orchestrator artifacts (`.swarm-*`, exploration notes, etc.)
+/// so that routing decisions reflect actual code changes, not bookkeeping files.
 pub(crate) fn list_changed_files(worktree_path: &Path) -> Vec<String> {
     match std::process::Command::new("git")
         .args(["diff", "--name-only", "main"])
@@ -407,10 +410,21 @@ pub(crate) fn list_changed_files(worktree_path: &Path) -> Vec<String> {
         Ok(output) if output.status.success() => String::from_utf8_lossy(&output.stdout)
             .lines()
             .filter(|l| !l.is_empty())
+            .filter(|l| !is_swarm_artifact(l))
             .map(|l| l.to_string())
             .collect(),
         _ => Vec::new(),
     }
+}
+
+/// Returns true if the path is a swarm orchestrator artifact that should be
+/// excluded from file-change counts used for routing decisions.
+fn is_swarm_artifact(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    name.starts_with(".swarm-")
+        || name == "exploration-notes.md"
+        || name == "grep-results.txt"
+        || name == "search-results.md"
 }
 
 #[cfg(test)]
