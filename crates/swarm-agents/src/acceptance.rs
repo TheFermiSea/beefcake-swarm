@@ -59,6 +59,16 @@ pub struct AcceptancePolicy {
     /// Default: empty (no file-level restriction — use `scope_to_crates` for coarser control).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowed_files: Vec<String>,
+
+    /// Reject diffs that contain only whitespace/formatting changes.
+    ///
+    /// Disabled by default because `cargo fmt` runs automatically before commit,
+    /// and its reformatting can make substantive code changes look "whitespace only"
+    /// to the character-level comparison. The 5/5 verifier gates (fmt, clippy,
+    /// check, test) are the authoritative quality signal.
+    /// Default: false (disabled).
+    #[serde(default)]
+    pub reject_whitespace_only: bool,
 }
 
 impl Default for AcceptancePolicy {
@@ -70,6 +80,7 @@ impl Default for AcceptancePolicy {
             scope_to_crates: Vec::new(),
             min_diff_lines: 5,
             allowed_files: Vec::new(),
+            reject_whitespace_only: false,
         }
     }
 }
@@ -180,15 +191,18 @@ pub fn check_acceptance_with_task(
         }
     }
 
-    // Gate 3: Reject whitespace-only diffs
-    if let Some(commit) = initial_commit {
-        match has_non_whitespace_changes(wt_path, commit) {
-            Ok(true) => {}
-            Ok(false) => {
-                rejections.push("Diff contains only whitespace/formatting changes".into());
-            }
-            Err(e) => {
-                warn!("Failed to inspect whitespace-only diff: {e} — skipping whitespace check");
+    // Gate 3: Reject whitespace-only diffs (disabled by default — cargo fmt
+    // makes substantive changes look whitespace-only to character comparison)
+    if policy.reject_whitespace_only {
+        if let Some(commit) = initial_commit {
+            match has_non_whitespace_changes(wt_path, commit) {
+                Ok(true) => {}
+                Ok(false) => {
+                    rejections.push("Diff contains only whitespace/formatting changes".into());
+                }
+                Err(e) => {
+                    warn!("Failed to inspect whitespace-only diff: {e} — skipping whitespace check");
+                }
             }
         }
     }
@@ -721,6 +735,7 @@ mod tests {
             scope_to_crates: Vec::new(),
             min_diff_lines: 0,
             allowed_files: Vec::new(),
+            reject_whitespace_only: false,
         };
 
         // With all gates disabled, should always pass
@@ -762,12 +777,8 @@ mod tests {
 
         let result = check_acceptance_with_task(
             &AcceptancePolicy {
-                max_diff_lines: 0,
-                min_cloud_passes: 0,
-                require_test_changes: false,
-                scope_to_crates: Vec::new(),
                 min_diff_lines: 5,
-                allowed_files: Vec::new(),
+                ..AcceptancePolicy::default()
             },
             dir.path(),
             Some(&initial),
@@ -806,8 +817,29 @@ mod tests {
         .unwrap();
         commit_all(&dir, "format only");
 
-        let result = check_acceptance_with_task(
+        // With reject_whitespace_only disabled (default), whitespace-only diffs are accepted.
+        let result_lenient = check_acceptance_with_task(
+            &AcceptancePolicy::default(),
+            dir.path(),
+            Some(&initial),
+            0,
+            Some(TaskMetadata::new(
+                "Complex function: process_issue_core",
+                Some("Location: src/lib.rs:1"),
+            )),
+        );
+        assert!(
+            !result_lenient
+                .rejections
+                .iter()
+                .any(|r| r.contains("whitespace/formatting")),
+            "Whitespace gate should be off by default"
+        );
+
+        // With reject_whitespace_only enabled, whitespace-only diffs are rejected.
+        let result_strict = check_acceptance_with_task(
             &AcceptancePolicy {
+                reject_whitespace_only: true,
                 max_diff_lines: 0,
                 min_cloud_passes: 0,
                 require_test_changes: false,
@@ -824,8 +856,8 @@ mod tests {
             )),
         );
 
-        assert!(!result.accepted);
-        assert!(result
+        assert!(!result_strict.accepted);
+        assert!(result_strict
             .rejections
             .iter()
             .any(|r| r.contains("whitespace/formatting")));
@@ -850,14 +882,7 @@ mod tests {
         commit_all(&dir, "wrong file");
 
         let result = check_acceptance_with_task(
-            &AcceptancePolicy {
-                max_diff_lines: 0,
-                min_cloud_passes: 0,
-                require_test_changes: false,
-                scope_to_crates: Vec::new(),
-                min_diff_lines: 0,
-                allowed_files: Vec::new(),
-            },
+            &AcceptancePolicy::default(),
             dir.path(),
             Some(&initial),
             0,
@@ -893,12 +918,8 @@ mod tests {
 
         let result = check_acceptance_with_task(
             &AcceptancePolicy {
-                max_diff_lines: 0,
-                min_cloud_passes: 0,
-                require_test_changes: false,
-                scope_to_crates: Vec::new(),
                 min_diff_lines: 5,
-                allowed_files: Vec::new(),
+                ..AcceptancePolicy::default()
             },
             dir.path(),
             Some(&initial),
