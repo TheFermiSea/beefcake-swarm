@@ -99,10 +99,8 @@ pub async fn run_assessment(tz_pg_url: Option<&str>, repo_root: &Path) -> Option
     let pg_url = tz_pg_url?;
 
     // Query TZ Postgres for variant performance — run both queries concurrently.
-    let (stats_result, baseline_result) = tokio::join!(
-        query_variant_stats(pg_url),
-        query_baseline_rate(pg_url),
-    );
+    let (stats_result, baseline_result) =
+        tokio::join!(query_variant_stats(pg_url), query_baseline_rate(pg_url),);
 
     let stats = match stats_result {
         Ok(s) => s,
