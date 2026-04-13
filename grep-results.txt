@@ -1,0 +1,17 @@
+./config/tensorzero.toml:329:[models.omnicoder]
+./config/tensorzero.toml:330:routing = ["vasp02_omnicoder"]
+./config/tensorzero.toml:332:[models.omnicoder.providers.vasp02_omnicoder]
+./config/tensorzero.toml:457:# Re-added: omnicoder_9b — real OmniCoder-9B on vasp-02:8083 (historical 0.753, n=2742).
+./config/tensorzero.toml:493:[functions.worker_code_edit.variants.omnicoder_9b]
+./config/tensorzero.toml:495:model = "omnicoder"
+./config/tensorzero.toml:513:# omnicoder_9b (60.4%), sera_14b_worker (43.6%), devstral_24b (38.7%), qwen35_27b (31.9%).
+./config/tensorzero.toml:515:# omnicoder exclusively, causing cascading failure when it hung).
+./config/tensorzero.toml:519:candidate_variants = { omnicoder_9b = 0.35, sera_14b_worker = 0.25, devstral_24b = 0.22, qwen35_27b = 0.18 }
+./config/tensorzero.toml:585:[functions.code_fixing.variants.omnicoder_fixer]
+./config/tensorzero.toml:587:model = "omnicoder"
+./config/tensorzero.toml:595:# Restored strong performers: omnicoder_fixer, devstral_fixer.
+./config/tensorzero.toml:611:candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer", "qwen_reasoning_fixer"]
+./config/experiments/gemma-experiment.toml:2:# vasp-02 models (devstral, omnicoder) swapped out — Gemma on vasp-02:8081.
+./config/experiments/normal.toml:2:# All vasp-02 models (devstral, omnicoder) active.
+./config/experiments/normal.toml:5:candidate_variants = ["omnicoder_9b", "qwen35_27b", "devstral_24b", "sera_14b_worker"]
+./config/experiments/normal.toml:8:candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer"]
