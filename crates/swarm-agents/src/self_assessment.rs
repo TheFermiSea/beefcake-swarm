@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use tracing::{debug, info, warn};
+use tracing::{debug, error, info, warn};
 
 /// How often to run self-assessment (every N completed issues).
 pub const ASSESSMENT_INTERVAL: usize = 10;
@@ -42,6 +42,8 @@ pub struct AssessmentReport {
     pub dominant_variant: Option<(String, f64)>,
     /// Whether traffic is overly concentrated on one variant.
     pub traffic_concentrated: bool,
+    /// True if zero task_resolved=true in the assessment window despite episodes being posted.
+    pub feedback_health_warning: bool,
     /// Actions taken automatically.
     pub actions_taken: Vec<String>,
     /// Issues created for human review.
@@ -126,6 +128,7 @@ pub async fn run_assessment(tz_pg_url: Option<&str>, repo_root: &Path) -> Option
         broken_variants: Vec::new(),
         dominant_variant: None,
         traffic_concentrated: false,
+        feedback_health_warning: false,
         actions_taken: Vec::new(),
         issues_created: Vec::new(),
     };
@@ -150,6 +153,17 @@ pub async fn run_assessment(tz_pg_url: Option<&str>, repo_root: &Path) -> Option
             baseline = format!("{:.1}%", baseline),
             drop = format!("{:.1}%", baseline - report.window_success_rate),
             "Self-assessment: DEGRADATION DETECTED"
+        );
+    }
+
+    // Feedback health: warn if episodes are being posted but NONE are successes.
+    // This catches the scenario where feedback reaches TZ but the learning
+    // loop is starved of positive signal (all task_resolved = false).
+    if total_episodes >= 10 && total_wins == 0 {
+        report.feedback_health_warning = true;
+        error!(
+            total_episodes,
+            "FEEDBACK HEALTH: zero task_resolved=true in window despite {total_episodes} episodes — TZ cannot learn"
         );
     }
 

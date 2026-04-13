@@ -108,6 +108,9 @@ pub struct OrchestratorContext<'a> {
     // ── Per-iteration transient ──
     pub pre_worker_commit: Option<String>,
     pub auto_fix_applied: bool,
+    /// CoT planner output from the last iteration (if CoTPlanner was routed to).
+    /// Injected into the next iteration's worker prompt as planning context.
+    pub last_plan_output: Option<String>,
 
     // ── Coordination integrations (P2.2 + P2.3) ──
     pub router: DynamicRouter,
@@ -345,6 +348,7 @@ impl<'a> OrchestratorContext<'a> {
                 cl
             },
             auto_fix_applied: false,
+            last_plan_output: None,
             reformulation_store,
             intent_contract,
             factory,
@@ -555,6 +559,7 @@ impl<'a> OrchestratorContext<'a> {
                 cl
             },
             auto_fix_applied: false,
+            last_plan_output: None,
             reformulation_store,
             intent_contract,
             factory,
@@ -1015,6 +1020,21 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
             }
             task_prompt.push_str("```\n");
         }
+    }
+
+    // Inject CoT planner output from a previous iteration (if any).
+    // The planner has no tools and can't write files, but its analysis
+    // provides valuable context for the worker that follows.
+    if let Some(plan) = ctx.last_plan_output.take() {
+        task_prompt.push_str("\n## Plan from Previous Analysis\n\n");
+        let plan_budget = plan.len().min(2000);
+        let plan_slice = &plan[..plan.floor_char_boundary(plan_budget)];
+        task_prompt.push_str(plan_slice);
+        if plan.len() > plan_budget {
+            task_prompt.push_str("\n...(plan truncated)\n");
+        }
+        task_prompt.push('\n');
+        info!(iteration, plan_chars = plan_budget, "Injected CoT plan into worker prompt");
     }
 
     // Checkpoint before agent invocation
@@ -1565,6 +1585,27 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     }
 
     if !has_changes {
+        // If the agent produced a substantial response without file changes,
+        // treat it as a plan/analysis and inject it into the next iteration.
+        // This enables the CoT planner (no tools) to contribute context
+        // instead of being penalized by the no-change circuit breaker.
+        if response.len() > 100 {
+            info!(
+                iteration,
+                response_len = response.len(),
+                "Storing agent response as plan context for next iteration"
+            );
+            ctx.last_plan_output = Some(response.clone());
+            // Skip the no-change escalation — the plan IS the output.
+            return Ok(StateTransition::Advance {
+                to: OrchestratorState::Planning,
+                reason: format!(
+                    "agent produced plan/analysis ({} chars) — re-entering with plan context",
+                    ctx.last_plan_output.as_ref().map(|p| p.len()).unwrap_or(0)
+                ),
+            });
+        }
+
         ctx.escalation.record_no_change();
         ctx.metrics.record_no_change();
         warn!(
@@ -1718,6 +1759,47 @@ pub async fn handle_verifying(ctx: &mut OrchestratorContext<'_>) -> Result<State
     let error_count = report.failure_signals.len();
     let cat_names: Vec<String> = error_cats.iter().map(|c| format!("{c:?}")).collect();
     ctx.metrics.record_verifier_results(error_count, cat_names);
+
+    // Post per-iteration inference-level feedback to TZ (verifier_pass, edit_accuracy).
+    // Gives Thompson Sampling per-call signal, not just per-episode.
+    if let (Some(ref tz_url), Some(ref pg_url)) =
+        (&ctx.config.tensorzero_url, &ctx.config.tensorzero_pg_url)
+    {
+        let now_secs = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+        let since = now_secs - verifier_elapsed.as_secs_f64() - 10.0;
+        let inf_ids =
+            crate::tensorzero::resolve_recent_inference_ids(pg_url, since, 1).await;
+        if let Some(inf_id) = inf_ids.first() {
+            let primary_err = error_cats.first().map(|c| c.to_string());
+            let iter_tags = crate::tensorzero::FeedbackTags {
+                issue_id: Some(ctx.issue.id.clone()),
+                error_category: primary_err,
+                prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
+                language: ctx.factory.language.clone(),
+                model: ctx.config.cloud_endpoint.as_ref().map(|e| e.model.clone()),
+                ..Default::default()
+            };
+            crate::tensorzero::post_inference_feedback(
+                tz_url,
+                inf_id,
+                "verifier_pass",
+                serde_json::Value::Bool(report.all_green),
+                Some(iter_tags.clone()),
+            )
+            .await;
+            crate::tensorzero::post_inference_feedback(
+                tz_url,
+                inf_id,
+                "edit_accuracy",
+                serde_json::json!(report.health_score()),
+                Some(iter_tags),
+            )
+            .await;
+        }
+    }
 
     if let Some(lm) = ctx.metrics.build_loop_metrics(report.all_green) {
         lm.emit();
@@ -2613,68 +2695,79 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
             // UUIDv7 episode IDs per inference, which differ from our session_id.
             // We must post feedback to TZ's own episode IDs for Thompson Sampling
             // to correlate feedback with the correct variant.
-            let tz_pg = ctx
-                .config
-                .tensorzero_pg_url
-                .as_deref()
-                .unwrap_or("postgresql://tensorzero:tensorzero@localhost:5433/tensorzero");
-            let session_start = ctx.process_start.elapsed().as_secs_f64();
-            let start_timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs_f64()
-                - session_start;
-            let episode_ids = crate::tensorzero::resolve_episode_ids(tz_pg, start_timestamp).await;
+            // Build rich tags for TZ episode feedback (was sparse: only 3/16 fields).
+            let primary_err = ctx.last_report.as_ref().and_then(|r| {
+                r.unique_error_categories().into_iter().next().map(|c| c.to_string())
+            });
+            let tags = crate::tensorzero::FeedbackTags {
+                issue_id: Some(ctx.issue.id.clone()),
+                language: ctx.factory.language.clone(),
+                model: ctx.config.cloud_endpoint.as_ref().map(|e| e.model.clone()),
+                repo_id: ctx.config.repo_id.clone(),
+                error_category: primary_err,
+                prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
+                retry_tier: Some(final_tier.clone()),
+                write_deadline: Some(ctx.config.max_turns_without_write),
+                max_tool_calls: Some(ctx.config.max_worker_tool_calls),
+                ..Default::default()
+            };
 
-            if episode_ids.is_empty() {
-                // Fallback: generate a UUIDv7 episode ID from our session_id.
-                // This won't correlate with TZ inferences but at least the feedback
-                // format will be valid.
-                let fallback_id =
-                    crate::tensorzero::generate_episode_id(&ctx.issue.id, ctx.session.session_id());
-                warn!(
-                    id = %ctx.issue.id,
-                    fallback_id = %fallback_id,
-                    "No TZ episode IDs resolved — using generated UUIDv7 fallback"
-                );
-                let tags = crate::tensorzero::FeedbackTags {
-                    issue_id: Some(ctx.issue.id.clone()),
-                    repo_id: ctx.config.repo_id.clone(),
-                    retry_tier: Some(final_tier.clone()),
-                    ..Default::default()
-                };
-                crate::tensorzero::post_episode_feedback(
-                    tz_url,
-                    &fallback_id,
-                    ctx.success,
-                    iterations,
-                    wall_secs,
-                    Some(tags),
-                )
-                .await;
-            } else {
-                info!(
-                    count = episode_ids.len(),
-                    success = ctx.success,
-                    "Posting TZ feedback to {} resolved episode IDs",
-                    episode_ids.len()
-                );
-                let tags = crate::tensorzero::FeedbackTags {
-                    issue_id: Some(ctx.issue.id.clone()),
-                    repo_id: ctx.config.repo_id.clone(),
-                    retry_tier: Some(final_tier.clone()),
-                    ..Default::default()
-                };
-                for ep_id in &episode_ids {
+            // Resolve TZ episode IDs. If PG is unreachable, use a generated fallback.
+            let tz_pg = match ctx.config.tensorzero_pg_url.as_deref() {
+                Some(pg) => pg,
+                None => {
+                    warn!(id = %ctx.issue.id, "TZ PG URL not configured — skipping episode feedback");
+                    // Jump past the feedback block
+                    ""
+                }
+            };
+            if !tz_pg.is_empty() {
+                let session_start = ctx.process_start.elapsed().as_secs_f64();
+                let start_timestamp = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_secs_f64()
+                    - session_start;
+                let episode_ids =
+                    crate::tensorzero::resolve_episode_ids(tz_pg, start_timestamp).await;
+
+                if episode_ids.is_empty() {
+                    let fallback_id = crate::tensorzero::generate_episode_id(
+                        &ctx.issue.id,
+                        ctx.session.session_id(),
+                    );
+                    warn!(
+                        id = %ctx.issue.id,
+                        fallback_id = %fallback_id,
+                        "No TZ episode IDs resolved — using generated UUIDv7 fallback"
+                    );
                     crate::tensorzero::post_episode_feedback(
                         tz_url,
-                        ep_id,
+                        &fallback_id,
                         ctx.success,
                         iterations,
                         wall_secs,
-                        Some(tags.clone()),
+                        Some(tags),
                     )
                     .await;
+                } else {
+                    info!(
+                        count = episode_ids.len(),
+                        success = ctx.success,
+                        "TZ episode feedback: posting to {} resolved episodes",
+                        episode_ids.len()
+                    );
+                    for ep_id in &episode_ids {
+                        crate::tensorzero::post_episode_feedback(
+                            tz_url,
+                            ep_id,
+                            ctx.success,
+                            iterations,
+                            wall_secs,
+                            Some(tags.clone()),
+                        )
+                        .await;
+                    }
                 }
             }
         }
