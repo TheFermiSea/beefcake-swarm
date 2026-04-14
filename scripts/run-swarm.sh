@@ -6,9 +6,9 @@ export RUST_LOG="${RUST_LOG:-info}"
 # BD_ACTOR identifies this orchestrator instance for `bd mail` messaging.
 # Defaults to hostname-based identity; override for multi-instance setups.
 export BD_ACTOR="${BD_ACTOR:-swarm-$(hostname -s 2>/dev/null || echo worker)}"
-# Scout/Fast tier: GLM-4.7-Flash on vasp-03 (30B/3B MoE, SOTA tool-calling, ~50 tok/s, 32K context)
-export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-03:8081/v1}"
-export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-OmniCoder-9B}"
+# Scout/Fast tier: rerouted to vasp-01 (Qwen3.5-27B). vasp-03 freed for other tasks.
+export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-01:8081/v1}"
+export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3.5-27B}"
 # Coder tier: Qwen3.5-27B on vasp-01 (dense, GPU-resident, ~27 tok/s, 32K context)
 export SWARM_CODER_URL="${SWARM_CODER_URL:-http://vasp-01:8081/v1}"
 export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-27B}"

@@ -262,13 +262,15 @@ json_mode = "strict"
 
 # --- Scout/fast tier on vasp-03 (GLM-4.7-Flash, SOTA tool-calling) ---
 
+# Rerouted from vasp-03 (GLM-4.7-Flash) to vasp-01 (Qwen3.5-27B).
+# vasp-03 freed for other computational tasks (2026-04-14).
 [models.qwen_fast]
-routing = ["vasp03"]
+routing = ["vasp01_fast"]
 
-[models.qwen_fast.providers.vasp03]
+[models.qwen_fast.providers.vasp01_fast]
 type = "openai"
-model_name = "GLM-4.7-Flash"
-api_base = "http://10.0.0.22:8081/v1"
+model_name = "Qwen3.5-27B"
+api_base = "http://10.0.0.20:8081/v1"
 api_key_location = "none"
 
 # --- Coder tier on vasp-01 (Qwen3.5-27B dense — current champion) ---

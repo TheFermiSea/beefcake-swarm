@@ -656,9 +656,9 @@ impl Default for SwarmConfig {
                 tz_base.as_deref(),
                 LocalEndpointConfig {
                     url_var: "SWARM_FAST_URL",
-                    default_url: "http://vasp-03:8081/v1",
+                    default_url: "http://vasp-01:8081/v1",
                     model_var: "SWARM_FAST_MODEL",
-                    default_model: "OmniCoder-9B",
+                    default_model: "Qwen3.5-27B",
                     tier: Tier::Fast,
                     api_key_var: "SWARM_FAST_API_KEY",
                     tensorzero_model: "tensorzero::function_name::worker_code_edit",
