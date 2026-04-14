@@ -760,6 +760,12 @@ if [[ -n "$_old_logs" ]]; then
   log "  [log-rotation] Deleted $_count old run logs (keeping newest 50)"
 fi
 
+# Ensure TensorZero gateway is running for experiment tracking and feedback.
+# Uses standalone container to avoid Docker host-network stale-endpoint bug.
+if [[ -x "$REPO_ROOT/scripts/ensure-tensorzero.sh" ]]; then
+  "$REPO_ROOT/scripts/ensure-tensorzero.sh" 2>&1 | sed 's/^/  /' || true
+fi
+
 # Clean stale build artifacts on ai-proxy that accumulate from local-mode runs.
 # In SLURM mode, builds happen on compute nodes — ai-proxy doesn't need these.
 if [[ "$DISPATCH" == "slurm" ]]; then
