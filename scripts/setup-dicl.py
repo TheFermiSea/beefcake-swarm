@@ -140,14 +140,24 @@ async def setup_dicl(args: argparse.Namespace) -> None:
 
         added = 0
         skipped = 0
-        for inf_id in inference_ids:
+
+        async def _add_single(inf_id: str) -> tuple[bool, Exception | None, str]:
             try:
                 await t0.add_datapoint_to_dataset(
                     dataset_name=dataset.name,
                     inference_id=inf_id,
                 )
-                added += 1
+                return True, None, inf_id
             except Exception as e:
+                return False, e, inf_id
+
+        tasks = [_add_single(inf_id) for inf_id in inference_ids]
+        results = await asyncio.gather(*tasks)
+
+        for success, e, inf_id in results:
+            if success:
+                added += 1
+            else:
                 skipped += 1
                 if skipped <= 5:
                     log(f"  Skipping inference {inf_id}: {e}")
