@@ -1207,11 +1207,41 @@ impl ClientSet {
             });
         }
 
-        // When TZ is configured, route ALL local inference through TZ's OpenAI
-        // endpoint so every call is logged with function/variant for A/B testing.
-        // Without this, only cloud manager calls go through TZ and local model
-        // experiments are invisible.
-        let (local, coder, reasoning) = if let Some(ref tz_url) = config.tensorzero_url {
+        // When TZ is configured AND reachable, route local inference through TZ's
+        // OpenAI endpoint so every call is logged with function/variant for A/B testing.
+        // If TZ is configured but unreachable, fall back to direct endpoints.
+        let tz_reachable = if let Some(ref tz_url) = config.tensorzero_url {
+            // Quick TCP probe to check if TZ gateway is listening, without reqwest::blocking.
+            // Parse host:port from URL like "http://localhost:3000".
+            let reachable = tz_url
+                .strip_prefix("http://")
+                .or_else(|| tz_url.strip_prefix("https://"))
+                .and_then(|rest| rest.split('/').next())
+                .map(|authority| {
+                    // Ensure host:port format (add default port 80 if missing)
+                    let addr = if authority.contains(':') {
+                        authority.to_string()
+                    } else {
+                        format!("{authority}:80")
+                    };
+                    std::net::TcpStream::connect_timeout(
+                        &addr.parse().unwrap_or_else(|_| {
+                            std::net::SocketAddr::from(([127, 0, 0, 1], 3000))
+                        }),
+                        std::time::Duration::from_secs(2),
+                    )
+                    .is_ok()
+                })
+                .unwrap_or(false);
+            if !reachable {
+                tracing::warn!(url = %tz_url, "TensorZero gateway unreachable — routing local clients directly to inference endpoints");
+            }
+            reachable
+        } else {
+            false
+        };
+        let (local, coder, reasoning) = if tz_reachable {
+            let tz_url = config.tensorzero_url.as_ref().unwrap();
             let tz_base = format!("{tz_url}/openai/v1");
             tracing::info!(url = %tz_url, "Routing ALL local clients through TensorZero");
             let tz_local = build_oai_client("not-needed", &tz_base, local_http.clone(), None)
@@ -1270,13 +1300,13 @@ impl ClientSet {
             .transpose()
             .context("Failed to build cloud client (CLIAPIProxy)")?;
 
-        // Build a TZ gateway client when SWARM_TENSORZERO_URL is set and a cloud
-        // endpoint is configured. TZ handles auth to CLIAPIProxy internally via
+        // Build a TZ gateway client when TZ is reachable and a cloud endpoint
+        // is configured. TZ handles auth to CLIAPIProxy internally via
         // the SWARM_CLOUD_API_KEY env var in tensorzero.toml — no x-api-key needed here.
         let cloud_tz = config
             .tensorzero_url
             .as_ref()
-            .filter(|_| config.cloud_endpoint.is_some())
+            .filter(|_| config.cloud_endpoint.is_some() && tz_reachable)
             .map(|tz_url| {
                 let tz_http = http_client_with_timeout(cloud_timeout)?;
                 tracing::info!(url = %tz_url, "Routing primary cloud client through TensorZero");
