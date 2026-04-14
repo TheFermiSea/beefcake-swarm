@@ -397,7 +397,7 @@ pub async fn generate_candidates(
                     max_tool_calls: Some(dynamic_turns * 3),
                     deadline: Some(Instant::now() + Duration::from_secs(timeout_secs)),
                     max_turns_without_write: Some(write_deadline),
-                    search_unlock_turn: Some(3),
+                    search_unlock_turn: Some(1),
                     ..Default::default()
                 },
             );
@@ -1114,7 +1114,7 @@ async fn run_subtask_worker(
         max_tool_calls: Some(dynamic_turns * 3),
         deadline: Some(Instant::now() + Duration::from_secs(timeout_secs)),
         max_turns_without_write: Some(write_deadline),
-        search_unlock_turn: Some(3),
+        search_unlock_turn: Some(1),
         ..Default::default()
     });
 

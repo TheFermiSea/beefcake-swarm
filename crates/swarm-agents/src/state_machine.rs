@@ -93,6 +93,9 @@ fn is_legal_transition(from: OrchestratorState, to: OrchestratorState) -> bool {
         (SelectingIssue, PreparingWorktree)
             | (PreparingWorktree, Planning)
             | (Planning, Implementing)
+            // auto-fix can produce a verifier-passing result during Planning
+            // (e.g. cargo clippy --fix resolves the issue before the LLM writes)
+            | (Planning, Merging)
             | (Implementing, Verifying)
             // Retry loop: any post-implementation state can return to Planning
             // for context rebuild + re-implementation. The iteration loop is:
