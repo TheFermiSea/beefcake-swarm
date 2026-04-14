@@ -569,9 +569,15 @@ fn extract_validation_command(description: &str) -> Option<String> {
 /// Run a validation command in the worktree.
 fn run_validation_command(wt_path: &Path, cmd: &str) -> anyhow::Result<bool> {
     use std::process::Command;
-    let status = Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
+
+    let parts = shlex::split(cmd)
+        .ok_or_else(|| anyhow::anyhow!("invalid quoting in validation command"))?;
+    if parts.is_empty() {
+        return Err(anyhow::anyhow!("empty validation command"));
+    }
+
+    let status = Command::new(&parts[0])
+        .args(&parts[1..])
         .current_dir(wt_path)
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
