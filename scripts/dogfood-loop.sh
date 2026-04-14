@@ -747,9 +747,24 @@ else
   log "  Issues:   auto (from bdh ready)"
 fi
 
-# Startup cleanup: remove stale worktrees and temp build artifacts.
+# Startup cleanup: remove stale worktrees, temp build artifacts, and old logs.
 # This is unconditional (not throttled) because it only runs once at startup.
 prune_stale_worktrees
+
+# Rotate dogfood logs: keep last 50, delete older ones to prevent disk exhaustion.
+# Each run generates 200-600KB of logs; 50 runs ≈ 25MB max.
+_old_logs=$(find "$LOG_DIR" -name "run-*.log" -type f | sort | head -n -50)
+if [[ -n "$_old_logs" ]]; then
+  _count=$(echo "$_old_logs" | wc -l)
+  echo "$_old_logs" | xargs rm -f
+  log "  [log-rotation] Deleted $_count old run logs (keeping newest 50)"
+fi
+
+# Ensure TensorZero gateway is running for experiment tracking and feedback.
+# Uses standalone container to avoid Docker host-network stale-endpoint bug.
+if [[ -x "$REPO_ROOT/scripts/ensure-tensorzero.sh" ]]; then
+  "$REPO_ROOT/scripts/ensure-tensorzero.sh" 2>&1 | sed 's/^/  /' || true
+fi
 
 # Clean stale build artifacts on ai-proxy that accumulate from local-mode runs.
 # In SLURM mode, builds happen on compute nodes — ai-proxy doesn't need these.

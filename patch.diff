@@ -1,0 +1,33 @@
+--- crates/swarm-agents/src/tools/workpad_tool.rs
++++ crates/swarm-agents/src/tools/workpad_tool.rs
+@@ -225,6 +225,30 @@
+ mod tests {
+     use super::*;
+
++    #[test]
++    fn init_workpad_creates_empty_file() {
++        let dir = tempfile::tempdir().unwrap();
++        let workpad = dir.path().join(WORKPAD_FILENAME);
++
++        assert!(!workpad.exists());
++        init_workpad(dir.path()).unwrap();
++
++        assert!(workpad.exists());
++        assert_eq!(std::fs::read_to_string(&workpad).unwrap(), "");
++    }
++
++    #[test]
++    fn init_workpad_truncates_existing_file() {
++        let dir = tempfile::tempdir().unwrap();
++        let workpad = dir.path().join(WORKPAD_FILENAME);
++
++        std::fs::write(&workpad, "some content").unwrap();
++        assert_eq!(std::fs::metadata(&workpad).unwrap().len(), 12);
++
++        init_workpad(dir.path()).unwrap();
++        assert_eq!(std::fs::metadata(&workpad).unwrap().len(), 0);
++    }
++
+     #[test]
+     fn read_workpad_returns_empty_when_file_missing() {
+         let dir = tempfile::tempdir().unwrap();

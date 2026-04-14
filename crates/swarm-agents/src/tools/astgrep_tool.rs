@@ -84,10 +84,10 @@ impl Tool for AstGrepTool {
                     .await?
             }
             (None, Some(pattern)) => {
-                // Inline pattern mode: `sg run --pattern <pat> [--language <lang>] .`
+                // Inline pattern mode: `sg run --pattern <pat> [--lang <lang>] .`
                 let mut cmd_args = vec!["run", "--pattern", pattern.as_str()];
                 if let Some(ref l) = args.language {
-                    cmd_args.push("--language");
+                    cmd_args.push("--lang");
                     cmd_args.push(l.as_str());
                 }
                 // Search current directory (worktree root)
