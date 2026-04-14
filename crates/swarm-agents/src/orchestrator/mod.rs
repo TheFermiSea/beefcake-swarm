@@ -1836,7 +1836,7 @@ async fn process_issue_core(
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(config.max_worker_tool_calls),
                             max_turns_without_write: Some(seq_write_deadline),
-                            search_unlock_turn: Some(3),
+                            search_unlock_turn: Some(1),
                             governance_tier,
                             ..Default::default()
                         });
@@ -1878,7 +1878,7 @@ async fn process_issue_core(
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(config.max_worker_tool_calls),
                             max_turns_without_write: Some(seq_write_deadline),
-                            search_unlock_turn: Some(3),
+                            search_unlock_turn: Some(1),
                             governance_tier,
                             ..Default::default()
                         });
@@ -1917,8 +1917,8 @@ async fn process_issue_core(
                             agent_name: "GLM-FastFixer".into(),
                             deadline: Some(Instant::now() + worker_timeout),
                             max_tool_calls: Some(config.max_worker_tool_calls),
-                            max_turns_without_write: Some(5),
-                            search_unlock_turn: Some(3),
+                            max_turns_without_write: Some(config.max_turns_without_write),
+                            search_unlock_turn: Some(1),
                             governance_tier,
                             ..Default::default()
                         });
