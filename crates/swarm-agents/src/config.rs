@@ -819,7 +819,9 @@ impl SwarmConfig {
         // Explicit env var (e.g. SWARM_FAST_URL) takes priority over TZ routing.
         // This ensures direct endpoints work even when SWARM_TENSORZERO_URL is set
         // but the TZ gateway is down.
-        let explicit_url = std::env::var(config.url_var).ok().filter(|s| !s.trim().is_empty());
+        let explicit_url = std::env::var(config.url_var)
+            .ok()
+            .filter(|s| !s.trim().is_empty());
         let use_tz = tz_base.is_some() && explicit_url.is_none();
         Endpoint {
             url: explicit_url
@@ -1230,9 +1232,9 @@ impl ClientSet {
                         format!("{authority}:80")
                     };
                     std::net::TcpStream::connect_timeout(
-                        &addr.parse().unwrap_or_else(|_| {
-                            std::net::SocketAddr::from(([127, 0, 0, 1], 3000))
-                        }),
+                        &addr
+                            .parse()
+                            .unwrap_or_else(|_| std::net::SocketAddr::from(([127, 0, 0, 1], 3000))),
                         std::time::Duration::from_secs(2),
                     )
                     .is_ok()
