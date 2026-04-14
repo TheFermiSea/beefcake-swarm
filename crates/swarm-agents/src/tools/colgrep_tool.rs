@@ -34,6 +34,53 @@ impl ColGrepTool {
             working_dir: working_dir.to_path_buf(),
         }
     }
+
+    fn parse_output(&self, output: &str) -> String {
+        // Basic validation that output is valid JSON (if not, it might be an error message we should return)
+        if !output.trim().starts_with('[') {
+            return output.to_string();
+        }
+
+        let Ok(results) = serde_json::from_str::<Vec<serde_json::Value>>(output) else {
+            return output.to_string();
+        };
+
+        if results.is_empty() {
+            return "No semantic matches found".to_string();
+        }
+
+        let mut formatted = Vec::new();
+        for res in results {
+            let file_path = res
+                .pointer("/unit/file")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let content = res
+                .pointer("/unit/content")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let score = res.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+
+            if !file_path.is_empty() {
+                // Ensure we don't return files outside the sandbox
+                if sandbox_check(&self.working_dir, file_path).is_err() {
+                    continue;
+                }
+            }
+
+            formatted.push(format!(
+                "--- MATCH (score: {score:.3}) ---
+File: {file_path}
+{content}
+"
+            ));
+        }
+
+        formatted.join(
+            "
+",
+        )
+    }
 }
 
 impl Tool for ColGrepTool {
@@ -100,43 +147,114 @@ impl Tool for ColGrepTool {
         )
         .await?;
 
-        // Basic validation that output is valid JSON (if not, it might be an error message we should return)
-        if !output.trim().starts_with('[') {
-            return Ok(output);
-        }
+        Ok(self.parse_output(&output))
+    }
+}
 
-        let Ok(results) = serde_json::from_str::<Vec<serde_json::Value>>(&output) else {
-            return Ok(output);
-        };
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-        if results.is_empty() {
-            return Ok("No semantic matches found".to_string());
-        }
+    #[tokio::test]
+    async fn test_definition() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let tool = ColGrepTool::new(&repo_root);
+        let def = tool.definition("".to_string()).await;
 
-        let mut formatted = Vec::new();
-        for res in results {
-            let file_path = res
-                .pointer("/unit/file")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let content = res
-                .pointer("/unit/content")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            let score = res.get("score").and_then(|v| v.as_f64()).unwrap_or(0.0);
+        assert_eq!(def.name, "colgrep");
+        assert!(def.description.contains("Semantic code search"));
+    }
 
-            if !file_path.is_empty() {
-                // Ensure we don't return files outside the sandbox
-                if sandbox_check(&self.working_dir, file_path).is_err() {
-                    continue;
+    #[test]
+    fn test_parse_output_valid_matches() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let tool = ColGrepTool::new(&repo_root);
+
+        // Mock a valid JSON response from colgrep
+        let json_output = r#"[
+            {
+                "score": 0.95,
+                "unit": {
+                    "file": "Cargo.toml",
+                    "content": "some text"
                 }
             }
+        ]"#;
 
-            formatted.push(format!(
-                "--- MATCH (score: {score:.3}) ---\nFile: {file_path}\n{content}\n"
-            ));
-        }
+        let parsed = tool.parse_output(json_output);
+        assert!(parsed.contains("--- MATCH (score: 0.950) ---"));
+        assert!(parsed.contains("File: Cargo.toml"));
+        assert!(parsed.contains("some text"));
+    }
 
-        Ok(formatted.join("\n"))
+    #[test]
+    fn test_parse_output_no_matches() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let tool = ColGrepTool::new(&repo_root);
+
+        let json_output = "[]";
+        let parsed = tool.parse_output(json_output);
+
+        assert_eq!(parsed, "No semantic matches found");
+    }
+
+    #[test]
+    fn test_parse_output_invalid_json() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let tool = ColGrepTool::new(&repo_root);
+
+        let text_output = "Error: colgrep not found";
+        let parsed = tool.parse_output(text_output);
+
+        // Plain text error should be returned as-is
+        assert_eq!(parsed, "Error: colgrep not found");
+    }
+
+    #[test]
+    fn test_parse_output_escapes_sandbox() {
+        let repo_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .parent()
+            .unwrap()
+            .to_path_buf();
+        let tool = ColGrepTool::new(&repo_root);
+
+        // Mock a match trying to access a file outside the workspace
+        let json_output = r#"[
+            {
+                "score": 0.88,
+                "unit": {
+                    "file": "../../../../../etc/passwd",
+                    "content": "root:x:0:0"
+                }
+            }
+        ]"#;
+
+        let parsed = tool.parse_output(json_output);
+
+        // The malicious file should be skipped, resulting in no formatted output
+        // (Since the array had 1 element which was skipped, join("\n") is empty)
+        assert_eq!(parsed, "");
     }
 }
