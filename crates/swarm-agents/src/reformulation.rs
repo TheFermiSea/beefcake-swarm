@@ -299,10 +299,22 @@ pub fn classify_failure(input: &FailureReviewInput) -> FailureClassification {
         return FailureClassification::ImplementationThrash { thrash_file };
     }
 
-    // Rule 5: Decomposition needed — many files changed with regressions
-    if input.files_changed.len() > 8 {
+    // Rule 5: Decomposition needed — many files changed with regressions.
+    // Exclude infrastructure files (.beads/, .swarm/, .git/) from the count —
+    // these are present in every worktree and inflate the file count.
+    let code_files: Vec<String> = input
+        .files_changed
+        .iter()
+        .filter(|f| {
+            !f.starts_with(".beads")
+                && !f.starts_with(".swarm")
+                && !f.starts_with(".git")
+        })
+        .cloned()
+        .collect();
+    if code_files.len() > 8 {
         return FailureClassification::DecompositionRequired {
-            affected_files: input.files_changed.clone(),
+            affected_files: code_files,
         };
     }
 
