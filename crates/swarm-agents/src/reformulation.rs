@@ -305,11 +305,7 @@ pub fn classify_failure(input: &FailureReviewInput) -> FailureClassification {
     let code_files: Vec<String> = input
         .files_changed
         .iter()
-        .filter(|f| {
-            !f.starts_with(".beads")
-                && !f.starts_with(".swarm")
-                && !f.starts_with(".git")
-        })
+        .filter(|f| !f.starts_with(".beads") && !f.starts_with(".swarm") && !f.starts_with(".git"))
         .cloned()
         .collect();
     if code_files.len() > 8 {
