@@ -128,4 +128,59 @@ mod tests {
             "output must mention workspace_root, got: {result}"
         );
     }
+
+    #[tokio::test]
+    async fn test_cargo_metadata_failure_on_non_workspace() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let tool = CargoMetadataTool::new(temp_dir.path());
+        let result = tool.call(CargoMetadataInput {}).await;
+
+        assert!(result.is_err());
+        if let Err(ToolError::Parse(msg)) = result {
+            assert!(msg.contains("failed to parse cargo metadata JSON"));
+            assert!(msg.contains("could not find `Cargo.toml`"));
+        } else {
+            panic!("Expected Parse error, got {:?}", result);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_cargo_metadata_valid_workspace() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir_path = temp_dir.path();
+
+        std::fs::write(
+            dir_path.join("Cargo.toml"),
+            r#"[package]
+name = "dummy_pkg"
+version = "0.1.0"
+edition = "2021"
+"#,
+        )
+        .unwrap();
+
+        std::fs::create_dir(dir_path.join("src")).unwrap();
+        std::fs::write(dir_path.join("src/main.rs"), "fn main() {}").unwrap();
+
+        let tool = CargoMetadataTool::new(dir_path);
+        let result = tool
+            .call(CargoMetadataInput {})
+            .await
+            .expect("cargo_metadata should succeed");
+
+        assert!(result.contains("workspace_root"));
+        assert!(result.contains("packages:\n"));
+        assert!(result.contains("dummy_pkg (Cargo.toml)"));
+        assert!(result.contains("bin: dummy_pkg"));
+    }
+
+    #[tokio::test]
+    async fn test_cargo_metadata_invalid_manifest() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        std::fs::write(temp_dir.path().join("Cargo.toml"), "invalid toml syntax {").unwrap();
+
+        let tool = CargoMetadataTool::new(temp_dir.path());
+        let result = tool.call(CargoMetadataInput {}).await;
+        assert!(result.is_err(), "should fail on invalid manifest");
+    }
 }
