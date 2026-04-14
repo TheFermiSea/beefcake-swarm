@@ -77,23 +77,85 @@ def load_telemetry(telemetry_path: Path, issue_filter: set = None) -> dict:
     return sessions
 
 
-def score_batch(results: list) -> dict:
+
+def parse_log(log_path_str: str, summary_dir: Path) -> tuple[bool, int]:
+    """Parse log file to determine success and tool call count.
+
+    Returns (success: bool, tool_count: int)
+    """
+    if not log_path_str:
+        return False, 0
+
+    candidates = []
+    p = Path(log_path_str)
+
+    # Check absolute, relative to summary dir, and relative to repo root
+    if p.is_absolute():
+        candidates.append(p)
+    else:
+        candidates.append(summary_dir / p)
+
+    if "logs/" in log_path_str:
+        repo_root = Path(__file__).resolve().parent.parent
+        # The log paths in dogfood-summary.jsonl often have the user's home dir hardcoded,
+        # e.g., "/home/brian/code/beefcake-swarm/logs/..."
+        # Try to extract relative from "logs/" and prepend repo root
+        try:
+            rel_log_path = log_path_str[log_path_str.index("logs/"):]
+            candidates.append(repo_root / rel_log_path)
+        except ValueError:
+            pass
+
+        # also if it's relative
+        if not p.is_absolute():
+            candidates.append(repo_root / log_path_str)
+
+    valid_path = None
+    for cand in candidates:
+        if cand.exists() and cand.is_file():
+            valid_path = cand
+            break
+
+    if not valid_path:
+        return False, 0
+
+    success = False
+    tools = 0
+    try:
+        with open(valid_path, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if "Issue resolved" in line:
+                    success = True
+                if "Tool call completed" in line:
+                    tools += 1
+    except Exception:
+        pass
+
+    return success, tools
+
+
+def score_batch(results: list, summary_dir: Path) -> dict:
     """Compute optimization score for a batch of results."""
     if not results:
         return {"score": 0, "success_rate": 0, "avg_time": 0, "avg_tools": 0, "n": 0}
 
     n = len(results)
 
-    # Count resolved (exit_code doesn't indicate success — check the log)
-    # For now, use elapsed_s > 0 as a proxy (crashed runs have elapsed=0)
-    # TODO: parse logs for "Issue resolved" count
-    resolved = sum(1 for r in results if r.get("elapsed_s", 0) > 100)  # >100s = actually ran
+    resolved = 0
+    total_tools = 0
+
+    for r in results:
+        log_path = r.get("log", "")
+        success, tools = parse_log(log_path, summary_dir)
+        if success:
+            resolved += 1
+        total_tools += tools
 
     success_rate = resolved / n if n > 0 else 0
     avg_time = sum(r.get("elapsed_s", 0) for r in results) / n
-    avg_tools = 0  # Not in summary — would need log parsing
+    avg_tools = total_tools / n if n > 0 else 0
 
-    score = success_rate * 100 - avg_time / 60
+    score = success_rate * 100 - avg_time / 60 - avg_tools / 10
 
     return {
         "score": round(score, 2),
@@ -185,7 +247,7 @@ def main():
         print("No matching results found.", file=sys.stderr)
         sys.exit(1)
 
-    scores = score_batch(results)
+    scores = score_batch(results, summary_path.parent)
 
     if args.json:
         print(json.dumps(scores))
@@ -198,7 +260,8 @@ def main():
         # Per-issue breakdown
         print(f"\nPer-issue:")
         for r in results:
-            status = "OK" if r.get("elapsed_s", 0) > 100 else "FAIL"
+            success, _ = parse_log(r.get("log", ""), summary_path.parent)
+            status = "OK" if success else "FAIL"
             print(f"  {r['issue']}: {status} ({r.get('elapsed_s', 0)}s)")
 
     # Post feedback to TensorZero if URL is provided
