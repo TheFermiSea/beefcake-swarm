@@ -345,8 +345,13 @@ prune_stale_worktrees() {
     done
   done
 
-  # Tell git to forget about the removed worktree directories
-  git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+  # Tell git to forget about the removed worktree directories.
+  # SLURM safety: only prune when running locally — in SLURM dispatch mode,
+  # worktrees are in node-local /tmp and pruning from ai-proxy would destroy
+  # other nodes' active worktree refs through the NFS-shared .git directory.
+  if [[ "${DISPATCH:-local}" != "slurm" ]]; then
+    git -C "$REPO_ROOT" worktree prune 2>/dev/null || true
+  fi
 
   # Delete orphaned swarm/* branches (safe now that worktrees are gone).
   # Uses -D (force) because the branch may not be merged — the swarm already

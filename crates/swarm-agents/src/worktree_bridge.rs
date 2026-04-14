@@ -101,6 +101,34 @@ fn tracked_changes(repo_root: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Returns true if `git worktree prune` is safe to run.
+///
+/// When worktrees live in node-local directories (e.g. `/tmp` on SLURM nodes)
+/// but the repo is NFS-shared, `git worktree prune` on one node will destroy
+/// worktree refs for other nodes — their `/tmp` paths don't exist locally, so
+/// git considers them stale. This check prevents that cross-node destruction.
+fn safe_to_prune(base_dir: &Path) -> bool {
+    let base_str = base_dir.to_string_lossy();
+    let is_node_local = base_str.starts_with("/tmp/");
+    let is_slurm = std::env::var("SLURM_JOB_ID").is_ok();
+    // Only dangerous when worktrees are in node-local /tmp AND we're on SLURM
+    !(is_node_local && is_slurm)
+}
+
+/// Run `git worktree prune` only when safe (not on SLURM with node-local worktrees).
+fn guarded_prune(base_dir: &Path, repo_root: &Path) {
+    if safe_to_prune(base_dir) {
+        let _ = Command::new("git")
+            .args(["worktree", "prune"])
+            .current_dir(repo_root)
+            .output();
+    } else {
+        tracing::debug!(
+            "Skipping git worktree prune (node-local worktrees on SLURM — would destroy other nodes' refs)"
+        );
+    }
+}
+
 /// Manages git worktrees for swarm agent tasks.
 pub struct WorktreeBridge {
     base_dir: PathBuf,
@@ -272,11 +300,8 @@ impl WorktreeBridge {
         }
 
         // Clean up stale branches from previous failed runs
-        // 1. Prune worktree bookkeeping
-        let _ = Command::new("git")
-            .args(["worktree", "prune"])
-            .current_dir(&self.repo_root)
-            .output();
+        // 1. Prune worktree bookkeeping (guarded for SLURM safety)
+        guarded_prune(&self.base_dir, &self.repo_root);
 
         // 2. Check if branch already exists
         let check_output = Command::new("git")
@@ -915,10 +940,7 @@ impl WorktreeBridge {
 
         if !wt_path.exists() {
             // Already cleaned — just prune bookkeeping
-            let _ = Command::new("git")
-                .args(["worktree", "prune"])
-                .current_dir(&self.repo_root)
-                .output();
+            guarded_prune(&self.base_dir, &self.repo_root);
             return Ok(());
         }
 
@@ -995,11 +1017,8 @@ impl WorktreeBridge {
             }
         }
 
-        // Step 5: Prune git bookkeeping
-        let _ = Command::new("git")
-            .args(["worktree", "prune"])
-            .current_dir(&self.repo_root)
-            .output();
+        // Step 5: Prune git bookkeeping (guarded for SLURM safety)
+        guarded_prune(&self.base_dir, &self.repo_root);
 
         // Step 6: Delete branch only if it has no unpushed commits
         if unpushed_count == 0 {
@@ -1113,11 +1132,8 @@ impl WorktreeBridge {
             }
         }
 
-        // Prune worktree bookkeeping for removed directories
-        let _ = Command::new("git")
-            .args(["worktree", "prune"])
-            .current_dir(&self.repo_root)
-            .output();
+        // Prune worktree bookkeeping for removed directories (guarded for SLURM safety)
+        guarded_prune(&self.base_dir, &self.repo_root);
 
         // Force-delete the branch (capital -D since it's unmerged)
         let del = Command::new("git")
@@ -1153,11 +1169,8 @@ impl WorktreeBridge {
     ///
     /// Returns the list of branches that were cleaned up.
     pub fn cleanup_stale(&self) -> Result<Vec<String>> {
-        // 1. Prune worktree bookkeeping
-        let _ = Command::new("git")
-            .args(["worktree", "prune"])
-            .current_dir(&self.repo_root)
-            .output();
+        // 1. Prune worktree bookkeeping (guarded for SLURM safety)
+        guarded_prune(&self.base_dir, &self.repo_root);
 
         // 2. Get all local branches matching swarm/*
         let branch_output = Command::new("git")

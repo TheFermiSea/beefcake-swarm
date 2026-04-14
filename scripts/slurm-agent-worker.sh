@@ -37,6 +37,10 @@ ISSUE_ID="${ISSUE_ID:?ISSUE_ID must be set}"
 REPO_ROOT="${REPO_ROOT:-/home/brian/code/beefcake-swarm}"
 NODE_NAME="$(hostname -s)"
 
+# Ensure HOME points to brian's home, not /root (which leaks from systemd/SLURM).
+# Without this, cargo, bd, and file operations fail with Permission denied.
+export HOME="/home/brian"
+
 # Decode objective
 OBJECTIVE="See beads issue ${ISSUE_ID} for full spec"
 if [[ -n "${ISSUE_OBJECTIVE_B64:-}" ]]; then
@@ -81,10 +85,11 @@ cleanup() {
         fi
     fi
 
-    # Clean up worktree (created by swarm-agents)
+    # Clean up THIS node's worktree only (created by swarm-agents).
+    # Do NOT run `git worktree prune` — it would destroy other nodes'
+    # worktree refs through the NFS-shared .git directory.
     cd "$REPO_ROOT" 2>/dev/null || true
     git worktree remove "$_wt_dir" --force 2>/dev/null || true
-    git worktree prune 2>/dev/null || true
 
     echo "[$(date)] Cleanup complete"
 }
@@ -185,10 +190,11 @@ mkdir -p "$SWARM_WORKTREE_DIR"
 cd "$REPO_ROOT"
 
 # Clean up any stale worktree from a previous run of this issue
+# Clean up THIS issue's worktree only — do NOT run `git worktree prune`
+# because it would destroy other SLURM nodes' worktree refs through NFS.
 git worktree remove "${SWARM_WORKTREE_DIR}/${ISSUE_ID}" --force 2>/dev/null || true
 rm -rf "${SWARM_WORKTREE_DIR}/${ISSUE_ID}" 2>/dev/null || true
 git branch -D "swarm/${ISSUE_ID}" 2>/dev/null || true
-git worktree prune 2>/dev/null || true
 
 # Ensure we're up to date
 git fetch origin main --quiet 2>/dev/null || true
@@ -202,6 +208,7 @@ export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6}"
 
 # TensorZero on ai-proxy for experiment tracking
 export SWARM_TENSORZERO_URL="${SWARM_TENSORZERO_URL:-http://10.0.0.100:3000}"
+export SWARM_TENSORZERO_PG_URL="${SWARM_TENSORZERO_PG_URL:-postgres://tensorzero:tensorzero@10.0.0.100:5433/tensorzero}"
 
 # ── Run the agent ──
 # Use prebuilt release binary if available, otherwise fall back to cargo run.

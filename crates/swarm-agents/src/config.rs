@@ -833,7 +833,19 @@ impl SwarmConfig {
     }
 
     fn default_tensorzero_pg_url(tensorzero_url: Option<&String>) -> Option<String> {
-        tensorzero_url.map(|_| "postgresql://localhost:5433/tensorzero".into())
+        tensorzero_url.map(|tz_url| {
+            // Derive PG host from TZ gateway URL — they're co-located (same docker-compose).
+            // Avoids hardcoding `localhost` which breaks on SLURM nodes where TZ is remote.
+            // Parse host from "http://host:port/..." without pulling in the `url` crate.
+            let host = tz_url
+                .strip_prefix("http://")
+                .or_else(|| tz_url.strip_prefix("https://"))
+                .and_then(|rest| rest.split('/').next())
+                .and_then(|authority| authority.split(':').next())
+                .filter(|h| !h.is_empty())
+                .unwrap_or("localhost");
+            format!("postgres://tensorzero:tensorzero@{host}:5433/tensorzero")
+        })
     }
 
     /// Resolve the appropriate rig client for a given swarm role based on the active stack profile.
