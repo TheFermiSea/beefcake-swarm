@@ -145,13 +145,10 @@ SELECT
     MIN(ci.processing_time_ms)::float8 AS min_latency_ms,
     MAX(ci.processing_time_ms)::float8 AS max_latency_ms
 FROM tensorzero.chat_inferences ci
-JOIN (
-    SELECT DISTINCT episode_id
-    FROM tensorzero.boolean_metric_feedback
-    WHERE tags->>'repo_id' = $1
-) bmf ON ci.episode_id = bmf.episode_id
+JOIN tensorzero.boolean_metric_feedback bmf ON ci.episode_id = bmf.episode_id
 WHERE ci.created_at > NOW() - INTERVAL '7 days'
   AND ci.processing_time_ms IS NOT NULL
+  AND bmf.tags->>'repo_id' = $1
 GROUP BY ci.function_name, ci.variant_name
 HAVING COUNT(*) >= 3
 ORDER BY ci.function_name, call_count DESC
