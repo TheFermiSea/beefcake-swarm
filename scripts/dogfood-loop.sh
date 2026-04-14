@@ -299,7 +299,8 @@ prune_stale_worktrees() {
   [[ ${#wt_dirs[@]} -eq 0 ]] && return 0
 
   # Build set of issue IDs actively used by running swarm-agents processes.
-  # We match the --issue argument from /proc/<pid>/cmdline.
+  # In local mode: check /proc/<pid>/cmdline for local swarm-agents processes.
+  # In SLURM mode: check squeue for active SLURM jobs (processes run on compute nodes).
   local active_issues=()
   local pid cmdline issue_id
   for pid in $(pgrep -f 'swarm-agents' 2>/dev/null || true); do
@@ -308,6 +309,15 @@ prune_stale_worktrees() {
     issue_id=$(echo "$cmdline" | grep -oP '(?<=--issue )\S+' 2>/dev/null || true)
     [[ -n "$issue_id" ]] && active_issues+=("$issue_id")
   done
+  # Also check SLURM queue for active agent jobs (dispatch=slurm mode)
+  if command -v squeue &>/dev/null; then
+    local job_name
+    while IFS= read -r job_name; do
+      # Job names are "swarm-agent-<suffix>" where suffix is the issue ID tail
+      issue_id=$(echo "$job_name" | sed 's/swarm-agent-/beefcake-/' 2>/dev/null || true)
+      [[ -n "$issue_id" ]] && active_issues+=("$issue_id")
+    done < <(squeue -u "$(whoami)" --name='swarm-agent-*' --noheader -o '%j' 2>/dev/null || true)
+  fi
 
   local cleaned=0 skipped=0
   local wt_path dir_name in_use active_id
@@ -357,6 +367,22 @@ prune_stale_worktrees() {
     git -C "$REPO_ROOT" branch -D "$branch" 2>/dev/null || true
     branch_count=$((branch_count + 1))
   done < <(git -C "$REPO_ROOT" branch --list 'swarm/*' 2>/dev/null || true)
+
+  # In SLURM mode, also clean orphaned worktrees on compute nodes.
+  # The worker script's EXIT trap should handle this, but crashed jobs may leave debris.
+  if [[ "${DISPATCH:-local}" == "slurm" ]] && command -v ssh &>/dev/null; then
+    local node remote_cleaned=0
+    for node in $(echo "${SLURM_NODES:-vasp-01,vasp-02,vasp-03}" | tr ',' ' '); do
+      local remote_count
+      remote_count=$(ssh -o ConnectTimeout=5 -o BatchMode=yes "root@${node}" \
+        "for d in /tmp/beefcake-wt/beefcake-*/; do [ -d \"\$d\" ] && rm -rf \"\$d\" && echo 1; done 2>/dev/null" 2>/dev/null \
+        | wc -l || echo 0)
+      remote_cleaned=$((remote_cleaned + remote_count))
+    done
+    if [[ $remote_cleaned -gt 0 ]]; then
+      cleaned=$((cleaned + remote_cleaned))
+    fi
+  fi
 
   if [[ $cleaned -gt 0 || $branch_count -gt 0 ]]; then
     log "  [worktree-cleanup] Pruned $cleaned worktrees, $branch_count branches (skipped $skipped active)"
@@ -716,9 +742,25 @@ else
   log "  Issues:   auto (from bdh ready)"
 fi
 
-# Startup worktree cleanup: remove stale worktrees from previous sessions.
+# Startup cleanup: remove stale worktrees and temp build artifacts.
 # This is unconditional (not throttled) because it only runs once at startup.
 prune_stale_worktrees
+
+# Clean stale build artifacts on ai-proxy that accumulate from local-mode runs.
+# In SLURM mode, builds happen on compute nodes — ai-proxy doesn't need these.
+if [[ "$DISPATCH" == "slurm" ]]; then
+  local_freed=0
+  for stale_dir in /tmp/beefcake-shared-target /tmp/beefcake-sccache; do
+    if [[ -d "$stale_dir" ]]; then
+      du_before=$(du -sm "$stale_dir" 2>/dev/null | cut -f1)
+      rm -rf "$stale_dir"
+      local_freed=$((local_freed + ${du_before:-0}))
+    fi
+  done
+  # Also clean old rustc temp files
+  rm -rf /tmp/rustc* 2>/dev/null || true
+  [[ $local_freed -gt 0 ]] && log "  [disk-cleanup] Freed ${local_freed}MB of stale build artifacts on ai-proxy"
+fi
 
 # Verify toolchain
 if [[ "$DISPATCH" == "local" ]]; then
