@@ -141,15 +141,18 @@ async def setup_dicl(args: argparse.Namespace) -> None:
         added = 0
         skipped = 0
 
+        semaphore = asyncio.Semaphore(10)
+
         async def _add_single(inf_id: str) -> tuple[bool, Exception | None, str]:
-            try:
-                await t0.add_datapoint_to_dataset(
-                    dataset_name=dataset.name,
-                    inference_id=inf_id,
-                )
-                return True, None, inf_id
-            except Exception as e:
-                return False, e, inf_id
+            async with semaphore:
+                try:
+                    await t0.add_datapoint_to_dataset(
+                        dataset_name=dataset.name,
+                        inference_id=inf_id,
+                    )
+                    return True, None, inf_id
+                except Exception as e:
+                    return False, e, inf_id
 
         tasks = [_add_single(inf_id) for inf_id in inference_ids]
         results = await asyncio.gather(*tasks)
