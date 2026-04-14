@@ -553,11 +553,15 @@ model = "qwen_coder"
 type = "chat_completion"
 model = "devstral"
 
+# Static weights based on TZ performance data (2026-04-14 reset):
+# devstral_planner (40s avg) is 4x faster than qwen_planner (161s avg).
+# qwen_planner was at 77% of traffic under adaptive TS, but feedback was broken
+# (TZ 400s) so TS never learned devstral was better. Reset to static with
+# devstral-heavy weighting. qwen_fast_planner included for speed diversity.
+# Previous: adaptive TS → converged on qwen_planner due to poisoned feedback.
 [functions.task_planning.experimentation]
-type = "adaptive"
-candidate_variants = ["qwen_fast_planner", "qwen_planner", "devstral_planner"]
-metric = "task_resolved"
-update_period_s = 300
+type = "static"
+candidate_variants = { devstral_planner = 0.50, qwen_fast_planner = 0.30, qwen_planner = 0.20 }
 
 # --- Code Fixing: 4-variant adaptive experiment for error fixing ---
 [functions.code_fixing]
@@ -604,14 +608,15 @@ model = "strand_rust_14b"
 type = "chat_completion"
 model = "qwen_reasoning"
 
-# Adaptive — strong performers + strand/reasoning fixer in fallback.
-# gemma_31b_fixer removed (0% task_resolved, experiment concluded 2026-04-12).
+# Static weights based on TZ performance data (2026-04-14 reset):
+# qwen35_fixer (15s avg) is 10x faster than gemma_31b_fixer (149s avg, already removed).
+# Adaptive TS priors poisoned by infrastructure failures — reset to static with
+# known-good performers. sera_14b historically best (92.1% resolved, n=165).
+# Previous: adaptive TS with poisoned feedback → unreliable variant selection.
 [functions.code_fixing.experimentation]
-type = "adaptive"
-candidate_variants = ["omnicoder_fixer", "qwen35_fixer", "devstral_fixer", "sera_14b_fixer", "qwen_reasoning_fixer"]
+type = "static"
+candidate_variants = { sera_14b_fixer = 0.30, qwen35_fixer = 0.25, omnicoder_fixer = 0.20, devstral_fixer = 0.15, qwen_reasoning_fixer = 0.10 }
 fallback_variants = ["strand_rust_fixer"]
-metric = "task_resolved"
-update_period_s = 300
 
 # --- Adversarial Testing: red-team agent ---
 [functions.adversarial_test]
