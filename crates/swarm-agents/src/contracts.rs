@@ -514,8 +514,25 @@ mod tests {
 
     #[test]
     fn test_fail_closed_response() {
-        let resp = SpecialistResponse::fail_closed("garbage output".into());
+        let raw = "garbage output";
+        let resp = SpecialistResponse::fail_closed(raw.into());
         assert_eq!(resp.objective_status, ObjectiveStatus::Failed);
+        assert_eq!(resp.raw_response, raw);
+        assert!(resp.patch_plan.is_none());
+        assert!(resp.files_changed.is_empty());
+        assert_eq!(resp.risks.len(), 1);
+        assert_eq!(resp.risks[0].severity, RiskSeverity::High);
+        assert_eq!(
+            resp.risks[0].description,
+            "Specialist response failed schema validation"
+        );
+        assert_eq!(resp.risks[0].file, None);
+        assert_eq!(resp.required_followups.len(), 1);
+        assert_eq!(resp.required_followups[0].target, FollowupTarget::Human);
+        assert_eq!(
+            resp.required_followups[0].action,
+            "Retry with clearer instructions or escalate"
+        );
         assert!(!resp.schema_valid);
         assert!(!resp.is_success());
         assert!(resp.needs_followup());
