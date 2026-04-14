@@ -313,17 +313,25 @@ impl TryFrom<crate::completion::Message> for Vec<InputItem> {
                                 }),
                             })
                         }
-                        // todo: should we ensure this takes into account file size?
                         crate::message::UserContent::Document(Document {
                             data: DocumentSourceKind::Base64(text),
                             ..
-                        }) => items.push(InputItem {
-                            role: Some(Role::User),
-                            input: InputContent::Message(Message::User {
-                                content: OneOrMany::one(UserContent::InputText { text }),
-                                name: None,
-                            }),
-                        }),
+                        }) => {
+                            const MAX_BASE64_SIZE: usize = 20 * 1024 * 1024; // 20 MB
+                            if text.len() > MAX_BASE64_SIZE {
+                                return Err(CompletionError::RequestError(
+                                    format!("Base64 document size ({} bytes) exceeds the 20MB limit", text.len()).into(),
+                                ));
+                            }
+
+                            items.push(InputItem {
+                                role: Some(Role::User),
+                                input: InputContent::Message(Message::User {
+                                    content: OneOrMany::one(UserContent::InputText { text }),
+                                    name: None,
+                                }),
+                            })
+                        }
                         crate::message::UserContent::Document(Document {
                             data: DocumentSourceKind::String(text),
                             ..
