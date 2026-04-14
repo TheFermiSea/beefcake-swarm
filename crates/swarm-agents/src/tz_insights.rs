@@ -26,8 +26,6 @@ pub struct TzInsights {
     cache: Mutex<Option<CachedInsights>>,
     /// Optional repo_id filter. When set, insights only include data from
     /// this repository, preventing cross-project contamination.
-    /// TODO: Wire into query_variant_stats() SQL WHERE clause via feedback tags JOIN.
-    #[allow(dead_code)]
     repo_id: Option<String>,
 }
 
@@ -112,7 +110,7 @@ impl TzInsights {
             }
         });
 
-        let stats = query_variant_stats(&client).await?;
+        let stats = query_variant_stats(&client, self.repo_id.as_deref()).await?;
         let global_model_stats = query_global_model_effectiveness(&client).await?;
 
         if stats.is_empty() && global_model_stats.is_empty() {
@@ -133,10 +131,41 @@ impl TzInsights {
 /// avoiding the need for a `rust_decimal` dependency in tokio-postgres.
 async fn query_variant_stats(
     client: &tokio_postgres::Client,
+    repo_id: Option<&str>,
 ) -> Result<Vec<VariantStat>, Box<dyn std::error::Error + Send + Sync>> {
-    let rows = client
-        .query(
-            r#"
+    let rows = if let Some(repo) = repo_id {
+        // Use a subquery to avoid inflating COUNT/AVG if there are multiple feedbacks per episode
+        client
+            .query(
+                r#"
+SELECT
+    ci.function_name,
+    ci.variant_name,
+    COUNT(*)::float8 AS call_count,
+    AVG(ci.processing_time_ms)::float8 AS avg_latency_ms,
+    (PERCENTILE_CONT(0.95) WITHIN GROUP
+          (ORDER BY ci.processing_time_ms))::float8 AS p95_latency_ms,
+    MIN(ci.processing_time_ms)::float8 AS min_latency_ms,
+    MAX(ci.processing_time_ms)::float8 AS max_latency_ms
+FROM tensorzero.chat_inferences ci
+WHERE ci.created_at > NOW() - INTERVAL '7 days'
+  AND ci.processing_time_ms IS NOT NULL
+  AND ci.episode_id IN (
+      SELECT episode_id
+      FROM tensorzero.boolean_metric_feedback
+      WHERE tags->>'repo_id' = $1
+  )
+GROUP BY ci.function_name, ci.variant_name
+HAVING COUNT(*) >= 3
+ORDER BY ci.function_name, call_count DESC
+"#,
+                &[&repo],
+            )
+            .await?
+    } else {
+        client
+            .query(
+                r#"
 SELECT
     function_name,
     variant_name,
@@ -153,9 +182,10 @@ GROUP BY function_name, variant_name
 HAVING COUNT(*) >= 3
 ORDER BY function_name, call_count DESC
 "#,
-            &[],
-        )
-        .await?;
+                &[],
+            )
+            .await?
+    };
 
     let stats = rows
         .iter()
