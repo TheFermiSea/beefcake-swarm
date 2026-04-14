@@ -449,7 +449,7 @@ impl AgentFactory {
         });
 
         // Prefer TZ gateway for the manager; fall back to direct CLIAPIProxy.
-        // cloud_tz is only set when SWARM_TENSORZERO_URL is configured.
+        // cloud_tz is only set when SWARM_TENSORZERO_URL is configured AND reachable.
         let active_cloud = self
             .clients
             .cloud_tz
@@ -457,7 +457,11 @@ impl AgentFactory {
             .or(self.clients.cloud.as_ref());
         if let Some(cloud_client) = active_cloud {
             let cloud_ep = self.config.cloud_endpoint.as_ref().unwrap();
-            let manager_model = if self.config.tensorzero_url.is_some() {
+            let tz_active = self.config.tensorzero_url.is_some()
+                && std::env::var("SWARM_TZ_ACTIVE")
+                    .map(|v| v != "0")
+                    .unwrap_or(true);
+            let manager_model = if tz_active {
                 "tensorzero::function_name::cloud_manager_delegation"
             } else {
                 cloud_ep.model.as_str()
