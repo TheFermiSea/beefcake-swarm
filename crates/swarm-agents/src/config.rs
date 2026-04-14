@@ -816,16 +816,19 @@ impl SwarmConfig {
     }
 
     fn local_endpoint(tz_base: Option<&str>, config: LocalEndpointConfig<'_>) -> Endpoint {
+        // Explicit env var (e.g. SWARM_FAST_URL) takes priority over TZ routing.
+        // This ensures direct endpoints work even when SWARM_TENSORZERO_URL is set
+        // but the TZ gateway is down.
+        let explicit_url = std::env::var(config.url_var).ok().filter(|s| !s.trim().is_empty());
+        let use_tz = tz_base.is_some() && explicit_url.is_none();
         Endpoint {
-            url: tz_base
-                .map(str::to_owned)
-                .or_else(|| std::env::var(config.url_var).ok())
+            url: explicit_url
+                .or_else(|| tz_base.map(str::to_owned))
                 .unwrap_or_else(|| config.default_url.into()),
-            model: match tz_base {
-                Some(_) => config.tensorzero_model.into(),
-                None => {
-                    std::env::var(config.model_var).unwrap_or_else(|_| config.default_model.into())
-                }
+            model: if use_tz {
+                config.tensorzero_model.into()
+            } else {
+                std::env::var(config.model_var).unwrap_or_else(|_| config.default_model.into())
             },
             tier: config.tier,
             api_key: std::env::var(config.api_key_var).unwrap_or_else(|_| "not-needed".into()),
