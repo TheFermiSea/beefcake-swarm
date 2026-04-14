@@ -383,7 +383,11 @@ fn infer_status_from_text(text: &str) -> ObjectiveStatus {
     }
 
     // Check for partial completion indicators
-    if upper.contains("PARTIAL") || upper.contains("DISCOVERED:") || upper.contains("TODO:") {
+    if upper.contains("PARTIAL")
+        || upper.contains("DISCOVERED:")
+        || upper.contains("TODO:")
+        || upper.contains("EDGE CASE")
+    {
         return ObjectiveStatus::Partial;
     }
 
@@ -816,6 +820,10 @@ mod tests {
     fn test_infer_status_partial() {
         assert_eq!(
             infer_status_from_text("Fixed part of it. TODO: handle edge case"),
+            ObjectiveStatus::Partial
+        );
+        assert_eq!(
+            infer_status_from_text("Implemented the feature, but missed an edge case"),
             ObjectiveStatus::Partial
         );
     }
