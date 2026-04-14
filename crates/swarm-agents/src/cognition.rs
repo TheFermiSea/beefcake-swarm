@@ -186,6 +186,38 @@ pub fn seed_from_wiki(base: &mut CognitionBase, repo_root: &Path) -> Result<usiz
     Ok(count)
 }
 
+/// Retrieve cognition items by keyword overlap (fallback when embeddings unavailable).
+pub fn retrieve_by_keywords(
+    base: &CognitionBase,
+    query: &str,
+    top_k: usize,
+) -> Vec<RetrievalResult> {
+    let query_lower = query.to_lowercase();
+    let query_words: std::collections::HashSet<&str> = query_lower.split_whitespace().collect();
+    if query_words.is_empty() {
+        return vec![];
+    }
+    let mut scored: Vec<_> = base
+        .items()
+        .iter()
+        .map(|item| {
+            let content_lower = item.content.to_lowercase();
+            let item_words: std::collections::HashSet<&str> =
+                content_lower.split_whitespace().collect();
+            let overlap = query_words.intersection(&item_words).count();
+            let score = overlap as f32 / query_words.len().max(1) as f32;
+            (item.clone(), score)
+        })
+        .filter(|(_, score)| *score > 0.1)
+        .collect();
+    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+    scored.truncate(top_k);
+    scored
+        .into_iter()
+        .map(|(item, score)| RetrievalResult { item, score })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -281,8 +313,15 @@ mod tests {
         base.add(make_item("ortho", "ortho doc", vec![0.0, 1.0]))
             .unwrap();
         // Item partially aligned
-        base.add(make_item("partial", "partial doc", vec![0.7071, 0.7071]))
-            .unwrap();
+        base.add(make_item(
+            "partial",
+            "partial doc",
+            vec![
+                std::f32::consts::FRAC_1_SQRT_2,
+                std::f32::consts::FRAC_1_SQRT_2,
+            ],
+        ))
+        .unwrap();
 
         let query = vec![1.0, 0.0];
         let results = base.retrieve(&query, 2, 0.0);
@@ -428,36 +467,4 @@ mod tests {
             );
         }
     }
-}
-
-/// Retrieve cognition items by keyword overlap (fallback when embeddings unavailable).
-pub fn retrieve_by_keywords(
-    base: &CognitionBase,
-    query: &str,
-    top_k: usize,
-) -> Vec<RetrievalResult> {
-    let query_lower = query.to_lowercase();
-    let query_words: std::collections::HashSet<&str> = query_lower.split_whitespace().collect();
-    if query_words.is_empty() {
-        return vec![];
-    }
-    let mut scored: Vec<_> = base
-        .items()
-        .iter()
-        .map(|item| {
-            let content_lower = item.content.to_lowercase();
-            let item_words: std::collections::HashSet<&str> =
-                content_lower.split_whitespace().collect();
-            let overlap = query_words.intersection(&item_words).count();
-            let score = overlap as f32 / query_words.len().max(1) as f32;
-            (item.clone(), score)
-        })
-        .filter(|(_, score)| *score > 0.1)
-        .collect();
-    scored.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
-    scored.truncate(top_k);
-    scored
-        .into_iter()
-        .map(|(item, score)| RetrievalResult { item, score })
-        .collect()
 }

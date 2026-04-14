@@ -172,41 +172,40 @@ def fetch_inferences_for_episode(conn, episode_id: str) -> list[dict]:
     return inferences
 
 
-def fetch_inference_data(conn, inference_id: str, created_at: str) -> dict | None:
-    """Fetch the actual input/output data for a chat inference.
+def fetch_inference_data_batch(conn, inference_ids: list[str]) -> dict[str, dict]:
+    """Fetch the actual input/output data for multiple chat inferences in one query.
 
     TZ partitions chat_inference_data by date. We query the parent table
     and let Postgres route to the correct partition.
 
-    Returns dict with: input (list of messages), output (assistant response).
+    Returns dict mapping inference_id -> {input, output}.
     """
+    if not inference_ids:
+        return {}
+
     cur = conn.cursor(cursor_factory=psycopg2.extras.DictCursor)
 
     query = """
-    SELECT input, output
+    SELECT id::text AS inference_id, input, output
     FROM tensorzero.chat_inference_data
-    WHERE id = %s::uuid
+    WHERE id = ANY(%s::uuid[])
     """
 
     try:
-        cur.execute(query, [inference_id])
-        row = cur.fetchone()
+        cur.execute(query, [inference_ids])
+        rows = cur.fetchall()
         cur.close()
 
-        if not row:
-            return None
-
-        return {
-            "input": row["input"],
-            "output": row["output"],
-        }
+        result = {}
+        for row in rows:
+            result[row["inference_id"]] = {"input": row["input"], "output": row["output"]}
+        return result
     except psycopg2.Error as e:
         cur.close()
-        # Partition might not exist for this date range — not fatal.
-        print(f"  Warning: Could not fetch data for inference {inference_id}: {e}", file=sys.stderr)
+        print(f"  Warning: Could not fetch data for batch of {len(inference_ids)} inferences: {e}", file=sys.stderr)
         # Reset the connection state after error in autocommit mode.
         conn.rollback()
-        return None
+        return {}
 
 
 def has_edit_tool_calls(output) -> bool:
@@ -538,6 +537,10 @@ Examples:
             skipped_no_data += 1
             continue
 
+        # Pre-fetch all inference data for this episode in one query
+        inf_ids_to_fetch = [inf["inference_id"] for inf in inferences]
+        batch_data = fetch_inference_data_batch(conn, inf_ids_to_fetch)
+
         for inf in inferences:
             total_inferences += 1
 
@@ -552,7 +555,7 @@ Examples:
                 continue
 
             # Fetch the actual message data
-            data = fetch_inference_data(conn, inf["inference_id"], inf["created_at"])
+            data = batch_data.get(inf["inference_id"])
             if not data:
                 skipped_no_data += 1
                 continue
@@ -654,7 +657,7 @@ Examples:
     ]
 
     print(f"\n{'=' * 60}")
-    print(f"Training Data Extraction Summary")
+    print("Training Data Extraction Summary")
     print(f"{'=' * 60}")
     print(f"  Episodes (unique):      {len(unique_episodes)}")
     print(f"  Training samples:       {len(training_samples)}")
@@ -673,11 +676,11 @@ Examples:
         avg_iter = sum(iter_values) / len(iter_values)
         print(f"  Avg iterations/episode: {avg_iter:.1f}")
 
-    print(f"\n  By model:")
+    print("\n  By model:")
     for model, count in sorted(model_counts.items(), key=lambda x: -x[1]):
         print(f"    {model}: {count}")
 
-    print(f"\n  By function:")
+    print("\n  By function:")
     for fn, count in sorted(function_counts.items(), key=lambda x: -x[1]):
         print(f"    {fn}: {count}")
 
