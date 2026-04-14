@@ -1,0 +1,7 @@
+Apply the following repair plan:
+
+{{ plan }}
+{% if target_files is defined and target_files %}
+
+Target files: {{ target_files }}
+{% endif %}
