@@ -34,7 +34,10 @@ SLURM_PARTITION="${SLURM_PARTITION:-gpu_ai}"
 SLURM_QOS="${SLURM_QOS:-ai_opportunistic}"
 SLURM_NODES="${SLURM_NODES:-vasp-01,vasp-02,vasp-03}"
 SLURM_TIME="${SLURM_TIME:-02:00:00}"
-SLURM_LOG_DIR="${SLURM_LOG_DIR:-${REPO_ROOT}/logs/slurm-agents}"
+# NFS repo path (visible from compute nodes). ai-proxy has its own /home
+# (not NFS), so SLURM --output/--error must use NFS-resolved paths.
+SLURM_NFS_REPO="${SLURM_NFS_REPO:-/home/brian/code/beefcake-swarm}"
+SLURM_LOG_DIR="${SLURM_LOG_DIR:-${SLURM_NFS_REPO}/logs/slurm-agents}"
 BEADS_BIN="${SWARM_BEADS_BIN:-${SCRIPT_DIR}/bd-safe.sh}"
 DRY_RUN="${DRY_RUN:-0}"
 
@@ -59,7 +62,7 @@ Options:
 Environment:
   DRY_RUN=1           Preview sbatch commands without submitting
   SLURM_NODES         Comma-separated node list (default: vasp-01,vasp-02,vasp-03)
-  SWARM_CLOUD_URL     Cloud proxy endpoint (default: http://10.0.0.5:8317/v1)
+  SWARM_CLOUD_URL     Cloud proxy endpoint (default: http://10.0.0.100:8317/v1)
   SWARM_CLOUD_API_KEY Cloud API key (required for cloud manager mode)
 EOF
     exit 0
@@ -97,7 +100,9 @@ if [[ -z "$ISSUE_LIST" ]]; then
     usage
 fi
 
-mkdir -p "$SLURM_LOG_DIR"
+# Create NFS log dir (via SSH since ai-proxy doesn't mount NFS /home)
+ssh -o ConnectTimeout=10 -o BatchMode=yes "root@10.0.0.5" \
+    "su - brian -c 'mkdir -p $SLURM_LOG_DIR'" 2>/dev/null || mkdir -p "$SLURM_LOG_DIR" 2>/dev/null || true
 
 # Parse node list and issue list
 IFS=' ' read -ra ISSUES <<< "$ISSUE_LIST"
@@ -135,13 +140,16 @@ for i in "${!ISSUES[@]}"; do
         --time="$SLURM_TIME"
         --output="${SLURM_LOG_DIR}/agent-%j-${issue##*-}.log"
         --error="${SLURM_LOG_DIR}/agent-%j-${issue##*-}.err"
-        --export="ALL,ISSUE_ID=${issue},ISSUE_OBJECTIVE_B64=${objective_b64},DISPATCH_NODE=${node}"
+        --export="ALL,ISSUE_ID=${issue},ISSUE_OBJECTIVE_B64=${objective_b64},DISPATCH_NODE=${node},REPO_ROOT=${SLURM_NFS_REPO}"
     )
 
+    # Use the NFS-visible worker script path (not ai-proxy's local SCRIPT_DIR)
+    WORKER_SCRIPT="${SLURM_NFS_REPO}/scripts/slurm-agent-worker.sh"
+
     if [[ "$DRY_RUN" == "1" ]]; then
-        echo "  [dry-run] sbatch ${SBATCH_ARGS[*]} $SCRIPT_DIR/slurm-agent-worker.sh"
+        echo "  [dry-run] sbatch ${SBATCH_ARGS[*]} $WORKER_SCRIPT"
     else
-        JOB_ID=$(sbatch "${SBATCH_ARGS[@]}" "$SCRIPT_DIR/slurm-agent-worker.sh" 2>&1 | grep -oP '\d+')
+        JOB_ID=$(sbatch "${SBATCH_ARGS[@]}" "$WORKER_SCRIPT" 2>&1 | grep -oP '\d+')
         echo "  Submitted: SLURM job $JOB_ID"
         SUBMITTED+=("$JOB_ID")
 
