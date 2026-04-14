@@ -211,44 +211,11 @@ impl GitManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
     use tempfile::tempdir;
 
     fn setup_git_repo() -> (tempfile::TempDir, GitManager) {
         let dir = tempdir().unwrap();
-
-        // Initialize git repo
-        Command::new("git")
-            .args(["init"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
-        // Configure git user
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
-        // Create initial commit
-        std::fs::write(dir.path().join("README.md"), "# Test").unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
+        crate::harness::test_utils::init_test_git_repo(dir.path());
         let manager = GitManager::new(dir.path(), "[harness]");
         (dir, manager)
     }

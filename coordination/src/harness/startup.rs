@@ -73,7 +73,7 @@ pub fn perform_startup_ritual(config: &HarnessConfig) -> HarnessResult<StartupCo
                 id: last_start.session_id,
                 started_at: last_start.timestamp,
                 iteration: max_iteration,
-                max_iterations: 20, // Default, should be from config
+                max_iterations: config.max_iterations,
                 current_feature,
                 status: crate::harness::types::SessionStatus::Paused,
                 working_directory: working_directory.clone(),
@@ -215,43 +215,11 @@ pub fn format_startup_context(ctx: &StartupContext) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
     use tempfile::tempdir;
 
     fn setup_test_repo() -> (tempfile::TempDir, HarnessConfig) {
         let dir = tempdir().unwrap();
-
-        // Initialize git repo
-        Command::new("git")
-            .args(["init"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-
-        // Create initial commit
-        std::fs::write(dir.path().join("README.md"), "# Test").unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        crate::harness::test_utils::init_test_git_repo(dir.path());
 
         let config = HarnessConfig {
             features_path: dir.path().join("features.json"),

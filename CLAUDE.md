@@ -109,7 +109,6 @@ Key modules:
 - `reformulation.rs` (~64k) — Task decomposition and reformulation before delegation to workers.
 - `runtime_adapter.rs` (~64k) — Runtime model-routing adapter; handles tier selection and fallback at call time.
 - `subtask.rs` (~46k) — Parallel subtask decomposition and execution.
-- `harness_layers.rs` (~39k) — Session harness layering (checkpoints, context budgets, delegation contracts).
 - `pipeline.rs` — High-level pipeline orchestration (pre-task research, post-success upload, retry logic).
 - `context_firewall.rs` — Prevents context bleed between parallel issues in the same worktree.
 - `autopilot.rs` + `autopilot/` — Fully autonomous execution mode (no cloud manager, local models only).

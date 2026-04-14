@@ -7,6 +7,8 @@
 //! 4. Sub-session persistence across restarts
 //! 5. Blocking behavior respects interventions
 
+mod common;
+
 use coordination::harness::{
     error::HarnessError,
     tools::{
@@ -17,58 +19,20 @@ use coordination::harness::{
     },
     types::HarnessConfig,
 };
-use std::process::Command;
 use tempfile::tempdir;
 
 fn setup_test_repo_with_features() -> (tempfile::TempDir, HarnessConfig) {
     let dir = tempdir().unwrap();
+    common::init_git_repo(dir.path());
 
-    // Initialize git repo
-    Command::new("git")
-        .args(["init"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "Test"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    std::fs::write(dir.path().join("README.md"), "# Test").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-
-    // Create features.json
     let features = r#"[
         {"id": "f1", "category": "testing", "description": "Feature 1", "steps": ["Step 1", "Step 2"], "passes": false},
         {"id": "f2", "category": "testing", "description": "Feature 2", "steps": ["Step 1"], "depends_on": ["f1"], "passes": false}
     ]"#;
     std::fs::write(dir.path().join("features.json"), features).unwrap();
 
-    let config = HarnessConfig {
-        features_path: dir.path().join("features.json"),
-        progress_path: dir.path().join("claude-progress.txt"),
-        session_state_path: dir.path().join(".harness-session.json"),
-        working_directory: dir.path().to_path_buf(),
-        max_iterations: 20,
-        auto_checkpoint: true,
-        require_clean_git: false,
-        commit_prefix: "[harness]".to_string(),
-    };
-
+    let mut config = common::harness_config(&dir);
+    config.max_iterations = 20;
     (dir, config)
 }
 

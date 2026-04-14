@@ -512,6 +512,42 @@ pub struct HarnessClaimSubSessionResultResponse {
     pub progress_logged: bool,
 }
 
+/// Request for harness_end tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct HarnessEndRequest {
+    /// Whether the session completed successfully
+    #[schemars(description = "Whether the session ended successfully")]
+    pub success: bool,
+
+    /// Summary of the session
+    #[schemars(description = "Summary of the session outcome")]
+    pub summary: String,
+}
+
+/// Request for harness_complete_sub_session tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct HarnessCompleteSubSessionRequest {
+    /// Sub-session ID to complete
+    #[schemars(description = "Sub-session ID to complete")]
+    pub sub_session_id: String,
+
+    /// Summary of work completed
+    #[schemars(description = "Summary of work completed")]
+    pub summary: String,
+}
+
+/// Request for harness_fail_sub_session tool
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct HarnessFailSubSessionRequest {
+    /// Sub-session ID that failed
+    #[schemars(description = "Sub-session ID that failed")]
+    pub sub_session_id: String,
+
+    /// Reason for failure
+    #[schemars(description = "Reason for failure")]
+    pub reason: String,
+}
+
 /// Request for harness_retrospective tool
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct HarnessRetrospectiveRequest {
@@ -530,6 +566,33 @@ pub struct HarnessRetrospectiveResponse {
 // ============================================================================
 // Tool Implementation Functions
 // ============================================================================
+
+/// Check if the session has blocking interventions (ApprovalNeeded or DecisionPoint)
+/// and return an error if so. Used as a guard at the top of mutation tools.
+/// Single-pass: avoids the double-traversal of calling has_blocking_interventions()
+/// then re-filtering unresolved_interventions().
+fn check_blocking_interventions(
+    session: &crate::harness::session::SessionManager,
+) -> HarnessResult<()> {
+    let blockers: Vec<String> = session
+        .state()
+        .pending_interventions
+        .iter()
+        .filter(|i| {
+            !i.resolved
+                && matches!(
+                    i.intervention_type,
+                    crate::harness::types::InterventionType::ApprovalNeeded
+                        | crate::harness::types::InterventionType::DecisionPoint
+                )
+        })
+        .map(|i| format!("[{}] {}", i.id, i.question))
+        .collect();
+    if blockers.is_empty() {
+        return Ok(());
+    }
+    Err(crate::harness::error::HarnessError::blocked_by_intervention(blockers.join("; ")))
+}
 
 /// Start or resume a harness session
 pub fn harness_start(
@@ -748,29 +811,7 @@ pub fn harness_complete_feature(
         .as_ref()
         .ok_or_else(|| crate::harness::error::HarnessError::session("No active session"))?;
 
-    // Check for blocking interventions (Phase 5: Human Intervention Points)
-    if session.state().has_blocking_interventions() {
-        let blockers: Vec<String> = session
-            .state()
-            .unresolved_interventions()
-            .iter()
-            .filter(|i| {
-                matches!(
-                    i.intervention_type,
-                    crate::harness::types::InterventionType::ApprovalNeeded
-                        | crate::harness::types::InterventionType::DecisionPoint
-                )
-            })
-            .map(|i| format!("[{}] {}", i.id, i.question))
-            .collect();
-
-        return Err(crate::harness::error::HarnessError::session(format!(
-            "Cannot complete feature while blocking interventions are pending. \
-             Resolve interventions first using harness_resolve_intervention. \
-             Blocking: {}",
-            blockers.join(", ")
-        )));
-    }
+    check_blocking_interventions(session)?;
 
     // Mark feature as passing
     registry.mark_passing(&req.feature_id)?;
@@ -890,26 +931,7 @@ pub fn harness_iterate(
         .as_mut()
         .ok_or_else(|| crate::harness::error::HarnessError::session("No active session"))?;
 
-    // Check for blocking interventions (Phase 5: Human Intervention Points)
-    if session.state().has_blocking_interventions() {
-        let blockers: Vec<String> = session
-            .state()
-            .unresolved_interventions()
-            .iter()
-            .filter(|i| {
-                matches!(
-                    i.intervention_type,
-                    crate::harness::types::InterventionType::ApprovalNeeded
-                        | crate::harness::types::InterventionType::DecisionPoint
-                )
-            })
-            .map(|i| format!("[{}] {}", i.id, i.question))
-            .collect();
-
-        return Err(
-            crate::harness::error::HarnessError::blocked_by_intervention(blockers.join("; ")),
-        );
-    }
+    check_blocking_interventions(session)?;
 
     // Start session if still initializing
     if session.status() == SessionStatus::Initializing {
@@ -1105,26 +1127,7 @@ pub fn harness_work_on_feature(
         .as_mut()
         .ok_or_else(|| crate::harness::error::HarnessError::session("No active session"))?;
 
-    // Check for blocking interventions (Phase 5: Human Intervention Points)
-    if session.state().has_blocking_interventions() {
-        let blockers: Vec<String> = session
-            .state()
-            .unresolved_interventions()
-            .iter()
-            .filter(|i| {
-                matches!(
-                    i.intervention_type,
-                    crate::harness::types::InterventionType::ApprovalNeeded
-                        | crate::harness::types::InterventionType::DecisionPoint
-                )
-            })
-            .map(|i| format!("[{}] {}", i.id, i.question))
-            .collect();
-
-        return Err(
-            crate::harness::error::HarnessError::blocked_by_intervention(blockers.join("; ")),
-        );
-    }
+    check_blocking_interventions(session)?;
 
     // Start session if still initializing
     if session.status() == SessionStatus::Initializing {
@@ -1165,32 +1168,9 @@ pub fn harness_complete_and_next(
     state: &mut HarnessState,
     req: HarnessCompleteAndNextRequest,
 ) -> HarnessResult<HarnessCompleteAndNextResponse> {
-    // Check for blocking interventions first (Phase 5: Human Intervention Points)
-    {
-        let session = state
-            .session
-            .as_ref()
-            .ok_or_else(|| crate::harness::error::HarnessError::session("No active session"))?;
-
-        if session.state().has_blocking_interventions() {
-            let blockers: Vec<String> = session
-                .state()
-                .unresolved_interventions()
-                .iter()
-                .filter(|i| {
-                    matches!(
-                        i.intervention_type,
-                        crate::harness::types::InterventionType::ApprovalNeeded
-                            | crate::harness::types::InterventionType::DecisionPoint
-                    )
-                })
-                .map(|i| format!("[{}] {}", i.id, i.question))
-                .collect();
-
-            return Err(
-                crate::harness::error::HarnessError::blocked_by_intervention(blockers.join("; ")),
-            );
-        }
+    // Check for blocking interventions before proceeding
+    if let Some(session) = state.session.as_ref() {
+        check_blocking_interventions(session)?;
     }
 
     // Mark feature as passing
@@ -1488,26 +1468,7 @@ pub fn harness_delegate(
         .as_mut()
         .ok_or_else(|| crate::harness::error::HarnessError::session("No active session"))?;
 
-    // Check for blocking interventions
-    if session.state().has_blocking_interventions() {
-        let blockers: Vec<String> = session
-            .state()
-            .unresolved_interventions()
-            .iter()
-            .filter(|i| {
-                matches!(
-                    i.intervention_type,
-                    crate::harness::types::InterventionType::ApprovalNeeded
-                        | crate::harness::types::InterventionType::DecisionPoint
-                )
-            })
-            .map(|i| format!("[{}] {}", i.id, i.question))
-            .collect();
-
-        return Err(
-            crate::harness::error::HarnessError::blocked_by_intervention(blockers.join("; ")),
-        );
-    }
+    check_blocking_interventions(session)?;
 
     // Verify feature exists
     if state
@@ -1807,39 +1768,11 @@ pub fn harness_retrospective(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::process::Command;
     use tempfile::tempdir;
 
     fn setup_test_harness() -> (tempfile::TempDir, HarnessState) {
         let dir = tempdir().unwrap();
-
-        // Initialize git repo
-        Command::new("git")
-            .args(["init"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.email", "test@test.com"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["config", "user.name", "Test"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        std::fs::write(dir.path().join("README.md"), "# Test").unwrap();
-        Command::new("git")
-            .args(["add", "."])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
-        Command::new("git")
-            .args(["commit", "-m", "Initial commit"])
-            .current_dir(dir.path())
-            .output()
-            .unwrap();
+        crate::harness::test_utils::init_test_git_repo(dir.path());
 
         let config = HarnessConfig {
             features_path: dir.path().join("features.json"),

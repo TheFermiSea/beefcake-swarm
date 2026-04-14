@@ -4479,8 +4479,11 @@ fn _assert_process_issue_core_is_send(
 
 /// Saved state for session resume after SLURM preemption or crash.
 ///
-/// Written to `.swarm-resume.json` in the repo root on failure.
-/// Checked on startup to restore worktree, iteration count, and escalation state.
+/// Written to `.swarm-resume.json` in the repo root on failure (see `write_resume_file`
+/// call sites in driver.rs and this module). The read path (`check_for_resume`) exists
+/// below but is not yet wired into `process_issue` — intended for a future PR that
+/// adds automatic session recovery on startup.
+#[allow(dead_code)] // Write path exists; read path not yet wired
 #[derive(serde::Serialize, serde::Deserialize)]
 pub struct SwarmResumeFile {
     /// Issue being worked on
@@ -4500,6 +4503,11 @@ pub struct SwarmResumeFile {
 }
 
 /// Check for a resume file and return the data if found.
+///
+/// Not yet called in production — `process_issue` does not check for resume files
+/// on startup. Wire this into the issue dispatch loop to enable automatic recovery
+/// after SLURM preemption.
+#[allow(dead_code)] // Intended for future session recovery feature
 pub fn check_for_resume(repo_root: &Path) -> Option<SwarmResumeFile> {
     let resume_path = repo_root.join(".swarm-resume.json");
     if resume_path.exists() {

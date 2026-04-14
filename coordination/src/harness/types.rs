@@ -609,6 +609,10 @@ impl ProgressEntry {
             marker,
             summary,
             feature_id,
+            // NOTE: Metadata is lost on log-line roundtrip — the text format doesn't
+            // serialize metadata fields. Checkpoint commit hashes survive via the
+            // summary-string fallback in `structured_summary` (parses "Created checkpoint
+            // at <hash>"). Changing the format would break existing progress files.
             metadata: serde_json::Map::new(),
         })
     }

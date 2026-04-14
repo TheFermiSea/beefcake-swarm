@@ -7,6 +7,8 @@
 //! - Session resume from progress file
 //! - Feature registry interactions
 
+mod common;
+
 use coordination::harness::{
     create_shared_state,
     tools::{
@@ -24,11 +26,8 @@ use tempfile::tempdir;
 /// Setup a test environment with git repo and optional features.json
 fn setup_test_env(features: Option<&str>) -> (tempfile::TempDir, HarnessConfig) {
     let dir = tempdir().expect("Failed to create temp dir");
+    common::init_git_repo(dir.path());
 
-    // Initialize git repo with initial commit
-    init_git_repo(dir.path());
-
-    // Create features.json if provided
     if let Some(content) = features {
         fs::write(dir.path().join("features.json"), content).unwrap();
     }
@@ -45,35 +44,6 @@ fn setup_test_env(features: Option<&str>) -> (tempfile::TempDir, HarnessConfig) 
     };
 
     (dir, config)
-}
-
-fn init_git_repo(path: &std::path::Path) {
-    Command::new("git")
-        .args(["init"])
-        .current_dir(path)
-        .output()
-        .expect("git init failed");
-    Command::new("git")
-        .args(["config", "user.email", "test@test.com"])
-        .current_dir(path)
-        .output()
-        .expect("git config email failed");
-    Command::new("git")
-        .args(["config", "user.name", "Test User"])
-        .current_dir(path)
-        .output()
-        .expect("git config name failed");
-    fs::write(path.join("README.md"), "# Test Project\n").unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(path)
-        .output()
-        .expect("git add failed");
-    Command::new("git")
-        .args(["commit", "-m", "Initial commit"])
-        .current_dir(path)
-        .output()
-        .expect("git commit failed");
 }
 
 /// Sample features.json for testing (raw array of FeatureSpec)

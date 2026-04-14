@@ -18,6 +18,9 @@ pub mod startup;
 pub mod tools;
 pub mod types;
 
+#[cfg(test)]
+pub(crate) mod test_utils;
+
 pub use error::{HarnessError, HarnessResult};
 pub use git_manager::GitManager;
 pub use progress::ProgressTracker;

@@ -138,185 +138,6 @@ struct HydraRequest {
 }
 
 // ============================================================================
-// Harness MCP Request Types (use rmcp's schemars)
-// ============================================================================
-
-/// MCP request for harness_start tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessStartRequest {
-    #[schemars(description = "Maximum iterations before session auto-stops")]
-    max_iterations: Option<u32>,
-    #[schemars(description = "Require no uncommitted changes before starting")]
-    require_clean_git: Option<bool>,
-    #[schemars(description = "Resume interrupted session if found")]
-    auto_resume: Option<bool>,
-}
-
-/// MCP request for harness_status tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessStatusRequest {
-    #[schemars(description = "Include full feature list in response")]
-    include_features: Option<bool>,
-    #[schemars(description = "Include recent progress log entries")]
-    include_progress: Option<bool>,
-    #[schemars(description = "Include structured session summary")]
-    include_structured_summary: Option<bool>,
-    #[schemars(description = "Maximum features to include in response (default: 20)")]
-    max_features: Option<u32>,
-    #[schemars(description = "Maximum progress entries to include (default: 10)")]
-    max_progress_entries: Option<u32>,
-}
-
-/// MCP request for harness_iterate tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessIterateRequest {
-    #[schemars(description = "Brief summary of what was accomplished")]
-    summary: String,
-    #[schemars(description = "Feature ID currently being worked on")]
-    feature_id: Option<String>,
-}
-
-/// MCP request for harness_complete_feature tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessCompleteFeatureRequest {
-    #[schemars(description = "ID of the feature to mark as complete")]
-    feature_id: String,
-    #[schemars(description = "Brief summary of how the feature was implemented")]
-    summary: String,
-    #[schemars(description = "Create git checkpoint after marking complete")]
-    checkpoint: Option<bool>,
-}
-
-/// MCP request for harness_checkpoint tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessCheckpointRequest {
-    #[schemars(description = "Description of what this checkpoint captures")]
-    description: String,
-    #[schemars(description = "Feature ID this checkpoint is for")]
-    feature_id: Option<String>,
-}
-
-/// MCP request for harness_rollback tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessRollbackRequest {
-    #[schemars(description = "Git commit hash to rollback to")]
-    commit_hash: String,
-    #[schemars(description = "Hard rollback discards changes, soft preserves them")]
-    hard: Option<bool>,
-}
-
-/// MCP request for harness_compact_progress tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessCompactProgressRequest {
-    #[schemars(description = "Keep this many recent entries without summarization (default: 10)")]
-    keep_recent: Option<u32>,
-    #[schemars(
-        description = "Set to true to perform compaction, false to preview (default: false)"
-    )]
-    execute: Option<bool>,
-}
-
-/// MCP request for harness_work_on_feature tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessWorkOnFeatureRequest {
-    #[schemars(description = "ID of the feature to start working on")]
-    feature_id: String,
-    #[schemars(description = "Brief summary of the work being done")]
-    summary: String,
-}
-
-/// MCP request for harness_complete_and_next tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessCompleteAndNextRequest {
-    #[schemars(description = "ID of the feature to mark as complete")]
-    feature_id: String,
-    #[schemars(description = "Brief summary of how the feature was implemented")]
-    summary: String,
-    #[schemars(description = "Create git checkpoint after completion (default: true)")]
-    checkpoint: Option<bool>,
-}
-
-/// MCP request for harness_quick_status tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessQuickStatusRequest {}
-
-/// MCP request for harness_acknowledge tool
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessAcknowledgeRequest {
-    #[schemars(description = "IDs of checklist items that were reviewed (optional)")]
-    reviewed_items: Option<Vec<String>>,
-}
-
-/// MCP request for harness_request_intervention tool (Phase 5)
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessRequestInterventionRequest {
-    #[schemars(
-        description = "Type of intervention: review_required, approval_needed, decision_point, clarification_needed"
-    )]
-    intervention_type: String,
-    #[schemars(description = "Question or description for the human")]
-    question: String,
-    #[schemars(description = "Associated feature ID (optional)")]
-    feature_id: Option<String>,
-    #[schemars(description = "Options for decision points (optional)")]
-    options: Option<Vec<String>>,
-}
-
-/// MCP request for harness_resolve_intervention tool (Phase 5)
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessResolveInterventionRequest {
-    #[schemars(description = "Intervention ID to resolve")]
-    intervention_id: String,
-    #[schemars(description = "Resolution or decision made")]
-    resolution: String,
-}
-
-/// MCP request for harness_delegate tool (Phase 6)
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessDelegateRequest {
-    #[schemars(description = "Feature ID for the delegated work")]
-    feature_id: String,
-    #[schemars(description = "Detailed description of the task for the sub-agent")]
-    task_description: String,
-    #[schemars(description = "Maximum iterations for the sub-agent (default: 10)")]
-    max_iterations: Option<u32>,
-}
-
-/// MCP request for harness_sub_session_status tool (Phase 6)
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessSubSessionStatusRequest {
-    #[schemars(description = "Sub-session ID to check status of")]
-    sub_session_id: String,
-}
-
-/// MCP request for harness_claim_sub_session_result tool (Phase 6)
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessClaimSubSessionResultRequest {
-    #[schemars(description = "Sub-session ID to claim results from")]
-    sub_session_id: String,
-    #[schemars(description = "Optional summary to use instead of sub-session's own summary")]
-    summary: Option<String>,
-}
-
-/// MCP request for harness_complete_sub_session tool (Phase 6)
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessCompleteSubSessionRequest {
-    #[schemars(description = "Sub-session ID to complete")]
-    sub_session_id: String,
-    #[schemars(description = "Summary of work completed")]
-    summary: String,
-}
-
-/// MCP request for harness_fail_sub_session tool (Phase 6)
-#[derive(Debug, Deserialize, schemars::JsonSchema)]
-struct McpHarnessFailSubSessionRequest {
-    #[schemars(description = "Sub-session ID that failed")]
-    sub_session_id: String,
-    #[schemars(description = "Reason for failure")]
-    reason: String,
-}
-
-// ============================================================================
 // Ensemble MCP Request Types
 // ============================================================================
 
@@ -693,17 +514,12 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_start(
         &self,
-        Parameters(req): Parameters<McpHarnessStartRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessStartRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessStartRequest {
-            max_iterations: req.max_iterations,
-            require_clean_git: req.require_clean_git,
-            auto_resume: req.auto_resume,
-        };
-        let response = harness::tools::harness_start(&mut state, harness_req)
-            .map_err(|e| e.to_structured_json())?;
+        let response =
+            harness::tools::harness_start(&mut state, req).map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
 
@@ -713,19 +529,12 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_status(
         &self,
-        Parameters(req): Parameters<McpHarnessStatusRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessStatusRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessStatusRequest {
-            include_features: req.include_features,
-            include_progress: req.include_progress,
-            include_structured_summary: req.include_structured_summary,
-            max_features: req.max_features,
-            max_progress_entries: req.max_progress_entries,
-        };
-        let response = harness::tools::harness_status(&mut state, harness_req)
-            .map_err(|e| e.to_structured_json())?;
+        let response =
+            harness::tools::harness_status(&mut state, req).map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
 
@@ -734,16 +543,12 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_iterate(
         &self,
-        Parameters(req): Parameters<McpHarnessIterateRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessIterateRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessIterateRequest {
-            summary: req.summary,
-            feature_id: req.feature_id,
-        };
-        let response = harness::tools::harness_iterate(&mut state, harness_req)
-            .map_err(|e| e.to_structured_json())?;
+        let response =
+            harness::tools::harness_iterate(&mut state, req).map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
 
@@ -752,16 +557,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_complete_feature(
         &self,
-        Parameters(req): Parameters<McpHarnessCompleteFeatureRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessCompleteFeatureRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessCompleteFeatureRequest {
-            feature_id: req.feature_id,
-            summary: req.summary,
-            checkpoint: req.checkpoint,
-        };
-        let response = harness::tools::harness_complete_feature(&mut state, harness_req)
+        let response = harness::tools::harness_complete_feature(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -771,15 +571,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_checkpoint(
         &self,
-        Parameters(req): Parameters<McpHarnessCheckpointRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessCheckpointRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessCheckpointRequest {
-            description: req.description,
-            feature_id: req.feature_id,
-        };
-        let response = harness::tools::harness_checkpoint(&mut state, harness_req)
+        let response = harness::tools::harness_checkpoint(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -790,15 +586,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_rollback(
         &self,
-        Parameters(req): Parameters<McpHarnessRollbackRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessRollbackRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessRollbackRequest {
-            commit_hash: req.commit_hash,
-            hard: req.hard,
-        };
-        let response = harness::tools::harness_rollback(&mut state, harness_req)
+        let response = harness::tools::harness_rollback(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -808,15 +600,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_compact_progress(
         &self,
-        Parameters(req): Parameters<McpHarnessCompactProgressRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessCompactProgressRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessCompactProgressRequest {
-            keep_recent: req.keep_recent,
-            execute: req.execute,
-        };
-        let response = harness::tools::harness_compact_progress(&mut state, harness_req)
+        let response = harness::tools::harness_compact_progress(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -826,15 +614,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_work_on_feature(
         &self,
-        Parameters(req): Parameters<McpHarnessWorkOnFeatureRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessWorkOnFeatureRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessWorkOnFeatureRequest {
-            feature_id: req.feature_id,
-            summary: req.summary,
-        };
-        let response = harness::tools::harness_work_on_feature(&mut state, harness_req)
+        let response = harness::tools::harness_work_on_feature(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -844,16 +628,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_complete_and_next(
         &self,
-        Parameters(req): Parameters<McpHarnessCompleteAndNextRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessCompleteAndNextRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessCompleteAndNextRequest {
-            feature_id: req.feature_id,
-            summary: req.summary,
-            checkpoint: req.checkpoint,
-        };
-        let response = harness::tools::harness_complete_and_next(&mut state, harness_req)
+        let response = harness::tools::harness_complete_and_next(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -864,12 +643,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_quick_status(
         &self,
-        Parameters(_req): Parameters<McpHarnessQuickStatusRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessQuickStatusRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessQuickStatusRequest {};
-        let response = harness::tools::harness_quick_status(&state, harness_req)
+        let response = harness::tools::harness_quick_status(&state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -879,14 +657,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_acknowledge(
         &self,
-        Parameters(req): Parameters<McpHarnessAcknowledgeRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessAcknowledgeRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessAcknowledgeRequest {
-            reviewed_items: req.reviewed_items,
-        };
-        let response = harness::tools::harness_acknowledge(&mut state, harness_req)
+        let response = harness::tools::harness_acknowledge(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -896,17 +671,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_request_intervention(
         &self,
-        Parameters(req): Parameters<McpHarnessRequestInterventionRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessRequestInterventionRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessRequestInterventionRequest {
-            intervention_type: req.intervention_type,
-            question: req.question,
-            feature_id: req.feature_id,
-            options: req.options,
-        };
-        let response = harness::tools::harness_request_intervention(&mut state, harness_req)
+        let response = harness::tools::harness_request_intervention(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -916,15 +685,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_resolve_intervention(
         &self,
-        Parameters(req): Parameters<McpHarnessResolveInterventionRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessResolveInterventionRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessResolveInterventionRequest {
-            intervention_id: req.intervention_id,
-            resolution: req.resolution,
-        };
-        let response = harness::tools::harness_resolve_intervention(&mut state, harness_req)
+        let response = harness::tools::harness_resolve_intervention(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -938,16 +703,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_delegate(
         &self,
-        Parameters(req): Parameters<McpHarnessDelegateRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessDelegateRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessDelegateRequest {
-            feature_id: req.feature_id,
-            task_description: req.task_description,
-            max_iterations: req.max_iterations,
-        };
-        let response = harness::tools::harness_delegate(&mut state, harness_req)
+        let response = harness::tools::harness_delegate(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -958,14 +718,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_sub_session_status(
         &self,
-        Parameters(req): Parameters<McpHarnessSubSessionStatusRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessSubSessionStatusRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessSubSessionStatusRequest {
-            sub_session_id: req.sub_session_id,
-        };
-        let response = harness::tools::harness_sub_session_status(&state, harness_req)
+        let response = harness::tools::harness_sub_session_status(&state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -975,15 +732,11 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_claim_sub_session_result(
         &self,
-        Parameters(req): Parameters<McpHarnessClaimSubSessionResultRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessClaimSubSessionResultRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
-        let harness_req = harness::tools::HarnessClaimSubSessionResultRequest {
-            sub_session_id: req.sub_session_id,
-            summary: req.summary,
-        };
-        let response = harness::tools::harness_claim_sub_session_result(&mut state, harness_req)
+        let response = harness::tools::harness_claim_sub_session_result(&mut state, req)
             .map_err(|e| e.to_structured_json())?;
         serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
@@ -993,7 +746,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_complete_sub_session(
         &self,
-        Parameters(req): Parameters<McpHarnessCompleteSubSessionRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessCompleteSubSessionRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -1007,7 +760,7 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
     )]
     async fn harness_fail_sub_session(
         &self,
-        Parameters(req): Parameters<McpHarnessFailSubSessionRequest>,
+        Parameters(req): Parameters<harness::tools::HarnessFailSubSessionRequest>,
     ) -> Result<String, String> {
         let shared = self.get_harness().map_err(|e| e.to_string())?;
         let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
@@ -1025,6 +778,35 @@ Include necessary imports and derive macros. Code should be clippy-clean and wel
         let state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
         let sub_sessions = harness::tools::harness_list_sub_sessions(&state);
         serde_json::to_string_pretty(&sub_sessions).map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "End the harness session. Call this when work is complete or the agent is stopping. Reports success/failure and generates a session summary."
+    )]
+    async fn harness_end(
+        &self,
+        Parameters(req): Parameters<harness::tools::HarnessEndRequest>,
+    ) -> Result<String, String> {
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
+        let mut state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let response = harness::tools::harness_end(&mut state, req.success, &req.summary)
+            .map_err(|e| e.to_structured_json())?;
+        serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
+    }
+
+    #[tool(
+        description = "Generate a post-session retrospective analysis. Reviews progress entries, feature completion, and patterns to produce actionable insights.",
+        annotations(read_only_hint = true)
+    )]
+    async fn harness_retrospective(
+        &self,
+        Parameters(req): Parameters<harness::tools::HarnessRetrospectiveRequest>,
+    ) -> Result<String, String> {
+        let shared = self.get_harness().map_err(|e| e.to_string())?;
+        let state = shared.lock().map_err(|e| format!("Lock error: {}", e))?;
+        let response = harness::tools::harness_retrospective(&state, req)
+            .map_err(|e| e.to_structured_json())?;
+        serde_json::to_string_pretty(&response).map_err(|e| e.to_string())
     }
 
     // ========================================================================
