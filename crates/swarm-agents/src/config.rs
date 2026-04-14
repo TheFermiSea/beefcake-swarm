@@ -933,10 +933,15 @@ impl SwarmConfig {
             }
         }
 
-        // When TZ is configured, map every role to a TZ function name so all
-        // inferences are tracked and A/B tested. TZ routes each function to the
-        // configured model variants (OmniCoder-9B, Qwen3.5-27B, etc.)
-        if self.tensorzero_url.is_some() {
+        // When TZ is configured AND reachable, map every role to a TZ function name
+        // so all inferences are tracked and A/B tested. TZ routes each function to the
+        // configured model variants. When TZ is down (SWARM_TZ_ACTIVE=0), fall through
+        // to real model names so inference goes directly to endpoints.
+        let tz_active = self.tensorzero_url.is_some()
+            && std::env::var("SWARM_TZ_ACTIVE")
+                .map(|v| v != "0")
+                .unwrap_or(true);
+        if tz_active {
             return match role {
                 SwarmRole::Council => "tensorzero::function_name::architect_plan",
                 SwarmRole::Scout | SwarmRole::Reviewer => "tensorzero::function_name::code_review",
@@ -1235,6 +1240,12 @@ impl ClientSet {
                 .unwrap_or(false);
             if !reachable {
                 tracing::warn!(url = %tz_url, "TensorZero gateway unreachable — routing local clients directly to inference endpoints");
+                // Signal to resolve_role_model() that TZ function names should NOT be used.
+                // This env var is checked at model resolution time so agents get real model
+                // names instead of tensorzero::function_name::* when TZ is down.
+                std::env::set_var("SWARM_TZ_ACTIVE", "0");
+            } else {
+                std::env::set_var("SWARM_TZ_ACTIVE", "1");
             }
             reachable
         } else {
