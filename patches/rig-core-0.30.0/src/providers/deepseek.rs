@@ -235,12 +235,12 @@ impl From<message::ToolResult> for Message {
     }
 }
 
-impl From<message::ToolCall> for ToolCall {
-    fn from(tool_call: message::ToolCall) -> Self {
+impl From<(usize, message::ToolCall)> for ToolCall {
+    fn from((index, tool_call): (usize, message::ToolCall)) -> Self {
         Self {
             id: tool_call.id,
-            // TODO: update index when we have it
-            index: 0,
+
+            index,
             r#type: ToolType::Function,
             function: Function {
                 name: tool_call.function.name,
@@ -326,9 +326,10 @@ impl TryFrom<message::Message> for Vec<Message> {
                 let tool_calls = content
                     .clone()
                     .into_iter()
-                    .filter_map(|content| match content {
+                    .enumerate()
+                    .filter_map(|(i, content)| match content {
                         message::AssistantContent::ToolCall(tool_call) => {
-                            Some(ToolCall::from(tool_call))
+                            Some(ToolCall::from((i, tool_call)))
                         }
                         _ => None,
                     })
@@ -1030,7 +1031,7 @@ mod tests {
 
         let expected_choice: Choice = Choice {
             finish_reason: "tool_calls".to_string(),
-            index: 0,
+            index,
             logprobs: None,
             message: Message::Assistant {
                 content: "".to_string(),
@@ -1041,7 +1042,7 @@ mod tests {
                         name: "subtract".to_string(),
                         arguments: serde_json::from_str(r#"{"x":2,"y":5}"#).unwrap(),
                     },
-                    index: 0,
+                    index,
                     r#type: ToolType::Function,
                 }],
                 reasoning_content: None,
