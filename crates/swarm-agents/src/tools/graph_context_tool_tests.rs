@@ -15,53 +15,52 @@ fn build_test_graph() -> Arc<SemanticCodeGraph> {
     Arc::new(SemanticCodeGraph::from_sources(&[("test.rs", source)]))
 }
 
-#[tokio::test]
-async fn test_graph_context_success() {
+async fn run_tool_test(
+    target: &str,
+    hops: Option<u32>,
+    kind: Option<&str>,
+    expected_contents: &[&str],
+) {
     let graph = build_test_graph();
-    let working_dir = Path::new("/tmp");
-    let tool = GraphContextTool::new(working_dir, graph);
-
+    let tool = GraphContextTool::new(Path::new("/tmp"), graph);
     let input = GraphContextInput {
-        target: "caller".to_string(),
-        hops: Some(2),
-        kind: Some("callees".to_string()),
+        target: target.to_string(),
+        hops,
+        kind: kind.map(|s| s.to_string()),
     };
-
     let result = tool.call(input).await.unwrap();
-    assert!(result.contains("caller"));
-    assert!(result.contains("callee"));
+    for expected in expected_contents {
+        assert!(
+            result.contains(expected),
+            "Result did not contain expected string '{}'\nResult:\n{}",
+            expected,
+            result
+        );
+    }
 }
 
 #[tokio::test]
-async fn test_graph_context_no_hops_default() {
-    let graph = build_test_graph();
-    let tool = GraphContextTool::new(Path::new("/tmp"), graph);
-
-    let input = GraphContextInput {
-        target: "caller".to_string(),
-        hops: None,
-        kind: None, // should default to "callees"
-    };
-
-    let result = tool.call(input).await.unwrap();
-    assert!(result.contains("caller"));
-    assert!(result.contains("callee"));
-}
-
-#[tokio::test]
-async fn test_graph_context_not_found() {
-    let graph = build_test_graph();
-    let tool = GraphContextTool::new(Path::new("/tmp"), graph);
-
-    let input = GraphContextInput {
-        target: "nonexistent".to_string(),
-        hops: Some(1),
-        kind: Some("callers".to_string()),
-    };
-
-    let result = tool.call(input).await.unwrap();
-    assert!(result.contains("Graph query error"));
-    assert!(result.contains("nonexistent"));
+async fn test_graph_context_queries() {
+    // success
+    run_tool_test("caller", Some(2), Some("callees"), &["caller", "callee"]).await;
+    // no_hops_default
+    run_tool_test("caller", None, None, &["caller", "callee"]).await;
+    // not_found
+    run_tool_test(
+        "nonexistent",
+        Some(1),
+        Some("callers"),
+        &["Graph query error", "nonexistent"],
+    )
+    .await;
+    // truncation
+    run_tool_test(
+        "a",
+        Some(1),
+        Some("callees"),
+        &["Nodes:", "Edges:", "a", "b"],
+    )
+    .await;
 }
 
 #[tokio::test]
@@ -83,24 +82,6 @@ fn test_parse_query_kind() {
     assert_eq!(parse_query_kind("dependents"), QueryKind::Dependents);
     assert_eq!(parse_query_kind("unknown"), QueryKind::Callees); // Default
     assert_eq!(parse_query_kind("CALLERS"), QueryKind::Callers); // Case insensitive
-}
-
-#[tokio::test]
-async fn test_graph_context_truncation() {
-    let graph = build_test_graph();
-    let tool = GraphContextTool::new(Path::new("/tmp"), graph);
-
-    let input = GraphContextInput {
-        target: "a".to_string(),
-        hops: Some(1), // limit depth to test edge counts
-        kind: Some("callees".to_string()),
-    };
-
-    let result = tool.call(input).await.unwrap();
-    assert!(result.contains("Nodes:"));
-    assert!(result.contains("Edges:"));
-    assert!(result.contains("a"));
-    assert!(result.contains("b"));
 }
 
 #[tokio::test]
