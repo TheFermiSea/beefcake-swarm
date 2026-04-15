@@ -1,0 +1,26 @@
+{
+  "timestamp": "2026-04-14T22:35:32.114626530+00:00",
+  "archive_summary": {
+    "total_attempts": 6,
+    "resolved": 3,
+    "failed": 3,
+    "resolution_rate": 0.5,
+    "avg_iterations": 1.0
+  },
+  "insights": [],
+  "recommendations": [],
+  "tz_directives": [
+    "For architect_plan: opus_verbose handles 72% of calls (3976 total)",
+    "For code_fixing: qwen35_fixer (14949ms avg) is 10.5x faster than gemma_31b_fixer (156237ms avg)",
+    "For task_planning: devstral_planner (32483ms avg) is 5.0x faster than qwen_planner (161862ms avg)",
+    "For task_planning: qwen_planner handles 76% of calls (254 total)",
+    "For worker_code_edit: sera_14b_worker (19099ms avg) is 12.2x faster than gemma_31b_worker (233079ms avg)"
+  ],
+  "artifacts_dir": "/home/brian/code/beefcake-swarm/.swarm/autopilot",
+  "trends": {
+    "resolution_rate_delta": 0.12090163934426229,
+    "avg_iterations_delta": -0.1945945945945946,
+    "insights_count_delta": -4,
+    "reports_compared": 6
+  }
+}

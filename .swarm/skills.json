@@ -1,0 +1,14 @@
+[
+  {
+    "id": "skill-37bd7630",
+    "label": "Resolved 'Escalate repeat-call skip to terminate after 6+ consecutive skips. The repeat-call circuit breaker (runtime_adapter.rs:420-453) skips identical tool calls after 3 repeats via ToolCallHookAction::skip. But a stubborn model may keep retrying indefinitely, wasting turns. After 6+ consecutive skips of the same (tool_name, args) hash, escalate to ToolCallHookAction::ter' in 1 iteration(s) using tensorzero::function_name::task_planning",
+    "trigger": {
+      "error_categories": [
+        "borrow_checker"
+      ]
+    },
+    "approach": "Resolved 'Escalate repeat-call skip to terminate after 6+ consecutive skips. The repeat-call circuit breaker (runtime_adapter.rs:420-453) skips identical tool calls after 3 repeats via ToolCallHookAction::skip. But a stubborn model may keep retrying indefinitely, wasting turns. After 6+ consecutive skips of the same (tool_name, args) hash, escalate to ToolCallHookAction::ter' in 1 iteration(s) using tensorzero::function_name::task_planning",
+    "success_count": 1,
+    "failure_count": 0
+  }
+]
