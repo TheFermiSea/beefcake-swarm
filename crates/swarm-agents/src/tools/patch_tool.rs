@@ -535,7 +535,7 @@ impl Tool for EditFileTool {
                 )));
             }
         }
-        let full_path = sandbox_check(&self.working_dir, &args.path)?;
+        let full_path = sandbox_check(&self.working_dir, &args.path, true)?;
 
         // Read the current file
         let content = std::fs::read_to_string(&full_path).map_err(|e| {

@@ -113,7 +113,7 @@ impl Tool for SearchCodeTool {
 
             // Sandbox-check the relative path returned by rg.
             if !file_path.is_empty() {
-                sandbox_check(&self.working_dir, file_path)?;
+                sandbox_check(&self.working_dir, file_path, false)?;
             }
 
             lines.push(format!("{file_path}:{line_number}: {content}"));

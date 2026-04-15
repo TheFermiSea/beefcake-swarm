@@ -90,7 +90,7 @@ impl Tool for ReadFileTool {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        let full_path = sandbox_check(&self.working_dir, &args.path)?;
+        let full_path = sandbox_check(&self.working_dir, &args.path, false)?;
         let content = std::fs::read_to_string(&full_path)?;
 
         // Apply line-range slicing when requested.
@@ -248,7 +248,7 @@ impl Tool for WriteFileTool {
                 )));
             }
         }
-        let full_path = sandbox_check(&self.working_dir, &args.path)?;
+        let full_path = sandbox_check(&self.working_dir, &args.path, true)?;
         if !args.path.contains('/') {
             tracing::warn!(
                 path = %args.path,
@@ -480,7 +480,7 @@ impl Tool for ListFilesTool {
         let dir = if args.path.is_empty() {
             self.working_dir.clone()
         } else {
-            sandbox_check(&self.working_dir, &args.path)?
+            sandbox_check(&self.working_dir, &args.path, false)?
         };
 
         let mut entries = Vec::new();
