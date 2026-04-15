@@ -6,7 +6,12 @@ use rig::completion::ToolDefinition;
 use rig::tool::Tool;
 use serde::Deserialize;
 
-use super::{run_command_with_timeout, ToolError};
+#[cfg(not(test))]
+use super::run_command_with_timeout;
+#[cfg(test)]
+use tests::mock_run_command_with_timeout as run_command_with_timeout;
+
+use super::ToolError;
 
 const DEFAULT_TIMEOUT_SECS: u64 = 30;
 
@@ -106,6 +111,191 @@ impl Tool for AstGrepTool {
             Ok("No structural matches found".to_string())
         } else {
             Ok(output)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use once_cell::sync::Lazy;
+    use std::collections::HashMap;
+    use std::sync::Mutex;
+
+    pub static MOCK_CALLS: Lazy<Mutex<HashMap<PathBuf, Vec<Vec<String>>>>> =
+        Lazy::new(|| Mutex::new(HashMap::new()));
+    pub static MOCK_OUTPUT: Lazy<Mutex<HashMap<PathBuf, String>>> =
+        Lazy::new(|| Mutex::new(HashMap::new()));
+
+    pub(crate) async fn mock_run_command_with_timeout(
+        program: &str,
+        args: &[&str],
+        working_dir: &Path,
+        _timeout_secs: u64,
+    ) -> Result<String, ToolError> {
+        let mut call = vec![program.to_string()];
+        call.extend(args.iter().map(|s| s.to_string()));
+        MOCK_CALLS
+            .lock()
+            .unwrap()
+            .entry(working_dir.to_path_buf())
+            .or_default()
+            .push(call);
+
+        let output = MOCK_OUTPUT
+            .lock()
+            .unwrap()
+            .get(working_dir)
+            .cloned()
+            .unwrap_or_default();
+
+        Ok(output)
+    }
+
+    fn setup_mock(dir: &Path, output: &str) {
+        MOCK_OUTPUT
+            .lock()
+            .unwrap()
+            .insert(dir.to_path_buf(), output.to_string());
+        MOCK_CALLS
+            .lock()
+            .unwrap()
+            .insert(dir.to_path_buf(), Vec::new());
+    }
+
+    fn get_mock_calls(dir: &Path) -> Vec<Vec<String>> {
+        MOCK_CALLS
+            .lock()
+            .unwrap()
+            .get(dir)
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    #[tokio::test]
+    async fn test_astgrep_rule_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        setup_mock(path, "match found in rule");
+
+        let tool = AstGrepTool::new(path);
+        let result = tool
+            .call(AstGrepInput {
+                rule: Some("rules/my-rule.yml".to_string()),
+                pattern: None,
+                language: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result, "match found in rule");
+
+        let calls = get_mock_calls(path);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0],
+            vec!["sg", "scan", "--rule", "rules/my-rule.yml", "."]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_astgrep_pattern_mode_no_language() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        setup_mock(path, "match found for pattern");
+
+        let tool = AstGrepTool::new(path);
+        let result = tool
+            .call(AstGrepInput {
+                rule: None,
+                pattern: Some("fn test() {}".to_string()),
+                language: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result, "match found for pattern");
+
+        let calls = get_mock_calls(path);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0],
+            vec!["sg", "run", "--pattern", "fn test() {}", "."]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_astgrep_pattern_mode_with_language() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        setup_mock(path, "match found for language pattern");
+
+        let tool = AstGrepTool::new(path);
+        let result = tool
+            .call(AstGrepInput {
+                rule: None,
+                pattern: Some("def test(): pass".to_string()),
+                language: Some("python".to_string()),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result, "match found for language pattern");
+
+        let calls = get_mock_calls(path);
+        assert_eq!(calls.len(), 1);
+        assert_eq!(
+            calls[0],
+            vec![
+                "sg",
+                "run",
+                "--pattern",
+                "def test(): pass",
+                "--lang",
+                "python",
+                "."
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn test_astgrep_empty_output_returns_no_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+        setup_mock(path, "   \n  "); // empty/whitespace output
+
+        let tool = AstGrepTool::new(path);
+        let result = tool
+            .call(AstGrepInput {
+                rule: Some("rules/test.yml".to_string()),
+                pattern: None,
+                language: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(result, "No structural matches found");
+    }
+
+    #[tokio::test]
+    async fn test_astgrep_missing_both_rule_and_pattern() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path();
+
+        let tool = AstGrepTool::new(path);
+        let result = tool
+            .call(AstGrepInput {
+                rule: None,
+                pattern: None,
+                language: None,
+            })
+            .await;
+
+        assert!(result.is_err());
+        if let Err(ToolError::Policy(msg)) = result {
+            assert!(msg.contains("requires either `pattern` or `rule`"));
+        } else {
+            panic!("Expected Policy error, got {:?}", result);
         }
     }
 }
