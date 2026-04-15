@@ -35,3 +35,9 @@
 {"id":35,"timestamp":"2026-04-15T14:32:10.786552920Z","kind":{"type":"state_transition","from":"planning","to":"implementing","iteration":1,"reason":"iteration 1 planned, tier=Worker"}}
 {"id":36,"timestamp":"2026-04-15T14:32:10.788130848Z","kind":{"type":"checkpoint_written","checkpoint_id":3,"state":"implementing","iteration":1}}
 {"id":37,"timestamp":"2026-04-15T14:34:13.533122056Z","kind":{"type":"state_transition","from":"implementing","to":"planning","iteration":1,"reason":"agent failed, escalation continues: Continuing at Worker (3 iterations remaining)"}}
+{"id":38,"timestamp":"2026-04-15T16:18:42.827025287Z","kind":{"type":"session_started","issue_id":"beefcake-ca2f1","objective":"High churn: scripts/run-swarm-sandbox.slurm (modified 32 times in 90 days)","base_commit":"544d4dac22cf1540b01ee69684f6975697baaf46"}}
+{"id":39,"timestamp":"2026-04-15T16:18:42.827892765Z","kind":{"type":"worktree_provisioned","path":"/tmp/swarm-wt/beefcake-swarm/beefcake-ca2f1","branch":"swarm/beefcake-ca2f1","commit":"544d4dac22cf1540b01ee69684f6975697baaf46"}}
+{"id":40,"timestamp":"2026-04-15T16:18:42.942477986Z","kind":{"type":"state_transition","from":"preparing_worktree","to":"planning","iteration":0,"reason":"worktree ready, endpoints healthy"}}
+{"id":41,"timestamp":"2026-04-15T16:18:42.944659520Z","kind":{"type":"state_transition","from":"planning","to":"implementing","iteration":1,"reason":"iteration 1 planned, tier=Worker"}}
+{"id":42,"timestamp":"2026-04-15T16:18:42.946900391Z","kind":{"type":"checkpoint_written","checkpoint_id":3,"state":"implementing","iteration":1}}
+{"id":43,"timestamp":"2026-04-15T16:25:47.101519831Z","kind":{"type":"state_transition","from":"implementing","to":"planning","iteration":1,"reason":"agent failed, escalation continues: Continuing at Worker (3 iterations remaining)"}}
