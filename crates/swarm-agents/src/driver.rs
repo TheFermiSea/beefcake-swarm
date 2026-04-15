@@ -6,7 +6,23 @@
 //! Gated behind `SWARM_STATE_DRIVER=1` — the legacy path remains the default.
 
 use std::path::PathBuf;
+use std::sync::{Arc, OnceLock};
 use std::time::Instant;
+
+/// Serializes concurrent Explorer calls to prevent GPU contention on the
+/// reasoning endpoint (vasp-02 / Devstral).
+///
+/// With `--parallel N`, multiple issues route to ExplorerCoder simultaneously
+/// and all land on the same vasp-02 endpoint. Running two large Explorer
+/// inference sessions concurrently on a single V100S fills the KV cache and
+/// causes llama.cpp to return empty completions. A semaphore of size 1 ensures
+/// only one Explorer runs at a time; GeneralCoder phases remain fully
+/// concurrent since the permit is dropped before Phase 2 begins.
+///
+/// `tokio::sync::Semaphore` works across separate thread-local runtimes
+/// (one per `std::thread::spawn + block_on`) because it only uses the `Waker`
+/// from the calling context, not a shared runtime scheduler.
+static EXPLORER_GATE: OnceLock<Arc<tokio::sync::Semaphore>> = OnceLock::new();
 
 use anyhow::{Context as _, Result};
 use tracing::{debug, error, info, warn};
@@ -1362,6 +1378,16 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                     ctx.metrics.record_coder_route("ExplorerCoder");
 
                     // ── Phase 1: Explorer ────────────────────────────────────────
+                    // Acquire the global gate before starting the Explorer to
+                    // prevent concurrent inference on the same reasoning endpoint.
+                    // The permit is dropped explicitly before Phase 2 so
+                    // GeneralCoder phases remain fully concurrent.
+                    let explorer_permit = EXPLORER_GATE
+                        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
+                        .acquire()
+                        .await
+                        .expect("EXPLORER_GATE semaphore was closed");
+
                     ctx.metrics.record_agent_metrics("Devstral-Explorer", 0, 0);
                     let explorer = ctx.factory.build_explorer(&ctx.wt_path);
                     let explore_budget = ctx.worker_timeout / 2;
@@ -1410,6 +1436,10 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                             None
                         }
                     };
+
+                    // Release the gate now — Phase 2 (GeneralCoder) runs on
+                    // a different endpoint (vasp-01) and does not need exclusion.
+                    drop(explorer_permit);
 
                     // ── Phase 2: GeneralCoder with enriched prompt ───────────────
                     ctx.metrics
