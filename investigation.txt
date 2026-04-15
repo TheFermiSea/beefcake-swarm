@@ -1,0 +1,50 @@
+test tz_insights::tests::test_new_rejects_empty_url ... ok
+test tz_insights::tests::test_single_variant_no_comparison ... ok
+test tz_insights::tests::test_speed_comparison_2x ... ok
+test tz_insights::tests::test_speed_comparison_under_2x_no_directive ... ok
+test tz_insights::tests::test_success_winner ... ok
+test tz_insights::tests::test_zero_success ... ok
+test tools::cargo_metadata_tool::tests::test_cargo_metadata_contains_workspace_root ... ok
+test wiki::tests::test_append_log_creates_file ... ok
+test wiki::tests::test_capture_analysis_creates_page_and_updates_index ... ok
+test wiki::tests::test_capture_analysis_fails_without_wiki_dir ... ok
+test wiki::tests::test_capture_analysis_without_source_issue ... ok
+test wiki::tests::test_page_overwrites_on_recapture ... ok
+test work_protocol::tests::verification_confidence_mapping ... ok
+test work_protocol::tests::work_result_escalation_signals ... ok
+test work_protocol::tests::work_result_with_verification_refines_confidence ... ok
+test wiki::tests::test_update_index_deduplicates ... ok
+test worktree_bridge::tests::test_cleanup_nonexistent_is_ok ... ok
+test tz_insights::tests::test_get_directives_pg_unreachable ... ok
+test worktree_bridge::tests::test_cleanup_stale_no_zombies ... ok
+test tools::tz_mcp_tool::tests::tool_degrades_gracefully_on_connection_failure ... ok
+test worktree_bridge::tests::test_cleanup_removes_worktree ... ok
+test worktree_bridge::tests::test_cleanup_stale_removes_orphaned_branches ... ok
+test worktree_bridge::tests::test_create_and_list ... ok
+test worktree_bridge::tests::test_create_sets_skip_worktree_on_beads ... ok
+test worktree_bridge::tests::test_retry_git_command_non_transient_failure_no_retry ... ok
+test worktree_bridge::tests::test_create_cleans_stale_branch ... ok
+test worktree_bridge::tests::test_sanitize_id ... ok
+test worktree_bridge::tests::test_sanitize_id_edge_cases ... ok
+test worktree_bridge::tests::test_worktree_path ... ok
+test worktree_bridge::tests::test_retry_git_command_succeeds_first_try ... ok
+test notebook_bridge::tests::test_resolve_registry_prefers_swarm_subdir ... ok
+test worktree_bridge::tests::test_merge_conflict_reports_error ... ok
+test notebook_bridge::tests::test_resolve_registry_falls_back_to_root ... ok
+test worktree_bridge::tests::test_merge_and_remove_auto_stashes_dirty_target_repo ... ok
+
+failures:
+
+---- config::tests::test_default_config stdout ----
+
+thread 'config::tests::test_default_config' (202968) panicked at crates/swarm-agents/src/config.rs:1494:9:
+assertion failed: config.fast_endpoint.url.contains("vasp-03")
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    config::tests::test_default_config
+
+test result: FAILED. 799 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.70s
+
+error: test failed, to rerun pass `-p swarm-agents --lib`

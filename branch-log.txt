@@ -1,0 +1,5 @@
+5ecd1b8 swarm: auto-fix iteration 5 (clippy --fix + fmt)
+62c17aa swarm: auto-fix iteration 4 (clippy --fix + fmt)
+8c6ed58 swarm: auto-fix iteration 3 (clippy --fix + fmt)
+37d80d5 swarm: auto-fix iteration 2 (clippy --fix + fmt)
+e0ad31b feat: free vasp-03 GPU — reroute all traffic to vasp-01/vasp-02

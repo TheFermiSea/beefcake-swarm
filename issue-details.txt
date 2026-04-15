@@ -1,0 +1,40 @@
+◐ beefcake-ek56e · Migrate worktree lifecycle to bd worktree create/remove   [● P1 · IN_PROGRESS]
+Owner: TheFermiSea · Type: task
+Created: 2026-04-07 · Updated: 2026-04-15
+
+DESCRIPTION
+Our worktree_bridge.rs manually manages git worktrees with custom beads redirect.
+bd worktree create handles the full lifecycle: create, configure beads redirect, track state.
+
+Implementation:
+1. Replace git worktree add/remove calls with bd worktree create/remove
+2. Remove custom .beads redirect logic from worktree_bridge.rs
+3. Gain: automatic beads database sharing, proper cleanup on failure
+4. bd worktree list replaces our manual /tmp/beefcake-wt/ scanning
+
+Key files: crates/swarm-agents/src/worktree_bridge.rs
+
+NOTES
+## Postmortem (2026-04-12T21:09:48Z)
+
+ROOT CAUSE: The agent ignored the explicit target file (crates/swarm-agents/src/worktree_bridge.rs) and instead edited .swarm-checkpoint.json, treating a metadata state update as the implementation work. After successfully writing the checkpoint file once, it then looped trying to re-apply the same old_content that no longer existed in the file, burning all remaining turns on a stale edit_file mismatch cycle.
+
+PATTERN: Wrong file targeted combined with edit_file old_content mismatch loop — the agent latched onto a metadata file visible in its context instead of the implementation file named in the issue, then got stuck retrying a stale patch after the file had already changed.
+
+FIX STRATEGY:
+- Open and read crates/swarm-agents/src/worktree_bridge.rs as the very first action; do not open, read, or write .swarm-checkpoint.json under any circumstances.
+- Make all edits directly to worktree_bridge.rs: replace Command::new("git").args(["worktree", "add", ...]) with Command::new("bd").args(["worktree", "create", issue_id]), replace git worktree remove / remove_dir_all calls with Command::new("bd").args(["worktree", "remove", issue_id]), delete the .beads symlink block (the one logged as "Symlinked .beads/ to main repo for shared Dolt access"), and replace any /tmp/beefcake-wt/ or /tmp/swarm-wt/ directory scanning with Command::new("bd").args(["worktree", "list"]) output parsing.
+- After editing worktree_bridge.rs, immediately run cargo build -p swarm-agents and fix any compilation errors before doing anything else; do not attempt any further reads or metadata updates after the build succeeds.
+
+REVISED DESCRIPTION:
+
+Title: Migrate worktree lifecycle to bd worktree create/remove
+
+Target file: crates/swarm-agents/src/worktree_bridge.rs
+
+CRITICAL CONSTRAINT: Do NOT touch .swarm-checkpoint.json or any other file. The one and only file that needs to change is crates/swarm-agents/src/worktree_bridge.rs.
+
+Step 1 — Read the target file.
+Use read_file on crates/swarm-agents/src/worktree_bridge.rs. Read it completely before writing a single line. Do not read any other file first.
+
+Step 2 — Replace git worktree add.

@@ -1,0 +1,6 @@
+" M .swarm-checkpoint.json
+ M .swarm-session.jsonl
+?? findings.md
+?? investigation.txt
+?? investigation2.txt
+?? scope-check.txt
