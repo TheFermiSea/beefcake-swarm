@@ -1,46 +1,32 @@
 {
   "schema_version": 1,
-  "checkpoint_id": 5,
+  "checkpoint_id": 3,
   "state": "implementing",
-  "iteration": 2,
+  "iteration": 1,
   "transitions": [
     {
       "from": "selecting_issue",
       "to": "preparing_worktree",
       "iteration": 0,
-      "elapsed_ms": 321,
+      "elapsed_ms": 383,
       "reason": "issue validated and claimed"
     },
     {
       "from": "preparing_worktree",
       "to": "planning",
       "iteration": 0,
-      "elapsed_ms": 850,
+      "elapsed_ms": 914,
       "reason": "worktree ready, endpoints healthy"
     },
     {
       "from": "planning",
       "to": "implementing",
       "iteration": 1,
-      "elapsed_ms": 851,
+      "elapsed_ms": 916,
       "reason": "iteration 1 planned, tier=Worker"
-    },
-    {
-      "from": "implementing",
-      "to": "planning",
-      "iteration": 1,
-      "elapsed_ms": 344163,
-      "reason": "agent failed, escalation continues: All gates passed — sending for council review"
-    },
-    {
-      "from": "planning",
-      "to": "implementing",
-      "iteration": 2,
-      "elapsed_ms": 344166,
-      "reason": "iteration 2 planned, tier=Worker"
     }
   ],
-  "created_at": "2026-04-15T04:17:02.291399081+00:00",
-  "git_hash": "c25ed34c6e035909e382e28d2c32068ec98d93ea",
-  "issue_id": "beefcake-1y2k"
+  "created_at": "2026-04-15T14:32:10.787880245+00:00",
+  "git_hash": "ed9bb48d0b1f5837b98a237b3f76f7f013178e1c",
+  "issue_id": "beefcake-s0r65"
 }

@@ -1356,7 +1356,10 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                     // coder instructions. No write deadline — exploration takes time.
                     // Phase 2: GeneralCoder receives the enriched prompt and writes
                     // on its first or second turn.
-                    info!(iteration, "Routing to ExplorerCoder pipeline (state driver)");
+                    info!(
+                        iteration,
+                        "Routing to ExplorerCoder pipeline (state driver)"
+                    );
                     ctx.metrics.record_coder_route("ExplorerCoder");
 
                     // ── Phase 1: Explorer ────────────────────────────────────────
@@ -1390,7 +1393,10 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                             Some(analysis)
                         }
                         Ok(Ok(_)) => {
-                            warn!(iteration, "Explorer returned empty analysis — proceeding without");
+                            warn!(
+                                iteration,
+                                "Explorer returned empty analysis — proceeding without"
+                            );
                             None
                         }
                         Ok(Err(e)) => {
@@ -1398,13 +1404,17 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                             None
                         }
                         Err(_) => {
-                            warn!(iteration, "Explorer timed out — proceeding without analysis");
+                            warn!(
+                                iteration,
+                                "Explorer timed out — proceeding without analysis"
+                            );
                             None
                         }
                     };
 
                     // ── Phase 2: GeneralCoder with enriched prompt ───────────────
-                    ctx.metrics.record_agent_metrics("Qwen3.5-GeneralCoder", 0, 0);
+                    ctx.metrics
+                        .record_agent_metrics("Qwen3.5-GeneralCoder", 0, 0);
                     let enriched_prompt = match &exploration {
                         Some(analysis) => format!(
                             "{task_prompt}\n\n\
@@ -1438,7 +1448,10 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                     {
                         Ok(result) => result,
                         Err(_) => {
-                            warn!(iteration, "general_coder timed out in ExplorerCoder pipeline (state driver)");
+                            warn!(
+                                iteration,
+                                "general_coder timed out in ExplorerCoder pipeline (state driver)"
+                            );
                             Ok("general_coder timed out. Changes on disk.".into())
                         }
                     };
@@ -1625,7 +1638,10 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         Ok(_) => {
             // Primary manager returned empty/null content — treat as failure so
             // the fallback matrix can be tried on the next iteration.
-            error!(iteration, "Agent returned empty response (state driver) — treating as failure");
+            error!(
+                iteration,
+                "Agent returned empty response (state driver) — treating as failure"
+            );
             let _ = ctx.progress.log_error(
                 ctx.session.session_id(),
                 iteration,
