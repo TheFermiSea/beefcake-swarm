@@ -268,11 +268,7 @@ pub fn build_editor_named(
 ///   3. Coder receives the instructions and writes on its first or second turn.
 ///
 /// No write deadline is applied to the explorer (see driver.rs AdapterConfig).
-pub fn build_explorer(
-    client: &openai::CompletionsClient,
-    model: &str,
-    wt_path: &Path,
-) -> OaiAgent {
+pub fn build_explorer(client: &openai::CompletionsClient, model: &str, wt_path: &Path) -> OaiAgent {
     build_explorer_named(client, model, wt_path, "explorer", false)
 }
 
@@ -284,12 +280,8 @@ pub fn build_explorer_named(
     name: &str,
     proxy_tools: bool,
 ) -> OaiAgent {
-    let preamble = prompts::build_full_worker_preamble(
-        "explorer",
-        wt_path,
-        prompts::EXPLORER_PREAMBLE,
-        None,
-    );
+    let preamble =
+        prompts::build_full_worker_preamble("explorer", wt_path, prompts::EXPLORER_PREAMBLE, None);
     client
         .agent(model)
         .name(name)

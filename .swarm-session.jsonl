@@ -29,3 +29,9 @@
 {"id":29,"timestamp":"2026-04-15T04:17:02.289462517Z","kind":{"type":"state_transition","from":"planning","to":"implementing","iteration":2,"reason":"iteration 2 planned, tier=Worker"}}
 {"id":30,"timestamp":"2026-04-15T04:17:02.291856203Z","kind":{"type":"checkpoint_written","checkpoint_id":5,"state":"implementing","iteration":2}}
 {"id":31,"timestamp":"2026-04-15T04:23:18.511889614Z","kind":{"type":"state_transition","from":"implementing","to":"planning","iteration":2,"reason":"agent failed, escalation continues: Continuing at Worker (2 iterations remaining)"}}
+{"id":32,"timestamp":"2026-04-15T14:32:10.673670436Z","kind":{"type":"session_started","issue_id":"beefcake-s0r65","objective":"Add pre-flight model health probes before worker delegation","base_commit":"ed9bb48d0b1f5837b98a237b3f76f7f013178e1c"}}
+{"id":33,"timestamp":"2026-04-15T14:32:10.674578885Z","kind":{"type":"worktree_provisioned","path":"/tmp/swarm-wt/beefcake-swarm/beefcake-s0r65","branch":"swarm/beefcake-s0r65","commit":"ed9bb48d0b1f5837b98a237b3f76f7f013178e1c"}}
+{"id":34,"timestamp":"2026-04-15T14:32:10.784750711Z","kind":{"type":"state_transition","from":"preparing_worktree","to":"planning","iteration":0,"reason":"worktree ready, endpoints healthy"}}
+{"id":35,"timestamp":"2026-04-15T14:32:10.786552920Z","kind":{"type":"state_transition","from":"planning","to":"implementing","iteration":1,"reason":"iteration 1 planned, tier=Worker"}}
+{"id":36,"timestamp":"2026-04-15T14:32:10.788130848Z","kind":{"type":"checkpoint_written","checkpoint_id":3,"state":"implementing","iteration":1}}
+{"id":37,"timestamp":"2026-04-15T14:34:13.533122056Z","kind":{"type":"state_transition","from":"implementing","to":"planning","iteration":1,"reason":"agent failed, escalation continues: Continuing at Worker (3 iterations remaining)"}}
