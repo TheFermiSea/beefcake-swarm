@@ -154,7 +154,12 @@ export PATH="$HOME/.local/bin:$PATH"
 # Use prebuilt release binary if available, otherwise fall back to cargo run.
 # The release binary is 10x faster to start (no compilation) and runs faster.
 # Build with: CARGO_TARGET_DIR=/tmp/beefcake-shared-target cargo build -p swarm-agents --release
-_RELEASE_BIN="${CARGO_TARGET_DIR:-/tmp/beefcake-shared-target}/release/swarm-agents"
+#
+# BEEFCAKE_BIN_DIR overrides the binary lookup independently of CARGO_TARGET_DIR,
+# preventing ambient CARGO_TARGET_DIR settings (e.g. from .bashrc pointing at rust-daq)
+# from selecting a stale binary from a different workspace.
+_BIN_DIR="${BEEFCAKE_BIN_DIR:-/tmp/beefcake-shared-target}"
+_RELEASE_BIN="${_BIN_DIR}/release/swarm-agents"
 if [[ -x "$_RELEASE_BIN" ]]; then
     exec "$_RELEASE_BIN" "$@"
 else

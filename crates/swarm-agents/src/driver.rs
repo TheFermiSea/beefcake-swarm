@@ -1189,7 +1189,6 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                 .last()
                 .cloned()
                 .unwrap_or_default();
-
             // Complexity-gated CoT planner: check if this task should use
             // Devstral-24B in pure-reasoning mode (no tools) before falling
             // through to the standard error-driven routing.
