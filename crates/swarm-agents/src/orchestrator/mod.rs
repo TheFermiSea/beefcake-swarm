@@ -3992,6 +3992,7 @@ async fn process_issue_core(
     let final_tier = format!("{:?}", escalation.current_tier);
     let mut session_metrics = metrics.finalize(success, &final_tier);
 
+    let mut resolved_episode_ids = Vec::new();
     // Populate token usage and cost from TZ Postgres if available.
     if let Some(ref pg_url) = config.tensorzero_pg_url {
         let (input, output) =
@@ -3999,6 +4000,13 @@ async fn process_issue_core(
         session_metrics.input_tokens = input;
         session_metrics.output_tokens = output;
         session_metrics.estimated_cost_usd = crate::tensorzero::estimate_cost(input, output);
+
+        // Resolve actual episode IDs and update metrics
+        resolved_episode_ids =
+            crate::tensorzero::resolve_episode_ids(pg_url, tz_session_start_secs).await;
+        if let Some(id) = resolved_episode_ids.first() {
+            session_metrics.tensorzero_episode_id = Some(id.clone());
+        }
     }
 
     telemetry::write_session_metrics(&session_metrics, &wt_path);
@@ -4068,10 +4076,9 @@ async fn process_issue_core(
         // harness settings with task_resolved outcomes (Meta-Harness optimization).
         crate::tensorzero::HarnessPreset::select_uniform().apply_to_tags(&mut tz_tags);
 
-        if let Some(ref pg_url) = config.tensorzero_pg_url {
-            // Resolve episode IDs once — reused for both feedback calls below.
-            let episode_ids =
-                crate::tensorzero::resolve_episode_ids(pg_url, tz_session_start_secs).await;
+        if config.tensorzero_pg_url.is_some() {
+            // Use the episode IDs resolved earlier
+            let episode_ids = resolved_episode_ids;
 
             // Post core episode metrics (task_resolved, iterations_used, wall_time, etc.)
             for ep_id in &episode_ids {
