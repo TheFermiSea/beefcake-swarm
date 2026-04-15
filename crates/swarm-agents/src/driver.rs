@@ -1464,10 +1464,16 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                             )
                             .await
                             {
-                                Ok(Ok(response)) => {
+                                Ok(Ok(response)) if !response.trim().is_empty() => {
                                     info!(iteration, model = %entry.model, "Fallback succeeded (state driver)");
                                     fallback_result = Some(Ok(response));
                                     break;
+                                }
+                                Ok(Ok(_)) => {
+                                    // Null/empty content — proxy returned HTTP 200 but no text.
+                                    // Happens when a model's OAuth token is stale or the proxy
+                                    // has a format compatibility issue. Skip to next fallback.
+                                    warn!(iteration, model = %entry.model, "Fallback returned empty content, skipping (state driver)");
                                 }
                                 Ok(Err(e)) => {
                                     warn!(iteration, model = %entry.model, error = %e, "Fallback failed (state driver)");
@@ -1517,10 +1523,21 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     ctx.metrics.record_agent_time(agent_elapsed);
     ctx.span_summary.record_agent(0);
     let response = match agent_future {
-        Ok(r) => {
+        Ok(r) if !r.trim().is_empty() => {
             let preview = &r[..r.floor_char_boundary(500)];
             info!(iteration, response_len = r.len(), response_preview = %preview, "Agent responded (state driver)");
             r
+        }
+        Ok(_) => {
+            // Primary manager returned empty/null content — treat as failure so
+            // the fallback matrix can be tried on the next iteration.
+            error!(iteration, "Agent returned empty response (state driver) — treating as failure");
+            let _ = ctx.progress.log_error(
+                ctx.session.session_id(),
+                iteration,
+                "Manager returned empty response (proxy null-content bug)".to_string(),
+            );
+            return Err(anyhow::anyhow!("Manager returned empty response"));
         }
         Err(e) => {
             error!(iteration, "Agent failed (state driver): {e}");

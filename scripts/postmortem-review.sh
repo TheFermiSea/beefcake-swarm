@@ -14,7 +14,14 @@ LOG_FILE="${2:?Usage: postmortem-review.sh <issue-id> <log-file>}"
 
 CLOUD_URL="${SWARM_CLOUD_URL:-http://localhost:8317/v1}"
 CLOUD_KEY="${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY required}"
-MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6}"
+# Ordered fallback list — tried in sequence until one returns non-empty content.
+# Primary model from env, then hardcoded fallbacks that are known-good.
+POSTMORTEM_MODELS=(
+  "${SWARM_CLOUD_MODEL:-claude-opus-4-6}"
+  "claude-opus-4-6"
+  "claude-sonnet-4-6"
+  "gemini-3-flash-preview"
+)
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BEADS_BIN="${SWARM_BEADS_BIN:-${SCRIPT_DIR}/bd-safe.sh}"
 
@@ -64,11 +71,25 @@ Analyze why this automated coding attempt failed. Provide:
 Respond in plain text (no markdown fences). Start with "ROOT CAUSE:" on the first line.
 PROMPT_EOF
 
-python3 - "$MODEL" "$PROMPT_FILE" "$PAYLOAD_FILE" <<'PY'
-import json
-import pathlib
-import sys
+# Try each model in the cascade until one returns non-empty content.
+DIAGNOSIS=""
+USED_MODEL=""
+# Deduplicate while preserving order (bash 4+)
+declare -A _seen_models
+DEDUPE_MODELS=()
+for _m in "${POSTMORTEM_MODELS[@]}"; do
+  if [[ -z "${_seen_models[$_m]+x}" ]]; then
+    _seen_models[$_m]=1
+    DEDUPE_MODELS+=("$_m")
+  fi
+done
 
+for MODEL in "${DEDUPE_MODELS[@]}"; do
+  log "Sending postmortem for $ISSUE_ID to $MODEL..."
+
+  # Rebuild payload with the current model name.
+  python3 - "$MODEL" "$PROMPT_FILE" "$PAYLOAD_FILE" <<'PY'
+import json, pathlib, sys
 model, prompt_path, payload_path = sys.argv[1:4]
 prompt = pathlib.Path(prompt_path).read_text()
 payload = {
@@ -80,74 +101,61 @@ payload = {
 pathlib.Path(payload_path).write_text(json.dumps(payload))
 PY
 
-log "Sending postmortem for $ISSUE_ID to $MODEL..."
+  HTTP_STATUS="$(curl -sS --max-time 120 \
+    -o "$RESPONSE_FILE" \
+    -w "%{http_code}" \
+    -H "x-api-key: $CLOUD_KEY" \
+    -H "Content-Type: application/json" \
+    "${CLOUD_URL%/}/chat/completions" \
+    --data-binary "@$PAYLOAD_FILE")"
 
-# Call the cloud API without putting the prompt in argv.
-HTTP_STATUS="$(curl -sS --max-time 120 \
-  -o "$RESPONSE_FILE" \
-  -w "%{http_code}" \
-  -H "x-api-key: $CLOUD_KEY" \
-  -H "Content-Type: application/json" \
-  "${CLOUD_URL%/}/chat/completions" \
-  --data-binary "@$PAYLOAD_FILE")"
+  if [[ ! "$HTTP_STATUS" =~ ^2 ]]; then
+    log "Model $MODEL failed HTTP $HTTP_STATUS — trying next"
+    continue
+  fi
 
-if [[ ! "$HTTP_STATUS" =~ ^2 ]]; then
-  log "Cloud council request failed with HTTP $HTTP_STATUS — skipping update"
-  log "Raw response: $(python3 - "$RESPONSE_FILE" <<'PY'
-import pathlib
-import sys
-print(pathlib.Path(sys.argv[1]).read_text(errors='replace')[:500])
-PY
-)"
-  exit 0
-fi
-
-# Extract the response content
-DIAGNOSIS="$(python3 - "$RESPONSE_FILE" <<'PY'
-import json
-import pathlib
-import sys
-
+  DIAGNOSIS="$(python3 - "$RESPONSE_FILE" <<'PY'
+import json, pathlib, sys
 try:
     payload = json.loads(pathlib.Path(sys.argv[1]).read_text())
 except Exception:
     print("")
     raise SystemExit(0)
-
 choices = payload.get("choices") or []
 if not choices:
     print("")
     raise SystemExit(0)
-
 message = choices[0].get("message") or {}
 content = message.get("content")
 if isinstance(content, str):
     print(content)
 elif isinstance(content, list):
-    parts = []
-    for item in content:
-        if isinstance(item, dict) and item.get("type") == "text":
-            text = item.get("text")
-            if text:
-                parts.append(text)
+    parts = [item.get("text","") for item in content
+             if isinstance(item, dict) and item.get("type") == "text" and item.get("text")]
     print("\n".join(parts))
 else:
     print("")
 PY
-)"
+  )"
+
+  if [[ -n "$DIAGNOSIS" ]]; then
+    USED_MODEL="$MODEL"
+    break
+  fi
+
+  log "Model $MODEL returned empty content — trying next"
+  log "Raw response: $(python3 - "$RESPONSE_FILE" <<'PY'
+import pathlib, sys
+print(pathlib.Path(sys.argv[1]).read_text(errors='replace')[:300])
+PY
+  )"
+done
 
 if [[ -z "$DIAGNOSIS" ]]; then
-  log "Cloud council returned empty response — skipping update"
-  log "Raw response: $(python3 - "$RESPONSE_FILE" <<'PY'
-import pathlib
-import sys
-print(pathlib.Path(sys.argv[1]).read_text(errors='replace')[:500])
-PY
-)"
+  log "All postmortem models returned empty — skipping update"
   exit 0
 fi
-
-log "Received diagnosis (${#DIAGNOSIS} chars)"
+log "Received diagnosis via $USED_MODEL (${#DIAGNOSIS} chars)"
 
 # Update the beads issue with the postmortem notes
 NOTES="## Postmortem ($(date -u +%Y-%m-%dT%H:%M:%SZ))
