@@ -1018,6 +1018,18 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         format_task_prompt(&packet)
     };
 
+    // Prune accumulated context after prune_after_iteration iterations.
+    // The state driver path was missing this — unlike orchestrator/mod.rs which calls
+    // telemetry::prune_task_prompt() explicitly, driver.rs built task_prompt but never
+    // pruned it. By iteration 4+ the prompt hits 135K tokens (4× the 32K context of
+    // local models), causing 502 "exceed_context_size_error" from every endpoint.
+    task_prompt = crate::telemetry::prune_task_prompt(
+        &task_prompt,
+        iteration,
+        ctx.config.prune_after_iteration,
+        2, // keep last 2 iteration sections (matches orchestrator/mod.rs)
+    );
+
     // Inject verifier stderr when failure_signals are thin
     if let Some(ref report) = ctx.last_report {
         if !report.all_green && packet.failure_signals.is_empty() {
