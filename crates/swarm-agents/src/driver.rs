@@ -1065,6 +1065,30 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         );
     }
 
+    // High-churn issues (stringer-generated: "High churn: <file> (modified N times in M days)")
+    // get a targeted prompt injection. Without it, agents correctly identify the churn as a
+    // process issue but conclude "nothing to change" and hit the no-change circuit breaker.
+    // The hint makes the refactoring intent explicit so the coder actually edits the file.
+    if ctx.issue.title.starts_with("High churn:") {
+        task_prompt.push_str(
+            "\n\n## High-Churn Refactoring Task\n\
+             This file has unusually high git churn — it is modified very frequently, which \
+             suggests it is doing too much or has unclear boundaries. Your task is to make \
+             at least one concrete code improvement that will reduce future churn:\n\
+             - Extract a well-named helper function for a repeated or complex block\n\
+             - Move a cohesive group of functions into a sub-module or separate file\n\
+             - Replace an ad-hoc inline pattern with a named constant or struct\n\
+             - Add a doc comment that clarifies the invariant or contract\n\
+             **You MUST make at least one file edit.** Analysis without an edit will be \
+             rejected. Choose the smallest change that clearly improves structure.\n"
+        );
+        info!(
+            iteration,
+            issue_id = %ctx.issue.id,
+            "Injected high-churn refactoring hint into task prompt"
+        );
+    }
+
     // Checkpoint before agent invocation
     ctx.pre_worker_commit = ctx.git_mgr.current_commit_full().ok();
 
@@ -1378,68 +1402,90 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                     ctx.metrics.record_coder_route("ExplorerCoder");
 
                     // ── Phase 1: Explorer ────────────────────────────────────────
-                    // Acquire the global gate before starting the Explorer to
-                    // prevent concurrent inference on the same reasoning endpoint.
-                    // The permit is dropped explicitly before Phase 2 so
-                    // GeneralCoder phases remain fully concurrent.
-                    let explorer_permit = EXPLORER_GATE
-                        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
-                        .acquire()
-                        .await
-                        .expect("EXPLORER_GATE semaphore was closed");
+                    // Pre-flight deep probe: verify the reasoning endpoint can
+                    // actually generate before acquiring the semaphore gate.
+                    // vasp-02 occasionally returns empty completions even without
+                    // concurrent load (independent of the inter-issue contention
+                    // that EXPLORER_GATE prevents). A 10-second 1-token probe is
+                    // far cheaper than waiting for a 25-turn Explorer to time out.
+                    //
+                    // If the probe passes: acquire the global gate and run Explorer.
+                    // If the probe fails: skip Explorer immediately, fall through
+                    // to GeneralCoder — same as the existing timeout/error fallback,
+                    // but without burning 25-40s on transient retries.
+                    let exploration =
+                        if ctx.cluster_health.deep_probe_tier("reasoning").await {
+                            // Acquire the global gate to prevent concurrent inference
+                            // on the same reasoning endpoint. The permit is dropped
+                            // explicitly before Phase 2 so GeneralCoder phases remain
+                            // fully concurrent.
+                            let explorer_permit = EXPLORER_GATE
+                                .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(1)))
+                                .acquire()
+                                .await
+                                .expect("EXPLORER_GATE semaphore was closed");
 
-                    ctx.metrics.record_agent_metrics("Devstral-Explorer", 0, 0);
-                    let explorer = ctx.factory.build_explorer(&ctx.wt_path);
-                    let explore_budget = ctx.worker_timeout / 2;
-                    let explore_adapter = RuntimeAdapter::new(AdapterConfig {
-                        agent_name: "Devstral-Explorer".into(),
-                        deadline: Some(Instant::now() + explore_budget),
-                        max_tool_calls: Some(25),
-                        // No max_turns_without_write: explorer is read-only
-                        ..Default::default()
-                    });
-                    let exploration = match tokio::time::timeout(
-                        explore_budget,
-                        crate::orchestrator::prompt_with_hook_and_retry(
-                            &explorer,
-                            &task_prompt,
-                            1,
-                            explore_adapter,
-                        ),
-                    )
-                    .await
-                    {
-                        Ok(Ok(analysis)) if !analysis.trim().is_empty() => {
-                            info!(
-                                iteration,
-                                analysis_len = analysis.len(),
-                                "Explorer produced analysis (state driver)"
-                            );
-                            Some(analysis)
-                        }
-                        Ok(Ok(_)) => {
+                            ctx.metrics.record_agent_metrics("Devstral-Explorer", 0, 0);
+                            let explorer = ctx.factory.build_explorer(&ctx.wt_path);
+                            let explore_budget = ctx.worker_timeout / 2;
+                            let explore_adapter = RuntimeAdapter::new(AdapterConfig {
+                                agent_name: "Devstral-Explorer".into(),
+                                deadline: Some(Instant::now() + explore_budget),
+                                max_tool_calls: Some(25),
+                                // No max_turns_without_write: explorer is read-only
+                                ..Default::default()
+                            });
+                            let result = match tokio::time::timeout(
+                                explore_budget,
+                                crate::orchestrator::prompt_with_hook_and_retry(
+                                    &explorer,
+                                    &task_prompt,
+                                    1,
+                                    explore_adapter,
+                                ),
+                            )
+                            .await
+                            {
+                                Ok(Ok(analysis)) if !analysis.trim().is_empty() => {
+                                    info!(
+                                        iteration,
+                                        analysis_len = analysis.len(),
+                                        "Explorer produced analysis (state driver)"
+                                    );
+                                    Some(analysis)
+                                }
+                                Ok(Ok(_)) => {
+                                    warn!(
+                                        iteration,
+                                        "Explorer returned empty analysis — proceeding without"
+                                    );
+                                    None
+                                }
+                                Ok(Err(e)) => {
+                                    warn!(iteration, error = %e, "Explorer failed — proceeding without analysis");
+                                    None
+                                }
+                                Err(_) => {
+                                    warn!(
+                                        iteration,
+                                        "Explorer timed out — proceeding without analysis"
+                                    );
+                                    None
+                                }
+                            };
+
+                            // Release the gate now — Phase 2 (GeneralCoder) runs on
+                            // a different endpoint (vasp-01) and does not need exclusion.
+                            drop(explorer_permit);
+                            result
+                        } else {
                             warn!(
                                 iteration,
-                                "Explorer returned empty analysis — proceeding without"
+                                "Explorer pre-flight probe failed (reasoning endpoint unresponsive) \
+                                 — skipping Explorer phase"
                             );
                             None
-                        }
-                        Ok(Err(e)) => {
-                            warn!(iteration, error = %e, "Explorer failed — proceeding without analysis");
-                            None
-                        }
-                        Err(_) => {
-                            warn!(
-                                iteration,
-                                "Explorer timed out — proceeding without analysis"
-                            );
-                            None
-                        }
-                    };
-
-                    // Release the gate now — Phase 2 (GeneralCoder) runs on
-                    // a different endpoint (vasp-01) and does not need exclusion.
-                    drop(explorer_permit);
+                        };
 
                     // ── Phase 2: GeneralCoder with enriched prompt ───────────────
                     ctx.metrics
