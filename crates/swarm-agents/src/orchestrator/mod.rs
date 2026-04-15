@@ -2011,7 +2011,10 @@ async fn process_issue_core(
                                 Some(analysis)
                             }
                             Ok(Ok(_)) => {
-                                warn!(iteration, "Explorer returned empty analysis — proceeding without");
+                                warn!(
+                                    iteration,
+                                    "Explorer returned empty analysis — proceeding without"
+                                );
                                 None
                             }
                             Ok(Err(e)) => {
@@ -2019,7 +2022,10 @@ async fn process_issue_core(
                                 None
                             }
                             Err(_) => {
-                                warn!(iteration, "Explorer timed out — proceeding without analysis");
+                                warn!(
+                                    iteration,
+                                    "Explorer timed out — proceeding without analysis"
+                                );
                                 None
                             }
                         };
