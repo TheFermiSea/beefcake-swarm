@@ -683,14 +683,14 @@ fn test_sandbox_valid_path() {
     let dir = tempfile::tempdir().unwrap();
     fs::write(dir.path().join("file.rs"), "").unwrap();
 
-    let result = sandbox_check(dir.path(), "file.rs");
+    let result = sandbox_check(dir.path(), "file.rs", false);
     assert!(result.is_ok());
 }
 
 #[test]
 fn test_sandbox_escape_attempt() {
     let dir = tempfile::tempdir().unwrap();
-    let result = sandbox_check(dir.path(), "../../../etc/passwd");
+    let result = sandbox_check(dir.path(), "../../../etc/passwd", false);
     assert!(result.is_err());
 }
 
@@ -698,6 +698,35 @@ fn test_sandbox_escape_attempt() {
 fn test_sandbox_new_file_in_existing_dir() {
     let dir = tempfile::tempdir().unwrap();
     // Parent exists, file doesn't — should still pass sandbox check
-    let result = sandbox_check(dir.path(), "new_file.txt");
+    let result = sandbox_check(dir.path(), "new_file.txt", false);
     assert!(result.is_ok());
+}
+
+#[test]
+fn test_sandbox_checkpoint_readable_but_not_writable() {
+    let dir = tempfile::tempdir().unwrap();
+    // Reads of .swarm-checkpoint.json must succeed — model probes this on turn 1
+    assert!(
+        sandbox_check(dir.path(), ".swarm-checkpoint.json", false).is_ok(),
+        ".swarm-checkpoint.json must be readable"
+    );
+    // Writes must be blocked — workers looped writing '{}' to this file
+    assert!(
+        sandbox_check(dir.path(), ".swarm-checkpoint.json", true).is_err(),
+        ".swarm-checkpoint.json must not be writable"
+    );
+}
+
+#[test]
+fn test_sandbox_session_log_fully_forbidden() {
+    let dir = tempfile::tempdir().unwrap();
+    // Session log is forbidden for both reads and writes
+    assert!(
+        sandbox_check(dir.path(), ".swarm-session.jsonl", false).is_err(),
+        ".swarm-session.jsonl must not be readable"
+    );
+    assert!(
+        sandbox_check(dir.path(), ".swarm-session.jsonl", true).is_err(),
+        ".swarm-session.jsonl must not be writable"
+    );
 }

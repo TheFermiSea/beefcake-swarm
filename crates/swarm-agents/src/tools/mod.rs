@@ -121,25 +121,37 @@ pub(crate) async fn run_command_with_timeout(
 /// 100% dogfood failure rate on 2026-03-14. `.git/` is obviously off-limits.
 const FORBIDDEN_PREFIXES: &[&str] = &[".beads", ".git", ".dolt"];
 
-/// Root-level files that agents must not read or modify.
-/// These are swarm infrastructure files — editing them causes data corruption
-/// or session state loss. Workers were observed editing `.swarm-session.jsonl`
-/// (the session log) and `.swarm-checkpoint.json` during dogfood runs.
+/// Root-level files that agents must never read OR write.
+/// Session log and event files — workers corrupting these causes context loss.
 const FORBIDDEN_FILES: &[&str] = &[
     ".swarm-session.jsonl",
-    ".swarm-checkpoint.json",
-    ".swarm-checkpoint.json.tmp",
     ".swarm-progress.txt",
     ".swarm-events.jsonl",
     ".swarm-telemetry.jsonl",
     ".swarm-hook-events.jsonl",
 ];
 
+/// Root-level files that agents may read but must not write.
+/// Workers were observed writing `"{}"` to `.swarm-checkpoint.json` in a loop
+/// (observed 2026-04-15). Reads are harmless — the model probes for a resume
+/// checkpoint on turn 1 and moves on when it gets a sensible response.
+const WRITE_FORBIDDEN_FILES: &[&str] = &[
+    ".swarm-checkpoint.json",
+    ".swarm-checkpoint.json.tmp",
+];
+
 /// Validate that a resolved path stays within the sandbox root and does not
 /// touch forbidden directories (`.beads/`, `.git/`, etc.) or protected files.
 ///
+/// `is_write` — when `true`, also enforces `WRITE_FORBIDDEN_FILES` (files
+/// that may be read but never mutated).
+///
 /// Returns the canonicalized path on success.
-pub fn sandbox_check(working_dir: &Path, relative_path: &str) -> Result<PathBuf, ToolError> {
+pub fn sandbox_check(
+    working_dir: &Path,
+    relative_path: &str,
+    is_write: bool,
+) -> Result<PathBuf, ToolError> {
     // Normalize the path to catch tricks like "./.swarm-session.jsonl" or
     // "foo/../.beads/config.yaml". Component iteration strips `.` and
     // resolves `..`, and Normal segments never contain `/`.
@@ -154,6 +166,15 @@ pub fn sandbox_check(working_dir: &Path, relative_path: &str) -> Result<PathBuf,
                 return Err(ToolError::Sandbox(format!(
                     "path `{relative_path}` is a protected swarm infrastructure file"
                 )));
+            }
+        }
+        if is_write {
+            for forbidden in WRITE_FORBIDDEN_FILES {
+                if filename_str == *forbidden {
+                    return Err(ToolError::Sandbox(format!(
+                        "path `{relative_path}` is a read-only swarm infrastructure file"
+                    )));
+                }
             }
         }
     }

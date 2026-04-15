@@ -127,7 +127,7 @@ impl Tool for ColGrepTool {
 
             if !file_path.is_empty() {
                 // Ensure we don't return files outside the sandbox
-                if sandbox_check(&self.working_dir, file_path).is_err() {
+                if sandbox_check(&self.working_dir, file_path, false).is_err() {
                     continue;
                 }
             }

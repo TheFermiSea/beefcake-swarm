@@ -60,7 +60,7 @@ impl Tool for FileExistsTool {
             // sandbox_check canonicalises the path; if the file doesn't exist it
             // falls back to canonicalising the parent — which is fine for existence
             // checks because we just call .exists() on the original join.
-            sandbox_check(&self.working_dir, rel)?;
+            sandbox_check(&self.working_dir, rel, false)?;
             let full = self.working_dir.join(rel);
             map.insert(rel.clone(), serde_json::Value::Bool(full.exists()));
         }
