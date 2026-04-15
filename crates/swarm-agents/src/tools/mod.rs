@@ -135,10 +135,7 @@ const FORBIDDEN_FILES: &[&str] = &[
 /// Workers were observed writing `"{}"` to `.swarm-checkpoint.json` in a loop
 /// (observed 2026-04-15). Reads are harmless — the model probes for a resume
 /// checkpoint on turn 1 and moves on when it gets a sensible response.
-const WRITE_FORBIDDEN_FILES: &[&str] = &[
-    ".swarm-checkpoint.json",
-    ".swarm-checkpoint.json.tmp",
-];
+const WRITE_FORBIDDEN_FILES: &[&str] = &[".swarm-checkpoint.json", ".swarm-checkpoint.json.tmp"];
 
 /// Validate that a resolved path stays within the sandbox root and does not
 /// touch forbidden directories (`.beads/`, `.git/`, etc.) or protected files.
