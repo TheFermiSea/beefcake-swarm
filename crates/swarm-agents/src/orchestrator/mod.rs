@@ -1978,6 +1978,104 @@ async fn process_issue_core(
                         };
                         (result, adapter)
                     }
+                    CoderRoute::ExplorerCoder => {
+                        // Two-phase pipeline: Explorer (read-only) → GeneralCoder (targeted edit).
+                        // Explorer runs on the reasoning model with no write deadline.
+                        // GeneralCoder receives the original task + Explorer's analysis.
+                        info!(iteration, "Routing to ExplorerCoder pipeline");
+                        metrics.record_coder_route("ExplorerCoder");
+
+                        // ── Phase 1: Explorer ────────────────────────────────────
+                        metrics.record_agent_metrics("Devstral-Explorer", 0, 0);
+                        let explorer = factory.build_explorer(&wt_path);
+                        let explore_budget = worker_timeout / 2;
+                        let explore_adapter = RuntimeAdapter::new(AdapterConfig {
+                            agent_name: "Devstral-Explorer".into(),
+                            deadline: Some(Instant::now() + explore_budget),
+                            max_tool_calls: Some(25),
+                            // No max_turns_without_write — explorer is read-only
+                            ..Default::default()
+                        });
+                        let exploration = match tokio::time::timeout(
+                            explore_budget,
+                            prompt_with_hook_and_retry(&explorer, &task_prompt, 1, explore_adapter),
+                        )
+                        .await
+                        {
+                            Ok(Ok(analysis)) if !analysis.trim().is_empty() => {
+                                info!(
+                                    iteration,
+                                    analysis_len = analysis.len(),
+                                    "Explorer produced analysis"
+                                );
+                                Some(analysis)
+                            }
+                            Ok(Ok(_)) => {
+                                warn!(iteration, "Explorer returned empty analysis — proceeding without");
+                                None
+                            }
+                            Ok(Err(e)) => {
+                                warn!(iteration, error = %e, "Explorer failed — proceeding without analysis");
+                                None
+                            }
+                            Err(_) => {
+                                warn!(iteration, "Explorer timed out — proceeding without analysis");
+                                None
+                            }
+                        };
+
+                        // ── Phase 2: GeneralCoder with enriched prompt ───────────
+                        metrics.record_agent_metrics("Qwen3.5-GeneralCoder", 0, 0);
+                        let enriched_prompt = match &exploration {
+                            Some(analysis) => format!(
+                                "{task_prompt}\n\n\
+                                 ## Explorer Analysis\n\
+                                 The Explorer has already read the relevant files. \
+                                 Follow the CODER INSTRUCTIONS below — do NOT re-read \
+                                 files already described. Write your first edit \
+                                 on your first or second tool call.\n\n\
+                                 {analysis}"
+                            ),
+                            None => task_prompt.clone(),
+                        };
+                        let seq_write_deadline = crate::subtask::dynamic_write_deadline(
+                            triage_result.complexity,
+                            &issue_objective,
+                            &[],
+                            &[],
+                        );
+                        let adapter = RuntimeAdapter::new(AdapterConfig {
+                            agent_name: "Qwen3.5-GeneralCoder".into(),
+                            deadline: Some(Instant::now() + worker_timeout),
+                            max_tool_calls: Some(config.max_worker_tool_calls),
+                            max_turns_without_write: Some(seq_write_deadline),
+                            search_unlock_turn: Some(1),
+                            governance_tier,
+                            ..Default::default()
+                        });
+                        let result = match tokio::time::timeout(
+                            worker_timeout,
+                            prompt_with_hook_and_retry(
+                                &general_coder,
+                                &enriched_prompt,
+                                2,
+                                adapter.clone(),
+                            ),
+                        )
+                        .await
+                        {
+                            Ok(result) => result,
+                            Err(_elapsed) => {
+                                warn!(
+                                    iteration,
+                                    timeout_secs = worker_timeout.as_secs(),
+                                    "general_coder timed out in ExplorerCoder pipeline"
+                                );
+                                Ok(TIMEOUT_RESPONSE.to_string())
+                            }
+                        };
+                        (result, adapter)
+                    }
                 }
             }
             SwarmTier::Strategist => {

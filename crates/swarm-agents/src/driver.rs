@@ -1350,6 +1350,100 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                     };
                     (result, adapter)
                 }
+                CoderRoute::ExplorerCoder => {
+                    // Two-phase pipeline: Explorer → GeneralCoder.
+                    // Phase 1: Explorer reads files and git history, returns specific
+                    // coder instructions. No write deadline — exploration takes time.
+                    // Phase 2: GeneralCoder receives the enriched prompt and writes
+                    // on its first or second turn.
+                    info!(iteration, "Routing to ExplorerCoder pipeline (state driver)");
+                    ctx.metrics.record_coder_route("ExplorerCoder");
+
+                    // ── Phase 1: Explorer ────────────────────────────────────────
+                    ctx.metrics.record_agent_metrics("Devstral-Explorer", 0, 0);
+                    let explorer = ctx.factory.build_explorer(&ctx.wt_path);
+                    let explore_budget = ctx.worker_timeout / 2;
+                    let explore_adapter = RuntimeAdapter::new(AdapterConfig {
+                        agent_name: "Devstral-Explorer".into(),
+                        deadline: Some(Instant::now() + explore_budget),
+                        max_tool_calls: Some(25),
+                        // No max_turns_without_write: explorer is read-only
+                        ..Default::default()
+                    });
+                    let exploration = match tokio::time::timeout(
+                        explore_budget,
+                        crate::orchestrator::prompt_with_hook_and_retry(
+                            &explorer,
+                            &task_prompt,
+                            1,
+                            explore_adapter,
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(Ok(analysis)) if !analysis.trim().is_empty() => {
+                            info!(
+                                iteration,
+                                analysis_len = analysis.len(),
+                                "Explorer produced analysis (state driver)"
+                            );
+                            Some(analysis)
+                        }
+                        Ok(Ok(_)) => {
+                            warn!(iteration, "Explorer returned empty analysis — proceeding without");
+                            None
+                        }
+                        Ok(Err(e)) => {
+                            warn!(iteration, error = %e, "Explorer failed — proceeding without analysis");
+                            None
+                        }
+                        Err(_) => {
+                            warn!(iteration, "Explorer timed out — proceeding without analysis");
+                            None
+                        }
+                    };
+
+                    // ── Phase 2: GeneralCoder with enriched prompt ───────────────
+                    ctx.metrics.record_agent_metrics("Qwen3.5-GeneralCoder", 0, 0);
+                    let enriched_prompt = match &exploration {
+                        Some(analysis) => format!(
+                            "{task_prompt}\n\n\
+                             ## Explorer Analysis\n\
+                             The Explorer has already read the relevant files. \
+                             Follow the CODER INSTRUCTIONS below — do NOT re-read \
+                             files already described. Write your first edit \
+                             on your first or second tool call.\n\n\
+                             {analysis}"
+                        ),
+                        None => task_prompt.clone(),
+                    };
+                    let adapter = RuntimeAdapter::new(AdapterConfig {
+                        agent_name: "Qwen3.5-GeneralCoder".into(),
+                        deadline: Some(Instant::now() + ctx.worker_timeout),
+                        max_tool_calls: Some(30),
+                        max_turns_without_write: Some(ctx.config.max_turns_without_write),
+                        search_unlock_turn: Some(1),
+                        ..Default::default()
+                    });
+                    let result = match tokio::time::timeout(
+                        ctx.worker_timeout,
+                        crate::orchestrator::prompt_with_hook_and_retry(
+                            &ctx.general_coder,
+                            &enriched_prompt,
+                            2,
+                            adapter.clone(),
+                        ),
+                    )
+                    .await
+                    {
+                        Ok(result) => result,
+                        Err(_) => {
+                            warn!(iteration, "general_coder timed out in ExplorerCoder pipeline (state driver)");
+                            Ok("general_coder timed out. Changes on disk.".into())
+                        }
+                    };
+                    (result, adapter)
+                }
             }
         }
         SwarmTier::Strategist => {

@@ -33,6 +33,20 @@ pub enum CoderRoute {
     /// Triggered when the task requires decomposition (DecompositionRequired failure),
     /// touches many files, or involves cross-crate architectural decisions.
     CoTPlanner,
+    /// Two-phase pipeline: Explorer (read-only analysis) → GeneralCoder (targeted edit).
+    ///
+    /// Used for task/feature issues with no compilation errors — the class of issues
+    /// where workers hit the write deadline because they need extensive exploration
+    /// before knowing what to write (high-churn analysis, multi-file refactors, etc.).
+    ///
+    /// Phase 1: Explorer runs on the reasoning model with read-only tools and NO write
+    /// deadline. It reads the target file(s), traces git history, and returns specific
+    /// "find this / replace with this" instructions.
+    /// Phase 2: GeneralCoder receives the original task PLUS the Explorer's instructions.
+    /// With the exact edit pre-digested, it writes on its first or second turn.
+    ///
+    /// Implements the "localize then edit" pattern from SWE-bench top performers.
+    ExplorerCoder,
 }
 
 /// Route to the appropriate coder based on error category distribution and iteration.
@@ -49,8 +63,10 @@ pub enum CoderRoute {
 /// trait bounds, async) still use the coder tier on retry.
 pub fn route_to_coder(error_cats: &[ErrorCategory], iteration: u32) -> CoderRoute {
     if error_cats.is_empty() {
-        // First iteration — use general coder for scaffolding/multi-file work
-        return CoderRoute::GeneralCoder;
+        // No compilation errors — this is a task/feature/analysis issue.
+        // Use the two-phase Explorer → Coder pipeline so the coder receives
+        // pre-digested instructions and can write on its first or second turn.
+        return CoderRoute::ExplorerCoder;
     }
 
     // Reasoning sandwich: on retries with only simple errors, use the fast tier.
@@ -691,8 +707,9 @@ mod tests {
     }
 
     #[test]
-    fn test_route_empty_errors_to_general() {
-        assert_eq!(route_to_coder(&[], 1), CoderRoute::GeneralCoder);
+    fn test_route_empty_errors_to_explorer_coder() {
+        // No compilation errors → task/feature/analysis issue → ExplorerCoder pipeline
+        assert_eq!(route_to_coder(&[], 1), CoderRoute::ExplorerCoder);
     }
 
     #[test]

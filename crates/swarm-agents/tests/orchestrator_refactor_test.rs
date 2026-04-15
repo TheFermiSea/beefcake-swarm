@@ -100,9 +100,10 @@ fn reexport_coder_route_variants() {
 
 #[test]
 fn reexport_route_to_coder_function() {
-    // Must be callable through the re-export path
+    // Must be callable through the re-export path.
+    // Empty error_cats → task/feature issue → ExplorerCoder pipeline.
     let result = orchestrator::route_to_coder(&[], 1);
-    assert_eq!(result, CoderRoute::GeneralCoder);
+    assert_eq!(result, CoderRoute::ExplorerCoder);
 }
 
 #[test]
@@ -164,8 +165,10 @@ fn routing_general_errors_to_general_coder() {
 }
 
 #[test]
-fn routing_empty_errors_to_general() {
-    assert_eq!(route_to_coder(&[], 1), CoderRoute::GeneralCoder);
+fn routing_empty_errors_to_explorer_coder() {
+    // Empty error_cats means a task/feature issue with no compilation errors.
+    // Route to ExplorerCoder so the worker explores before writing.
+    assert_eq!(route_to_coder(&[], 1), CoderRoute::ExplorerCoder);
 }
 
 // ── 3. Prompt formatting contracts ───────────────────────────────────

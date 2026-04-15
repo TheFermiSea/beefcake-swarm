@@ -381,6 +381,16 @@ impl AgentFactory {
         )
     }
 
+    /// Build the Explorer specialist (two-phase pipeline phase 1).
+    ///
+    /// Read-only tools: read_file, list_files, run_command, search_code, colgrep.
+    /// No write deadline — Explorer is paired with GeneralCoder in ExplorerCoder route.
+    /// Runs on the reasoning model (Devstral-24B) for deep analysis capability.
+    pub fn build_explorer(&self, wt_path: &Path) -> OaiAgent {
+        let (client, model) = self.resolve_role_endpoint(SwarmRole::ReasoningWorker);
+        specialists::build_explorer_named(&client, &model, wt_path, "explorer", false)
+    }
+
     /// Build the planner specialist.
     ///
     /// Read-only tools for analysis. Produces structured JSON repair plans.

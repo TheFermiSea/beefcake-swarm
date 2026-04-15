@@ -1,12 +1,14 @@
-//! Specialist agent builders: planner, fixer, architect, and editor.
+//! Specialist agent builders: planner, fixer, architect, editor, and explorer.
 //!
 //! These agents are registered as tools on the manager, enabling an explicit
 //! delegation protocol:
 //!
 //!   Manager → planner (produces structured plan) → fixer (implements plan)
+//!   Manager → explorer (read-only analysis) → general_coder (targeted edit)
 //!
-//! This separates planning from execution, letting the manager verify plans
-//! before committing to implementation.
+//! The explorer/coder split implements the "localize then edit" two-phase pattern
+//! from SWE-bench top performers. Explorer has read-only tools and no write
+//! deadline; coder receives pre-digested instructions and writes immediately.
 
 use std::path::Path;
 
@@ -20,6 +22,10 @@ use super::coder::{worker_sampling_params, OaiAgent};
 
 const DEFAULT_PLANNER_MAX_TURNS: usize = 15;
 const DEFAULT_FIXER_MAX_TURNS: usize = 25;
+/// Explorer gets more turns than the planner because it may need to trace
+/// git history (multiple `git diff` calls), read several files, and run
+/// searches before it has enough context to produce coder instructions.
+const DEFAULT_EXPLORER_MAX_TURNS: usize = 20;
 
 fn planner_max_turns() -> usize {
     std::env::var("SWARM_PLANNER_MAX_TURNS")
@@ -35,6 +41,14 @@ fn fixer_max_turns() -> usize {
         .and_then(|v| v.parse::<usize>().ok())
         .filter(|v| *v > 0)
         .unwrap_or(DEFAULT_FIXER_MAX_TURNS)
+}
+
+fn explorer_max_turns() -> usize {
+    std::env::var("SWARM_EXPLORER_MAX_TURNS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .filter(|v| *v > 0)
+        .unwrap_or(DEFAULT_EXPLORER_MAX_TURNS)
 }
 
 /// Build the planner specialist.
@@ -240,6 +254,59 @@ pub fn build_editor_named(
             None,
         ))
         .default_max_turns(editor_max_turns())
+        .build()
+}
+
+/// Build the Explorer specialist.
+///
+/// Read-only tools: read_file, list_files, run_command, search_code, colgrep.
+/// NO edit_file or write_file — the explorer never modifies files.
+///
+/// Used as the first phase of the ExplorerCoder two-phase pipeline in driver.rs:
+///   1. Explorer reads the target file(s), traces git history, runs searches.
+///   2. Explorer returns specific coder instructions with exact text to change.
+///   3. Coder receives the instructions and writes on its first or second turn.
+///
+/// No write deadline is applied to the explorer (see driver.rs AdapterConfig).
+pub fn build_explorer(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+) -> OaiAgent {
+    build_explorer_named(client, model, wt_path, "explorer", false)
+}
+
+/// Build the Explorer specialist with a custom agent name.
+pub fn build_explorer_named(
+    client: &openai::CompletionsClient,
+    model: &str,
+    wt_path: &Path,
+    name: &str,
+    proxy_tools: bool,
+) -> OaiAgent {
+    let preamble = prompts::build_full_worker_preamble(
+        "explorer",
+        wt_path,
+        prompts::EXPLORER_PREAMBLE,
+        None,
+    );
+    client
+        .agent(model)
+        .name(name)
+        .description(
+            "Read-only codebase explorer — reads files, traces git history, returns \
+             specific edit instructions for the coder (two-phase pipeline phase 1)",
+        )
+        .preamble(&preamble)
+        .temperature(0.1) // Low temp: accurate analysis, not creative
+        .additional_params(worker_sampling_params())
+        .tools(bundles::worker_tools(
+            wt_path,
+            WorkerRole::Planner, // Read-only: read_file, list_files, run_command
+            proxy_tools,
+            None,
+        ))
+        .default_max_turns(explorer_max_turns())
         .build()
 }
 
