@@ -840,59 +840,76 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 );
             }
 
-            // Anti-pattern detection: consecutive edit failures on the same file.
-            const MAX_EDIT_FAILURES_PER_FILE: u32 = 3;
-
+            // Anti-pattern detection + file-path tracking.
             let base_name = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
             if base_name == "edit_file" {
                 if let Some(path) = extract_path_from_args(&args_for_path) {
-                    if is_error {
-                        let count = s.edit_failure_counts.entry(path.clone()).or_insert(0);
-                        *count += 1;
-                        let count_val = *count;
-                        if count_val >= MAX_EDIT_FAILURES_PER_FILE {
-                            warn!(
-                                agent = %config.agent_name,
-                                file = %path,
-                                failures = count_val,
-                                "Anti-pattern: consecutive edit failures — terminating"
-                            );
-                            s.terminated_early = true;
-                            let reason = format!(
-                                "Edit anti-pattern: {count_val} consecutive edit_file failures on '{path}'. \
-                                 The old_content does not match the file. Use read_file to verify \
-                                 exact current content before retrying."
-                            );
-                            s.termination_reason = Some(reason);
-                            return HookAction::terminate(format!(
-                                "Runtime adapter: edit anti-pattern on {path}"
-                            ));
-                        }
-                    } else {
-                        // Successful edit — reset failure counter for this file
-                        s.edit_failure_counts.remove(&path);
+                    if let Some(action) =
+                        check_edit_anti_pattern(&mut s, path, is_error, &config.agent_name)
+                    {
+                        return action;
                     }
                 }
             }
-
-            // Track file reads for progress monitoring
-            if base_name == "read_file" {
-                if let Some(path) = extract_path_from_args(&args_for_path) {
-                    s.files_read_set.insert(path);
-                }
-            }
-
-            // Update validator state: track file reads/writes for pre-call validators.
-            let base = tool_name.strip_prefix("proxy_").unwrap_or(&tool_name);
-            if let Some(path) = extract_path_from_args(&args_for_path) {
-                match base {
-                    "read_file" => s.validator_state.record_read(&path),
-                    "edit_file" | "write_file" => s.validator_state.record_write(&path),
-                    _ => {}
-                }
-            }
+            update_file_tracking(&mut s, base_name, &args_for_path);
 
             HookAction::cont()
+        }
+    }
+}
+
+/// Check the edit anti-pattern (repeated failures on the same file) and update state.
+///
+/// Returns `Some(HookAction::terminate(...))` when the threshold is exceeded, `None` otherwise.
+fn check_edit_anti_pattern(
+    s: &mut AdapterState,
+    path: String,
+    is_error: bool,
+    agent_name: &str,
+) -> Option<HookAction> {
+    const MAX_EDIT_FAILURES_PER_FILE: u32 = 3;
+    if is_error {
+        let count = s.edit_failure_counts.entry(path.clone()).or_insert(0);
+        *count += 1;
+        let count_val = *count;
+        if count_val >= MAX_EDIT_FAILURES_PER_FILE {
+            warn!(
+                agent = %agent_name,
+                file = %path,
+                failures = count_val,
+                "Anti-pattern: consecutive edit failures — terminating"
+            );
+            s.terminated_early = true;
+            let reason = format!(
+                "Edit anti-pattern: {count_val} consecutive edit_file failures on '{path}'. \
+                 The old_content does not match the file. Use read_file to verify \
+                 exact current content before retrying."
+            );
+            s.termination_reason = Some(reason);
+            return Some(HookAction::terminate(format!(
+                "Runtime adapter: edit anti-pattern on {path}"
+            )));
+        }
+    } else {
+        // Successful edit — reset failure counter for this file
+        s.edit_failure_counts.remove(&path);
+    }
+    None
+}
+
+/// Update file-tracking state after a tool result: reads into the read set, writes into
+/// the validator state.
+fn update_file_tracking(s: &mut AdapterState, base_name: &str, args: &str) {
+    if base_name == "read_file" {
+        if let Some(path) = extract_path_from_args(args) {
+            s.files_read_set.insert(path);
+        }
+    }
+    if let Some(path) = extract_path_from_args(args) {
+        match base_name {
+            "read_file" => s.validator_state.record_read(&path),
+            "edit_file" | "write_file" => s.validator_state.record_write(&path),
+            _ => {}
         }
     }
 }

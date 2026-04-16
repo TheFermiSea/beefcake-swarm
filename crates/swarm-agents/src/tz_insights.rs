@@ -320,120 +320,132 @@ fn generate_global_directives(stats: &[GlobalModelStat]) -> Vec<String> {
 /// Generate human-readable directives from variant statistics.
 ///
 /// Deterministic threshold-based rules (no LLM). Returns at most 5 directives.
-pub fn generate_directives(stats: &[VariantStat]) -> Vec<String> {
-    let mut directives = Vec::new();
+/// Rule 1: variant A is >2x faster than B (5+ samples each).
+fn directive_speed_comparison(func: &str, variants: &[&VariantStat]) -> Option<String> {
+    if variants.len() < 2 {
+        return None;
+    }
+    let qualified: Vec<&&VariantStat> = variants.iter().filter(|v| v.call_count >= 5).collect();
+    if qualified.len() < 2 {
+        return None;
+    }
+    let fastest = qualified
+        .iter()
+        .min_by(|a, b| a.avg_latency_ms.partial_cmp(&b.avg_latency_ms).unwrap())?;
+    let slowest = qualified
+        .iter()
+        .max_by(|a, b| a.avg_latency_ms.partial_cmp(&b.avg_latency_ms).unwrap())?;
+    if slowest.avg_latency_ms == 0.0 {
+        return None;
+    }
+    let ratio = slowest.avg_latency_ms / fastest.avg_latency_ms;
+    if ratio < 2.0 {
+        return None;
+    }
+    Some(format!(
+        "For {func}: {} ({:.0}ms avg) is {:.1}x faster than {} ({:.0}ms avg)",
+        fastest.variant_name, fastest.avg_latency_ms, ratio, slowest.variant_name, slowest.avg_latency_ms,
+    ))
+}
 
-    // Group stats by function
+/// Rule 2: one variant handles >70% of calls.
+fn directive_dominant_variant(func: &str, variants: &[&VariantStat], total_calls: u64) -> Option<String> {
+    if total_calls == 0 || variants.len() <= 1 {
+        return None;
+    }
+    variants.iter().find_map(|v| {
+        let pct = (v.call_count as f64 / total_calls as f64) * 100.0;
+        if pct > 70.0 {
+            Some(format!(
+                "For {func}: {} handles {:.0}% of calls ({} total)",
+                v.variant_name, pct, total_calls,
+            ))
+        } else {
+            None
+        }
+    })
+}
+
+/// Rule 3: P95 > 5x avg with 5+ samples — likely timeout tail.
+fn directive_latency_anomaly(func: &str, variants: &[&VariantStat]) -> Vec<String> {
+    variants
+        .iter()
+        .filter(|v| {
+            v.call_count >= 5 && v.avg_latency_ms > 0.0 && v.p95_latency_ms / v.avg_latency_ms > 5.0
+        })
+        .map(|v| format!(
+            "WARNING: {func}/{} has P95 {:.0}ms vs avg {:.0}ms — possible timeout",
+            v.variant_name, v.p95_latency_ms, v.avg_latency_ms,
+        ))
+        .collect()
+}
+
+/// Rule 4: variant A has >20% higher success rate than B (10+ episodes each).
+fn directive_success_winner(func: &str, variants: &[&VariantStat]) -> Option<String> {
+    if variants.len() < 2 {
+        return None;
+    }
+    let with_success: Vec<&&VariantStat> = variants
+        .iter()
+        .filter(|v| v.success_rate.is_some() && v.call_count >= 10)
+        .collect();
+    if with_success.len() < 2 {
+        return None;
+    }
+    let best = with_success.iter().max_by(|a, b| {
+        a.success_rate.partial_cmp(&b.success_rate).unwrap_or(std::cmp::Ordering::Equal)
+    })?;
+    let worst = with_success.iter().min_by(|a, b| {
+        a.success_rate.partial_cmp(&b.success_rate).unwrap_or(std::cmp::Ordering::Equal)
+    })?;
+    let best_rate = best.success_rate.unwrap_or(0.0);
+    let worst_rate = worst.success_rate.unwrap_or(0.0);
+    if best_rate - worst_rate <= 20.0 {
+        return None;
+    }
+    Some(format!(
+        "For {func}: {} resolves {:.0}% vs {} {:.0}%",
+        best.variant_name, best_rate, worst.variant_name, worst_rate,
+    ))
+}
+
+/// Rule 5: 0% success across all variants — function may be misrouted.
+fn directive_zero_success(func: &str, variants: &[&VariantStat], total_calls: u64) -> Option<String> {
+    let any_has_success = variants.iter().any(|v| v.success_rate.is_some());
+    let all_zero = variants.iter().all(|v| v.success_rate.map(|r| r < 0.01).unwrap_or(false));
+    if all_zero && any_has_success && total_calls >= 10 {
+        Some(format!("WARNING: {func} has 0% resolution rate — tasks may be misrouted"))
+    } else {
+        None
+    }
+}
+
+pub fn generate_directives(stats: &[VariantStat]) -> Vec<String> {
     let mut by_function: std::collections::HashMap<&str, Vec<&VariantStat>> =
         std::collections::HashMap::new();
     for s in stats {
         by_function.entry(&s.function_name).or_default().push(s);
     }
 
+    let mut directives = Vec::new();
     for (func, variants) in &by_function {
-        // Rule 1: Speed comparison — variant A >2x faster than B (5+ samples each)
-        if variants.len() >= 2 {
-            let qualified: Vec<&&VariantStat> =
-                variants.iter().filter(|v| v.call_count >= 5).collect();
-            if qualified.len() >= 2 {
-                let fastest = qualified
-                    .iter()
-                    .min_by(|a, b| a.avg_latency_ms.partial_cmp(&b.avg_latency_ms).unwrap())
-                    .unwrap();
-                let slowest = qualified
-                    .iter()
-                    .max_by(|a, b| a.avg_latency_ms.partial_cmp(&b.avg_latency_ms).unwrap())
-                    .unwrap();
-                if slowest.avg_latency_ms > 0.0 {
-                    let ratio = slowest.avg_latency_ms / fastest.avg_latency_ms;
-                    if ratio >= 2.0 {
-                        directives.push(format!(
-                            "For {func}: {} ({:.0}ms avg) is {:.1}x faster than {} ({:.0}ms avg)",
-                            fastest.variant_name,
-                            fastest.avg_latency_ms,
-                            ratio,
-                            slowest.variant_name,
-                            slowest.avg_latency_ms,
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Rule 2: Dominant variant — one handles >70% of calls
         let total_calls: u64 = variants.iter().map(|v| v.call_count).sum();
-        if total_calls > 0 {
-            for v in variants {
-                let pct = (v.call_count as f64 / total_calls as f64) * 100.0;
-                if pct > 70.0 && variants.len() > 1 {
-                    directives.push(format!(
-                        "For {func}: {} handles {:.0}% of calls ({} total)",
-                        v.variant_name, pct, total_calls,
-                    ));
-                }
-            }
-        }
 
-        // Rule 3: Latency anomaly — P95 > 5x avg with 5+ samples
-        for v in variants {
-            if v.call_count >= 5
-                && v.avg_latency_ms > 0.0
-                && v.p95_latency_ms / v.avg_latency_ms > 5.0
-            {
-                directives.push(format!(
-                    "WARNING: {func}/{} has P95 {:.0}ms vs avg {:.0}ms — possible timeout",
-                    v.variant_name, v.p95_latency_ms, v.avg_latency_ms,
-                ));
-            }
+        if let Some(d) = directive_speed_comparison(func, variants) {
+            directives.push(d);
         }
-
-        // Rule 4: Success winner — variant A >20% higher success rate (10+ episodes each)
-        if variants.len() >= 2 {
-            let with_success: Vec<&&VariantStat> = variants
-                .iter()
-                .filter(|v| v.success_rate.is_some() && v.call_count >= 10)
-                .collect();
-            if with_success.len() >= 2 {
-                let best = with_success
-                    .iter()
-                    .max_by(|a, b| {
-                        a.success_rate
-                            .partial_cmp(&b.success_rate)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .unwrap();
-                let worst = with_success
-                    .iter()
-                    .min_by(|a, b| {
-                        a.success_rate
-                            .partial_cmp(&b.success_rate)
-                            .unwrap_or(std::cmp::Ordering::Equal)
-                    })
-                    .unwrap();
-                let best_rate = best.success_rate.unwrap_or(0.0);
-                let worst_rate = worst.success_rate.unwrap_or(0.0);
-                if best_rate - worst_rate > 20.0 {
-                    directives.push(format!(
-                        "For {func}: {} resolves {:.0}% vs {} {:.0}%",
-                        best.variant_name, best_rate, worst.variant_name, worst_rate,
-                    ));
-                }
-            }
+        if let Some(d) = directive_dominant_variant(func, variants, total_calls) {
+            directives.push(d);
         }
-
-        // Rule 5: Zero success — function has 0% success across all variants
-        let all_zero = variants
-            .iter()
-            .all(|v| v.success_rate.map(|r| r < 0.01).unwrap_or(false));
-        let any_has_success = variants.iter().any(|v| v.success_rate.is_some());
-        if all_zero && any_has_success && total_calls >= 10 {
-            directives.push(format!(
-                "WARNING: {func} has 0% resolution rate — tasks may be misrouted",
-            ));
+        directives.extend(directive_latency_anomaly(func, variants));
+        if let Some(d) = directive_success_winner(func, variants) {
+            directives.push(d);
+        }
+        if let Some(d) = directive_zero_success(func, variants, total_calls) {
+            directives.push(d);
         }
     }
 
-    // Sort for determinism, truncate to 5
     directives.sort();
     directives.truncate(5);
     directives
