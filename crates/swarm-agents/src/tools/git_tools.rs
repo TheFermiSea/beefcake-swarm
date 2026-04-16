@@ -129,3 +129,118 @@ impl Tool for ListChangedFilesTool {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::process::Command;
+    use tempfile::tempdir;
+
+    fn setup_git_repo(dir: &Path) {
+        Command::new("git")
+            .arg("init")
+            .current_dir(dir)
+            .output()
+            .expect("Failed to initialize git repository");
+
+        Command::new("git")
+            .args(["config", "user.name", "Test User"])
+            .current_dir(dir)
+            .output()
+            .expect("Failed to set git user name");
+
+        Command::new("git")
+            .args(["config", "user.email", "test@example.com"])
+            .current_dir(dir)
+            .output()
+            .expect("Failed to set git user email");
+
+        // Initial commit so HEAD exists
+        fs::write(dir.join("initial.txt"), "initial content").unwrap();
+        Command::new("git")
+            .args(["add", "initial.txt"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "Initial commit"])
+            .current_dir(dir)
+            .output()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn test_get_diff_no_changes() {
+        let dir = tempdir().unwrap();
+        setup_git_repo(dir.path());
+
+        let tool = GetDiffTool::new(dir.path());
+
+        // There's only one commit, HEAD~1 won't exist. We should test diffing against HEAD
+        let args_head = GetDiffArgs {
+            base_ref: Some("HEAD".to_string()),
+            name_only: None,
+        };
+
+        let result = tool.call(args_head).await.expect("Tool call failed");
+        assert_eq!(result, "No changes");
+    }
+
+    #[tokio::test]
+    async fn test_get_diff_with_changes() {
+        let dir = tempdir().unwrap();
+        setup_git_repo(dir.path());
+
+        fs::write(dir.path().join("test_file.txt"), "hello world").unwrap();
+        Command::new("git")
+            .args(["add", "test_file.txt"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "Second commit"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let tool = GetDiffTool::new(dir.path());
+
+        let args = GetDiffArgs {
+            base_ref: Some("HEAD~1".to_string()),
+            name_only: None,
+        };
+
+        let result = tool.call(args).await.expect("Tool call failed");
+
+        assert!(result.contains("test_file.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_get_diff_name_only() {
+        let dir = tempdir().unwrap();
+        setup_git_repo(dir.path());
+
+        fs::write(dir.path().join("test_file_name_only.txt"), "hello world").unwrap();
+        Command::new("git")
+            .args(["add", "test_file_name_only.txt"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+        Command::new("git")
+            .args(["commit", "-m", "Second commit"])
+            .current_dir(dir.path())
+            .output()
+            .unwrap();
+
+        let tool = GetDiffTool::new(dir.path());
+
+        let args = GetDiffArgs {
+            base_ref: Some("HEAD~1".to_string()),
+            name_only: Some(true),
+        };
+        let result = tool.call(args).await.expect("Tool call failed");
+        // Output should just be the filename
+        assert_eq!(result.trim(), "test_file_name_only.txt");
+    }
+}
