@@ -618,77 +618,9 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
             let tool_class = Self::classify_tool(&tool_name);
             match tool_class {
                 ToolClass::ReadOnly => {
-                    s.consecutive_reads += 1;
-
-                    // Track total pre-write reads (never resets until first write).
-                    // Skipped on Core tier — simple fixes don't need read-budget enforcement.
-                    if config.governance_tier != GovernanceTier::Core
-                        && !s.has_written
-                        && config.max_turns_without_write.is_some()
-                    {
-                        s.total_reads_before_write += 1;
-
-                        // Hard budget: terminate after too many reads without writing.
-                        // Enhanced tier uses tighter thresholds to enforce focused behavior.
-                        let (pre_write_read_budget, pre_write_read_warn) =
-                            match config.governance_tier {
-                                GovernanceTier::Enhanced => (5, 3),
-                                _ => (8, 5),
-                            };
-
-                        if s.total_reads_before_write >= pre_write_read_budget {
-                            s.terminated_early = true;
-                            let reason = format!(
-                                "Pre-write read budget exhausted: {} read-only calls with no \
-                                 edit_file/write_file (limit: {}, tier: {}). Stop exploring and write your edit now.",
-                                s.total_reads_before_write, pre_write_read_budget, config.governance_tier
-                            );
-                            s.termination_reason = Some(reason.clone());
-                            warn!(
-                                agent = %config.agent_name,
-                                total_reads = s.total_reads_before_write,
-                                governance_tier = %config.governance_tier,
-                                "Anti-stall: pre-write read budget exceeded"
-                            );
-                            return ToolCallHookAction::terminate(format!(
-                                "Runtime adapter: {reason}"
-                            ));
-                        } else if s.total_reads_before_write == pre_write_read_warn {
-                            info!(
-                                agent = %config.agent_name,
-                                total_reads = s.total_reads_before_write,
-                                budget = pre_write_read_budget,
-                                "Pre-write read warning: approaching budget limit"
-                            );
-                        }
+                    if let Some(action) = handle_readonly_tool(&mut s, &config, &tool_name) {
+                        return action;
                     }
-
-                    // Post-write read stall detection: if the agent already wrote files
-                    // and is now just reading, it's likely done but doesn't know it.
-                    // Terminate early to hand control back to the orchestrator's verifier.
-                    if s.has_written && s.consecutive_reads >= 3 {
-                        s.terminated_early = true;
-                        let reason = format!(
-                            "Post-write read stall: {} consecutive read-only calls after \
-                             successful write. Task appears complete — handing off to verifier.",
-                            s.consecutive_reads
-                        );
-                        s.termination_reason = Some(reason.clone());
-                        warn!(
-                            agent = %config.agent_name,
-                            tool = %tool_name,
-                            consecutive_reads = s.consecutive_reads,
-                            "Post-write stall: terminating agent (wrote files, now only reading)"
-                        );
-                        return ToolCallHookAction::terminate(format!("Runtime adapter: {reason}"));
-                    }
-
-                    debug!(
-                        agent = %config.agent_name,
-                        tool = %tool_name,
-                        consecutive_reads = s.consecutive_reads,
-                        "Read-only tool call"
-                    );
                 }
                 ToolClass::Action => {
                     if s.consecutive_reads > 0 {
@@ -912,6 +844,80 @@ fn update_file_tracking(s: &mut AdapterState, base_name: &str, args: &str) {
             _ => {}
         }
     }
+}
+
+/// Handle the ReadOnly tool class: enforce pre-write and post-write read budgets.
+///
+/// Returns `Some(terminate)` when a budget is exceeded, `None` to continue.
+fn handle_readonly_tool(
+    s: &mut AdapterState,
+    config: &AdapterConfig,
+    tool_name: &str,
+) -> Option<ToolCallHookAction> {
+    s.consecutive_reads += 1;
+
+    // Pre-write read budget: non-Core tiers are limited to avoid excessive exploration.
+    if config.governance_tier != GovernanceTier::Core
+        && !s.has_written
+        && config.max_turns_without_write.is_some()
+    {
+        s.total_reads_before_write += 1;
+
+        let (pre_write_read_budget, pre_write_read_warn) = match config.governance_tier {
+            GovernanceTier::Enhanced => (5, 3),
+            _ => (8, 5),
+        };
+
+        if s.total_reads_before_write >= pre_write_read_budget {
+            s.terminated_early = true;
+            let reason = format!(
+                "Pre-write read budget exhausted: {} read-only calls with no \
+                 edit_file/write_file (limit: {}, tier: {}). Stop exploring and write your edit now.",
+                s.total_reads_before_write, pre_write_read_budget, config.governance_tier
+            );
+            s.termination_reason = Some(reason.clone());
+            warn!(
+                agent = %config.agent_name,
+                total_reads = s.total_reads_before_write,
+                governance_tier = %config.governance_tier,
+                "Anti-stall: pre-write read budget exceeded"
+            );
+            return Some(ToolCallHookAction::terminate(format!("Runtime adapter: {reason}")));
+        } else if s.total_reads_before_write == pre_write_read_warn {
+            info!(
+                agent = %config.agent_name,
+                total_reads = s.total_reads_before_write,
+                budget = pre_write_read_budget,
+                "Pre-write read warning: approaching budget limit"
+            );
+        }
+    }
+
+    // Post-write stall: agent wrote, but is now looping on reads — hand off to verifier.
+    if s.has_written && s.consecutive_reads >= 3 {
+        s.terminated_early = true;
+        let reason = format!(
+            "Post-write read stall: {} consecutive read-only calls after \
+             successful write. Task appears complete — handing off to verifier.",
+            s.consecutive_reads
+        );
+        s.termination_reason = Some(reason.clone());
+        warn!(
+            agent = %config.agent_name,
+            tool = %tool_name,
+            consecutive_reads = s.consecutive_reads,
+            "Post-write stall: terminating agent (wrote files, now only reading)"
+        );
+        return Some(ToolCallHookAction::terminate(format!("Runtime adapter: {reason}")));
+    }
+
+    debug!(
+        agent = %config.agent_name,
+        tool = %tool_name,
+        consecutive_reads = s.consecutive_reads,
+        "Read-only tool call"
+    );
+    None
 }
 
 /// Best-effort extraction of file path from JSON args.

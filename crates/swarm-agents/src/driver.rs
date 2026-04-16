@@ -1992,20 +1992,73 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     })
 }
 
-/// Verifying: run deterministic quality gates, auto-fix, regression detection.
-pub async fn handle_verifying(ctx: &mut OrchestratorContext<'_>) -> Result<StateTransition> {
-    let iteration = ctx.session.iteration();
-
-    let verifier_start = Instant::now();
-    let current_vc = if ctx.config.verifier_packages.is_empty() {
+/// Build the VerifierConfig for the current run.
+///
+/// When `verifier_packages` is empty (the default), auto-detect from git changes.
+/// Otherwise, use the pre-configured package list.
+fn scoped_verifier_config(ctx: &OrchestratorContext<'_>) -> VerifierConfig {
+    if ctx.config.verifier_packages.is_empty() {
         VerifierConfig {
             packages: detect_changed_packages(&ctx.wt_path, true),
             ..ctx.verifier_config.clone()
         }
     } else {
         ctx.verifier_config.clone()
-    };
-    let verifier = Verifier::new(&ctx.wt_path, current_vc);
+    }
+}
+
+/// Handle regression detection and optional rollback.
+///
+/// If `error_count > prev_error_count`, attempts a hard rollback to `pre_worker_commit`
+/// and re-verifies. Returns `Some(Planning)` if rollback was successful; `None` otherwise.
+async fn maybe_rollback_on_regression(
+    ctx: &mut OrchestratorContext<'_>,
+    iteration: u32,
+    error_count: usize,
+    prev_error_count: Option<usize>,
+) -> Option<StateTransition> {
+    let prev_count = prev_error_count?;
+    if error_count <= prev_count {
+        return None;
+    }
+    warn!(
+        iteration,
+        prev_errors = prev_count,
+        curr_errors = error_count,
+        "Regression detected (state driver)"
+    );
+    let mut rolled_back = false;
+    if let Some(ref rollback_hash) = ctx.pre_worker_commit.clone() {
+        match ctx.git_mgr.hard_rollback(rollback_hash) {
+            Ok(()) => {
+                rolled_back = true;
+                info!(iteration, rollback_to = %rollback_hash, "Rolled back (state driver)");
+            }
+            Err(e) => {
+                error!(iteration, "Rollback failed (state driver): {e}");
+            }
+        }
+    }
+    ctx.metrics.record_regression(rolled_back);
+    if rolled_back {
+        let rb_verifier = Verifier::new(&ctx.wt_path, scoped_verifier_config(ctx));
+        let rb_report = rb_verifier.run_pipeline().await;
+        ctx.last_report = Some(rb_report);
+        ctx.metrics.finish_iteration();
+        return Some(StateTransition::Advance {
+            to: OrchestratorState::Planning,
+            reason: "regression rolled back, retrying".into(),
+        });
+    }
+    None
+}
+
+/// Verifying: run deterministic quality gates, auto-fix, regression detection.
+pub async fn handle_verifying(ctx: &mut OrchestratorContext<'_>) -> Result<StateTransition> {
+    let iteration = ctx.session.iteration();
+
+    let verifier_start = Instant::now();
+    let verifier = Verifier::new(&ctx.wt_path, scoped_verifier_config(ctx));
     let mut report = verifier.run_pipeline().await;
     let verifier_elapsed = verifier_start.elapsed();
     ctx.metrics.record_verifier_time(verifier_elapsed);
@@ -2088,46 +2141,8 @@ pub async fn handle_verifying(ctx: &mut OrchestratorContext<'_>) -> Result<State
     let prev_error_count = ctx.last_report.as_ref().map(|r| r.failure_signals.len());
     if !report.all_green {
         ctx.consecutive_validator_failures = 0;
-        if let Some(prev_count) = prev_error_count {
-            if error_count > prev_count {
-                warn!(
-                    iteration,
-                    prev_errors = prev_count,
-                    curr_errors = error_count,
-                    "Regression detected (state driver)"
-                );
-                let mut rolled_back = false;
-                if let Some(ref rollback_hash) = ctx.pre_worker_commit {
-                    match ctx.git_mgr.hard_rollback(rollback_hash) {
-                        Ok(()) => {
-                            rolled_back = true;
-                            info!(iteration, rollback_to = %rollback_hash, "Rolled back (state driver)");
-                        }
-                        Err(e) => {
-                            error!(iteration, "Rollback failed (state driver): {e}");
-                        }
-                    }
-                }
-                ctx.metrics.record_regression(rolled_back);
-                if rolled_back {
-                    let rb_vc = if ctx.config.verifier_packages.is_empty() {
-                        VerifierConfig {
-                            packages: detect_changed_packages(&ctx.wt_path, true),
-                            ..ctx.verifier_config.clone()
-                        }
-                    } else {
-                        ctx.verifier_config.clone()
-                    };
-                    let rb_verifier = Verifier::new(&ctx.wt_path, rb_vc);
-                    let rb_report = rb_verifier.run_pipeline().await;
-                    ctx.last_report = Some(rb_report);
-                    ctx.metrics.finish_iteration();
-                    return Ok(StateTransition::Advance {
-                        to: OrchestratorState::Planning,
-                        reason: "regression rolled back, retrying".into(),
-                    });
-                }
-            }
+        if let Some(t) = maybe_rollback_on_regression(ctx, iteration, error_count, prev_error_count).await {
+            return Ok(t);
         }
     }
 
