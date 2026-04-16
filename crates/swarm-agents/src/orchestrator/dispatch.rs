@@ -399,113 +399,96 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
 /// - A directive to call read_file first
 ///
 /// The full verbose format (`format_task_prompt`) is for cloud/council models.
+/// Resolve target files for the compact prompt using a 4-stage fallback pipeline:
+///
+/// 1. Explicit `files_touched` (metadata paths filtered out)
+/// 2. File paths embedded in the objective text (bare filenames resolved via `find`)
+/// 3. Grep the worktree for CamelCase/snake_case identifiers from the objective
+/// 4. First 3 file_contexts entries
+///
+/// Returns at most 3 paths, falling back to `src/lib.rs` / `Cargo.toml` if all stages miss.
+fn resolve_compact_target_files(packet: &WorkPacket, wt_root: &Path) -> Vec<String> {
+    // Stage 1: explicit scope from files_touched (minus infra paths)
+    let from_touched: Vec<String> = packet
+        .files_touched
+        .iter()
+        .filter(|f| !f.starts_with(".beads") && !f.starts_with(".git/") && !f.starts_with(".claude"))
+        .cloned()
+        .collect();
+    if !from_touched.is_empty() {
+        return from_touched;
+    }
+
+    // Stage 2: file paths embedded in objective text
+    let wt_str = wt_root.to_str().unwrap_or(".");
+    let from_objective: Vec<String> = packet
+        .objective
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .map(|w| {
+            w.trim_end_matches(|c: char| {
+                c.is_ascii_punctuation() && c != '/' && c != '.' && c != '_' && c != '-' && c != '*'
+            })
+            .trim()
+        })
+        .filter(|w| !w.is_empty() && (w.ends_with(".rs") || w.ends_with(".toml")))
+        .flat_map(|w| {
+            if w.contains('/') {
+                vec![w.to_string()]
+            } else {
+                match std::process::Command::new("find")
+                    .args([wt_str, "-name", w, "-path", "*/src/*"])
+                    .output()
+                {
+                    Ok(out) if out.status.success() => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        stdout
+                            .lines()
+                            .take(3)
+                            .filter_map(|line| {
+                                line.strip_prefix(wt_str).map(|p| p.trim_start_matches('/').to_string())
+                            })
+                            .collect()
+                    }
+                    _ => vec![],
+                }
+            }
+        })
+        .collect();
+    if !from_objective.is_empty() {
+        return from_objective;
+    }
+
+    // Stage 3: grep-based identifier search
+    let from_grep = find_target_files_by_grep(wt_root, &packet.objective, &[]).unwrap_or_else(|| {
+        // Stage 4: first 3 file_contexts
+        packet.file_contexts.iter().map(|fc| fc.file.clone()).take(3).collect()
+    });
+    if !from_grep.is_empty() {
+        return from_grep;
+    }
+
+    // Final fallback: common entry points
+    ["src/lib.rs", "src/main.rs"]
+        .iter()
+        .filter(|p| wt_root.join(p).exists())
+        .map(|p| p.to_string())
+        .chain(std::iter::once("Cargo.toml".to_string()))
+        .take(3)
+        .collect()
+}
+
 pub fn format_compact_task_prompt(packet: &WorkPacket, wt_root: &Path) -> String {
     let mut prompt = String::with_capacity(1500);
 
     prompt.push_str(&format!("# Task: {}\n\n", packet.objective));
 
-    // Target files — prefer explicit scope, then extract from objective text,
-    // then grep the worktree for objective identifiers,
-    // then fall back to first few file_contexts filenames.
-    // Filter out metadata paths (e.g., .beads/, .git/) that aren't code targets.
-    let source_files_touched: Vec<String> = packet
-        .files_touched
-        .iter()
-        .filter(|f| {
-            !f.starts_with(".beads") && !f.starts_with(".git/") && !f.starts_with(".claude")
-        })
-        .cloned()
-        .collect();
-    let target_files: Vec<String> = if !source_files_touched.is_empty() {
-        source_files_touched
-    } else {
-        // Try to extract file paths from objective (e.g., "File: src/foo.rs")
-        // Accepts both full paths (crates/swarm-agents/src/foo.rs) and bare
-        // filenames (runtime_adapter.rs). Bare filenames are resolved by
-        // searching the worktree.
-        let objective_files: Vec<String> = packet
-            .objective
-            .split(|c: char| c.is_whitespace() || c == ',')
-            .map(|w| {
-                w.trim_end_matches(|c: char| {
-                    c.is_ascii_punctuation()
-                        && c != '/'
-                        && c != '.'
-                        && c != '_'
-                        && c != '-'
-                        && c != '*'
-                })
-                .trim()
-            })
-            .filter(|w| !w.is_empty() && (w.ends_with(".rs") || w.ends_with(".toml")))
-            .flat_map(|w| {
-                if w.contains('/') {
-                    // Full path — use as-is
-                    vec![w.to_string()]
-                } else {
-                    // Bare filename — search worktree for matching files
-                    match std::process::Command::new("find")
-                        .args([
-                            wt_root.to_str().unwrap_or("."),
-                            "-name",
-                            w,
-                            "-path",
-                            "*/src/*",
-                        ])
-                        .output()
-                    {
-                        Ok(output) if output.status.success() => {
-                            let stdout = String::from_utf8_lossy(&output.stdout);
-                            stdout
-                                .lines()
-                                .take(3)
-                                .filter_map(|line| {
-                                    line.strip_prefix(wt_root.to_str().unwrap_or(""))
-                                        .map(|p| p.trim_start_matches('/').to_string())
-                                })
-                                .collect()
-                        }
-                        _ => vec![],
-                    }
-                }
-            })
-            .collect();
-        if !objective_files.is_empty() {
-            objective_files
-        } else {
-            // Grep the worktree for CamelCase identifiers from the objective.
-            // The context packer's file_contexts only covers ~18 files (token budget)
-            // and likely misses the target file in large workspaces (402 .rs files).
-            find_target_files_by_grep(wt_root, &packet.objective, &[]).unwrap_or_else(|| {
-                // Final fallback: first 3 file_contexts
-                packet
-                    .file_contexts
-                    .iter()
-                    .map(|fc| fc.file.clone())
-                    .take(3)
-                    .collect()
-            })
-        }
-    };
+    let target_files = resolve_compact_target_files(packet, wt_root);
 
     debug!(
         raw_files_touched = ?packet.files_touched,
         target_files = ?target_files,
         "compact prompt: file targeting pipeline"
     );
-
-    // Guard against empty target_files — fall back to common entry points.
-    let target_files: Vec<String> = if target_files.is_empty() {
-        ["src/lib.rs", "src/main.rs"]
-            .iter()
-            .filter(|p| wt_root.join(p).exists())
-            .map(|p| p.to_string())
-            .chain(std::iter::once("Cargo.toml".to_string()))
-            .take(3)
-            .collect()
-    } else {
-        target_files
-    };
 
     if !target_files.is_empty() {
         prompt.push_str("**Files to modify:**\n");

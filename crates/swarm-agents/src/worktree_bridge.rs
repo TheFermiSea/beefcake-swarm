@@ -129,6 +129,128 @@ fn guarded_prune(base_dir: &Path, repo_root: &Path) {
     }
 }
 
+/// Write orchestrator artifact exclusions to the worktree's local exclude file.
+///
+/// Uses the `.git/info/exclude` file so that tracked `.gitignore` is not modified
+/// by agent-authored commits. Best-effort: logs a warning on any failure.
+fn write_worktree_excludes(wt_path: &Path, git_dir: &Path) {
+    let exclude_dir = if git_dir.is_file() {
+        // Worktrees have a .git file pointing to the real git dir
+        let pointer = std::fs::read_to_string(git_dir).unwrap_or_default();
+        let real_dir = pointer
+            .strip_prefix("gitdir: ")
+            .unwrap_or("")
+            .trim()
+            .to_string();
+        if real_dir.is_empty() {
+            return;
+        }
+        PathBuf::from(real_dir).join("info")
+    } else if git_dir.is_dir() {
+        git_dir.join("info")
+    } else {
+        return;
+    };
+
+    let _ = std::fs::create_dir_all(&exclude_dir);
+    let exclude_file = exclude_dir.join("exclude");
+    let needs_write = if exclude_file.exists() {
+        let content = std::fs::read_to_string(&exclude_file).unwrap_or_default();
+        !content.contains(".swarm-progress.txt")
+    } else {
+        true
+    };
+    if needs_write {
+        use std::io::Write;
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&exclude_file)
+        {
+            let _ = f.write_all(
+                b"\n# Orchestrator artifacts\n.swarm-progress.txt\n.swarm-session.json\n.swarm-*\n.swarm-*/\n# Beads data (auto-modified by bd, not real code changes)\n# .beads (no slash) matches the symlink; .beads/ matches the directory fallback\n.beads\n.beads/\n",
+            );
+        }
+    }
+    let _ = wt_path; // suppress unused warning — wt_path used only for context in callers
+}
+
+/// Set the skip-worktree bit on `.beads/` files so `bd` changes stay invisible to git.
+///
+/// Best-effort: worktree creation succeeds even if this fails.
+fn setup_beads_skip_worktree(wt_path: &Path) {
+    match Command::new("git")
+        .args(["ls-files", ".beads/"])
+        .current_dir(wt_path)
+        .output()
+    {
+        Ok(ls_output) if ls_output.status.success() => {
+            let file_list = String::from_utf8_lossy(&ls_output.stdout).to_string();
+            let files: Vec<&str> = file_list.lines().filter(|l| !l.is_empty()).collect();
+            if !files.is_empty() {
+                let mut args: Vec<&str> = vec!["update-index", "--skip-worktree"];
+                args.extend(&files);
+                match retry_git_command(&args, wt_path, 3) {
+                    Ok(ref out) if !out.status.success() => {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        tracing::warn!(
+                            stderr = %stderr.trim(),
+                            "git update-index --skip-worktree failed; .beads/ files may appear in status"
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!(error = %e, "Failed to run git update-index --skip-worktree");
+                    }
+                    _ => {}
+                }
+            }
+        }
+        Ok(ls_output) => {
+            let stderr = String::from_utf8_lossy(&ls_output.stderr);
+            tracing::warn!(
+                stderr = %stderr.trim(),
+                "git ls-files .beads/ failed; skipping skip-worktree setup"
+            );
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to execute git ls-files for .beads/");
+        }
+    }
+}
+
+/// Symlink the worktree's `.beads/` to the main repo's `.beads/` for shared Dolt access.
+///
+/// Best-effort: logs a warning but does not fail worktree creation.
+fn setup_beads_symlink(wt_path: &Path, repo_root: &Path) {
+    let wt_beads = wt_path.join(".beads");
+    let main_beads = repo_root.join(".beads");
+    if !main_beads.exists() || !wt_beads.exists() || wt_beads.is_symlink() {
+        return;
+    }
+    match std::fs::remove_dir_all(&wt_beads) {
+        Ok(()) => {
+            #[cfg(unix)]
+            match std::os::unix::fs::symlink(&main_beads, &wt_beads) {
+                Ok(()) => {
+                    tracing::info!(
+                        src = %main_beads.display(),
+                        dst = %wt_beads.display(),
+                        "Symlinked .beads/ to main repo for shared Dolt access"
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "Failed to symlink .beads/; bd commands may fail in worktree");
+                }
+            }
+            #[cfg(not(unix))]
+            tracing::warn!("Non-Unix platform: cannot symlink .beads/; bd commands may fail in worktree");
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to remove worktree .beads/ for symlink; bd commands may fail");
+        }
+    }
+}
+
 /// Manages git worktrees for swarm agent tasks.
 pub struct WorktreeBridge {
     base_dir: PathBuf,
@@ -342,153 +464,11 @@ impl WorktreeBridge {
             bail!("git worktree add failed: {stderr}");
         }
 
-        // Write orchestrator artifact exclusions to the worktree's local exclude file
-        // instead of modifying the tracked .gitignore. This prevents `git add .` from
-        // staging .gitignore changes into agent-authored commits.
+        // Write orchestrator artifact exclusions and configure .beads/ for shared Dolt access.
         let git_dir = wt_path.join(".git");
-        let exclude_dir = if git_dir.is_file() {
-            // Worktrees have a .git file pointing to the real git dir
-            let pointer = std::fs::read_to_string(&git_dir).unwrap_or_default();
-            let real_dir = pointer
-                .strip_prefix("gitdir: ")
-                .unwrap_or("")
-                .trim()
-                .to_string();
-            if real_dir.is_empty() {
-                None
-            } else {
-                Some(PathBuf::from(real_dir).join("info"))
-            }
-        } else if git_dir.is_dir() {
-            Some(git_dir.join("info"))
-        } else {
-            None
-        };
-
-        if let Some(info_dir) = exclude_dir {
-            let _ = std::fs::create_dir_all(&info_dir);
-            let exclude_file = info_dir.join("exclude");
-            let needs_write = if exclude_file.exists() {
-                let content = std::fs::read_to_string(&exclude_file).unwrap_or_default();
-                !content.contains(".swarm-progress.txt")
-            } else {
-                true
-            };
-            if needs_write {
-                use std::io::Write;
-                if let Ok(mut f) = std::fs::OpenOptions::new()
-                    .create(true)
-                    .append(true)
-                    .open(&exclude_file)
-                {
-                    let _ = f.write_all(
-                        b"\n# Orchestrator artifacts\n.swarm-progress.txt\n.swarm-session.json\n.swarm-*\n.swarm-*/\n# Beads data (auto-modified by bd, not real code changes)\n# .beads (no slash) matches the symlink; .beads/ matches the directory fallback\n.beads\n.beads/\n",
-                    );
-                }
-            }
-        }
-
-        // Mark tracked .beads/ files as skip-worktree so git ignores
-        // modifications by bd commands. Prevents beads backup changes from
-        // appearing in git diff/status/add — fixes false positive acceptance,
-        // circuit breaker bypass, and agent confusion from beads noise.
-        //
-        // Best-effort: worktree creation succeeds even if this fails, but we
-        // log warnings so failures are diagnosable.
-        match Command::new("git")
-            .args(["ls-files", ".beads/"])
-            .current_dir(&wt_path)
-            .output()
-        {
-            Ok(ls_output) if ls_output.status.success() => {
-                let file_list = String::from_utf8_lossy(&ls_output.stdout).to_string();
-                let files: Vec<&str> = file_list.lines().filter(|l| !l.is_empty()).collect();
-                if !files.is_empty() {
-                    let mut args: Vec<&str> = vec!["update-index", "--skip-worktree"];
-                    args.extend(&files);
-                    match retry_git_command(&args, &wt_path, 3) {
-                        Ok(ref out) if !out.status.success() => {
-                            let stderr = String::from_utf8_lossy(&out.stderr);
-                            tracing::warn!(
-                                stderr = %stderr.trim(),
-                                "git update-index --skip-worktree failed; .beads/ files may appear in status"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "Failed to run git update-index --skip-worktree"
-                            );
-                        }
-                        _ => {}
-                    }
-                }
-            }
-            Ok(ls_output) => {
-                let stderr = String::from_utf8_lossy(&ls_output.stderr);
-                tracing::warn!(
-                    stderr = %stderr.trim(),
-                    "git ls-files .beads/ failed; skipping skip-worktree setup"
-                );
-            }
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "Failed to execute git ls-files for .beads/"
-                );
-            }
-        }
-
-        // Replace the worktree's .beads/ directory with a symlink to the main repo's
-        // .beads/ so that `bd` commands from the worktree connect to the same Dolt
-        // database server as the main repo.
-        //
-        // Why symlink instead of copy:
-        //   - The beads Dolt server uses its startup CWD as the database root.
-        //   - The server is started by the first `bd` invocation in the main repo.
-        //   - Worktrees share the same server (port 3307 locked in .beads/dolt-server.lock).
-        //   - If the worktree runs `bd` against its own (fresh) .beads/dolt/, it starts a
-        //     NEW server process with a different CWD → "database not found" errors.
-        //   - Symlinking ensures all worktree `bd` commands use the main repo's running
-        //     server and authoritative issue database.
-        //
-        // Safety: skip-worktree bits (set above) prevent git from showing the "missing"
-        // tracked files as deleted. The symlink replaces a directory git thinks it owns,
-        // but git won't complain because skip-worktree hides those paths.
-        let wt_beads = wt_path.join(".beads");
-        let main_beads = self.repo_root.join(".beads");
-        if main_beads.exists() && wt_beads.exists() && !wt_beads.is_symlink() {
-            match std::fs::remove_dir_all(&wt_beads) {
-                Ok(()) => {
-                    #[cfg(unix)]
-                    match std::os::unix::fs::symlink(&main_beads, &wt_beads) {
-                        Ok(()) => {
-                            tracing::info!(
-                                src = %main_beads.display(),
-                                dst = %wt_beads.display(),
-                                "Symlinked .beads/ to main repo for shared Dolt access"
-                            );
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                error = %e,
-                                "Failed to symlink .beads/; bd commands may fail in worktree"
-                            );
-                        }
-                    }
-                    #[cfg(not(unix))]
-                    tracing::warn!(
-                        "Non-Unix platform: cannot symlink .beads/; bd commands may fail in worktree"
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "Failed to remove worktree .beads/ for symlink; bd commands may fail"
-                    );
-                }
-            }
-        }
+        write_worktree_excludes(&wt_path, &git_dir);
+        setup_beads_skip_worktree(&wt_path);
+        setup_beads_symlink(&wt_path, &self.repo_root);
 
         Ok(wt_path)
     }
