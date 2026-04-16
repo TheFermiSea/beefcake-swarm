@@ -305,10 +305,7 @@ impl Tool for WriteFileTool {
 /// function transparently reverses that encoding. Returns the original string unchanged
 /// when no double-encoding is detected.
 fn maybe_unescape_content(path: &str, content: String) -> String {
-    if content.starts_with('"')
-        && content.ends_with('"')
-        && has_json_escape_sequences(&content)
-    {
+    if content.starts_with('"') && content.ends_with('"') && has_json_escape_sequences(&content) {
         match serde_json::from_str::<String>(&content) {
             Ok(unescaped) if unescaped != content => {
                 tracing::warn!(
