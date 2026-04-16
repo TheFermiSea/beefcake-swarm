@@ -427,11 +427,16 @@ async fn main() -> Result<()> {
         sorted.sort_by_key(|i| (i.priority.unwrap_or(4), i.swarm_complexity_rank()));
 
         // Claim up to parallel_issues issues in priority order.
+        // Skip non-actionable issues (shell high-churn) before claiming.
         let max_parallel = config.parallel_issues;
         let mut claimed: Vec<BeadsIssue> = Vec::new();
         for candidate in &sorted {
             if claimed.len() >= max_parallel {
                 break;
+            }
+            if let Some(skip_reason) = is_non_actionable_high_churn(&candidate.title) {
+                info!(id = %candidate.id, reason = %skip_reason, "Skipping non-actionable issue");
+                continue;
             }
             match tracker.try_claim(&candidate.id) {
                 Ok(true) => {
@@ -714,6 +719,28 @@ fn new_tracker(repo_root: Option<&Path>) -> Box<dyn IssueTracker> {
     }
 }
 
+/// Check if a high-churn issue targets a file type the swarm cannot verify.
+///
+/// Returns `Some(reason)` if the issue should be skipped, `None` if it's actionable.
+/// Shell scripts, SLURM files, and other non-source files have no quality gates in the
+/// swarm pipeline — attempting them burns 5-6 iterations with no changes committed.
+fn is_non_actionable_high_churn(title: &str) -> Option<String> {
+    let churn_file = title
+        .strip_prefix("High churn: ")
+        .and_then(|s| s.split(" (modified").next())?;
+    let non_verifiable = churn_file.ends_with(".sh")
+        || churn_file.ends_with(".slurm")
+        || churn_file.ends_with(".bash")
+        || churn_file.ends_with(".zsh");
+    if non_verifiable {
+        Some(format!(
+            "High-churn target '{churn_file}' is a shell/SLURM script — no quality gates available"
+        ))
+    } else {
+        None
+    }
+}
+
 /// Look up a single issue by ID via `bd show`.
 fn show_issue(id: &str, repo_root: Option<&Path>) -> Result<BeadsIssue> {
     match repo_root {
@@ -743,12 +770,19 @@ fn handle_pick_next(repo_root: Option<&Path>) -> Result<()> {
     let mut sorted = issues;
     sorted.sort_by_key(|i| (i.priority.unwrap_or(4), i.swarm_complexity_rank()));
 
-    // Filter through reformulation state
+    // Filter through reformulation state and non-actionable issue types
     let store = swarm_agents::reformulation::ReformulationStore::new(&repo_root);
     for candidate in &sorted {
         if let Some(reason) = swarm_agents::reformulation::should_skip_issue(&store, &candidate.id)
         {
             eprintln!("Skipping {}: {reason}", candidate.id);
+            continue;
+        }
+
+        // Skip high-churn issues for non-verifiable file types (shell scripts, SLURM).
+        // The swarm's quality gates are cargo-based; these burn 5-6 iterations with no edits.
+        if let Some(skip_reason) = is_non_actionable_high_churn(&candidate.title) {
+            eprintln!("Skipping {}: {skip_reason}", candidate.id);
             continue;
         }
 

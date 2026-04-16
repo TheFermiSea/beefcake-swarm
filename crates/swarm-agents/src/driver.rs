@@ -957,6 +957,37 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     // process issue but conclude "nothing to change" and hit the no-change circuit breaker.
     // The hint makes the refactoring intent explicit so the coder actually edits the file.
     if ctx.issue.title.starts_with("High churn:") {
+        // Extract the target file path from the title.
+        let churn_file = ctx
+            .issue
+            .title
+            .strip_prefix("High churn: ")
+            .and_then(|s| s.split(" (modified").next())
+            .unwrap_or("");
+
+        // Fail fast for non-verifiable file types. The swarm's quality gates are
+        // cargo-based (fmt/clippy/check/test); shell scripts and SLURM files have
+        // no lint or test feedback, so agents waste 5-6 iterations producing nothing.
+        let non_verifiable = churn_file.ends_with(".sh")
+            || churn_file.ends_with(".slurm")
+            || churn_file.ends_with(".bash")
+            || churn_file.ends_with(".zsh");
+        if non_verifiable {
+            warn!(
+                iteration,
+                issue_id = %ctx.issue.id,
+                file = churn_file,
+                "High-churn target is a non-verifiable file type — failing fast to avoid wasting iterations"
+            );
+            ctx.metrics.finish_iteration();
+            return Ok(StateTransition::Fail {
+                reason: format!(
+                    "High-churn target '{churn_file}' is a shell/SLURM script — \
+                     no quality gates available. Needs human review."
+                ),
+            });
+        }
+
         task_prompt.push_str(
             "\n\n## High-Churn Refactoring Task\n\
              This file has unusually high git churn — it is modified very frequently, which \
@@ -972,6 +1003,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         info!(
             iteration,
             issue_id = %ctx.issue.id,
+            file = churn_file,
             "Injected high-churn refactoring hint into task prompt"
         );
     }
