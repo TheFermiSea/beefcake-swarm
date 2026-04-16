@@ -856,68 +856,13 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     }
 
     // --- Part B: Mutation archive strategy seeding ---
-    //
-    // On the first iteration (no last_report), query the archive for similar past
-    // issues and inject the strategies that worked as a heuristic hint.  Uses
-    // map_elites::sample_diverse() so we suggest a variety of approaches rather
-    // than always repeating the most-recently-successful pattern.
-    if ctx.last_report.is_none() {
-        let archive =
-            crate::mutation_archive::MutationArchive::new(ctx.worktree_bridge.repo_root());
-        let keyword_matches = archive.query_by_keywords(&ctx.issue.title, 10);
-        if !keyword_matches.is_empty() {
-            // Build a temporary QD archive from the keyword matches so we can
-            // sample diverse strategies (rather than just the top match).
-            let mut qd = crate::map_elites::QualityDiversityArchive::new();
-            for r in &keyword_matches {
-                let lines = (r.lines_added + r.lines_removed) as usize;
-                let files = r.files_changed.len();
-                let features =
-                    crate::map_elites::FeatureExtractor::extract_from_metadata(lines, files);
-                let score = if r.resolved {
-                    1.0 / r.iterations.max(1) as f64
-                } else {
-                    0.0
-                };
-                let node = crate::map_elites::ExperimentNode {
-                    id: r.issue_id.clone(),
-                    description: r.issue_title.clone(),
-                    score,
-                    lines_changed: lines,
-                    files_changed: files,
-                    strategy: crate::map_elites::FeatureExtractor::infer_strategy(files, lines),
-                };
-                qd.insert(node, features);
-            }
-
-            // Sample up to 3 diverse experiments from different bins.
-            let diverse = qd.sample_diverse(3);
-            if !diverse.is_empty() {
-                let mut hint = String::from(
-                    "## Strategy Hints from Past Similar Issues\n\n\
-                     The mutation archive found similar past issues. \
-                     Consider these strategies (do not blindly copy — adapt as needed):\n\n",
-                );
-                for node in &diverse {
-                    // Find the original record for model/tier info.
-                    if let Some(rec) = keyword_matches.iter().find(|r| r.issue_id == node.id) {
-                        hint.push_str(&format!(
-                            "- **{}** (resolved={}, {} iter, model=`{}`, strategy={:?})\n",
-                            rec.issue_title, rec.resolved, rec.iterations, rec.model, node.strategy,
-                        ));
-                    }
-                }
-                hint.push('\n');
-                packet.relevant_heuristics.push(hint);
-                info!(
-                    matches = keyword_matches.len(),
-                    diverse = diverse.len(),
-                    "Mutation archive: seeded {} diverse strategy hints (state driver)",
-                    diverse.len()
-                );
-            }
-        }
-    }
+    maybe_seed_strategy_hints(
+        &mut packet,
+        &ctx.issue.title,
+        ctx.worktree_bridge.repo_root(),
+        ctx.last_report.is_none(),
+        iteration,
+    );
 
     info!(
         tokens = packet.estimated_tokens(),
@@ -925,95 +870,8 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         "Packed context (state driver)"
     );
 
-    // Sparse context guard — escalate Worker→Council when cloud is available
-    let tier = if tier == SwarmTier::Worker
-        && packet.file_contexts.is_empty()
-        && packet.files_touched.is_empty()
-        && packet.failure_signals.is_empty()
-        && ctx.config.cloud_endpoint.is_some()
-    {
-        warn!(
-            iteration,
-            "Sparse context — escalating Worker→Council (state driver)"
-        );
-        ctx.escalation.record_escalation(
-            SwarmTier::Council,
-            EscalationReason::Explicit {
-                reason: "sparse context: no file_contexts/files_touched/failure_signals".into(),
-            },
-        );
-        SwarmTier::Council
-    } else {
-        if tier == SwarmTier::Worker
-            && packet.file_contexts.is_empty()
-            && packet.files_touched.is_empty()
-            && packet.failure_signals.is_empty()
-        {
-            warn!(
-                iteration,
-                "Sparse context but no cloud — keeping Worker (state driver)"
-            );
-        }
-        tier
-    };
-
-    // --- P2.2: DynamicRouter integration ---
-    // Ask the router for a tier recommendation based on error patterns + performance
-    // history. If the router recommends Council and we're currently Worker (and cloud is
-    // available), upgrade the tier for this iteration.
-    let tier = if tier == SwarmTier::Worker && ctx.last_report.is_some() {
-        // Convert ErrorCategories to ParsedErrors for router input
-        let parsed_errors: Vec<coordination::feedback::error_parser::ParsedError> = ctx
-            .last_report
-            .as_ref()
-            .map(|r| {
-                r.unique_error_categories()
-                    .into_iter()
-                    .map(|cat| coordination::feedback::error_parser::ParsedError {
-                        category: cat,
-                        code: None,
-                        message: String::new(),
-                        file: None,
-                        line: None,
-                        column: None,
-                        suggestion: None,
-                        rendered: String::new(),
-                        labels: Vec::new(),
-                    })
-                    .collect()
-            })
-            .unwrap_or_default();
-
-        if !parsed_errors.is_empty() {
-            let selection = ctx.router.select_for_errors_dynamic(&parsed_errors);
-            if selection.tier == ModelTier::Council && ctx.config.cloud_endpoint.is_some() {
-                info!(
-                    iteration,
-                    reason = %selection.reason,
-                    "DynamicRouter recommends Council (P2.2)"
-                );
-                ctx.escalation.record_escalation(
-                    SwarmTier::Council,
-                    EscalationReason::Explicit {
-                        reason: format!("DynamicRouter: {}", selection.reason),
-                    },
-                );
-                SwarmTier::Council
-            } else {
-                debug!(
-                    iteration,
-                    tier = %selection.tier,
-                    reason = %selection.reason,
-                    "DynamicRouter stays at Worker"
-                );
-                tier
-            }
-        } else {
-            tier
-        }
-    } else {
-        tier
-    };
+    // Sparse context guard + DynamicRouter tier resolution
+    let tier = resolve_final_tier(ctx, &packet, tier, iteration);
 
     // Derive harness policy for prompt-building (may be re-derived below if the deep
     // probe escalates the tier — see "Re-derive harness policy" block after deep probe).
@@ -1850,137 +1708,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     }
 
     if !has_changes {
-        // If the agent produced a substantial response without file changes,
-        // treat it as a plan/analysis and inject it into the next iteration.
-        // This enables the CoT planner (no tools) to contribute context
-        // instead of being penalized by the no-change circuit breaker.
-        //
-        // Guard: only store as plan if this is the FIRST plan-only response.
-        // If we already have a plan stored, the previous plan didn't help —
-        // don't keep accumulating plans, let the no-change circuit breaker fire.
-        let is_hallucinated = response.contains(".swarm-checkpoint")
-            || response.contains(".swarm-session")
-            || response.contains("tz_insights_join");
-        let already_has_plan = ctx.last_plan_output.is_some();
-        if response.len() > 100 && !already_has_plan && !is_hallucinated {
-            info!(
-                iteration,
-                response_len = response.len(),
-                "Storing agent response as plan context for next iteration"
-            );
-            ctx.last_plan_output = Some(response.clone());
-            // Skip the no-change escalation — the plan IS the output.
-            return Ok(StateTransition::Advance {
-                to: OrchestratorState::Planning,
-                reason: format!(
-                    "agent produced plan/analysis ({} chars) — re-entering with plan context",
-                    ctx.last_plan_output.as_ref().map(|p| p.len()).unwrap_or(0)
-                ),
-            });
-        }
-        if is_hallucinated {
-            warn!(
-                iteration,
-                response_len = response.len(),
-                "Discarding hallucinated plan output (references swarm internals)"
-            );
-        }
-
-        ctx.escalation.record_no_change();
-        ctx.metrics.record_no_change();
-        warn!(
-            iteration,
-            response_len = response.len(),
-            consecutive_no_change = ctx.escalation.consecutive_no_change,
-            agent_terminated_without_writing,
-            "No file changes (state driver)"
-        );
-
-        // Write-deadline escalation: immediate Cloud escalation
-        if agent_terminated_without_writing
-            && ctx.escalation.current_tier == SwarmTier::Worker
-            && ctx.config.cloud_endpoint.is_some()
-        {
-            warn!(
-                iteration,
-                "Write-deadline escalation (state driver): worker terminated without writing — \
-                 escalating to Council immediately"
-            );
-            ctx.escalation.record_escalation(
-                SwarmTier::Council,
-                EscalationReason::Explicit {
-                    reason: "write deadline: worker exhausted turns without edit_file/write_file"
-                        .to_string(),
-                },
-            );
-            ctx.metrics.finish_iteration();
-            return Ok(StateTransition::Advance {
-                to: OrchestratorState::Planning,
-                reason: "write-deadline escalation → Council".into(),
-            });
-        }
-
-        // No-change circuit breaker
-        if ctx.escalation.consecutive_no_change >= ctx.config.max_consecutive_no_change {
-            error!(iteration, "No-change circuit breaker (state driver)");
-            ctx.metrics.finish_iteration();
-
-            let scaffolded =
-                try_scaffold_fallback(&ctx.wt_path, &ctx.issue.id, &ctx.issue.title, "", iteration);
-
-            create_stuck_intervention(
-                &mut ctx.session,
-                &ctx.progress,
-                &ctx.wt_path,
-                iteration,
-                &format!(
-                    "No-change circuit breaker: {} consecutive no-change iterations{}",
-                    ctx.escalation.consecutive_no_change,
-                    if scaffolded {
-                        " (scaffold committed)"
-                    } else {
-                        ""
-                    },
-                ),
-            );
-            return Ok(StateTransition::Fail {
-                reason: "No-change circuit breaker".into(),
-            });
-        }
-
-        // Run verifier to get escalation decision
-        let engine = EscalationEngine::new();
-        let current_vc = if ctx.config.verifier_packages.is_empty() {
-            VerifierConfig {
-                packages: detect_changed_packages(&ctx.wt_path, true),
-                ..ctx.verifier_config.clone()
-            }
-        } else {
-            ctx.verifier_config.clone()
-        };
-        let verifier = Verifier::new(&ctx.wt_path, current_vc);
-        let report = verifier.run_pipeline().await;
-        let decision = engine.decide(&mut ctx.escalation, &report);
-        ctx.last_report = Some(report);
-        ctx.metrics.finish_iteration();
-
-        if decision.stuck {
-            create_stuck_intervention(
-                &mut ctx.session,
-                &ctx.progress,
-                &ctx.wt_path,
-                iteration,
-                &decision.reason,
-            );
-            return Ok(StateTransition::Fail {
-                reason: format!("Stuck (no changes): {}", decision.reason),
-            });
-        }
-        ctx.escalation.current_tier = decision.target_tier;
-        return Ok(StateTransition::Advance {
-            to: OrchestratorState::Planning,
-            reason: format!("no changes, tier → {:?}", decision.target_tier),
-        });
+        return handle_no_file_changes(ctx, iteration, &response, agent_terminated_without_writing).await;
     }
 
     // Reset no-change counter
@@ -2051,6 +1779,289 @@ async fn maybe_rollback_on_regression(
         });
     }
     None
+}
+
+/// On the first iteration (no prior verifier report), query the mutation archive for
+/// similar past issues and inject the top-3 diverse successful strategies as a hint.
+///
+/// Uses MAP-Elites sampling so we suggest a variety of approaches rather than always
+/// repeating the most-recently-successful pattern.
+fn maybe_seed_strategy_hints(
+    packet: &mut coordination::WorkPacket,
+    issue_title: &str,
+    repo_root: &std::path::Path,
+    is_first_iteration: bool,
+    iteration: u32,
+) {
+    if !is_first_iteration {
+        return;
+    }
+    let archive = crate::mutation_archive::MutationArchive::new(repo_root);
+    let keyword_matches = archive.query_by_keywords(issue_title, 10);
+    if keyword_matches.is_empty() {
+        return;
+    }
+    // Build a temporary QD archive from the keyword matches so we can
+    // sample diverse strategies (rather than just the top match).
+    let mut qd = crate::map_elites::QualityDiversityArchive::new();
+    for r in &keyword_matches {
+        let lines = (r.lines_added + r.lines_removed) as usize;
+        let files = r.files_changed.len();
+        let features = crate::map_elites::FeatureExtractor::extract_from_metadata(lines, files);
+        let score = if r.resolved {
+            1.0 / r.iterations.max(1) as f64
+        } else {
+            0.0
+        };
+        let node = crate::map_elites::ExperimentNode {
+            id: r.issue_id.clone(),
+            description: r.issue_title.clone(),
+            score,
+            lines_changed: lines,
+            files_changed: files,
+            strategy: crate::map_elites::FeatureExtractor::infer_strategy(files, lines),
+        };
+        qd.insert(node, features);
+    }
+    let diverse = qd.sample_diverse(3);
+    if diverse.is_empty() {
+        return;
+    }
+    let mut hint = String::from(
+        "## Strategy Hints from Past Similar Issues\n\n\
+         The mutation archive found similar past issues. \
+         Consider these strategies (do not blindly copy — adapt as needed):\n\n",
+    );
+    for node in &diverse {
+        if let Some(rec) = keyword_matches.iter().find(|r| r.issue_id == node.id) {
+            hint.push_str(&format!(
+                "- **{}** (resolved={}, {} iter, model=`{}`, strategy={:?})\n",
+                rec.issue_title, rec.resolved, rec.iterations, rec.model, node.strategy,
+            ));
+        }
+    }
+    hint.push('\n');
+    packet.relevant_heuristics.push(hint);
+    info!(
+        iteration,
+        matches = keyword_matches.len(),
+        diverse = diverse.len(),
+        "Mutation archive: seeded {} diverse strategy hints (state driver)",
+        diverse.len()
+    );
+}
+
+/// Resolve the final dispatch tier after applying two escalation heuristics:
+///
+/// 1. **Sparse context**: if `packet` has no file contexts, files touched, or failure
+///    signals and cloud is available, escalate Worker→Council immediately (no point
+///    sending a worker into the void with no context).
+/// 2. **DynamicRouter (P2.2)**: if the router recommends Council based on error patterns
+///    and cloud is available, upgrade the tier.
+fn resolve_final_tier(
+    ctx: &mut OrchestratorContext<'_>,
+    packet: &coordination::WorkPacket,
+    tier: SwarmTier,
+    iteration: u32,
+) -> SwarmTier {
+    // Step 1: sparse context guard
+    let tier = if tier == SwarmTier::Worker
+        && packet.file_contexts.is_empty()
+        && packet.files_touched.is_empty()
+        && packet.failure_signals.is_empty()
+    {
+        if ctx.config.cloud_endpoint.is_some() {
+            warn!(iteration, "Sparse context — escalating Worker→Council (state driver)");
+            ctx.escalation.record_escalation(
+                SwarmTier::Council,
+                EscalationReason::Explicit {
+                    reason: "sparse context: no file_contexts/files_touched/failure_signals".into(),
+                },
+            );
+            SwarmTier::Council
+        } else {
+            warn!(iteration, "Sparse context but no cloud — keeping Worker (state driver)");
+            tier
+        }
+    } else {
+        tier
+    };
+
+    // Step 2: DynamicRouter recommendation (P2.2)
+    if tier != SwarmTier::Worker || ctx.last_report.is_none() {
+        return tier;
+    }
+    let parsed_errors: Vec<coordination::feedback::error_parser::ParsedError> = ctx
+        .last_report
+        .as_ref()
+        .map(|r| {
+            r.unique_error_categories()
+                .into_iter()
+                .map(|cat| coordination::feedback::error_parser::ParsedError {
+                    category: cat,
+                    code: None,
+                    message: String::new(),
+                    file: None,
+                    line: None,
+                    column: None,
+                    suggestion: None,
+                    rendered: String::new(),
+                    labels: Vec::new(),
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if parsed_errors.is_empty() {
+        return tier;
+    }
+    let selection = ctx.router.select_for_errors_dynamic(&parsed_errors);
+    if selection.tier == ModelTier::Council && ctx.config.cloud_endpoint.is_some() {
+        info!(
+            iteration,
+            reason = %selection.reason,
+            "DynamicRouter recommends Council (P2.2)"
+        );
+        ctx.escalation.record_escalation(
+            SwarmTier::Council,
+            EscalationReason::Explicit {
+                reason: format!("DynamicRouter: {}", selection.reason),
+            },
+        );
+        SwarmTier::Council
+    } else {
+        debug!(
+            iteration,
+            tier = %selection.tier,
+            reason = %selection.reason,
+            "DynamicRouter stays at Worker"
+        );
+        tier
+    }
+}
+
+/// Handle the case where the agent produced no file changes.
+///
+/// Checks (in order):
+/// 1. If the response looks like a plan/analysis (long, not hallucinated), store it for
+///    the next iteration and return to Planning — the CoT planner path uses this.
+/// 2. Write-deadline escalation: if the agent exhausted all turns without writing,
+///    immediately escalate Worker→Council.
+/// 3. No-change circuit breaker: abort if we've hit `max_consecutive_no_change`.
+/// 4. Run the verifier and use its escalation decision as the next Planning state.
+async fn handle_no_file_changes(
+    ctx: &mut OrchestratorContext<'_>,
+    iteration: u32,
+    response: &str,
+    agent_terminated_without_writing: bool,
+) -> Result<StateTransition> {
+    let is_hallucinated = response.contains(".swarm-checkpoint")
+        || response.contains(".swarm-session")
+        || response.contains("tz_insights_join");
+    let already_has_plan = ctx.last_plan_output.is_some();
+    if response.len() > 100 && !already_has_plan && !is_hallucinated {
+        info!(
+            iteration,
+            response_len = response.len(),
+            "Storing agent response as plan context for next iteration"
+        );
+        ctx.last_plan_output = Some(response.to_owned());
+        return Ok(StateTransition::Advance {
+            to: OrchestratorState::Planning,
+            reason: format!(
+                "agent produced plan/analysis ({} chars) — re-entering with plan context",
+                ctx.last_plan_output.as_ref().map(|p| p.len()).unwrap_or(0)
+            ),
+        });
+    }
+    if is_hallucinated {
+        warn!(
+            iteration,
+            response_len = response.len(),
+            "Discarding hallucinated plan output (references swarm internals)"
+        );
+    }
+
+    ctx.escalation.record_no_change();
+    ctx.metrics.record_no_change();
+    warn!(
+        iteration,
+        response_len = response.len(),
+        consecutive_no_change = ctx.escalation.consecutive_no_change,
+        agent_terminated_without_writing,
+        "No file changes (state driver)"
+    );
+
+    // Write-deadline escalation: immediate Cloud escalation
+    if agent_terminated_without_writing
+        && ctx.escalation.current_tier == SwarmTier::Worker
+        && ctx.config.cloud_endpoint.is_some()
+    {
+        warn!(
+            iteration,
+            "Write-deadline escalation (state driver): worker terminated without writing — \
+             escalating to Council immediately"
+        );
+        ctx.escalation.record_escalation(
+            SwarmTier::Council,
+            EscalationReason::Explicit {
+                reason: "write deadline: worker exhausted turns without edit_file/write_file"
+                    .to_string(),
+            },
+        );
+        ctx.metrics.finish_iteration();
+        return Ok(StateTransition::Advance {
+            to: OrchestratorState::Planning,
+            reason: "write-deadline escalation → Council".into(),
+        });
+    }
+
+    // No-change circuit breaker
+    if ctx.escalation.consecutive_no_change >= ctx.config.max_consecutive_no_change {
+        error!(iteration, "No-change circuit breaker (state driver)");
+        ctx.metrics.finish_iteration();
+        let scaffolded =
+            try_scaffold_fallback(&ctx.wt_path, &ctx.issue.id, &ctx.issue.title, "", iteration);
+        create_stuck_intervention(
+            &mut ctx.session,
+            &ctx.progress,
+            &ctx.wt_path,
+            iteration,
+            &format!(
+                "No-change circuit breaker: {} consecutive no-change iterations{}",
+                ctx.escalation.consecutive_no_change,
+                if scaffolded { " (scaffold committed)" } else { "" },
+            ),
+        );
+        return Ok(StateTransition::Fail {
+            reason: "No-change circuit breaker".into(),
+        });
+    }
+
+    // Run verifier to get escalation decision
+    let engine = EscalationEngine::new();
+    let verifier = Verifier::new(&ctx.wt_path, scoped_verifier_config(ctx));
+    let report = verifier.run_pipeline().await;
+    let decision = engine.decide(&mut ctx.escalation, &report);
+    ctx.last_report = Some(report);
+    ctx.metrics.finish_iteration();
+
+    if decision.stuck {
+        create_stuck_intervention(
+            &mut ctx.session,
+            &ctx.progress,
+            &ctx.wt_path,
+            iteration,
+            &decision.reason,
+        );
+        return Ok(StateTransition::Fail {
+            reason: format!("Stuck (no changes): {}", decision.reason),
+        });
+    }
+    ctx.escalation.current_tier = decision.target_tier;
+    Ok(StateTransition::Advance {
+        to: OrchestratorState::Planning,
+        reason: format!("no changes, tier → {:?}", decision.target_tier),
+    })
 }
 
 /// Verifying: run deterministic quality gates, auto-fix, regression detection.

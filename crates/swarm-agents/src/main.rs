@@ -176,87 +176,7 @@ async fn main() -> Result<()> {
     );
 
     // --- Health check endpoints with model verification ---
-    if config.cloud_only {
-        info!("Cloud-only mode — skipping local endpoint health checks");
-        if let Some(ref cloud_ep) = config.cloud_endpoint {
-            let cloud_ok =
-                check_endpoint_with_model(&cloud_ep.url, Some(&cloud_ep.api_key), None).await;
-            if !cloud_ok {
-                error!(
-                    url = %cloud_ep.url,
-                    "Cloud endpoint not reachable — aborting (cloud-only mode)"
-                );
-                anyhow::bail!(
-                    "Cloud endpoint {} is not reachable. Check proxy status.",
-                    cloud_ep.url
-                );
-            }
-            info!(url = %cloud_ep.url, "Cloud endpoint health check passed");
-        } else {
-            error!("--cloud-only requires SWARM_CLOUD_URL to be configured");
-            anyhow::bail!("Cloud-only mode requires cloud_endpoint");
-        }
-    } else {
-        let local_ok = check_endpoint_with_model(
-            &config.fast_endpoint.url,
-            Some(&config.fast_endpoint.api_key),
-            Some(&config.fast_endpoint.model),
-        )
-        .await;
-        let coder_ok = check_endpoint_with_model(
-            &config.coder_endpoint.url,
-            Some(&config.coder_endpoint.api_key),
-            Some(&config.coder_endpoint.model),
-        )
-        .await;
-        let reasoning_ok = check_endpoint_with_model(
-            &config.reasoning_endpoint.url,
-            Some(&config.reasoning_endpoint.api_key),
-            Some(&config.reasoning_endpoint.model),
-        )
-        .await;
-        info!(local_ok, coder_ok, reasoning_ok, "Endpoint health check");
-        if !local_ok {
-            error!(
-                url = %config.fast_endpoint.url,
-                model = %config.fast_endpoint.model,
-                "Fast/scout endpoint not ready (vasp-03). sbatch run-27b-256k.slurm"
-            );
-        }
-        if !coder_ok {
-            error!(
-                url = %config.coder_endpoint.url,
-                model = %config.coder_endpoint.model,
-                "Coder/integrator endpoint not ready (vasp-01). sbatch run-122b-rpc.slurm"
-            );
-        }
-        if !reasoning_ok {
-            error!(
-                url = %config.reasoning_endpoint.url,
-                model = %config.reasoning_endpoint.model,
-                "Reasoning/integrator endpoint not ready (vasp-02). sbatch --nodelist=vasp-02 run-122b-rpc.slurm"
-            );
-        }
-
-        if !local_ok && !coder_ok && !reasoning_ok {
-            if config.cloud_endpoint.is_some() {
-                warn!("All local endpoints down — will attempt cloud-only mode");
-                config.cloud_only = true;
-            } else {
-                error!("All endpoints unreachable and no cloud configured — exiting");
-                anyhow::bail!("No inference endpoints available");
-            }
-        } else if !local_ok || !coder_ok || !reasoning_ok {
-            // At least one local endpoint is down but not all — warn loudly.
-            // Workers routed to failed endpoints will get 502 errors and waste iterations.
-            warn!(
-                local_ok,
-                coder_ok,
-                reasoning_ok,
-                "Some local endpoints are down — workers may fail. Fix before running dogfood."
-            );
-        }
-    }
+    run_health_checks(&mut config).await?;
 
     // Detect repo root (needed for registry resolution and worktree bridge)
     let repo_root = match &args.repo_root {
@@ -576,6 +496,98 @@ async fn main() -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Probe all configured inference endpoints and mutate `config` if needed.
+///
+/// In cloud-only mode, verifies the cloud endpoint is reachable and bails immediately
+/// if it isn't (since there are no fallback options). In local mode, checks all three
+/// tier endpoints (fast/coder/reasoning) and logs errors for any that are down. If all
+/// three are unreachable and a cloud endpoint is configured, automatically switches the
+/// config into cloud-only mode rather than aborting.
+async fn run_health_checks(config: &mut SwarmConfig) -> Result<()> {
+    if config.cloud_only {
+        info!("Cloud-only mode — skipping local endpoint health checks");
+        if let Some(ref cloud_ep) = config.cloud_endpoint {
+            let cloud_ok =
+                check_endpoint_with_model(&cloud_ep.url, Some(&cloud_ep.api_key), None).await;
+            if !cloud_ok {
+                error!(
+                    url = %cloud_ep.url,
+                    "Cloud endpoint not reachable — aborting (cloud-only mode)"
+                );
+                anyhow::bail!(
+                    "Cloud endpoint {} is not reachable. Check proxy status.",
+                    cloud_ep.url
+                );
+            }
+            info!(url = %cloud_ep.url, "Cloud endpoint health check passed");
+        } else {
+            error!("--cloud-only requires SWARM_CLOUD_URL to be configured");
+            anyhow::bail!("Cloud-only mode requires cloud_endpoint");
+        }
+    } else {
+        let local_ok = check_endpoint_with_model(
+            &config.fast_endpoint.url,
+            Some(&config.fast_endpoint.api_key),
+            Some(&config.fast_endpoint.model),
+        )
+        .await;
+        let coder_ok = check_endpoint_with_model(
+            &config.coder_endpoint.url,
+            Some(&config.coder_endpoint.api_key),
+            Some(&config.coder_endpoint.model),
+        )
+        .await;
+        let reasoning_ok = check_endpoint_with_model(
+            &config.reasoning_endpoint.url,
+            Some(&config.reasoning_endpoint.api_key),
+            Some(&config.reasoning_endpoint.model),
+        )
+        .await;
+        info!(local_ok, coder_ok, reasoning_ok, "Endpoint health check");
+        if !local_ok {
+            error!(
+                url = %config.fast_endpoint.url,
+                model = %config.fast_endpoint.model,
+                "Fast/scout endpoint not ready (vasp-03). sbatch run-27b-256k.slurm"
+            );
+        }
+        if !coder_ok {
+            error!(
+                url = %config.coder_endpoint.url,
+                model = %config.coder_endpoint.model,
+                "Coder/integrator endpoint not ready (vasp-01). sbatch run-122b-rpc.slurm"
+            );
+        }
+        if !reasoning_ok {
+            error!(
+                url = %config.reasoning_endpoint.url,
+                model = %config.reasoning_endpoint.model,
+                "Reasoning/integrator endpoint not ready (vasp-02). sbatch --nodelist=vasp-02 run-122b-rpc.slurm"
+            );
+        }
+
+        if !local_ok && !coder_ok && !reasoning_ok {
+            if config.cloud_endpoint.is_some() {
+                warn!("All local endpoints down — will attempt cloud-only mode");
+                config.cloud_only = true;
+            } else {
+                error!("All endpoints unreachable and no cloud configured — exiting");
+                anyhow::bail!("No inference endpoints available");
+            }
+        } else if !local_ok || !coder_ok || !reasoning_ok {
+            // At least one local endpoint is down but not all — warn loudly.
+            // Workers routed to failed endpoints will get 502 errors and waste iterations.
+            warn!(
+                local_ok,
+                coder_ok,
+                reasoning_ok,
+                "Some local endpoints are down — workers may fail. Fix before running dogfood."
+            );
+        }
+    }
     Ok(())
 }
 
