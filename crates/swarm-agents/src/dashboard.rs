@@ -436,6 +436,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             estimated_cost_usd: 0.0,
+            active_harness_policy: None,
         }
     }
 

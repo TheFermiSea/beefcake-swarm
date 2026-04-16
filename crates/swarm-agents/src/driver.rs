@@ -34,6 +34,7 @@ use crate::beads_bridge::{BeadsBridge, BeadsIssue, IssueTracker};
 use crate::cluster_health::ClusterHealth;
 use crate::config::{SwarmConfig, SwarmRole};
 use crate::file_targeting::detect_changed_packages;
+use crate::harness::HarnessPolicy;
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::orchestrator::{
@@ -134,6 +135,7 @@ pub struct OrchestratorContext<'a> {
     // ── Coordination integrations (P2.2 + P2.3) ──
     pub router: DynamicRouter,
     pub correction_loop: TieredCorrectionLoop,
+    pub last_harness_policy: Option<HarnessPolicy>,
 
     // ── Reformulation engine ──
     pub reformulation_store: ReformulationStore,
@@ -366,6 +368,7 @@ impl<'a> OrchestratorContext<'a> {
                 cl.start();
                 cl
             },
+            last_harness_policy: None,
             auto_fix_applied: false,
             last_plan_output: None,
             cot_planner_invocations: 0,
@@ -578,6 +581,7 @@ impl<'a> OrchestratorContext<'a> {
                 cl.start();
                 cl
             },
+            last_harness_policy: None,
             auto_fix_applied: false,
             last_plan_output: None,
             cot_planner_invocations: 0,
@@ -1011,8 +1015,19 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         tier
     };
 
+    let harness_policy = HarnessPolicy::derive(&packet, tier);
+    harness_policy.apply_to_packet(&mut packet);
+    ctx.metrics.record_harness_policy(&harness_policy);
+    if harness_policy.economics.prefer_compact_prompt {
+        ctx.metrics.record_compact_prompt();
+    }
+    if harness_policy.judgment.external_review_required {
+        ctx.metrics.record_strict_external_judgment();
+    }
+    ctx.last_harness_policy = Some(harness_policy.clone());
+
     // Build prompt
-    let mut task_prompt = if tier == SwarmTier::Worker {
+    let mut task_prompt = if harness_policy.economics.prefer_compact_prompt {
         format_compact_task_prompt(&packet, &ctx.wt_path)
     } else {
         format_task_prompt(&packet)
@@ -1113,7 +1128,10 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     //
     // Only activates for the Worker tier — Council/Strategist run once and
     // produce authoritative output, so candidate redundancy isn't beneficial.
-    if ctx.config.candidate_count > 1 && tier == SwarmTier::Worker {
+    if harness_policy.economics.allow_candidate_fanout
+        && ctx.config.candidate_count > 1
+        && tier == SwarmTier::Worker
+    {
         let base_commit = ctx
             .pre_worker_commit
             .clone()
@@ -2276,6 +2294,26 @@ pub async fn handle_validating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
         }
     }
 
+    if let Some(policy) = ctx.last_harness_policy.as_ref() {
+        if policy.judgment.external_review_required
+            && ctx.factory.clients.cloud.is_some()
+            && cloud_passes < policy.judgment.min_external_passes
+            && !ctx.last_validator_feedback.is_empty()
+        {
+            warn!(
+                iteration,
+                required = policy.judgment.min_external_passes,
+                observed = cloud_passes,
+                "Harness judgment rejected resolution after external review"
+            );
+            ctx.metrics.finish_iteration();
+            return Ok(StateTransition::Advance {
+                to: OrchestratorState::Planning,
+                reason: "external judgment rejected".into(),
+            });
+        }
+    }
+
     // Acceptance policy check
     let acceptance_result = acceptance::check_acceptance_with_task(
         &ctx.acceptance_policy,
@@ -2772,7 +2810,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
 /// Takes `MetricsCollector` by value because `finalize()` consumes `self`.
 /// The caller should `std::mem::replace` the collector out of the context
 /// before calling this.
-pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsCollector) {
+pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, mut metrics: MetricsCollector) {
     if !ctx.success {
         ctx.session.fail();
         let _ = ctx.progress.log_session_end(
@@ -2905,8 +2943,10 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
 
     // Telemetry
     let final_tier = format!("{:?}", ctx.escalation.current_tier);
+    metrics.record_proof_of_work_emitted();
     let session_metrics = metrics.finalize(ctx.success, &final_tier);
     telemetry::write_session_metrics(&session_metrics, &ctx.wt_path);
+    telemetry::write_proof_of_work(&session_metrics, &ctx.wt_path);
     telemetry::append_telemetry(&session_metrics, ctx.worktree_bridge.repo_root());
 
     // TensorZero feedback — health-gated to prevent data poisoning.
