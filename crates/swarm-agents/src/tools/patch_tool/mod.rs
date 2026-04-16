@@ -62,6 +62,57 @@ pub struct EditFileTool {
     allowed_files: Option<std::collections::HashSet<String>>,
 }
 
+/// Validate anchor strings and verify hashes against file content.
+///
+/// Returns `(start_line, end_line)` (1-indexed, inclusive) on success.
+/// Errors on bad format, out-of-range lines, ordering violations, or stale hashes.
+fn validate_anchors(
+    start_anchor: &str,
+    end_anchor: &str,
+    lines: &[&str],
+) -> Result<(usize, usize), ToolError> {
+    let (start_line, start_hash) = parse_anchor(start_anchor).ok_or_else(|| {
+        ToolError::Validation(format!(
+            "Invalid anchor_start format: '{start_anchor}'. Expected 'line:hash' (e.g. '42:a3')"
+        ))
+    })?;
+    let (end_line, end_hash) = parse_anchor(end_anchor).ok_or_else(|| {
+        ToolError::Validation(format!(
+            "Invalid anchor_end format: '{end_anchor}'. Expected 'line:hash' (e.g. '44:0e')"
+        ))
+    })?;
+
+    if start_line == 0 || end_line == 0 || start_line > lines.len() || end_line > lines.len() {
+        return Err(ToolError::Validation(format!(
+            "Anchor line numbers out of range: start={start_line}, end={end_line}, \
+             file has {} lines. Re-read the file to get fresh anchors.",
+            lines.len()
+        )));
+    }
+    if start_line > end_line {
+        return Err(ToolError::Validation(format!(
+            "anchor_start line ({start_line}) must be <= anchor_end line ({end_line})"
+        )));
+    }
+
+    let actual_start = blake3_short(lines[start_line - 1].trim());
+    if actual_start != start_hash {
+        return Err(ToolError::Validation(format!(
+            "Stale anchor_start: line {start_line} hash is now '{actual_start}' \
+             (expected '{start_hash}'). Re-read the file to get fresh anchors."
+        )));
+    }
+    let actual_end = blake3_short(lines[end_line - 1].trim());
+    if actual_end != end_hash {
+        return Err(ToolError::Validation(format!(
+            "Stale anchor_end: line {end_line} hash is now '{actual_end}' \
+             (expected '{end_hash}'). Re-read the file to get fresh anchors."
+        )));
+    }
+
+    Ok((start_line, end_line))
+}
+
 impl EditFileTool {
     pub fn new(working_dir: &Path) -> Self {
         Self {
@@ -91,50 +142,7 @@ impl EditFileTool {
         new_content: &str,
     ) -> Result<String, ToolError> {
         let lines: Vec<&str> = content.lines().collect();
-
-        let (start_line, start_hash) = parse_anchor(start_anchor).ok_or_else(|| {
-            ToolError::Validation(format!(
-                "Invalid anchor_start format: '{start_anchor}'. Expected 'line:hash' (e.g. '42:a3')"
-            ))
-        })?;
-
-        let (end_line, end_hash) = parse_anchor(end_anchor).ok_or_else(|| {
-            ToolError::Validation(format!(
-                "Invalid anchor_end format: '{end_anchor}'. Expected 'line:hash' (e.g. '44:0e')"
-            ))
-        })?;
-
-        // Validate line numbers
-        if start_line == 0 || end_line == 0 || start_line > lines.len() || end_line > lines.len() {
-            return Err(ToolError::Validation(format!(
-                "Anchor line numbers out of range: start={start_line}, end={end_line}, \
-                 file has {} lines. Re-read the file to get fresh anchors.",
-                lines.len()
-            )));
-        }
-
-        if start_line > end_line {
-            return Err(ToolError::Validation(format!(
-                "anchor_start line ({start_line}) must be <= anchor_end line ({end_line})"
-            )));
-        }
-
-        // Verify hashes match current content
-        let actual_start_hash = blake3_short(lines[start_line - 1].trim());
-        if actual_start_hash != start_hash {
-            return Err(ToolError::Validation(format!(
-                "Stale anchor_start: line {start_line} hash is now '{actual_start_hash}' \
-                 (expected '{start_hash}'). Re-read the file to get fresh anchors."
-            )));
-        }
-
-        let actual_end_hash = blake3_short(lines[end_line - 1].trim());
-        if actual_end_hash != end_hash {
-            return Err(ToolError::Validation(format!(
-                "Stale anchor_end: line {end_line} hash is now '{actual_end_hash}' \
-                 (expected '{end_hash}'). Re-read the file to get fresh anchors."
-            )));
-        }
+        let (start_line, end_line) = validate_anchors(start_anchor, end_anchor, &lines)?;
 
         // Build new file: lines before range + new_content + lines after range
         let mut result = String::with_capacity(content.len());

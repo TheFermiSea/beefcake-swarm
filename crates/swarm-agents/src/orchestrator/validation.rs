@@ -39,26 +39,17 @@ pub(crate) struct LocalValidationResult {
 /// Classify a blocking issue description into a `ValidatorIssueType`.
 fn classify_issue(description: &str) -> ValidatorIssueType {
     let lower = description.to_lowercase();
-    if lower.contains("logic") || lower.contains("incorrect") || lower.contains("wrong") {
+    let contains_any = |keywords: &[&str]| keywords.iter().any(|kw| lower.contains(kw));
+
+    if contains_any(&["logic", "incorrect", "wrong"]) {
         ValidatorIssueType::LogicError
-    } else if lower.contains("safety")
-        || lower.contains("error handling")
-        || lower.contains("unwrap")
-        || lower.contains("panic")
-    {
+    } else if contains_any(&["safety", "error handling", "unwrap", "panic"]) {
         ValidatorIssueType::MissingSafetyCheck
-    } else if lower.contains("edge case")
-        || lower.contains("boundary")
-        || lower.contains("overflow")
-        || lower.contains("empty")
-    {
+    } else if contains_any(&["edge case", "boundary", "overflow", "empty"]) {
         ValidatorIssueType::UnhandledEdgeCase
-    } else if lower.contains("style") || lower.contains("naming") || lower.contains("format") {
+    } else if contains_any(&["style", "naming", "format"]) {
         ValidatorIssueType::StyleViolation
-    } else if lower.contains("behavior")
-        || lower.contains("specification")
-        || lower.contains("spec")
-    {
+    } else if contains_any(&["behavior", "specification", "spec"]) {
         ValidatorIssueType::IncorrectBehavior
     } else {
         ValidatorIssueType::Other

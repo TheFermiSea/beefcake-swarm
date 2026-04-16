@@ -260,31 +260,9 @@ impl Tool for WriteFileTool {
             std::fs::create_dir_all(parent)?;
         }
 
-        // Heuristic: detect double-JSON-encoded content from local models.
-        // Qwen3.5 sometimes wraps the entire file in quotes with
-        // escaped characters. After rig's JSON parse the content arrives as
-        // a valid Rust string that starts/ends with `"` and contains escape
-        // sequences like `\n`, `\t`, `\"`. Only unescape if escape sequences
-        // are present — otherwise `"hello"` would be silently stripped to `hello`.
-        let content = if args.content.starts_with('"')
-            && args.content.ends_with('"')
-            && has_json_escape_sequences(&args.content)
-        {
-            match serde_json::from_str::<String>(&args.content) {
-                Ok(unescaped) if unescaped != args.content => {
-                    tracing::warn!(
-                        path = %args.path,
-                        orig_len = args.content.len(),
-                        unescaped_len = unescaped.len(),
-                        "write_file: detected double-escaped content, unescaping"
-                    );
-                    unescaped
-                }
-                _ => args.content,
-            }
-        } else {
-            args.content
-        };
+        // Detect and reverse double-JSON-encoding from local models (Qwen3.5 etc.).
+        // Runs before the omission/blast-radius guards so they see the final content.
+        let content = maybe_unescape_content(&args.path, args.content);
 
         // Omission guard: reject writes containing placeholder patterns like
         // "// ... existing code ..." that indicate the LLM truncated the output.
@@ -298,30 +276,8 @@ impl Tool for WriteFileTool {
         }
 
         // Blast-radius guard: reject writes that shrink an existing file by >50%.
-        // Prevents catastrophic file corruption from truncated model output
-        // (e.g., job 1653: 500-line pipeline.rs replaced with 1 line of garbage).
         // Runs AFTER unescape so the size comparison uses the final content length.
-        // Uses fs::metadata to avoid reading the entire file and to work with non-UTF8 files.
-        if full_path.exists() {
-            let existing_len = std::fs::metadata(&full_path)?.len() as usize;
-            let new_len = content.len();
-            if existing_len > 100 && new_len < existing_len / 2 {
-                tracing::error!(
-                    path = %args.path,
-                    existing_bytes = existing_len,
-                    new_bytes = new_len,
-                    shrink_pct = (100 - (new_len * 100 / existing_len)),
-                    "write_file: BLAST-RADIUS GUARD triggered — refusing destructive write"
-                );
-                return Err(ToolError::Policy(format!(
-                    "Blast-radius guard: refusing to write {new_len} bytes to {} \
-                     (currently {existing_len} bytes, {:.0}% shrink). \
-                     Use edit_file for targeted changes instead of rewriting the entire file.",
-                    args.path,
-                    100.0 - (new_len as f64 * 100.0 / existing_len as f64)
-                )));
-            }
-        }
+        check_blast_radius(&args.path, &full_path, &content)?;
 
         // Data fabrication guard: reject writes to data/results files that look
         // like fabricated benchmark or experimental output.
@@ -340,6 +296,59 @@ impl Tool for WriteFileTool {
         std::fs::write(&full_path, &content)?;
         Ok(format!("Wrote {bytes} bytes to {}", args.path))
     }
+}
+
+/// Detect and reverse double-JSON-encoding introduced by some local models (e.g. Qwen3.5).
+///
+/// When a model wraps the entire file in outer quotes with escaped characters, the content
+/// arrives as a Rust string starting/ending with `"` containing `\n`, `\t` etc. This
+/// function transparently reverses that encoding. Returns the original string unchanged
+/// when no double-encoding is detected.
+fn maybe_unescape_content(path: &str, content: String) -> String {
+    if content.starts_with('"')
+        && content.ends_with('"')
+        && has_json_escape_sequences(&content)
+    {
+        match serde_json::from_str::<String>(&content) {
+            Ok(unescaped) if unescaped != content => {
+                tracing::warn!(
+                    path = %path,
+                    orig_len = content.len(),
+                    unescaped_len = unescaped.len(),
+                    "write_file: detected double-escaped content, unescaping"
+                );
+                return unescaped;
+            }
+            _ => {}
+        }
+    }
+    content
+}
+
+/// Enforce the blast-radius guard: reject writes that shrink an existing file by >50%.
+fn check_blast_radius(path: &str, full_path: &Path, content: &str) -> Result<(), ToolError> {
+    if !full_path.exists() {
+        return Ok(());
+    }
+    let existing_len = std::fs::metadata(full_path)?.len() as usize;
+    let new_len = content.len();
+    if existing_len > 100 && new_len < existing_len / 2 {
+        tracing::error!(
+            path = %path,
+            existing_bytes = existing_len,
+            new_bytes = new_len,
+            shrink_pct = (100 - (new_len * 100 / existing_len)),
+            "write_file: BLAST-RADIUS GUARD triggered — refusing destructive write"
+        );
+        return Err(ToolError::Policy(format!(
+            "Blast-radius guard: refusing to write {new_len} bytes to {} \
+             (currently {existing_len} bytes, {:.0}% shrink). \
+             Use edit_file for targeted changes instead of rewriting the entire file.",
+            path,
+            100.0 - (new_len as f64 * 100.0 / existing_len as f64)
+        )));
+    }
+    Ok(())
 }
 
 /// Check if a quoted string contains JSON escape sequences (e.g., `\n`, `\t`, `\"`).
