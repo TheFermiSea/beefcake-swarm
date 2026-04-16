@@ -182,15 +182,13 @@ struct AdapterState {
     /// Set by `on_completion_call` when the worker is approaching the write deadline;
     /// consumed (taken) by `on_tool_result` and prepended to the tool output.
     pending_reminder: Option<String>,
-    /// Count of tool calls that hit the harness-path sandbox (.swarm/, .swarm-*,
-    /// .beads/, .git/). Agents observed fixating on these — 1,705 blocked attempts
-    /// across 20 runs on 2026-04-16. Triggers early termination after threshold.
+    /// Count of tool calls blocked by the harness-path sandbox
+    /// (`.swarm/`, `.swarm-*`, `.beads/`, `.git/`). Agent fails-fast after the limit.
     swarm_internal_attempts: usize,
 }
 
-/// Threshold for swarm-internal-path sandbox attempts before forcing termination.
-/// Three strikes: an agent that can't stop reaching for harness internals won't
-/// recover in later turns either.
+/// Three strikes before fail-fast: an agent that can't stop reaching for harness
+/// internals after repeated blocks won't recover in later turns either.
 const SWARM_INTERNAL_ATTEMPT_LIMIT: usize = 3;
 
 /// Rig [`PromptHook`] implementation for tool-event visibility and budget control.
@@ -746,14 +744,9 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 s.successful_writes += 1;
             }
 
-            // Fail-fast if the agent keeps reaching into harness state.
-            // Detected via the sandbox error substring ("harness state", "harness internals",
-            // "forbidden harness path") returned by sandbox_check / sandbox_command.
-            if is_error
-                && (result.contains("harness state")
-                    || result.contains("harness internals")
-                    || result.contains("forbidden harness path"))
-            {
+            // Fail-fast when the agent keeps hitting the harness-path sandbox.
+            // The marker is owned by tools/mod.rs — see HARNESS_SANDBOX_MARKER.
+            if is_error && result.contains(crate::tools::HARNESS_SANDBOX_MARKER) {
                 s.swarm_internal_attempts += 1;
                 warn!(
                     agent = %config.agent_name,
@@ -764,8 +757,8 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 );
                 if s.swarm_internal_attempts >= SWARM_INTERNAL_ATTEMPT_LIMIT {
                     let reason = format!(
-                        "agent fixated on harness internals ({} attempts) — refusing to waste \
-                         more turns. Target the actual source file instead.",
+                        "agent fixated on harness internals ({} attempts) — target the actual \
+                         source file instead.",
                         s.swarm_internal_attempts
                     );
                     warn!(agent = %config.agent_name, reason = %reason, "Terminating early");

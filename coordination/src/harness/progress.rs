@@ -7,10 +7,12 @@ use crate::harness::types::{ProgressEntry, ProgressMarker};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Progress tracker managing claude-progress.txt
 pub struct ProgressTracker {
     path: PathBuf,
+    parent_ensured: AtomicBool,
 }
 
 impl ProgressTracker {
@@ -18,17 +20,20 @@ impl ProgressTracker {
     pub fn new(path: impl AsRef<Path>) -> Self {
         Self {
             path: path.as_ref().to_path_buf(),
+            parent_ensured: AtomicBool::new(false),
         }
     }
 
     /// Append an entry to the progress file
     pub fn append(&self, entry: &ProgressEntry) -> HarnessResult<()> {
-        // Ensure parent dir exists (progress files now live under .swarm/ subdir).
-        if let Some(parent) = self.path.parent() {
-            if !parent.as_os_str().is_empty() {
-                std::fs::create_dir_all(parent)
-                    .map_err(|e| HarnessError::progress(e.to_string()))?;
+        if !self.parent_ensured.load(Ordering::Relaxed) {
+            if let Some(parent) = self.path.parent() {
+                if !parent.as_os_str().is_empty() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| HarnessError::progress(e.to_string()))?;
+                }
             }
+            self.parent_ensured.store(true, Ordering::Relaxed);
         }
         let mut file = OpenOptions::new()
             .create(true)

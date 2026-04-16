@@ -288,7 +288,7 @@ impl<'a> OrchestratorContext<'a> {
         // Harness
         let mut session = SessionManager::new(wt_path.clone(), config.max_retries);
         let git_mgr = GitManager::new(&wt_path, "[swarm]");
-        let progress = ProgressTracker::new(wt_path.join(".swarm/progress.txt"));
+        let progress = ProgressTracker::new(crate::session::progress_path(&wt_path));
 
         if let Ok(commit) = git_mgr.current_commit_full() {
             session.set_initial_commit(commit.clone());
@@ -509,7 +509,7 @@ impl<'a> OrchestratorContext<'a> {
 
         let mut session = SessionManager::new(wt_path.clone(), config.max_retries);
         let git_mgr = GitManager::new(&wt_path, "[swarm]");
-        let progress = ProgressTracker::new(wt_path.join(".swarm/progress.txt"));
+        let progress = ProgressTracker::new(crate::session::progress_path(&wt_path));
 
         if let Ok(commit) = git_mgr.current_commit_full() {
             session.set_initial_commit(commit);
@@ -1995,9 +1995,8 @@ async fn handle_no_file_changes(
     response: &str,
     agent_terminated_without_writing: bool,
 ) -> Result<StateTransition> {
-    // Belt-and-suspenders: detect responses that mention harness internals.
-    // The sandbox should block these at tool-call time now (2026-04-16), but catch
-    // any that slipped through narrative text.
+    // Defence-in-depth: the sandbox blocks harness-path tool calls, but a model
+    // may still narrate about them in response text.
     let is_hallucinated = response.contains(".swarm-checkpoint")
         || response.contains(".swarm-session")
         || response.contains(".swarm/checkpoint")
@@ -2782,10 +2781,8 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
                     .state_machine
                     .checkpoint(&ctx.issue.id, git_hash.as_deref())
                 {
-                    let cp_path = ctx.wt_path.join(".swarm/checkpoint.json");
-                    let tmp_path = ctx.wt_path.join(".swarm/checkpoint.json.tmp");
-                    // Ensure .swarm/ exists (files moved here 2026-04-16 to keep agents
-                    // from fixating on harness state at the worktree root).
+                    let cp_path = crate::session::checkpoint_path(&ctx.wt_path);
+                    let tmp_path = crate::session::checkpoint_tmp_path(&ctx.wt_path);
                     if let Some(parent) = cp_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
@@ -3010,10 +3007,7 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
         }
 
         // Save session state for resume
-        let state_path = ctx.wt_path.join(".swarm/session-state.json");
-        if let Some(parent) = state_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+        let state_path = crate::session::session_state_path(&ctx.wt_path);
         if let Err(e) = save_session_state(ctx.session.state(), &state_path) {
             warn!("Failed to save session state (state driver): {e}");
         }

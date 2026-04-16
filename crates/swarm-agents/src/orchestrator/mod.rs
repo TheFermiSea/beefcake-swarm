@@ -447,7 +447,7 @@ async fn process_issue_core(
     // --- Initialize harness components ---
     let mut session = SessionManager::new(wt_path.clone(), config.max_retries);
     let git_mgr = GitManager::new(&wt_path, "[swarm]");
-    let progress = ProgressTracker::new(wt_path.join(".swarm/progress.txt"));
+    let progress = ProgressTracker::new(crate::session::progress_path(&wt_path));
 
     // Record initial commit for potential rollback
     if let Ok(commit) = git_mgr.current_commit_full() {
@@ -3890,10 +3890,7 @@ async fn process_issue_core(
         }
 
         // Persist session state for potential resume after SLURM preemption
-        let state_path = wt_path.join(".swarm/session-state.json");
-        if let Some(parent) = state_path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
+        let state_path = crate::session::session_state_path(&wt_path);
         if let Err(e) = save_session_state(session.state(), &state_path) {
             warn!("Failed to save session state: {e}");
         } else {
@@ -5026,7 +5023,7 @@ mod tests {
         session.set_initial_commit("deadbeef".into());
 
         // Save state
-        let state_path = dir.path().join(".swarm/session-state.json");
+        let state_path = crate::session::session_state_path(dir.path());
         save_session_state(session.state(), &state_path).unwrap();
 
         // Load and verify
