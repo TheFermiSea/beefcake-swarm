@@ -722,22 +722,27 @@ fn new_tracker(repo_root: Option<&Path>) -> Box<dyn IssueTracker> {
 /// Check if a high-churn issue targets a file type the swarm cannot verify.
 ///
 /// Returns `Some(reason)` if the issue should be skipped, `None` if it's actionable.
-/// Shell scripts, SLURM files, and other non-source files have no quality gates in the
-/// swarm pipeline — attempting them burns 5-6 iterations with no changes committed.
+/// Only source files with quality gates in the swarm pipeline are considered verifiable:
+/// Rust (.rs), Python (.py), TypeScript/JS (.ts/.tsx/.js/.jsx), and Go (.go).
+/// Everything else — shell scripts, SLURM files, data files (.jsonl, .json, .toml),
+/// documentation (.md) — has no verification feedback loop, so agents waste iterations.
 fn is_non_actionable_high_churn(title: &str) -> Option<String> {
     let churn_file = title
         .strip_prefix("High churn: ")
         .and_then(|s| s.split(" (modified").next())?;
-    let non_verifiable = churn_file.ends_with(".sh")
-        || churn_file.ends_with(".slurm")
-        || churn_file.ends_with(".bash")
-        || churn_file.ends_with(".zsh");
-    if non_verifiable {
-        Some(format!(
-            "High-churn target '{churn_file}' is a shell/SLURM script — no quality gates available"
-        ))
-    } else {
+    let verifiable = churn_file.ends_with(".rs")
+        || churn_file.ends_with(".py")
+        || churn_file.ends_with(".ts")
+        || churn_file.ends_with(".tsx")
+        || churn_file.ends_with(".js")
+        || churn_file.ends_with(".jsx")
+        || churn_file.ends_with(".go");
+    if verifiable {
         None
+    } else {
+        Some(format!(
+            "High-churn target '{churn_file}' has no quality gates — swarm cannot verify changes"
+        ))
     }
 }
 

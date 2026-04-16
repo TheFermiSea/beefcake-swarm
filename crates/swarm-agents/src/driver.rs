@@ -965,14 +965,16 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
             .and_then(|s| s.split(" (modified").next())
             .unwrap_or("");
 
-        // Fail fast for non-verifiable file types. The swarm's quality gates are
-        // cargo-based (fmt/clippy/check/test); shell scripts and SLURM files have
-        // no lint or test feedback, so agents waste 5-6 iterations producing nothing.
-        let non_verifiable = churn_file.ends_with(".sh")
-            || churn_file.ends_with(".slurm")
-            || churn_file.ends_with(".bash")
-            || churn_file.ends_with(".zsh");
-        if non_verifiable {
+        // Fail fast for non-verifiable file types. Only Rust/Python/TS/Go have
+        // quality gates; everything else wastes 5-6 iterations producing nothing.
+        let verifiable = churn_file.ends_with(".rs")
+            || churn_file.ends_with(".py")
+            || churn_file.ends_with(".ts")
+            || churn_file.ends_with(".tsx")
+            || churn_file.ends_with(".js")
+            || churn_file.ends_with(".jsx")
+            || churn_file.ends_with(".go");
+        if !verifiable {
             warn!(
                 iteration,
                 issue_id = %ctx.issue.id,
