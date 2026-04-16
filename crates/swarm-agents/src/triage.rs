@@ -340,19 +340,10 @@ fn parse_triage_response(response: &str) -> Result<TriageResult> {
     })
 }
 
-/// Keyword-based triage fallback — no LLM call required.
-///
-/// Uses the same keyword lists as coordination's `classify_initial_tier()` but
-/// returns a TriageResult instead of a tier recommendation.
-fn keyword_triage(title: &str, description: Option<&str>) -> TriageResult {
-    let combined = format!(
-        "{} {}",
-        title.to_lowercase(),
-        description.unwrap_or("").to_lowercase()
-    );
-
-    // Language detection.
-    let language = if combined.contains("cargo")
+/// Detect the primary programming language from a lowercased combined text.
+/// Returns `"rust"` as the default for this project.
+fn detect_language(combined: &str) -> &'static str {
+    if combined.contains("cargo")
         || combined.contains("rustc")
         || combined.contains(".rs")
         || combined.contains("clippy")
@@ -375,8 +366,22 @@ fn keyword_triage(title: &str, description: Option<&str>) -> TriageResult {
     } else if combined.contains(".go") || combined.contains("golang") {
         "go"
     } else {
-        "rust" // Default for this project.
-    };
+        "rust"
+    }
+}
+
+/// Keyword-based triage fallback — no LLM call required.
+///
+/// Uses the same keyword lists as coordination's `classify_initial_tier()` but
+/// returns a TriageResult instead of a tier recommendation.
+fn keyword_triage(title: &str, description: Option<&str>) -> TriageResult {
+    let combined = format!(
+        "{} {}",
+        title.to_lowercase(),
+        description.unwrap_or("").to_lowercase()
+    );
+
+    let language = detect_language(&combined);
 
     // Complexity detection.
     let simple_keywords = [

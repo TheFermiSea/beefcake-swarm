@@ -199,22 +199,21 @@ fn is_simple_error(cat: &ErrorCategory) -> bool {
 }
 
 /// Format a WorkPacket into a structured prompt for agent consumption.
+/// Returns `true` for paths that belong to infrastructure directories agents
+/// must not treat as scope constraints (`.beads/`, `.git/`, `.claude/`, `.dolt/`).
+fn is_infra_path(path: &str) -> bool {
+    let infra = [".beads", ".git", ".claude", ".dolt"];
+    infra
+        .iter()
+        .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
+}
+
 pub fn format_task_prompt(packet: &WorkPacket) -> String {
     let mut prompt = String::new();
     let scoped_files: Vec<&String> = packet
         .files_touched
         .iter()
-        .filter(|f| {
-            let path = f.as_str();
-            !(path == ".beads"
-                || path.starts_with(".beads/")
-                || path == ".git"
-                || path.starts_with(".git/")
-                || path == ".claude"
-                || path.starts_with(".claude/")
-                || path == ".dolt"
-                || path.starts_with(".dolt/"))
-        })
+        .filter(|f| !is_infra_path(f.as_str()))
         .collect();
 
     prompt.push_str(&format!("# Task: {}\n\n", packet.objective));

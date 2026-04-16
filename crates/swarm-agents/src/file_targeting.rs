@@ -28,35 +28,57 @@ fn include_pattern_from_extensions(extensions: &[String]) -> String {
 /// Returns `Some(files)` if grep finds matches, `None` otherwise.
 /// Uses `source_extensions` from the language profile to filter by file type.
 /// Defaults to `*.rs` when no extensions are provided (backward compatible).
-pub(crate) fn find_target_files_by_grep(
-    wt_root: &Path,
-    objective: &str,
-    source_extensions: &[String],
-) -> Option<Vec<String>> {
-    let include = include_pattern_from_extensions(source_extensions);
-    // Extract CamelCase identifiers (likely struct/type/trait names)
-    let camel: Vec<&str> = objective
+/// Extract CamelCase and snake_case identifier tokens from an objective string.
+///
+/// CamelCase tokens (likely struct/type/trait names) take priority; snake_case
+/// tokens (function/variable names common in Rust) are appended after.
+fn extract_identifier_patterns(objective: &str) -> Vec<&str> {
+    let camel = objective
         .split(|c: char| !c.is_alphanumeric() && c != '_')
-        .filter(|w| w.len() >= 4 && w.chars().next().is_some_and(|c| c.is_uppercase()))
-        .collect();
-
-    // Also extract snake_case identifiers (e.g., edit_file, cargo_check, work_packet)
-    // These are common in Rust codebases and often appear in issue descriptions.
-    let snake: Vec<&str> = objective
+        .filter(|w| w.len() >= 4 && w.chars().next().is_some_and(|c| c.is_uppercase()));
+    let snake = objective
         .split(|c: char| !c.is_alphanumeric() && c != '_')
         .filter(|w| {
             w.contains('_')
                 && w.len() >= 5
                 && w.chars()
                     .all(|c| c.is_lowercase() || c == '_' || c.is_ascii_digit())
-        })
-        .collect();
+        });
 
-    let mut patterns: Vec<&str> = Vec::new();
-    // CamelCase first (more specific), then snake_case
-    patterns.extend(camel.iter().take(3));
-    patterns.extend(snake.iter().take(3));
-    patterns.dedup();
+    let mut patterns: Vec<&str> = camel.take(3).collect();
+    for tok in snake.take(3) {
+        if !patterns.contains(&tok) {
+            patterns.push(tok);
+        }
+    }
+    patterns
+}
+
+/// Score a candidate file by how many patterns it contains, with path boosts.
+fn score_candidate(patterns: &[&str], path: &str, wt_root: &Path) -> usize {
+    let content = std::fs::read_to_string(wt_root.join(path)).unwrap_or_default();
+    let mut score = patterns.iter().filter(|p| content.contains(*p)).count();
+    if path.contains("/tools/") {
+        score += 2;
+    } else if path.starts_with("patches/") {
+        score = score.saturating_sub(2);
+    } else if path.contains("/tests/")
+        || path.contains("test_")
+        || path.ends_with("_test.rs")
+        || path.ends_with("_tests.rs")
+    {
+        score = score.saturating_sub(1);
+    }
+    score
+}
+
+pub(crate) fn find_target_files_by_grep(
+    wt_root: &Path,
+    objective: &str,
+    source_extensions: &[String],
+) -> Option<Vec<String>> {
+    let include = include_pattern_from_extensions(source_extensions);
+    let patterns = extract_identifier_patterns(objective);
 
     debug!(
         wt_root = %wt_root.display(),
@@ -113,29 +135,10 @@ pub(crate) fn find_target_files_by_grep(
         return None;
     }
 
-    // Score files by how many patterns they match, with path-based boosts.
-    // Source files in tools/src/ are more likely implementation targets than
-    // patches/, tests/, or vendored code.
+    // Score files by pattern matches and path-based boosts/penalties.
     let mut scored: Vec<(usize, String)> = all_files
         .into_iter()
-        .map(|f| {
-            let full = wt_root.join(&f);
-            let content = std::fs::read_to_string(&full).unwrap_or_default();
-            let mut score = patterns.iter().filter(|p| content.contains(*p)).count();
-            // Boost actual source files, penalize vendored/test/patch files
-            if f.contains("/tools/") {
-                score += 2;
-            } else if f.starts_with("patches/") {
-                score = score.saturating_sub(2);
-            } else if f.contains("/tests/")
-                || f.contains("test_")
-                || f.ends_with("_test.rs")
-                || f.ends_with("_tests.rs")
-            {
-                score = score.saturating_sub(1);
-            }
-            (score, f)
-        })
+        .map(|f| (score_candidate(&patterns, &f, wt_root), f))
         .collect();
     scored.sort_by(|a, b| b.0.cmp(&a.0));
 
