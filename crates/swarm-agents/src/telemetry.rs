@@ -11,6 +11,8 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
 
+use crate::harness::HarnessPolicy;
+
 /// The action performed on a file artifact during an iteration.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -254,6 +256,9 @@ pub struct SessionMetrics {
     /// Estimated cost in USD based on cloud pricing rates.
     #[serde(default)]
     pub estimated_cost_usd: f64,
+    /// The latest layered harness policy applied during this session.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_harness_policy: Option<HarnessPolicy>,
 }
 
 /// Per-session record of which harness components fired and whether they
@@ -264,7 +269,22 @@ pub struct SessionMetrics {
 /// A component showing `fired: true, caught_issue: false` over N sessions is
 /// a candidate for removal or reformulation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HarnessComponentTrace {
+    /// Layered harness policy was derived for this run.
+    pub layered_harness_enabled: bool,
+    /// Economics layer activated compacting or fan-out controls.
+    pub economics_layer_active: bool,
+    /// Perception layer activated scoped-context controls.
+    pub perception_layer_active: bool,
+    /// Guardrails layer injected executable constraints.
+    pub guardrails_layer_active: bool,
+    /// Judgment layer enforced validator/evaluator behavior.
+    pub judgment_layer_active: bool,
+    /// Topology layer enforced manager/worker isolation.
+    pub topology_layer_active: bool,
+    /// Intent layer emitted reviewable artifacts.
+    pub intent_layer_active: bool,
     /// Whether the blind reviewer ran on this session.
     pub reviewer_fired: bool,
     /// Reviewer said FAIL where verifier said PASS — i.e., reviewer caught
@@ -288,6 +308,12 @@ pub struct HarnessComponentTrace {
     pub context_anxiety_detected: bool,
     /// Reviewer leniency flags raised (non-zero = reviewer may have been too lenient).
     pub reviewer_leniency_flag_count: u32,
+    /// Number of iterations that forced compact prompt mode.
+    pub compact_prompt_used_count: u32,
+    /// Number of times strict external judgment was enabled.
+    pub strict_external_judgment_count: u32,
+    /// Whether a proof-of-work artifact was emitted.
+    pub proof_of_work_emitted: bool,
 }
 
 /// Result of a single cloud validation call.
@@ -316,6 +342,7 @@ pub struct MetricsCollector {
     role_map_version: String,
     tensorzero_episode_id: Option<String>,
     harness_trace: HarnessComponentTrace,
+    active_harness_policy: Option<HarnessPolicy>,
 }
 
 /// In-flight state for the current iteration.
@@ -366,6 +393,7 @@ impl MetricsCollector {
             role_map_version: role_map_version.to_string(),
             tensorzero_episode_id: None,
             harness_trace: HarnessComponentTrace::default(),
+            active_harness_policy: None,
         }
     }
 
@@ -428,6 +456,29 @@ impl MetricsCollector {
 
     pub fn record_reviewer_leniency_flags(&mut self, count: u32) {
         self.harness_trace.reviewer_leniency_flag_count += count;
+    }
+
+    pub fn record_harness_policy(&mut self, policy: &HarnessPolicy) {
+        self.harness_trace.layered_harness_enabled = true;
+        self.harness_trace.economics_layer_active = true;
+        self.harness_trace.perception_layer_active = true;
+        self.harness_trace.guardrails_layer_active = policy.guardrails.executable_constraints;
+        self.harness_trace.judgment_layer_active = true;
+        self.harness_trace.topology_layer_active = true;
+        self.harness_trace.intent_layer_active = policy.intent.proof_of_work_required;
+        self.active_harness_policy = Some(policy.clone());
+    }
+
+    pub fn record_compact_prompt(&mut self) {
+        self.harness_trace.compact_prompt_used_count += 1;
+    }
+
+    pub fn record_strict_external_judgment(&mut self) {
+        self.harness_trace.strict_external_judgment_count += 1;
+    }
+
+    pub fn record_proof_of_work_emitted(&mut self) {
+        self.harness_trace.proof_of_work_emitted = true;
     }
 
     /// Begin tracking a new iteration.
@@ -699,6 +750,7 @@ impl MetricsCollector {
             input_tokens: 0,
             output_tokens: 0,
             estimated_cost_usd: 0.0,
+            active_harness_policy: self.active_harness_policy,
         }
     }
 }
@@ -712,6 +764,84 @@ pub fn write_session_metrics(metrics: &SessionMetrics, wt_path: &Path) {
             Err(e) => warn!("Failed to write session metrics: {e}"),
         },
         Err(e) => warn!("Failed to serialize session metrics: {e}"),
+    }
+}
+
+/// Write a compact proof-of-work artifact for human review.
+pub fn write_proof_of_work(metrics: &SessionMetrics, wt_path: &Path) -> bool {
+    #[derive(Serialize)]
+    struct ProofOfWork<'a> {
+        issue_id: &'a str,
+        issue_title: &'a str,
+        session_id: &'a str,
+        success: bool,
+        final_tier: &'a str,
+        total_iterations: u32,
+        elapsed_ms: u64,
+        changed_files: Vec<String>,
+        cloud_validations: &'a [ValidationMetric],
+        local_validations: &'a [ValidationMetric],
+        execution_artifacts: usize,
+        harness_trace: &'a HarnessComponentTrace,
+        harness_policy: Option<&'a HarnessPolicy>,
+        turns_until_first_write: Option<u32>,
+        write_by_turn_2: bool,
+        estimated_cost_usd: f64,
+    }
+
+    let mut changed_files: Vec<String> = metrics
+        .iterations
+        .iter()
+        .flat_map(|iter| {
+            iter.artifacts
+                .iter()
+                .filter_map(|artifact| match artifact.action {
+                    ArtifactAction::Modified
+                    | ArtifactAction::Created
+                    | ArtifactAction::Deleted => Some(artifact.path.clone()),
+                    ArtifactAction::Read => None,
+                })
+        })
+        .collect();
+    changed_files.sort();
+    changed_files.dedup();
+
+    let proof = ProofOfWork {
+        issue_id: &metrics.issue_id,
+        issue_title: &metrics.issue_title,
+        session_id: &metrics.session_id,
+        success: metrics.success,
+        final_tier: &metrics.final_tier,
+        total_iterations: metrics.total_iterations,
+        elapsed_ms: metrics.elapsed_ms,
+        changed_files,
+        cloud_validations: &metrics.cloud_validations,
+        local_validations: &metrics.local_validations,
+        execution_artifacts: metrics
+            .iterations
+            .iter()
+            .filter(|iter| iter.execution_artifact.is_some())
+            .count(),
+        harness_trace: &metrics.harness_trace,
+        harness_policy: metrics.active_harness_policy.as_ref(),
+        turns_until_first_write: metrics.turns_until_first_write,
+        write_by_turn_2: metrics.write_by_turn_2,
+        estimated_cost_usd: metrics.estimated_cost_usd,
+    };
+
+    let path = wt_path.join(".swarm-proof-of-work.json");
+    match serde_json::to_string_pretty(&proof) {
+        Ok(json) => {
+            if let Err(e) = std::fs::write(&path, json) {
+                warn!(path = %path.display(), error = %e, "Failed to write proof-of-work artifact");
+                return false;
+            }
+            true
+        }
+        Err(e) => {
+            warn!(error = %e, "Failed to serialize proof-of-work artifact");
+            false
+        }
     }
 }
 
@@ -1775,6 +1905,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             estimated_cost_usd: 0.0,
+            active_harness_policy: None,
         };
 
         write_session_metrics(&metrics, dir.path());
@@ -1817,6 +1948,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             estimated_cost_usd: 0.0,
+            active_harness_policy: None,
         };
         let metrics2 = SessionMetrics {
             session_id: "sess-2".into(),
@@ -1843,6 +1975,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             estimated_cost_usd: 0.0,
+            active_harness_policy: None,
         };
 
         append_telemetry(&metrics1, dir.path());
@@ -1891,6 +2024,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             estimated_cost_usd: 0.0,
+            active_harness_policy: None,
         };
         metrics1.iterations.push(IterationMetrics {
             iteration: 1,
@@ -1960,6 +2094,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             estimated_cost_usd: 0.0,
+            active_harness_policy: None,
         };
         metrics2.iterations.push(IterationMetrics {
             iteration: 1,
@@ -2147,6 +2282,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             estimated_cost_usd: 0.0,
+            active_harness_policy: None,
         }
     }
 
@@ -2556,6 +2692,7 @@ mod tests {
             input_tokens: 0,
             output_tokens: 0,
             estimated_cost_usd: 0.0,
+            active_harness_policy: None,
         };
 
         write_execution_artifacts(&metrics, dir.path(), None);

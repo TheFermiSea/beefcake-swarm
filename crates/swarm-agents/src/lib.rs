@@ -22,6 +22,7 @@ pub mod file_targeting;
 pub mod fix_templates;
 pub mod git_ops;
 pub mod handoff;
+pub mod harness;
 pub mod jsonl;
 pub mod judge;
 pub mod kb_refresh;
