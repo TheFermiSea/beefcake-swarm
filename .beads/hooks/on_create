@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+# .beads/hooks/on_create — Auto-claim swarm-ready issues.
+# Receives JSON issue data on stdin from beads.
+#
+# If any label contains "swarm-ready", runs `bd update <id> --claim`
+# so the swarm picks it up automatically.
+#
+# Fails silently — hooks must never block the beads CLI.
+
+set -o pipefail
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+EVENT_LOG="${REPO_ROOT}/.swarm-hook-events.jsonl"
+
+# Read stdin (beads pipes issue JSON)
+INPUT="$(cat)" || exit 0
+[ -z "$INPUT" ] && exit 0
+
+# Extract fields
+if command -v jq >/dev/null 2>&1; then
+  ISSUE_ID="$(printf '%s' "$INPUT" | jq -r '.id // .task_ref // "unknown"')"
+  TITLE="$(printf '%s' "$INPUT" | jq -r '.title // "untitled"')"
+  HAS_SWARM_READY="$(printf '%s' "$INPUT" | jq -r '
+    (.labels // []) | map(select(. | tostring | test("swarm-ready"; "i"))) | length > 0
+  ')"
+else
+  # Fallback: grep for swarm-ready in the raw JSON
+  ISSUE_ID="$(printf '%s' "$INPUT" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  [ -z "$ISSUE_ID" ] && ISSUE_ID="unknown"
+  TITLE="$(printf '%s' "$INPUT" | sed -n 's/.*"title"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -1)"
+  [ -z "$TITLE" ] && TITLE="untitled"
+  if printf '%s' "$INPUT" | grep -qi "swarm-ready"; then
+    HAS_SWARM_READY="true"
+  else
+    HAS_SWARM_READY="false"
+  fi
+fi
+
+TIMESTAMP="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+
+# Log the creation event
+if command -v jq >/dev/null 2>&1; then
+  printf '%s\n' "$(jq -n \
+    --arg ts "$TIMESTAMP" \
+    --arg ev "issue.created" \
+    --arg id "$ISSUE_ID" \
+    --arg title "$TITLE" \
+    --argjson autoclaim "$( [ "$HAS_SWARM_READY" = "true" ] && echo true || echo false )" \
+    '{timestamp: $ts, event: $ev, issue_id: $id, title: $title, auto_claimed: $autoclaim}')" \
+    >> "$EVENT_LOG" 2>/dev/null
+else
+  AUTOCLAIM="$( [ "$HAS_SWARM_READY" = "true" ] && echo true || echo false )"
+  printf '{"timestamp":"%s","event":"issue.created","issue_id":"%s","title":"%s","auto_claimed":%s}\n' \
+    "$TIMESTAMP" "$ISSUE_ID" "$TITLE" "$AUTOCLAIM" \
+    >> "$EVENT_LOG" 2>/dev/null
+fi
+
+# Auto-claim if swarm-ready label is present
+if [ "$HAS_SWARM_READY" = "true" ] && [ "$ISSUE_ID" != "unknown" ]; then
+  if command -v bd >/dev/null 2>&1; then
+    bd update "$ISSUE_ID" --claim 2>/dev/null || true
+  fi
+fi
+
+exit 0
