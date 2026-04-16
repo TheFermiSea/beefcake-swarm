@@ -882,7 +882,9 @@ fn handle_readonly_tool(
                 governance_tier = %config.governance_tier,
                 "Anti-stall: pre-write read budget exceeded"
             );
-            return Some(ToolCallHookAction::terminate(format!("Runtime adapter: {reason}")));
+            return Some(ToolCallHookAction::terminate(format!(
+                "Runtime adapter: {reason}"
+            )));
         } else if s.total_reads_before_write == pre_write_read_warn {
             info!(
                 agent = %config.agent_name,
@@ -908,7 +910,9 @@ fn handle_readonly_tool(
             consecutive_reads = s.consecutive_reads,
             "Post-write stall: terminating agent (wrote files, now only reading)"
         );
-        return Some(ToolCallHookAction::terminate(format!("Runtime adapter: {reason}")));
+        return Some(ToolCallHookAction::terminate(format!(
+            "Runtime adapter: {reason}"
+        )));
     }
 
     debug!(

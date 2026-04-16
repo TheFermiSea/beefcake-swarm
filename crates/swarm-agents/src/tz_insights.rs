@@ -344,12 +344,20 @@ fn directive_speed_comparison(func: &str, variants: &[&VariantStat]) -> Option<S
     }
     Some(format!(
         "For {func}: {} ({:.0}ms avg) is {:.1}x faster than {} ({:.0}ms avg)",
-        fastest.variant_name, fastest.avg_latency_ms, ratio, slowest.variant_name, slowest.avg_latency_ms,
+        fastest.variant_name,
+        fastest.avg_latency_ms,
+        ratio,
+        slowest.variant_name,
+        slowest.avg_latency_ms,
     ))
 }
 
 /// Rule 2: one variant handles >70% of calls.
-fn directive_dominant_variant(func: &str, variants: &[&VariantStat], total_calls: u64) -> Option<String> {
+fn directive_dominant_variant(
+    func: &str,
+    variants: &[&VariantStat],
+    total_calls: u64,
+) -> Option<String> {
     if total_calls == 0 || variants.len() <= 1 {
         return None;
     }
@@ -373,10 +381,12 @@ fn directive_latency_anomaly(func: &str, variants: &[&VariantStat]) -> Vec<Strin
         .filter(|v| {
             v.call_count >= 5 && v.avg_latency_ms > 0.0 && v.p95_latency_ms / v.avg_latency_ms > 5.0
         })
-        .map(|v| format!(
-            "WARNING: {func}/{} has P95 {:.0}ms vs avg {:.0}ms — possible timeout",
-            v.variant_name, v.p95_latency_ms, v.avg_latency_ms,
-        ))
+        .map(|v| {
+            format!(
+                "WARNING: {func}/{} has P95 {:.0}ms vs avg {:.0}ms — possible timeout",
+                v.variant_name, v.p95_latency_ms, v.avg_latency_ms,
+            )
+        })
         .collect()
 }
 
@@ -393,10 +403,14 @@ fn directive_success_winner(func: &str, variants: &[&VariantStat]) -> Option<Str
         return None;
     }
     let best = with_success.iter().max_by(|a, b| {
-        a.success_rate.partial_cmp(&b.success_rate).unwrap_or(std::cmp::Ordering::Equal)
+        a.success_rate
+            .partial_cmp(&b.success_rate)
+            .unwrap_or(std::cmp::Ordering::Equal)
     })?;
     let worst = with_success.iter().min_by(|a, b| {
-        a.success_rate.partial_cmp(&b.success_rate).unwrap_or(std::cmp::Ordering::Equal)
+        a.success_rate
+            .partial_cmp(&b.success_rate)
+            .unwrap_or(std::cmp::Ordering::Equal)
     })?;
     let best_rate = best.success_rate.unwrap_or(0.0);
     let worst_rate = worst.success_rate.unwrap_or(0.0);
@@ -410,11 +424,19 @@ fn directive_success_winner(func: &str, variants: &[&VariantStat]) -> Option<Str
 }
 
 /// Rule 5: 0% success across all variants — function may be misrouted.
-fn directive_zero_success(func: &str, variants: &[&VariantStat], total_calls: u64) -> Option<String> {
+fn directive_zero_success(
+    func: &str,
+    variants: &[&VariantStat],
+    total_calls: u64,
+) -> Option<String> {
     let any_has_success = variants.iter().any(|v| v.success_rate.is_some());
-    let all_zero = variants.iter().all(|v| v.success_rate.map(|r| r < 0.01).unwrap_or(false));
+    let all_zero = variants
+        .iter()
+        .all(|v| v.success_rate.map(|r| r < 0.01).unwrap_or(false));
     if all_zero && any_has_success && total_calls >= 10 {
-        Some(format!("WARNING: {func} has 0% resolution rate — tasks may be misrouted"))
+        Some(format!(
+            "WARNING: {func} has 0% resolution rate — tasks may be misrouted"
+        ))
     } else {
         None
     }

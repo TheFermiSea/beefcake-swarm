@@ -2141,7 +2141,9 @@ pub async fn handle_verifying(ctx: &mut OrchestratorContext<'_>) -> Result<State
     let prev_error_count = ctx.last_report.as_ref().map(|r| r.failure_signals.len());
     if !report.all_green {
         ctx.consecutive_validator_failures = 0;
-        if let Some(t) = maybe_rollback_on_regression(ctx, iteration, error_count, prev_error_count).await {
+        if let Some(t) =
+            maybe_rollback_on_regression(ctx, iteration, error_count, prev_error_count).await
+        {
             return Ok(t);
         }
     }

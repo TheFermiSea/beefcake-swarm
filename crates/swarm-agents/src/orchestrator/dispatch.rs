@@ -412,7 +412,9 @@ fn resolve_compact_target_files(packet: &WorkPacket, wt_root: &Path) -> Vec<Stri
     let from_touched: Vec<String> = packet
         .files_touched
         .iter()
-        .filter(|f| !f.starts_with(".beads") && !f.starts_with(".git/") && !f.starts_with(".claude"))
+        .filter(|f| {
+            !f.starts_with(".beads") && !f.starts_with(".git/") && !f.starts_with(".claude")
+        })
         .cloned()
         .collect();
     if !from_touched.is_empty() {
@@ -445,7 +447,8 @@ fn resolve_compact_target_files(packet: &WorkPacket, wt_root: &Path) -> Vec<Stri
                             .lines()
                             .take(3)
                             .filter_map(|line| {
-                                line.strip_prefix(wt_str).map(|p| p.trim_start_matches('/').to_string())
+                                line.strip_prefix(wt_str)
+                                    .map(|p| p.trim_start_matches('/').to_string())
                             })
                             .collect()
                     }
@@ -459,10 +462,16 @@ fn resolve_compact_target_files(packet: &WorkPacket, wt_root: &Path) -> Vec<Stri
     }
 
     // Stage 3: grep-based identifier search
-    let from_grep = find_target_files_by_grep(wt_root, &packet.objective, &[]).unwrap_or_else(|| {
-        // Stage 4: first 3 file_contexts
-        packet.file_contexts.iter().map(|fc| fc.file.clone()).take(3).collect()
-    });
+    let from_grep =
+        find_target_files_by_grep(wt_root, &packet.objective, &[]).unwrap_or_else(|| {
+            // Stage 4: first 3 file_contexts
+            packet
+                .file_contexts
+                .iter()
+                .map(|fc| fc.file.clone())
+                .take(3)
+                .collect()
+        });
     if !from_grep.is_empty() {
         return from_grep;
     }

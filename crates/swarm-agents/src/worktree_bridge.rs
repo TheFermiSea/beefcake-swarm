@@ -243,7 +243,9 @@ fn setup_beads_symlink(wt_path: &Path, repo_root: &Path) {
                 }
             }
             #[cfg(not(unix))]
-            tracing::warn!("Non-Unix platform: cannot symlink .beads/; bd commands may fail in worktree");
+            tracing::warn!(
+                "Non-Unix platform: cannot symlink .beads/; bd commands may fail in worktree"
+            );
         }
         Err(e) => {
             tracing::warn!(error = %e, "Failed to remove worktree .beads/ for symlink; bd commands may fail");
