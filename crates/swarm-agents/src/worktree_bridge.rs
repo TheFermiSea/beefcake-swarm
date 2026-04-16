@@ -251,6 +251,185 @@ fn setup_beads_symlink(wt_path: &Path, repo_root: &Path) {
     }
 }
 
+/// Detect and strip `.beads` if it was accidentally committed as a symlink/blob on `branch`.
+///
+/// When `git add .` stages the worktree's `.beads/` symlink as a mode-120000 blob, merging
+/// would try to replace the main repo's `.beads/` directory with a blob — which git rejects.
+/// This function detects that case, removes the blob from the index, restores the proper
+/// directory entries from `HEAD:.beads`, re-applies skip-worktree bits, and commits a fixup
+/// so the subsequent merge sees a clean tree.
+fn strip_beads_blob_if_needed(
+    wt_path: &Path,
+    repo_root: &Path,
+    branch: &str,
+    issue_id: &str,
+) -> Result<()> {
+    if !wt_path.exists() {
+        return Ok(());
+    }
+    let ls_beads = Command::new("git")
+        .args(["ls-tree", branch, "--", ".beads"])
+        .current_dir(repo_root)
+        .output();
+    // A symlink shows up as "120000 blob <sha>\t.beads"; a directory as "040000 tree ..."
+    let beads_is_blob = ls_beads
+        .map(|o| {
+            let out = String::from_utf8_lossy(&o.stdout);
+            out.contains(" blob ") && out.contains(".beads")
+        })
+        .unwrap_or(false);
+    if !beads_is_blob {
+        return Ok(());
+    }
+    tracing::warn!(
+        issue_id,
+        branch,
+        ".beads committed as symlink/blob — stripping before merge to prevent working-tree conflict"
+    );
+    // Get the .beads/ tree SHA from main HEAD to restore it.
+    let tree_sha = Command::new("git")
+        .args(["rev-parse", "HEAD:.beads"])
+        .current_dir(repo_root)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+        .filter(|s| !s.is_empty());
+    let Some(tree_sha) = tree_sha else {
+        bail!(
+            "Cannot strip .beads symlink from branch '{branch}': \
+             HEAD:.beads tree SHA not found — merge aborted to avoid working-tree conflict"
+        );
+    };
+    // Remove the .beads blob from the index.
+    let rm = retry_git_command(
+        &["rm", "--cached", "-f", "-q", "--ignore-unmatch", "--", ".beads"],
+        wt_path,
+        3,
+    )?;
+    if !rm.status.success() {
+        let stderr = String::from_utf8_lossy(&rm.stderr);
+        bail!("Failed to remove .beads blob from index before merge: {stderr}");
+    }
+    // Restore .beads/ directory entries from main HEAD (index-only).
+    let read_tree = retry_git_command(&["read-tree", "--prefix=.beads/", &tree_sha], wt_path, 3)?;
+    if !read_tree.status.success() {
+        let stderr = String::from_utf8_lossy(&read_tree.stderr);
+        bail!("Failed to restore .beads/ tree into index before merge: {stderr}");
+    }
+    // Re-apply skip-worktree so restored entries don't show as local modifications.
+    let ls = retry_git_command(&["ls-files", "--", ".beads/"], wt_path, 3)?;
+    if ls.status.success() {
+        let file_list = String::from_utf8_lossy(&ls.stdout).to_string();
+        let files: Vec<&str> = file_list.lines().filter(|l| !l.is_empty()).collect();
+        if !files.is_empty() {
+            let mut args = vec!["update-index", "--skip-worktree"];
+            args.extend_from_slice(&files);
+            let sw = retry_git_command(&args, wt_path, 3)?;
+            if !sw.status.success() {
+                let stderr = String::from_utf8_lossy(&sw.stderr);
+                bail!("Failed to set skip-worktree on .beads/ entries before merge: {stderr}");
+            }
+        }
+    }
+    // Commit the fixup so the merge sees a clean .beads/ directory.
+    let fixup = retry_git_command(
+        &["commit", "--allow-empty", "-m", "swarm: restore .beads directory (strip accidental symlink)"],
+        wt_path,
+        3,
+    )?;
+    if !fixup.status.success() {
+        let stderr = String::from_utf8_lossy(&fixup.stderr);
+        bail!("Failed to commit .beads fixup before merge: {stderr}");
+    }
+    tracing::info!(issue_id, ".beads symlink stripped from branch; proceeding with merge");
+    Ok(())
+}
+
+/// Run `cargo check --workspace` after a merge to detect regressions.
+///
+/// If check fails, reverts the merge commit (`HEAD~1`) and returns an error so the caller
+/// can re-open the issue. Skips silently if there is no `Cargo.toml` at the repo root.
+fn post_merge_cargo_check(repo_root: &Path, issue_id: &str) -> Result<()> {
+    if !repo_root.join("Cargo.toml").exists() {
+        tracing::debug!(issue_id, "No Cargo.toml — skipping post-merge verification");
+        return Ok(());
+    }
+    let check = Command::new("cargo")
+        .args(["check", "--workspace", "--quiet"])
+        .current_dir(repo_root)
+        .env(
+            "CARGO_TARGET_DIR",
+            std::env::var("CARGO_TARGET_DIR")
+                .unwrap_or_else(|_| "/tmp/beefcake-shared-target".into()),
+        )
+        .output();
+    match check {
+        Ok(output) if !output.status.success() => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::error!(
+                issue_id,
+                stderr = %stderr.chars().take(500).collect::<String>(),
+                "Post-merge cargo check FAILED — reverting merge"
+            );
+            let _ = Command::new("git")
+                .args(["reset", "--hard", "HEAD~1"])
+                .current_dir(repo_root)
+                .output();
+            bail!("Post-merge verification failed for {issue_id}: cargo check errors. Merge reverted.");
+        }
+        Ok(_) => {
+            tracing::debug!(issue_id, "Post-merge cargo check passed");
+        }
+        Err(e) => {
+            tracing::warn!(issue_id, error = %e, "Post-merge cargo check could not run — proceeding without verification");
+        }
+    }
+    Ok(())
+}
+
+/// Push `main` to `origin` after a successful merge.
+///
+/// If the push fails (network error or non-fast-forward), reverts the local merge commit
+/// and returns an error — this keeps the remote and local in sync and prevents stranded
+/// local state from blocking future runs.
+fn push_or_revert_merge(repo_root: &Path, issue_id: &str) -> Result<()> {
+    let push = retry_git_command(&["push", "origin", "main"], repo_root, 3);
+    match push {
+        Ok(output) if output.status.success() => {
+            tracing::info!(issue_id, "Pushed merge to origin/main");
+            Ok(())
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            tracing::error!(issue_id, stderr = %stderr.trim(), "git push failed — reverting local merge");
+            let revert = Command::new("git")
+                .args(["reset", "--hard", "HEAD~1"])
+                .current_dir(repo_root)
+                .output()
+                .context("Failed to revert merge after push failure")?;
+            if !revert.status.success() {
+                let revert_stderr = String::from_utf8_lossy(&revert.stderr);
+                bail!("Push failed for {issue_id} and merge revert failed: {revert_stderr}");
+            }
+            bail!("Push failed for {issue_id}: {}. Merge reverted.", stderr.trim());
+        }
+        Err(e) => {
+            tracing::error!(issue_id, error = %e, "git push command failed to execute — reverting local merge");
+            let revert = Command::new("git")
+                .args(["reset", "--hard", "HEAD~1"])
+                .current_dir(repo_root)
+                .output()
+                .context("Failed to revert merge after push execution error")?;
+            if !revert.status.success() {
+                let revert_stderr = String::from_utf8_lossy(&revert.stderr);
+                bail!("Push command failed for {issue_id} and merge revert failed: {revert_stderr}");
+            }
+            bail!("Push command failed for {issue_id}: {e}. Merge reverted.");
+        }
+    }
+}
+
 /// Manages git worktrees for swarm agent tasks.
 pub struct WorktreeBridge {
     base_dir: PathBuf,
@@ -556,124 +735,8 @@ impl WorktreeBridge {
             }
         }
 
-        // Pre-merge: detect and strip .beads symlink from the branch if it was accidentally
-        // committed. When `git add .` stages the worktree's .beads symlink as a mode-120000
-        // blob, git merge would try to replace .beads/ (a directory) with a blob in the
-        // main working tree. This fails with "Updating the following directories would lose
-        // untracked files in them" because .beads/ contains active beads database files.
-        //
-        // Fix: if the branch tip has .beads as a blob (symlink), not a tree (directory),
-        // restore the proper .beads/ directory structure from main HEAD and create a fixup
-        // commit so the merge can proceed cleanly.
-        if wt_path.exists() {
-            let ls_beads = Command::new("git")
-                .args(["ls-tree", &branch, "--", ".beads"])
-                .current_dir(&self.repo_root)
-                .output();
-
-            // A symlink shows up as "120000 blob <sha>\t.beads"; a directory as "040000 tree ..."
-            let beads_is_blob = ls_beads
-                .map(|o| {
-                    let out = String::from_utf8_lossy(&o.stdout);
-                    out.contains(" blob ") && out.contains(".beads")
-                })
-                .unwrap_or(false);
-
-            if beads_is_blob {
-                tracing::warn!(
-                    issue_id = %issue_id,
-                    branch = %branch,
-                    ".beads committed as symlink/blob — stripping before merge to prevent working-tree conflict"
-                );
-
-                // Get the tree SHA for .beads/ from the current main HEAD so we can restore it.
-                let tree_sha = Command::new("git")
-                    .args(["rev-parse", "HEAD:.beads"])
-                    .current_dir(&self.repo_root)
-                    .output()
-                    .ok()
-                    .filter(|o| o.status.success())
-                    .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
-                    .filter(|s| !s.is_empty());
-
-                if let Some(tree_sha) = tree_sha {
-                    // Remove the .beads blob from the worktree branch's index.
-                    let rm = retry_git_command(
-                        &[
-                            "rm",
-                            "--cached",
-                            "-f",
-                            "-q",
-                            "--ignore-unmatch",
-                            "--",
-                            ".beads",
-                        ],
-                        &wt_path,
-                        3,
-                    )?;
-                    if !rm.status.success() {
-                        let stderr = String::from_utf8_lossy(&rm.stderr);
-                        bail!("Failed to remove .beads blob from index before merge: {stderr}");
-                    }
-
-                    // Restore .beads/ directory entries from main HEAD (index-only, no working
-                    // tree update — the working tree still has the symlink, but skip-worktree
-                    // hides the discrepancy from git status/add/diff).
-                    let read_tree = retry_git_command(
-                        &["read-tree", "--prefix=.beads/", &tree_sha],
-                        &wt_path,
-                        3,
-                    )?;
-                    if !read_tree.status.success() {
-                        let stderr = String::from_utf8_lossy(&read_tree.stderr);
-                        bail!("Failed to restore .beads/ tree into index before merge: {stderr}");
-                    }
-
-                    // Re-apply skip-worktree bits on the restored .beads/ entries so they
-                    // don't appear as local modifications.
-                    let ls = retry_git_command(&["ls-files", "--", ".beads/"], &wt_path, 3)?;
-                    if ls.status.success() {
-                        let file_list = String::from_utf8_lossy(&ls.stdout).to_string();
-                        let files: Vec<&str> =
-                            file_list.lines().filter(|l| !l.is_empty()).collect();
-                        if !files.is_empty() {
-                            let mut args = vec!["update-index", "--skip-worktree"];
-                            args.extend_from_slice(&files);
-                            let sw = retry_git_command(&args, &wt_path, 3)?;
-                            if !sw.status.success() {
-                                let stderr = String::from_utf8_lossy(&sw.stderr);
-                                bail!(
-                                    "Failed to set skip-worktree on .beads/ entries before merge: {stderr}"
-                                );
-                            }
-                        }
-                    }
-
-                    // Commit the fixup so the merge sees a clean .beads/ directory.
-                    let fixup = retry_git_command(
-                        &[
-                            "commit",
-                            "--allow-empty",
-                            "-m",
-                            "swarm: restore .beads directory (strip accidental symlink)",
-                        ],
-                        &wt_path,
-                        3,
-                    )?;
-                    if !fixup.status.success() {
-                        let stderr = String::from_utf8_lossy(&fixup.stderr);
-                        bail!("Failed to commit .beads fixup before merge: {stderr}");
-                    }
-
-                    tracing::info!(issue_id = %issue_id, ".beads symlink stripped from branch; proceeding with merge");
-                } else {
-                    bail!(
-                        "Cannot strip .beads symlink from branch '{branch}': \
-                         HEAD:.beads tree SHA not found — merge aborted to avoid working-tree conflict"
-                    );
-                }
-            }
-        }
+        // Pre-merge: detect and strip .beads symlink if accidentally committed
+        strip_beads_blob_if_needed(&wt_path, &self.repo_root, &branch, issue_id)?;
 
         // Auto-stash dirty tracked files (e.g. Cargo.lock dirtied by builds)
         // so they don't block the merge. Pop the stash after merging.
@@ -751,107 +814,10 @@ impl WorktreeBridge {
         }
 
         // --- Post-merge verification ---
-        // Quick `cargo check` on the repo root to catch merge-induced regressions.
-        // If the merge broke compilation, revert it and reopen the issue.
-        // Skip for non-Rust repos (no Cargo.toml at root).
-        let has_cargo = self.repo_root.join("Cargo.toml").exists();
-        let check = if !has_cargo {
-            tracing::debug!(issue_id = %issue_id, "No Cargo.toml — skipping post-merge verification");
-            Ok(std::process::Output {
-                status: std::process::ExitStatus::default(),
-                stdout: vec![],
-                stderr: vec![],
-            })
-        } else {
-            Command::new("cargo")
-                .args(["check", "--workspace", "--quiet"])
-                .current_dir(&self.repo_root)
-                .env(
-                    "CARGO_TARGET_DIR",
-                    std::env::var("CARGO_TARGET_DIR")
-                        .unwrap_or_else(|_| "/tmp/beefcake-shared-target".into()),
-                )
-                .output()
-        };
-        match check {
-            Ok(output) if !output.status.success() => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::error!(
-                    issue_id = %issue_id,
-                    stderr = %stderr.chars().take(500).collect::<String>(),
-                    "Post-merge cargo check FAILED — reverting merge"
-                );
-                // Revert the merge commit
-                let _ = Command::new("git")
-                    .args(["reset", "--hard", "HEAD~1"])
-                    .current_dir(&self.repo_root)
-                    .output();
-                bail!(
-                    "Post-merge verification failed for {issue_id}: cargo check errors. Merge reverted."
-                );
-            }
-            Ok(_) => {
-                tracing::debug!(issue_id = %issue_id, "Post-merge cargo check passed");
-            }
-            Err(e) => {
-                // cargo check failed to run (not installed, etc.) — proceed anyway
-                tracing::warn!(
-                    issue_id = %issue_id,
-                    error = %e,
-                    "Post-merge cargo check could not run — proceeding without verification"
-                );
-            }
-        }
+        post_merge_cargo_check(&self.repo_root, issue_id)?;
 
         // --- Push to remote (authoritative) ---
-        // Push merged changes to origin/main. If push fails, revert the local merge
-        // and fail this landing so the issue is NOT closed with stranded local state.
-        let push = retry_git_command(&["push", "origin", "main"], &self.repo_root, 3);
-        match push {
-            Ok(output) if output.status.success() => {
-                tracing::info!(issue_id = %issue_id, "Pushed merge to origin/main");
-            }
-            Ok(output) => {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                tracing::error!(
-                    issue_id = %issue_id,
-                    stderr = %stderr.trim(),
-                    "git push failed — reverting local merge"
-                );
-                let revert = Command::new("git")
-                    .args(["reset", "--hard", "HEAD~1"])
-                    .current_dir(&self.repo_root)
-                    .output()
-                    .context("Failed to revert merge after push failure")?;
-                if !revert.status.success() {
-                    let revert_stderr = String::from_utf8_lossy(&revert.stderr);
-                    bail!("Push failed for {issue_id} and merge revert failed: {revert_stderr}");
-                }
-                bail!(
-                    "Push failed for {issue_id}: {}. Merge reverted.",
-                    stderr.trim()
-                );
-            }
-            Err(e) => {
-                tracing::error!(
-                    issue_id = %issue_id,
-                    error = %e,
-                    "git push command failed to execute — reverting local merge"
-                );
-                let revert = Command::new("git")
-                    .args(["reset", "--hard", "HEAD~1"])
-                    .current_dir(&self.repo_root)
-                    .output()
-                    .context("Failed to revert merge after push execution error")?;
-                if !revert.status.success() {
-                    let revert_stderr = String::from_utf8_lossy(&revert.stderr);
-                    bail!(
-                        "Push command failed for {issue_id} and merge revert failed: {revert_stderr}"
-                    );
-                }
-                bail!("Push command failed for {issue_id}: {e}. Merge reverted.");
-            }
-        }
+        push_or_revert_merge(&self.repo_root, issue_id)?;
 
         // Remove the worktree (--force: untracked .swarm-* artifacts are expected)
         match Command::new("git")
