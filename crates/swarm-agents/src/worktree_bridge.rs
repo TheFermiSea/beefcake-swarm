@@ -305,7 +305,15 @@ fn strip_beads_blob_if_needed(
     };
     // Remove the .beads blob from the index.
     let rm = retry_git_command(
-        &["rm", "--cached", "-f", "-q", "--ignore-unmatch", "--", ".beads"],
+        &[
+            "rm",
+            "--cached",
+            "-f",
+            "-q",
+            "--ignore-unmatch",
+            "--",
+            ".beads",
+        ],
         wt_path,
         3,
     )?;
@@ -336,7 +344,12 @@ fn strip_beads_blob_if_needed(
     }
     // Commit the fixup so the merge sees a clean .beads/ directory.
     let fixup = retry_git_command(
-        &["commit", "--allow-empty", "-m", "swarm: restore .beads directory (strip accidental symlink)"],
+        &[
+            "commit",
+            "--allow-empty",
+            "-m",
+            "swarm: restore .beads directory (strip accidental symlink)",
+        ],
         wt_path,
         3,
     )?;
@@ -344,7 +357,10 @@ fn strip_beads_blob_if_needed(
         let stderr = String::from_utf8_lossy(&fixup.stderr);
         bail!("Failed to commit .beads fixup before merge: {stderr}");
     }
-    tracing::info!(issue_id, ".beads symlink stripped from branch; proceeding with merge");
+    tracing::info!(
+        issue_id,
+        ".beads symlink stripped from branch; proceeding with merge"
+    );
     Ok(())
 }
 
@@ -414,7 +430,10 @@ fn push_or_revert_merge(repo_root: &Path, issue_id: &str) -> Result<()> {
                 let revert_stderr = String::from_utf8_lossy(&revert.stderr);
                 bail!("Push failed for {issue_id} and merge revert failed: {revert_stderr}");
             }
-            bail!("Push failed for {issue_id}: {}. Merge reverted.", stderr.trim());
+            bail!(
+                "Push failed for {issue_id}: {}. Merge reverted.",
+                stderr.trim()
+            );
         }
         Err(e) => {
             tracing::error!(issue_id, error = %e, "git push command failed to execute — reverting local merge");
@@ -425,7 +444,9 @@ fn push_or_revert_merge(repo_root: &Path, issue_id: &str) -> Result<()> {
                 .context("Failed to revert merge after push execution error")?;
             if !revert.status.success() {
                 let revert_stderr = String::from_utf8_lossy(&revert.stderr);
-                bail!("Push command failed for {issue_id} and merge revert failed: {revert_stderr}");
+                bail!(
+                    "Push command failed for {issue_id} and merge revert failed: {revert_stderr}"
+                );
             }
             bail!("Push command failed for {issue_id}: {e}. Merge reverted.");
         }

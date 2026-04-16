@@ -1708,7 +1708,8 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     }
 
     if !has_changes {
-        return handle_no_file_changes(ctx, iteration, &response, agent_terminated_without_writing).await;
+        return handle_no_file_changes(ctx, iteration, &response, agent_terminated_without_writing)
+            .await;
     }
 
     // Reset no-change counter
@@ -1871,7 +1872,10 @@ fn resolve_final_tier(
         && packet.failure_signals.is_empty()
     {
         if ctx.config.cloud_endpoint.is_some() {
-            warn!(iteration, "Sparse context — escalating Worker→Council (state driver)");
+            warn!(
+                iteration,
+                "Sparse context — escalating Worker→Council (state driver)"
+            );
             ctx.escalation.record_escalation(
                 SwarmTier::Council,
                 EscalationReason::Explicit {
@@ -1880,7 +1884,10 @@ fn resolve_final_tier(
             );
             SwarmTier::Council
         } else {
-            warn!(iteration, "Sparse context but no cloud — keeping Worker (state driver)");
+            warn!(
+                iteration,
+                "Sparse context but no cloud — keeping Worker (state driver)"
+            );
             tier
         }
     } else {
@@ -2029,7 +2036,11 @@ async fn handle_no_file_changes(
             &format!(
                 "No-change circuit breaker: {} consecutive no-change iterations{}",
                 ctx.escalation.consecutive_no_change,
-                if scaffolded { " (scaffold committed)" } else { "" },
+                if scaffolded {
+                    " (scaffold committed)"
+                } else {
+                    ""
+                },
             ),
         );
         return Ok(StateTransition::Fail {
