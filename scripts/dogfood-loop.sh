@@ -298,6 +298,29 @@ prune_stale_worktrees() {
   # Nothing to clean if no worktree directories exist
   [[ ${#wt_dirs[@]} -eq 0 ]] && return 0
 
+  # --- Legacy flat orphan cleanup ---
+  # Before the /{repo-name}/ subdir scheme was introduced, worktrees lived directly
+  # under /tmp/swarm-wt/ as /tmp/swarm-wt/<issue-id>/.  Those are invisible to the
+  # scan above (which only looks inside /tmp/swarm-wt/<repo-name>/).
+  # Sweep them here: any beefcake-XXXXX dir directly under /tmp/swarm-wt/ that is
+  # NOT the current repo-name subdir and NOT a registered git worktree is an orphan.
+  if [[ -d "/tmp/swarm-wt" ]]; then
+    local orphan_d orphan_name orphan_cleaned=0
+    for orphan_d in /tmp/swarm-wt/*/; do
+      [[ -d "$orphan_d" ]] || continue
+      orphan_name="$(basename "$orphan_d")"
+      # Skip the current active base dir (beefcake-swarm/, rust-daq/, etc.)
+      [[ "$orphan_name" == "$repo_name" ]] && continue
+      # Skip dirs that are registered git worktrees (safe-guard)
+      if git -C "$REPO_ROOT" worktree list 2>/dev/null | grep -qF "${orphan_d%/}"; then
+        continue
+      fi
+      rm -rf "$orphan_d"
+      orphan_cleaned=$((orphan_cleaned + 1))
+    done
+    [[ $orphan_cleaned -gt 0 ]] && log "  [worktree-cleanup] Removed $orphan_cleaned legacy flat orphan(s) from /tmp/swarm-wt/"
+  fi
+
   # Build set of issue IDs actively used by running swarm-agents processes.
   # In local mode: check /proc/<pid>/cmdline for local swarm-agents processes.
   # In SLURM mode: check squeue for active SLURM jobs (processes run on compute nodes).
@@ -409,7 +432,79 @@ maybe_prune_worktrees() {
     fi
   fi
   prune_stale_worktrees
+  maybe_check_disk_pressure
   printf '%s\n' "$now" > "$WORKTREE_CLEANUP_STAMP_FILE"
+}
+
+# --- Disk pressure guard ---
+# Emergency cleanup when disk usage approaches full.
+# Triggered at startup and periodically during the loop.
+# Tiers:
+#   ≥85% — warn + clean incremental caches and old TZ backups
+#   ≥92% — also force-prune all worktrees
+#   ≥97% — abort the loop (can't build safely)
+DISK_PRESSURE_STAMP_FILE="/tmp/dogfood-loop${_LOCK_SUFFIX:-}.disk-pressure.last_run"
+DISK_PRESSURE_INTERVAL="${DOGFOOD_DISK_PRESSURE_INTERVAL:-120}"  # check every 2 min
+
+check_disk_pressure() {
+  local mount="${1:-/}"
+  local disk_pct
+  disk_pct=$(df "$mount" | awk 'NR==2{gsub(/%/,"",$5); print $5}' 2>/dev/null || echo "0")
+  [[ "$disk_pct" =~ ^[0-9]+$ ]] || return 0
+  (( disk_pct < 85 )) && return 0
+
+  log "[DISK-PRESSURE] Disk at ${disk_pct}% on $mount — triggering emergency cleanup"
+
+  # 1. Clean incremental Rust compilation caches (safe — just slows next build)
+  local inc_freed=0
+  for code_dir in "$HOME/code"/*/; do
+    local inc_dir="${code_dir}target/debug/incremental"
+    if [[ -d "$inc_dir" ]]; then
+      local sz
+      sz=$(du -sm "$inc_dir" 2>/dev/null | cut -f1 || echo 0)
+      rm -rf "$inc_dir" 2>/dev/null || true
+      inc_freed=$((inc_freed + ${sz:-0}))
+    fi
+  done
+  [[ $inc_freed -gt 0 ]] && log "  [disk-pressure] Freed ${inc_freed}MB of incremental caches"
+
+  # 2. Trim TZ backups to at most 5 (≈9GB max); cron normally keeps up to 28
+  local tz_dir="/home/brian/backups/tensorzero"
+  if [[ -d "$tz_dir" ]]; then
+    ls -t "$tz_dir"/tz-*.sql.gz 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
+    log "  [disk-pressure] TZ backup dir trimmed to ≤5 files"
+  fi
+
+  # 3. At ≥92%, also full-prune all stale worktrees immediately
+  if (( disk_pct >= 92 )); then
+    log "  [disk-pressure] ${disk_pct}% ≥ 92 — force-pruning all stale worktrees"
+    prune_stale_worktrees
+  fi
+
+  # 4. At ≥97%, abort — can't build safely at this pressure
+  if (( disk_pct >= 97 )); then
+    log "[DISK-PRESSURE] CRITICAL: ${disk_pct}% — aborting dogfood loop to prevent OOM/corruption"
+    exit 1
+  fi
+
+  local after_pct
+  after_pct=$(df "$mount" | awk 'NR==2{gsub(/%/,"",$5); print $5}' 2>/dev/null || echo "?")
+  log "  [disk-pressure] After cleanup: ${after_pct}% disk usage"
+}
+
+maybe_check_disk_pressure() {
+  local now last_run elapsed
+  now=$(date +%s)
+  last_run=0
+  if [[ -f "$DISK_PRESSURE_STAMP_FILE" ]]; then
+    last_run=$(cat "$DISK_PRESSURE_STAMP_FILE" 2>/dev/null || echo "0")
+  fi
+  if [[ "$last_run" =~ ^[0-9]+$ ]]; then
+    elapsed=$((now - last_run))
+    (( elapsed < DISK_PRESSURE_INTERVAL )) && return 0
+  fi
+  check_disk_pressure /
+  printf '%s\n' "$now" > "$DISK_PRESSURE_STAMP_FILE"
 }
 
 # --- Circuit breaker: defer issues that fail too many times ---
@@ -749,6 +844,7 @@ fi
 
 # Startup cleanup: remove stale worktrees, temp build artifacts, and old logs.
 # This is unconditional (not throttled) because it only runs once at startup.
+check_disk_pressure /
 prune_stale_worktrees
 
 # Rotate dogfood logs: keep last 50, delete older ones to prevent disk exhaustion.
