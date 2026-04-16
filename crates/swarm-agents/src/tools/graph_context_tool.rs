@@ -141,3 +141,7 @@ impl Tool for GraphContextTool {
         Ok(output)
     }
 }
+
+#[cfg(test)]
+#[path = "graph_context_tool_tests.rs"]
+mod tests;
