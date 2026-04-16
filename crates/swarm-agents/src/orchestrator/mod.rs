@@ -68,6 +68,7 @@ use crate::acceptance::{self, AcceptancePolicy};
 use crate::agents::AgentFactory;
 use crate::beads_bridge::{BeadsIssue, IssueTracker};
 use crate::config::{GovernanceTier, SwarmConfig, SwarmRole};
+use crate::harness::HarnessPolicy;
 use crate::knowledge_sync;
 use crate::notebook_bridge::KnowledgeBase;
 use crate::telemetry::{self, MetricsCollector, TelemetryReader};
@@ -1559,10 +1560,20 @@ async fn process_issue_core(
             tier
         };
 
+        let harness_policy = HarnessPolicy::derive(&packet, tier);
+        harness_policy.apply_to_packet(&mut packet);
+        metrics.record_harness_policy(&harness_policy);
+        if harness_policy.economics.prefer_compact_prompt {
+            metrics.record_compact_prompt();
+        }
+        if harness_policy.judgment.external_review_required {
+            metrics.record_strict_external_judgment();
+        }
+
         // Worker tier gets a compact prompt (<1500 chars) because small local
         // models (HydraCoder 30B MoE) suppress tool calls with long prompts.
         // Council/Human tiers get the full verbose format for cloud models.
-        let mut task_prompt = if tier == SwarmTier::Worker {
+        let mut task_prompt = if harness_policy.economics.prefer_compact_prompt {
             format_compact_task_prompt(&packet, &wt_path)
         } else {
             format_task_prompt(&packet)
@@ -3377,6 +3388,22 @@ async fn process_issue_core(
                 }
             }
 
+            if harness_policy.judgment.external_review_required
+                && factory.clients.cloud.is_some()
+                && cloud_passes < harness_policy.judgment.min_external_passes
+                && !last_validator_feedback.is_empty()
+            {
+                warn!(
+                    iteration,
+                    required = harness_policy.judgment.min_external_passes,
+                    observed = cloud_passes,
+                    "Harness judgment rejected resolution after external review"
+                );
+                metrics.finish_iteration();
+                last_report = Some(report);
+                continue;
+            }
+
             // --- Acceptance policy check ---
             let acceptance_result = acceptance::check_acceptance_with_task(
                 &acceptance_policy,
@@ -3886,6 +3913,7 @@ async fn process_issue_core(
 
     // --- Write telemetry ---
     let final_tier = format!("{:?}", escalation.current_tier);
+    metrics.record_proof_of_work_emitted();
     let mut session_metrics = metrics.finalize(success, &final_tier);
 
     // Populate token usage and cost from TZ Postgres if available.
@@ -3898,6 +3926,7 @@ async fn process_issue_core(
     }
 
     telemetry::write_session_metrics(&session_metrics, &wt_path);
+    telemetry::write_proof_of_work(&session_metrics, &wt_path);
     telemetry::append_telemetry(&session_metrics, worktree_bridge.repo_root());
 
     // --- TensorZero feedback ---
