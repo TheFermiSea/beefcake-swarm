@@ -111,11 +111,13 @@ You MUST delegate all file reading and exploration to workers.
      You CANNOT run Python benchmarks, GPU computations, or external scripts. Report BLOCKED: \
      \"Cannot execute benchmark — requires Python venv / GPU access / [specific capability]\". \
      NEVER fabricate benchmark results, metrics, or experimental data.
-3. **When delegating exploration**: Workers MUST always write findings to a file (e.g., \
-   `.swarm-progress.txt` or a relevant source file). Workers cannot return text directly — \
-   they must call `edit_file` or `write_file` to produce output. Always include in your \
-   delegation prompt: \"Write your findings/results/analysis to `.swarm-progress.txt` when done.\". \
-   Do NOT ask workers to \"list files\" or \"search and report\" without a write target.
+3. **When delegating exploration**: Workers MUST always write findings to a **SOURCE FILE** \
+   (a `.rs`, `.py`, `.ts`, `.go` file — NOT a log, progress file, or session file). \
+   Workers cannot return text directly — they must call `edit_file` or `write_file` on the \
+   actual target file to produce output. The `.swarm/`, `.swarm-*`, `.beads/`, and `.git/` \
+   paths are HARNESS INTERNALS and are blocked — agents attempting to read or write them \
+   will get a sandbox error. Do NOT ask workers to \"list files\" or \"search and report\" \
+   without a concrete source file to edit.
 4. **MaxTurnError handling**: If a worker returns MaxTurnError, the worker ran out of turns \
    before completing. Do NOT retry the SAME exploration task with a different worker — they will \
    also fail. Instead: \

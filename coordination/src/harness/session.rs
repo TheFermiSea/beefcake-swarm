@@ -436,6 +436,12 @@ impl std::fmt::Display for SessionSummary {
 
 /// Save session state to a JSON file
 pub fn save_session_state(state: &SessionState, path: &std::path::Path) -> HarnessResult<()> {
+    // Ensure parent directory exists (session state now lives under .swarm/).
+    if let Some(parent) = path.parent() {
+        if !parent.as_os_str().is_empty() {
+            std::fs::create_dir_all(parent).map_err(HarnessError::Io)?;
+        }
+    }
     let json = serde_json::to_string_pretty(state)
         .map_err(|e| HarnessError::Io(std::io::Error::other(e)))?;
     std::fs::write(path, json).map_err(HarnessError::Io)?;

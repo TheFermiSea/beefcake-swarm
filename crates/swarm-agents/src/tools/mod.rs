@@ -119,7 +119,14 @@ pub(crate) async fn run_command_with_timeout(
 ///
 /// `.beads/` contains the issue tracker database — agents deleting it caused
 /// 100% dogfood failure rate on 2026-03-14. `.git/` is obviously off-limits.
-const FORBIDDEN_PREFIXES: &[&str] = &[".beads", ".git", ".dolt"];
+/// `.swarm/` holds harness state (sessions, checkpoints, progress logs) — agents
+/// observed burning 700+ tool calls on these per run (2026-04-16).
+const FORBIDDEN_PREFIXES: &[&str] = &[".beads", ".git", ".dolt", ".swarm"];
+
+/// Any top-level filename starting with this prefix is blocked for agents.
+/// Catches legacy paths like `.swarm-session.jsonl`, `.swarm-checkpoint.json`,
+/// `.swarm-progress.txt` without listing every variant.
+const FORBIDDEN_FILENAME_PREFIXES: &[&str] = &[".swarm-"];
 
 /// Root-level files that agents must never read OR write.
 /// Session log and event files — workers corrupting these causes context loss.
@@ -129,13 +136,37 @@ const FORBIDDEN_FILES: &[&str] = &[
     ".swarm-events.jsonl",
     ".swarm-telemetry.jsonl",
     ".swarm-hook-events.jsonl",
+    ".swarm-session.json",
+    ".swarm-checkpoint.json",
+    ".swarm-checkpoint.json.tmp",
 ];
 
 /// Root-level files that agents may read but must not write.
-/// Workers were observed writing `"{}"` to `.swarm-checkpoint.json` in a loop
-/// (observed 2026-04-15). Reads are harmless — the model probes for a resume
-/// checkpoint on turn 1 and moves on when it gets a sensible response.
+/// (Kept for backward compat with any callsite that still passes is_write=true;
+/// the files are also in FORBIDDEN_FILES so reads are blocked too.)
 const WRITE_FORBIDDEN_FILES: &[&str] = &[".swarm-checkpoint.json", ".swarm-checkpoint.json.tmp"];
+
+/// Substrings in shell commands that indicate the agent is trying to reach
+/// harness state. These commands are rejected by `sandbox_command`.
+pub const FORBIDDEN_COMMAND_SUBSTRINGS: &[&str] = &[
+    ".swarm-", ".swarm/", ".beads/", ".git/",
+];
+
+/// Reject shell commands that reference harness state paths.
+///
+/// Agents observed bypassing the file-tool sandbox by running `cat .swarm-session.jsonl`
+/// or `grep X .swarm-checkpoint.json` via `proxy_run_command`. This guard catches those.
+pub fn sandbox_command(command: &str) -> Result<(), ToolError> {
+    for needle in FORBIDDEN_COMMAND_SUBSTRINGS {
+        if command.contains(needle) {
+            return Err(ToolError::Sandbox(format!(
+                "command references forbidden harness path (`{needle}`): these are orchestrator \
+                 internals, not your target. Read the actual source file instead."
+            )));
+        }
+    }
+    Ok(())
+}
 
 /// Validate that a resolved path stays within the sandbox root and does not
 /// touch forbidden directories (`.beads/`, `.git/`, etc.) or protected files.
@@ -161,7 +192,16 @@ pub fn sandbox_check(
         for forbidden in FORBIDDEN_FILES {
             if filename_str == *forbidden {
                 return Err(ToolError::Sandbox(format!(
-                    "path `{relative_path}` is a protected swarm infrastructure file"
+                    "path `{relative_path}` is harness state (session/checkpoint/progress logs), \
+                     NOT your target. Read the actual source file you need to modify instead."
+                )));
+            }
+        }
+        for prefix in FORBIDDEN_FILENAME_PREFIXES {
+            if filename_str.starts_with(prefix) {
+                return Err(ToolError::Sandbox(format!(
+                    "path `{relative_path}` starts with `{prefix}` — these are harness internals, \
+                     not your target. Read the actual source file you need to modify instead."
                 )));
             }
         }
@@ -215,4 +255,59 @@ pub fn sandbox_check(
         return Err(ToolError::Sandbox(relative_path.to_string()));
     }
     Ok(resolved)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sandbox_command_blocks_harness_paths() {
+        assert!(sandbox_command("cat .swarm-session.jsonl").is_err());
+        assert!(sandbox_command("cat .swarm/session.jsonl").is_err());
+        assert!(sandbox_command("grep foo .swarm-checkpoint.json").is_err());
+        assert!(sandbox_command("ls .beads/").is_err());
+        assert!(sandbox_command("cat .git/HEAD").is_err());
+    }
+
+    #[test]
+    fn sandbox_command_allows_legitimate_commands() {
+        assert!(sandbox_command("cargo check --workspace").is_ok());
+        assert!(sandbox_command("grep foo src/main.rs").is_ok());
+        assert!(sandbox_command("ls").is_ok());
+        // Substring false-positive guard: "swarm" alone is fine; only the prefixes match.
+        assert!(sandbox_command("grep swarm src/lib.rs").is_ok());
+    }
+
+    #[test]
+    fn sandbox_check_blocks_legacy_dotswarm_filename_prefix() {
+        let tmp = std::env::temp_dir().join(format!("sandbox-test-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        // Any .swarm-* file is blocked even if not in FORBIDDEN_FILES.
+        let err = sandbox_check(&tmp, ".swarm-new-future-file.log", false).unwrap_err();
+        assert!(matches!(err, ToolError::Sandbox(_)));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn sandbox_check_blocks_dotswarm_subdir() {
+        let tmp = std::env::temp_dir().join(format!("sandbox-subdir-{}", std::process::id()));
+        std::fs::create_dir_all(tmp.join(".swarm")).unwrap();
+        let err = sandbox_check(&tmp, ".swarm/anything.json", false).unwrap_err();
+        assert!(matches!(err, ToolError::Sandbox(_)));
+        std::fs::remove_dir_all(&tmp).ok();
+    }
+
+    #[test]
+    fn sandbox_check_error_message_steers_agent() {
+        let tmp = std::env::temp_dir().join(format!("sandbox-msg-{}", std::process::id()));
+        std::fs::create_dir_all(&tmp).unwrap();
+        let err = sandbox_check(&tmp, ".swarm-session.jsonl", false).unwrap_err();
+        // The error message must contain "harness state" so the runtime adapter's
+        // fail-fast detector counts this toward the 3-strike limit.
+        let msg = format!("{err}");
+        assert!(msg.contains("harness state") || msg.contains("harness internals"),
+            "expected steering message, got: {msg}");
+        std::fs::remove_dir_all(&tmp).ok();
+    }
 }

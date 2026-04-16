@@ -106,6 +106,11 @@ impl Tool for RunCommandTool {
             });
         }
 
+        // Reject commands that reach into harness state (.swarm/, .swarm-*, .beads/).
+        // Agents observed bypassing the file-tool sandbox via `cat .swarm-session.jsonl`
+        // and similar (2026-04-16: 204 such calls across 20 runs).
+        super::sandbox_command(&args.command)?;
+
         let has_shell_ops = args.command.contains('|') || args.command.contains("&&");
 
         if has_shell_ops {

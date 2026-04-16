@@ -23,6 +23,13 @@ impl ProgressTracker {
 
     /// Append an entry to the progress file
     pub fn append(&self, entry: &ProgressEntry) -> HarnessResult<()> {
+        // Ensure parent dir exists (progress files now live under .swarm/ subdir).
+        if let Some(parent) = self.path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| HarnessError::progress(e.to_string()))?;
+            }
+        }
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)

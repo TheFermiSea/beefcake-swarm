@@ -182,7 +182,16 @@ struct AdapterState {
     /// Set by `on_completion_call` when the worker is approaching the write deadline;
     /// consumed (taken) by `on_tool_result` and prepended to the tool output.
     pending_reminder: Option<String>,
+    /// Count of tool calls that hit the harness-path sandbox (.swarm/, .swarm-*,
+    /// .beads/, .git/). Agents observed fixating on these — 1,705 blocked attempts
+    /// across 20 runs on 2026-04-16. Triggers early termination after threshold.
+    swarm_internal_attempts: usize,
 }
+
+/// Threshold for swarm-internal-path sandbox attempts before forcing termination.
+/// Three strikes: an agent that can't stop reaching for harness internals won't
+/// recover in later turns either.
+const SWARM_INTERNAL_ATTEMPT_LIMIT: usize = 3;
 
 /// Rig [`PromptHook`] implementation for tool-event visibility and budget control.
 ///
@@ -218,6 +227,7 @@ impl RuntimeAdapter {
                 repeat_call_counts: HashMap::new(),
                 last_call_key: None,
                 pending_reminder: None,
+                swarm_internal_attempts: 0,
             })),
             config: Arc::new(config),
             validators: Arc::new(Vec::new()),
@@ -249,6 +259,7 @@ impl RuntimeAdapter {
                 repeat_call_counts: HashMap::new(),
                 last_call_key: None,
                 pending_reminder: None,
+                swarm_internal_attempts: 0,
             })),
             config: Arc::new(config),
             validators: Arc::new(validators),
@@ -733,6 +744,35 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
             if Self::is_write_tool(&tool_name) && outcome == ToolOutcome::Success {
                 s.has_written = true;
                 s.successful_writes += 1;
+            }
+
+            // Fail-fast if the agent keeps reaching into harness state.
+            // Detected via the sandbox error substring ("harness state", "harness internals",
+            // "forbidden harness path") returned by sandbox_check / sandbox_command.
+            if is_error
+                && (result.contains("harness state")
+                    || result.contains("harness internals")
+                    || result.contains("forbidden harness path"))
+            {
+                s.swarm_internal_attempts += 1;
+                warn!(
+                    agent = %config.agent_name,
+                    tool = %tool_name,
+                    attempts = s.swarm_internal_attempts,
+                    limit = SWARM_INTERNAL_ATTEMPT_LIMIT,
+                    "Agent hit harness-path sandbox"
+                );
+                if s.swarm_internal_attempts >= SWARM_INTERNAL_ATTEMPT_LIMIT {
+                    let reason = format!(
+                        "agent fixated on harness internals ({} attempts) — refusing to waste \
+                         more turns. Target the actual source file instead.",
+                        s.swarm_internal_attempts
+                    );
+                    warn!(agent = %config.agent_name, reason = %reason, "Terminating early");
+                    s.terminated_early = true;
+                    s.termination_reason = Some(reason.clone());
+                    return HookAction::terminate(format!("Runtime adapter: {reason}"));
+                }
             }
 
             let duration_ms = duration.as_millis() as u64;

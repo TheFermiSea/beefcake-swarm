@@ -168,7 +168,7 @@ fn write_worktree_excludes(wt_path: &Path, git_dir: &Path) {
             .open(&exclude_file)
         {
             let _ = f.write_all(
-                b"\n# Orchestrator artifacts\n.swarm-progress.txt\n.swarm-session.json\n.swarm-*\n.swarm-*/\n# Beads data (auto-modified by bd, not real code changes)\n# .beads (no slash) matches the symlink; .beads/ matches the directory fallback\n.beads\n.beads/\n",
+                b"\n# Orchestrator artifacts (harness state, not source code)\n.swarm/\n.swarm-*\n# Beads data (auto-modified by bd, not real code changes)\n# .beads (no slash) matches the symlink; .beads/ matches the directory fallback\n.beads\n.beads/\n",
             );
         }
     }
@@ -704,7 +704,13 @@ impl WorktreeBridge {
         // These are created by the harness (ProgressTracker, SessionManager) during the
         // orchestration loop and must not block the merge.
         if wt_path.exists() {
-            for artifact in &[".swarm-progress.txt", ".swarm-session.json"] {
+            // Remove the entire .swarm/ state dir (current layout).
+            let swarm_dir = wt_path.join(".swarm");
+            if swarm_dir.is_dir() {
+                let _ = std::fs::remove_dir_all(&swarm_dir);
+            }
+            // Also clean up legacy top-level artifacts from pre-2026-04-16 worktrees.
+            for artifact in &[".swarm-progress.txt", ".swarm-session.json", ".swarm-session.jsonl", ".swarm-checkpoint.json"] {
                 let artifact_path = wt_path.join(artifact);
                 if artifact_path.exists() {
                     let _ = std::fs::remove_file(&artifact_path);

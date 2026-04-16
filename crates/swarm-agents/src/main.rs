@@ -53,7 +53,7 @@ struct CliArgs {
     issues: Vec<String>,
 
     /// Resume a crashed session from its event log instead of starting fresh.
-    /// Requires --issue and an existing worktree with .swarm-session.jsonl.
+    /// Requires --issue and an existing worktree with the swarm session log.
     #[arg(long)]
     resume: bool,
 
