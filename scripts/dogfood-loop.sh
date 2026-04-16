@@ -449,7 +449,7 @@ DISK_PRESSURE_INTERVAL="${DOGFOOD_DISK_PRESSURE_INTERVAL:-120}"  # check every 2
 check_disk_pressure() {
   local mount="${1:-/}"
   local disk_pct
-  disk_pct=$(df "$mount" | awk 'NR==2{gsub(/%/,"",$5); print $5}' 2>/dev/null || echo "0")
+  disk_pct=$(df -P "$mount" | awk 'NR==2{gsub(/%/,"",$5); print $5}' 2>/dev/null || echo "0")
   [[ "$disk_pct" =~ ^[0-9]+$ ]] || return 0
   (( disk_pct < 85 )) && return 0
 
@@ -471,7 +471,8 @@ check_disk_pressure() {
   # 2. Trim TZ backups to at most 5 (≈9GB max); cron normally keeps up to 28
   local tz_dir="/home/brian/backups/tensorzero"
   if [[ -d "$tz_dir" ]]; then
-    ls -t "$tz_dir"/tz-*.sql.gz 2>/dev/null | tail -n +6 | xargs rm -f 2>/dev/null || true
+    find "$tz_dir" -maxdepth 1 -name 'tz-*.sql.gz' -printf '%T@ %p\0' 2>/dev/null \
+      | sort -rz -n | tail -z -n +6 | xargs -r -0 rm -f
     log "  [disk-pressure] TZ backup dir trimmed to ≤5 files"
   fi
 
@@ -488,7 +489,7 @@ check_disk_pressure() {
   fi
 
   local after_pct
-  after_pct=$(df "$mount" | awk 'NR==2{gsub(/%/,"",$5); print $5}' 2>/dev/null || echo "?")
+  after_pct=$(df -P "$mount" | awk 'NR==2{gsub(/%/,"",$5); print $5}' 2>/dev/null || echo "?")
   log "  [disk-pressure] After cleanup: ${after_pct}% disk usage"
 }
 

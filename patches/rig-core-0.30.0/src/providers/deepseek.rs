@@ -325,13 +325,12 @@ impl TryFrom<message::Message> for Vec<Message> {
                 let tool_calls = content
                     .clone()
                     .into_iter()
-                    .enumerate()
-                    .filter_map(|(i, content)| match content {
-                        message::AssistantContent::ToolCall(tool_call) => {
-                            Some(ToolCall::from((i, tool_call)))
-                        }
+                    .filter_map(|content| match content {
+                        message::AssistantContent::ToolCall(tool_call) => Some(tool_call),
                         _ => None,
                     })
+                    .enumerate()
+                    .map(|(i, tool_call)| ToolCall::from((i, tool_call)))
                     .collect::<Vec<_>>();
 
                 // if we have tool calls, we add a new Assistant message with them

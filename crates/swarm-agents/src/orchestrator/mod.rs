@@ -3434,34 +3434,14 @@ async fn process_issue_core(
                 "Verifier passed (all gates green) — checking acceptance"
             );
             escalation.record_iteration(error_cats, error_count, true, report.reward_score);
-            best_error_count = Some(0);
-
-            // Log experiment TSV: success
-            let commit = pre_worker_commit.as_deref().unwrap_or("unknown");
-            crate::telemetry::append_experiment_tsv(
-                &wt_path,
-                commit,
-                0,
-                &["fmt", "clippy", "check", "test"],
-                "success",
-                "all gates green",
-            );
-
-            // Create harness checkpoint on success
-            if let Ok(hash) = git_mgr.current_commit() {
-                let _ = progress.log_checkpoint(session.session_id(), iteration, &hash);
-            }
-            let _ = progress.log_feature_complete(
-                session.session_id(),
-                iteration,
-                &issue.id,
-                "Verified (deterministic gates passed)",
-            );
 
             // --- Cloud validation (advisory) ---
             // After deterministic gates pass, send the diff to high-end cloud models
             // (G3 Pro + Sonnet 4.5) for logic/design review. Results are logged but
             // don't block acceptance — avoids subjective LLM feedback loops.
+            //
+            // NOTE: External review rejection is checked BEFORE recording success
+            // telemetry to avoid false-success bookkeeping when the harness rejects.
             let mut cloud_passes = 0usize;
             if let Some(ref cloud_client) = factory.clients.cloud {
                 if let Some(ref initial_commit) = session.state().initial_commit {
@@ -3495,7 +3475,6 @@ async fn process_issue_core(
             if harness_policy.judgment.external_review_required
                 && factory.clients.cloud.is_some()
                 && cloud_passes < harness_policy.judgment.min_external_passes
-                && !last_validator_feedback.is_empty()
             {
                 warn!(
                     iteration,
@@ -3507,6 +3486,30 @@ async fn process_issue_core(
                 last_report = Some(report);
                 continue;
             }
+
+            best_error_count = Some(0);
+
+            // Log experiment TSV: success
+            let commit = pre_worker_commit.as_deref().unwrap_or("unknown");
+            crate::telemetry::append_experiment_tsv(
+                &wt_path,
+                commit,
+                0,
+                &["fmt", "clippy", "check", "test"],
+                "success",
+                "all gates green",
+            );
+
+            // Create harness checkpoint on success
+            if let Ok(hash) = git_mgr.current_commit() {
+                let _ = progress.log_checkpoint(session.session_id(), iteration, &hash);
+            }
+            let _ = progress.log_feature_complete(
+                session.session_id(),
+                iteration,
+                &issue.id,
+                "Verified (deterministic gates passed)",
+            );
 
             // --- Acceptance policy check ---
             let acceptance_result = acceptance::check_acceptance_with_task(
@@ -4017,7 +4020,6 @@ async fn process_issue_core(
 
     // --- Write telemetry ---
     let final_tier = format!("{:?}", escalation.current_tier);
-    metrics.record_proof_of_work_emitted();
     let mut session_metrics = metrics.finalize(success, &final_tier);
 
     let mut resolved_episode_ids = Vec::new();
@@ -4038,7 +4040,9 @@ async fn process_issue_core(
     }
 
     telemetry::write_session_metrics(&session_metrics, &wt_path);
-    telemetry::write_proof_of_work(&session_metrics, &wt_path);
+    if telemetry::write_proof_of_work(&session_metrics, &wt_path) {
+        session_metrics.harness_trace.proof_of_work_emitted = true;
+    }
     telemetry::append_telemetry(&session_metrics, worktree_bridge.repo_root());
 
     // --- TensorZero feedback ---

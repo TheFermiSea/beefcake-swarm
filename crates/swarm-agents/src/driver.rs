@@ -1015,6 +1015,8 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
         tier
     };
 
+    // Derive harness policy for prompt-building (may be re-derived below if the deep
+    // probe escalates the tier — see "Re-derive harness policy" block after deep probe).
     let harness_policy = HarnessPolicy::derive(&packet, tier);
     harness_policy.apply_to_packet(&mut packet);
     ctx.metrics.record_harness_policy(&harness_policy);
@@ -1248,6 +1250,20 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
     } else {
         tier
     };
+
+    // Re-derive harness policy now that tier is fully finalized (the deep-probe
+    // above may have escalated Worker→Council after the initial derivation).
+    // Only update tracked state here — the packet and prompt are already built
+    // and re-applying to the packet would inject duplicate prompt sections.
+    let harness_policy = HarnessPolicy::derive(&packet, tier);
+    ctx.metrics.record_harness_policy(&harness_policy);
+    if harness_policy.economics.prefer_compact_prompt {
+        ctx.metrics.record_compact_prompt();
+    }
+    if harness_policy.judgment.external_review_required {
+        ctx.metrics.record_strict_external_judgment();
+    }
+    ctx.last_harness_policy = Some(harness_policy.clone());
 
     // Route to agent
     let agent_start = Instant::now();
@@ -2298,7 +2314,6 @@ pub async fn handle_validating(ctx: &mut OrchestratorContext<'_>) -> Result<Stat
         if policy.judgment.external_review_required
             && ctx.factory.clients.cloud.is_some()
             && cloud_passes < policy.judgment.min_external_passes
-            && !ctx.last_validator_feedback.is_empty()
         {
             warn!(
                 iteration,
@@ -2810,7 +2825,7 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
 /// Takes `MetricsCollector` by value because `finalize()` consumes `self`.
 /// The caller should `std::mem::replace` the collector out of the context
 /// before calling this.
-pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, mut metrics: MetricsCollector) {
+pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsCollector) {
     if !ctx.success {
         ctx.session.fail();
         let _ = ctx.progress.log_session_end(
@@ -2943,10 +2958,11 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, mut metrics: Metr
 
     // Telemetry
     let final_tier = format!("{:?}", ctx.escalation.current_tier);
-    metrics.record_proof_of_work_emitted();
-    let session_metrics = metrics.finalize(ctx.success, &final_tier);
+    let mut session_metrics = metrics.finalize(ctx.success, &final_tier);
     telemetry::write_session_metrics(&session_metrics, &ctx.wt_path);
-    telemetry::write_proof_of_work(&session_metrics, &ctx.wt_path);
+    if telemetry::write_proof_of_work(&session_metrics, &ctx.wt_path) {
+        session_metrics.harness_trace.proof_of_work_emitted = true;
+    }
     telemetry::append_telemetry(&session_metrics, ctx.worktree_bridge.repo_root());
 
     // TensorZero feedback — health-gated to prevent data poisoning.

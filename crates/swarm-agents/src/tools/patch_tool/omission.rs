@@ -59,7 +59,7 @@ pub fn detect_omission_placeholder(content: &str) -> Option<&str> {
                 .and_then(|s| s.strip_suffix("*/"))
                 .unwrap_or("")
                 .trim();
-            if inner == "..." || inner == "…" || inner.is_empty() {
+            if inner == "..." || inner == "…" {
                 return Some(trimmed);
             }
             let lower = inner.to_ascii_lowercase();

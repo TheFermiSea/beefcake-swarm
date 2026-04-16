@@ -269,6 +269,7 @@ pub struct SessionMetrics {
 /// A component showing `fired: true, caught_issue: false` over N sessions is
 /// a candidate for removal or reformulation.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
 pub struct HarnessComponentTrace {
     /// Layered harness policy was derived for this run.
     pub layered_harness_enabled: bool,
@@ -767,7 +768,7 @@ pub fn write_session_metrics(metrics: &SessionMetrics, wt_path: &Path) {
 }
 
 /// Write a compact proof-of-work artifact for human review.
-pub fn write_proof_of_work(metrics: &SessionMetrics, wt_path: &Path) {
+pub fn write_proof_of_work(metrics: &SessionMetrics, wt_path: &Path) -> bool {
     #[derive(Serialize)]
     struct ProofOfWork<'a> {
         issue_id: &'a str,
@@ -833,9 +834,14 @@ pub fn write_proof_of_work(metrics: &SessionMetrics, wt_path: &Path) {
         Ok(json) => {
             if let Err(e) = std::fs::write(&path, json) {
                 warn!(path = %path.display(), error = %e, "Failed to write proof-of-work artifact");
+                return false;
             }
+            true
         }
-        Err(e) => warn!(error = %e, "Failed to serialize proof-of-work artifact"),
+        Err(e) => {
+            warn!(error = %e, "Failed to serialize proof-of-work artifact");
+            false
+        }
     }
 }
 

@@ -227,7 +227,7 @@ pub fn strip_truncation_markers(s: &str) -> String {
         })
         .collect();
     if filtered.len() == s.lines().count() {
-        // No markers removed — return original to avoid allocating
+        // No markers removed — return an owned copy of the original
         return s.to_string();
     }
     filtered.join("\n")

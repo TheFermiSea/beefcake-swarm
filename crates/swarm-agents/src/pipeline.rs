@@ -494,6 +494,13 @@ pub fn run_initial(
 
     ctx = stage_acceptance_criteria(ctx);
 
+    // Re-derive harness policy now that enrichment stages may have mutated
+    // ctx.packet (blast-radius and KB enrichment can add file_contexts,
+    // relevant_heuristics, and failure_signals that affect the derived policy).
+    let harness = HarnessPolicy::derive(&ctx.packet, tier);
+    harness.apply_to_packet(&mut ctx.packet);
+    ctx.harness = harness;
+
     ctx
 }
 
