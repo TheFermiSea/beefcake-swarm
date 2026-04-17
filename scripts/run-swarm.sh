@@ -53,9 +53,11 @@ if [[ -n "${SWARM_CLOUD_URL:-}" ]]; then
   : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
   export SWARM_CLOUD_API_KEY
   # Default primary cloud model routed via CLIAPIProxy; override SWARM_CLOUD_MODEL to switch.
-  # claude-opus-4-6 is the primary cloud model (Anthropic credits renewed).
-  export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6}"
-  export SWARM_CLOUD_FALLBACK_MODEL="${SWARM_CLOUD_FALLBACK_MODEL:-claude-sonnet-4-6}"
+  # claude-sonnet-4-6 is primary (2026-04-17: Autopilot data shows sonnet-4-6
+  # consistently resolves issues that opus-4-6 did not; opus also hits quota
+  # more aggressively). opus-4-6 is kept as fallback-1 in CloudFallbackMatrix.
+  export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-sonnet-4-6}"
+  export SWARM_CLOUD_FALLBACK_MODEL="${SWARM_CLOUD_FALLBACK_MODEL:-claude-opus-4-6}"
   # CLIAPIProxy v6.8+ uses x-api-key header (not Authorization: Bearer)
   _PROXY_AUTH=(-H "x-api-key: $SWARM_CLOUD_API_KEY")
   if [[ "${SWARM_REQUIRE_ANTHROPIC_OWNERSHIP:-1}" == "1" ]]; then
