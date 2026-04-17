@@ -34,7 +34,7 @@ pub(crate) use validation::{
 
 // ── Remaining lifecycle imports ─────────────────────────────────────
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -252,6 +252,209 @@ pub async fn process_issue(
 
 /// Core orchestration loop — implement → verify → review → escalate.
 ///
+/// Owns a background tokio task and aborts it on drop. Used to tie the health
+/// monitor's lifetime to the enclosing orchestrator scope.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Probe all local inference endpoints, bail fast if all are down, and spawn
+/// a background monitor tied to the caller's scope.
+///
+/// Reuses the factory's shared `ClusterHealth` so `check_all_now()` updates
+/// the same `Arc<RwLock>` that `EndpointPool::next()` reads. Creating a
+/// separate instance here would leave the pool in Unknown state for all tiers.
+/// Snapshot wall-clock start and generate a TensorZero episode ID if TZ is
+/// configured. Returns `(start_secs, episode_id)`; `episode_id` is `None` when
+/// `tensorzero_url` is unset. The episode ID is also written onto `metrics`.
+fn setup_tensorzero_episode(
+    config: &SwarmConfig,
+    issue_id: &str,
+    session_id: &str,
+    metrics: &mut MetricsCollector,
+) -> (f64, Option<String>) {
+    let start_secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64();
+    let episode_id = config.tensorzero_url.as_ref().map(|_| {
+        let ep = crate::tensorzero::generate_episode_id(issue_id, session_id);
+        info!(episode_id = %ep, "TensorZero episode tracking enabled");
+        ep
+    });
+    if let Some(ref ep) = episode_id {
+        metrics.set_episode_id(ep.clone());
+    }
+    (start_secs, episode_id)
+}
+
+/// Build the session/git/progress triple and log the session start. Initial
+/// commit recording is best-effort; session.start() failure is non-fatal.
+fn init_harness_components(
+    wt_path: &Path,
+    config: &SwarmConfig,
+    issue: &BeadsIssue,
+) -> (SessionManager, GitManager, ProgressTracker) {
+    let mut session = SessionManager::new(wt_path.to_path_buf(), config.max_retries);
+    let git_mgr = GitManager::new(wt_path, "[swarm]");
+    let progress = ProgressTracker::new(crate::session::progress_path(wt_path));
+
+    if let Ok(commit) = git_mgr.current_commit_full() {
+        session.set_initial_commit(commit.clone());
+        info!(initial_commit = %commit, "Recorded initial commit");
+    }
+    if let Err(e) = session.start() {
+        warn!("Failed to start harness session: {e}");
+    }
+    session.set_current_feature(&issue.id);
+    let _ = progress.log_session_start(
+        session.session_id(),
+        format!("Processing issue: {} — {}", issue.id, issue.title),
+    );
+    info!(
+        session_id = session.short_id(),
+        issue_id = %issue.id,
+        max_iterations = config.max_retries,
+        "Harness session started"
+    );
+    (session, git_mgr, progress)
+}
+
+/// Reuse an existing worktree (resetting it for retry) or create a fresh one.
+/// Falls back to create after a failed reset.
+fn acquire_worktree(worktree_bridge: &WorktreeBridge, issue_id: &str) -> Result<PathBuf> {
+    if worktree_bridge.worktree_exists(issue_id) {
+        match worktree_bridge.reset_worktree(issue_id) {
+            Ok(p) => {
+                info!(path = %p.display(), "Reused existing worktree (reset for retry)");
+                return Ok(p);
+            }
+            Err(e) => {
+                warn!(id = issue_id, "Worktree reset failed, recreating: {e}");
+                let _ = worktree_bridge.cleanup(issue_id);
+            }
+        }
+    }
+    match worktree_bridge.create(issue_id) {
+        Ok(p) => {
+            info!(path = %p.display(), "Created worktree");
+            Ok(p)
+        }
+        Err(e) => {
+            error!(id = issue_id, "Failed to create worktree: {e}");
+            Err(e)
+        }
+    }
+}
+
+/// Load the persistent cognition base (seeded from wiki pages) and capture the
+/// original intent contract so subsequent reformulations cannot silently weaken
+/// the goal. The contract is append-only (first attempt only).
+fn init_cognition_and_contract(
+    worktree_bridge: &WorktreeBridge,
+    issue: &BeadsIssue,
+) -> (
+    Option<crate::cognition::CognitionBase>,
+    crate::reformulation::ReformulationStore,
+) {
+    let cognition_base = crate::cognition::CognitionBase::load_or_create(
+        &worktree_bridge.repo_root().join(".swarm/cognition"),
+    )
+    .ok()
+    .map(|mut base| {
+        if let Err(e) = crate::cognition::seed_from_wiki(&mut base, worktree_bridge.repo_root()) {
+            warn!(error = %e, "Failed to seed cognition base from wiki");
+        }
+        base
+    });
+    let reformulation_store =
+        crate::reformulation::ReformulationStore::new(worktree_bridge.repo_root());
+    let intent_contract = crate::reformulation::IntentContract::from_issue(
+        &issue.id,
+        &issue.title,
+        issue.description.as_deref(),
+    );
+    reformulation_store.save_contract(&intent_contract);
+    (cognition_base, reformulation_store)
+}
+
+/// Classify issue complexity/language and build the per-issue phase model selector.
+///
+/// Returns `(triage_result, issue_objective, phase_selector)`. `issue_objective`
+/// combines title + description for downstream write-deadline and routing hints.
+/// Triage uses the cheapest triage-capable cloud model (~$0.001/issue), falling
+/// back to keyword heuristics when cloud is unavailable or `SWARM_SKIP_TRIAGE=1`.
+async fn run_triage_phase(
+    factory: &AgentFactory,
+    config: &SwarmConfig,
+    issue: &BeadsIssue,
+) -> (triage::TriageResult, String, PhaseModelSelector) {
+    let triage_result = triage::triage_issue(
+        &issue.title,
+        issue.description.as_deref(),
+        &config.cloud_model_catalog,
+        factory.clients.cloud.as_ref(),
+        config.skip_triage,
+    )
+    .await;
+    info!(
+        id = %issue.id,
+        complexity = %triage_result.complexity,
+        language = %triage_result.language,
+        used_llm = triage_result.used_llm,
+        model = ?triage_result.triage_model,
+        "Triage complete"
+    );
+    let issue_objective = match &issue.description {
+        Some(desc) if !desc.is_empty() => format!("{} {}", issue.title, desc),
+        _ => issue.title.clone(),
+    };
+    let phase_selector = PhaseModelSelector::new(
+        config.cloud_model_catalog.clone(),
+        config.max_cost_per_issue,
+    );
+    (triage_result, issue_objective, phase_selector)
+}
+
+async fn run_preflight_health(
+    factory: &AgentFactory,
+    config: &SwarmConfig,
+    beads: &dyn IssueTracker,
+    issue: &BeadsIssue,
+) -> Result<AbortOnDrop> {
+    let cluster_health = factory
+        .cluster_health()
+        .cloned()
+        .unwrap_or_else(|| ClusterHealth::from_config(config));
+
+    if config.cloud_only {
+        info!("Cloud-only mode: bypassing local endpoint preflight checks");
+    } else {
+        let healthy_count = cluster_health.check_all_now().await;
+        // Evaluate async summary before the info! macro to avoid holding a
+        // temporary `&dyn tracing::Value` across the .await (which is !Send).
+        let health_summary = cluster_health.summary().await;
+        info!(
+            healthy = healthy_count,
+            total = 3,
+            summary = %health_summary,
+            "Preflight endpoint health check"
+        );
+        if healthy_count == 0 {
+            warn!(id = %issue.id, "All inference endpoints are DOWN — cannot proceed");
+            let _ = beads.update_status(&issue.id, "open");
+            anyhow::bail!(
+                "Preflight failed: all 3 inference endpoints are down ({})",
+                cluster_health.summary().await
+            );
+        }
+    }
+    Ok(AbortOnDrop(cluster_health.spawn_monitor()))
+}
+
 /// Check if an issue is actionable by the swarm. Returns `Some(reason)` if it should
 /// be rejected without claiming (title too short, epic, benchmark-execution, or matches
 /// a configured reject pattern), `None` if actionable.
@@ -324,68 +527,15 @@ async fn process_issue_core(
     }
 
     // --- Triage phase (Ensemble Swarm) ---
-    // Classify issue complexity, language, and suggested models using the cheapest
-    // triage-capable cloud model (~$0.001/issue). Falls back to keyword heuristics
-    // when cloud is unavailable or SWARM_SKIP_TRIAGE=1.
-    let triage_result = triage::triage_issue(
-        &issue.title,
-        issue.description.as_deref(),
-        &config.cloud_model_catalog,
-        factory.clients.cloud.as_ref(),
-        config.skip_triage,
-    )
-    .await;
-    info!(
-        id = %issue.id,
-        complexity = %triage_result.complexity,
-        language = %triage_result.language,
-        used_llm = triage_result.used_llm,
-        model = ?triage_result.triage_model,
-        "Triage complete"
-    );
-
-    // Combined issue objective (title + description) used for write-deadline
-    // computation and routing hints throughout the issue lifecycle.
-    let issue_objective: String = match &issue.description {
-        Some(desc) if !desc.is_empty() => format!("{} {}", issue.title, desc),
-        _ => issue.title.clone(),
-    };
-
-    // Build the phase-based model selector for this issue.
-    let phase_selector = PhaseModelSelector::new(
-        config.cloud_model_catalog.clone(),
-        config.max_cost_per_issue,
-    );
+    let (triage_result, issue_objective, phase_selector) =
+        run_triage_phase(factory, config, issue).await;
 
     // --- Claim issue ---
     beads.update_status(&issue.id, "in_progress")?;
     info!(id = %issue.id, "Claimed issue");
 
     // --- Create or reuse worktree ---
-    let wt_path = if worktree_bridge.worktree_exists(&issue.id) {
-        match worktree_bridge.reset_worktree(&issue.id) {
-            Ok(p) => {
-                info!(path = %p.display(), "Reused existing worktree (reset for retry)");
-                p
-            }
-            Err(e) => {
-                warn!(id = %issue.id, "Worktree reset failed, recreating: {e}");
-                let _ = worktree_bridge.cleanup(&issue.id);
-                worktree_bridge.create(&issue.id)?
-            }
-        }
-    } else {
-        match worktree_bridge.create(&issue.id) {
-            Ok(p) => {
-                info!(path = %p.display(), "Created worktree");
-                p
-            }
-            Err(e) => {
-                error!(id = %issue.id, "Failed to create worktree: {e}");
-                return Err(e);
-            }
-        }
-    };
+    let wt_path = acquire_worktree(worktree_bridge, &issue.id)?;
 
     // --- Load language profile (beefcake-loop: multi-language support) ---
     //
@@ -410,62 +560,12 @@ async fn process_issue_core(
         .map(|p| p.language.clone())
         .unwrap_or_else(|| "rust".to_string());
 
-    // --- Cognition base (ASI-Evolve pattern: knowledge retrieval) ---
-    // Load persistent knowledge items from `.swarm/cognition/` and seed from
-    // wiki pages. Retrieved items are injected into worker task prompts.
-    let cognition_base = crate::cognition::CognitionBase::load_or_create(
-        &worktree_bridge.repo_root().join(".swarm/cognition"),
-    )
-    .ok()
-    .map(|mut base| {
-        if let Err(e) = crate::cognition::seed_from_wiki(&mut base, worktree_bridge.repo_root()) {
-            warn!(error = %e, "Failed to seed cognition base from wiki");
-        }
-        base
-    });
-
-    // --- Intent contract (reformulation engine: Phase 1) ---
-    // Capture the original task goal on first pickup so reformulations can't
-    // silently weaken it. The contract is append-only (first attempt only).
-    let reformulation_store =
-        crate::reformulation::ReformulationStore::new(worktree_bridge.repo_root());
-    let intent_contract = crate::reformulation::IntentContract::from_issue(
-        &issue.id,
-        &issue.title,
-        issue.description.as_deref(),
-    );
-    reformulation_store.save_contract(&intent_contract);
+    // --- Cognition base + intent contract ---
+    let (cognition_base, reformulation_store) =
+        init_cognition_and_contract(worktree_bridge, issue);
 
     // --- Initialize harness components ---
-    let mut session = SessionManager::new(wt_path.clone(), config.max_retries);
-    let git_mgr = GitManager::new(&wt_path, "[swarm]");
-    let progress = ProgressTracker::new(crate::session::progress_path(&wt_path));
-
-    // Record initial commit for potential rollback
-    if let Ok(commit) = git_mgr.current_commit_full() {
-        session.set_initial_commit(commit.clone());
-        info!(initial_commit = %commit, "Recorded initial commit");
-    }
-
-    // Start session
-    if let Err(e) = session.start() {
-        warn!("Failed to start harness session: {e}");
-        // Non-fatal — continue without session tracking
-    }
-    session.set_current_feature(&issue.id);
-
-    // Log session start
-    let _ = progress.log_session_start(
-        session.session_id(),
-        format!("Processing issue: {} — {}", issue.id, issue.title),
-    );
-
-    info!(
-        session_id = session.short_id(),
-        issue_id = %issue.id,
-        max_iterations = config.max_retries,
-        "Harness session started"
-    );
+    let (mut session, git_mgr, progress) = init_harness_components(&wt_path, config, issue);
 
     // --- Telemetry ---
     let stack_profile_str = serde_json::to_string(&config.stack_profile)
@@ -482,19 +582,8 @@ async fn process_issue_core(
     );
 
     // --- TensorZero episode tracking ---
-    // Capture wall-clock start for resolving TZ-assigned episode IDs later.
-    let tz_session_start_secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs_f64();
-    let tensorzero_episode_id = config.tensorzero_url.as_ref().map(|_| {
-        let ep = crate::tensorzero::generate_episode_id(&issue.id, session.session_id());
-        info!(episode_id = %ep, "TensorZero episode tracking enabled");
-        ep
-    });
-    if let Some(ref ep_id) = tensorzero_episode_id {
-        metrics.set_episode_id(ep_id.clone());
-    }
+    let (tz_session_start_secs, tensorzero_episode_id) =
+        setup_tensorzero_episode(config, &issue.id, session.session_id(), &mut metrics);
 
     // --- TensorZero performance insights (Phase 3) ---
     let tz_directives = if let Some(ref pg_url) = config.tensorzero_pg_url {
@@ -555,54 +644,7 @@ async fn process_issue_core(
     let acceptance_policy = AcceptancePolicy::default();
 
     // --- Preflight: endpoint health check (P1.1 + P1.4) ---
-    // Probe all local inference endpoints before investing in agent builds.
-    // Fail fast if all workers are down — avoids burning cloud credits on
-    // delegation to dead endpoints.
-    //
-    // Use the factory's shared ClusterHealth so that check_all_now() updates
-    // the same Arc<RwLock> that EndpointPool::next() reads. Creating a separate
-    // instance here would leave the pool with Unknown status for all tiers.
-    let cluster_health = factory
-        .cluster_health()
-        .cloned()
-        .unwrap_or_else(|| ClusterHealth::from_config(config));
-
-    if !config.cloud_only {
-        let healthy_count = cluster_health.check_all_now().await;
-        // Evaluate async summary before the info! macro to avoid holding a
-        // temporary `&dyn tracing::Value` across the .await (which is !Send).
-        let health_summary = cluster_health.summary().await;
-        info!(
-            healthy = healthy_count,
-            total = 3,
-            summary = %health_summary,
-            "Preflight endpoint health check"
-        );
-        if healthy_count == 0 {
-            warn!(
-                id = %issue.id,
-                "All inference endpoints are DOWN — cannot proceed"
-            );
-            // Reset issue status so it can be picked up later
-            let _ = beads.update_status(&issue.id, "open");
-            anyhow::bail!(
-                "Preflight failed: all 3 inference endpoints are down ({})",
-                cluster_health.summary().await
-            );
-        }
-    } else {
-        info!("Cloud-only mode: bypassing local endpoint preflight checks");
-    }
-
-    // Spawn background health monitor for ongoing checks during the session.
-    // Wrap in a guard so the monitor task is aborted when this function exits.
-    struct AbortOnDrop(tokio::task::JoinHandle<()>);
-    impl Drop for AbortOnDrop {
-        fn drop(&mut self) {
-            self.0.abort();
-        }
-    }
-    let _health_monitor = AbortOnDrop(cluster_health.spawn_monitor());
+    let _health_monitor = run_preflight_health(factory, config, beads, issue).await?;
 
     // --- Build agents scoped to this worktree ---
     // Round-robin: each concurrent issue's factory clone selects the next node.
@@ -3649,7 +3691,7 @@ async fn process_issue_core(
         // Commit all edits before merging — workers modify files but don't commit.
         // Without this, merge_and_remove fails with "uncommitted changes" and the
         // entire resolution is lost (the bug that blocked beefcake-swarm-004).
-        if let Err(e) = git_commit_changes(&wt_path, session.iteration() as u32).await {
+        if let Err(e) = git_commit_changes(&wt_path, session.iteration()).await {
             warn!(id = %issue.id, "Failed to commit worker edits before merge: {e}");
         }
 
