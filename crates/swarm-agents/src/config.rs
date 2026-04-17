@@ -506,6 +506,13 @@ pub struct SwarmConfig {
     /// Requires `cloud_endpoint` to be configured.
     /// Populated from `--cloud-only` CLI flag or `SWARM_CLOUD_ONLY=1` env var.
     pub cloud_only: bool,
+    /// Disable Worker→Council escalation. TZ Autopilot audit (2026-04-17) found
+    /// Council resolved at 7.4% (2/27) vs Worker at 41.4% (12/29) using the SAME
+    /// model (gpt-5.4) — Council is actively hurting the swarm, not helping it.
+    /// When true, tier resolution stays on Worker and sparse-context / dynamic-
+    /// router / write-deadline escalations to Council become no-ops.
+    /// Populated from `SWARM_DISABLE_COUNCIL=1` env var. Default: true.
+    pub disable_council: bool,
     /// Ordered cloud model fallback matrix.
     /// When the primary cloud model fails, the orchestrator tries the next model.
     /// Populated from `SWARM_CLOUD_FALLBACK_MODELS` env var (comma-separated) or defaults.
@@ -712,6 +719,10 @@ impl Default for SwarmConfig {
             cloud_only: std::env::var("SWARM_CLOUD_ONLY")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            // Default disabled — see field docs. Set SWARM_DISABLE_COUNCIL=0 to re-enable.
+            disable_council: std::env::var("SWARM_DISABLE_COUNCIL")
+                .map(|v| !matches!(v.as_str(), "0" | "false" | "FALSE" | ""))
+                .unwrap_or(true),
             cloud_fallback_matrix: CloudFallbackMatrix::from_env(),
             max_consecutive_no_change: std::env::var("SWARM_MAX_NO_CHANGE")
                 .ok()
@@ -1113,6 +1124,7 @@ impl SwarmConfig {
             verifier_packages: Vec::new(),
             cloud_max_retries: 3,
             cloud_only: false,
+            disable_council: true,
             cloud_fallback_matrix: CloudFallbackMatrix::default_matrix(),
             max_consecutive_no_change: 3,
             min_objective_len: 10,

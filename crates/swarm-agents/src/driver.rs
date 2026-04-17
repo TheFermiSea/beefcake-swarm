@@ -1923,11 +1923,11 @@ fn resolve_final_tier(
         && packet.files_touched.is_empty()
         && packet.failure_signals.is_empty()
     {
-        if ctx.config.cloud_endpoint.is_some() {
-            warn!(
-                iteration,
-                "Sparse context — escalating Worker→Council (state driver)"
-            );
+        if ctx.config.disable_council {
+            warn!(iteration, "Sparse context — staying on Worker (Council disabled per config)");
+            tier
+        } else if ctx.config.cloud_endpoint.is_some() {
+            warn!(iteration, "Sparse context — escalating Worker→Council (state driver)");
             ctx.escalation.record_escalation(
                 SwarmTier::Council,
                 EscalationReason::Explicit {
@@ -1936,10 +1936,7 @@ fn resolve_final_tier(
             );
             SwarmTier::Council
         } else {
-            warn!(
-                iteration,
-                "Sparse context but no cloud — keeping Worker (state driver)"
-            );
+            warn!(iteration, "Sparse context but no cloud — keeping Worker (state driver)");
             tier
         }
     } else {
@@ -1947,7 +1944,7 @@ fn resolve_final_tier(
     };
 
     // Step 2: DynamicRouter recommendation (P2.2)
-    if tier != SwarmTier::Worker || ctx.last_report.is_none() {
+    if tier != SwarmTier::Worker || ctx.last_report.is_none() || ctx.config.disable_council {
         return tier;
     }
     let parsed_errors: Vec<coordination::feedback::error_parser::ParsedError> = ctx
@@ -2055,10 +2052,13 @@ async fn handle_no_file_changes(
         "No file changes (state driver)"
     );
 
-    // Write-deadline escalation: immediate Cloud escalation
+    // Write-deadline escalation: immediate Cloud escalation.
+    // Gated behind !disable_council — Autopilot audit showed Council underperforms
+    // Worker 5x even on the same model. When disabled, Worker just retries.
     if agent_terminated_without_writing
         && ctx.escalation.current_tier == SwarmTier::Worker
         && ctx.config.cloud_endpoint.is_some()
+        && !ctx.config.disable_council
     {
         warn!(
             iteration,
