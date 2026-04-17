@@ -135,6 +135,10 @@ const FORBIDDEN_FILES: &[&str] = &[
     ".swarm-hook-events.jsonl",
 ];
 
+/// Legacy swarm files that agents may inspect for recovery context but must
+/// never mutate directly.
+const READ_ONLY_SWARM_FILES: &[&str] = &[".swarm-checkpoint.json", ".swarm-checkpoint.json.tmp"];
+
 /// Substrings in shell commands that reach into harness state, rejected by `sandbox_command`.
 pub const FORBIDDEN_COMMAND_SUBSTRINGS: &[&str] = &[".swarm-", ".swarm/", ".beads/", ".git/"];
 
@@ -179,6 +183,15 @@ pub fn sandbox_check(
     // Filename-component check catches "./.swarm-session.jsonl", "../.beads/x", etc.
     if let Some(filename) = normalized.file_name() {
         let filename_str = filename.to_string_lossy();
+        let is_read_only_swarm_file = READ_ONLY_SWARM_FILES.contains(&filename_str.as_ref());
+
+        if is_write && is_read_only_swarm_file {
+            return Err(ToolError::Sandbox(format!(
+                "path `{relative_path}` is {HARNESS_SANDBOX_MARKER} \
+                 (checkpoint state is readable for recovery but never writable by agents)"
+            )));
+        }
+
         for forbidden in FORBIDDEN_FILES {
             if filename_str == *forbidden {
                 return Err(ToolError::Sandbox(format!(
@@ -189,7 +202,7 @@ pub fn sandbox_check(
             }
         }
         for prefix in FORBIDDEN_FILENAME_PREFIXES {
-            if filename_str.starts_with(prefix) {
+            if filename_str.starts_with(prefix) && !is_read_only_swarm_file {
                 return Err(ToolError::Sandbox(format!(
                     "path `{relative_path}` starts with `{prefix}` — {HARNESS_SANDBOX_MARKER}, \
                      not your target. Read the actual source file instead."
@@ -197,7 +210,6 @@ pub fn sandbox_check(
             }
         }
     }
-    let _ = is_write;
 
     // Block access to forbidden directories. Normal components never contain
     // `/` (separators are stripped by Path::components), so the equality

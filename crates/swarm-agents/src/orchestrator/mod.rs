@@ -561,8 +561,7 @@ async fn process_issue_core(
         .unwrap_or_else(|| "rust".to_string());
 
     // --- Cognition base + intent contract ---
-    let (cognition_base, reformulation_store) =
-        init_cognition_and_contract(worktree_bridge, issue);
+    let (cognition_base, reformulation_store) = init_cognition_and_contract(worktree_bridge, issue);
 
     // --- Initialize harness components ---
     let (mut session, git_mgr, progress) = init_harness_components(&wt_path, config, issue);
