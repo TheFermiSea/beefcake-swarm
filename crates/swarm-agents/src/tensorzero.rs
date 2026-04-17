@@ -265,6 +265,17 @@ pub struct FeedbackTags {
     /// Fix mode: `"fresh"` (iteration 1) or `"diff_evolution"` (iteration > 1 with
     /// previous diff injected). Tracks the ASI-Evolve diff-based evolution pattern.
     pub fix_mode: Option<String>,
+
+    // ── Cascade visibility (2026-04-17 TZ autopilot audit) ──
+    // Enables slicing by "which cascade level actually served the run", which the
+    // single `model` field cannot express — it only carries the configured primary.
+    /// Configured primary cloud model (from `SWARM_CLOUD_MODEL`).
+    pub primary_model: Option<String>,
+    /// Fallback model that ended up serving the run, if the primary failed and
+    /// `CloudFallbackMatrix` fell through. `None` means primary served (or no cloud).
+    pub fallback_model: Option<String>,
+    /// `true` iff the fallback cascade fired at least once during this run.
+    pub fallback_used: Option<bool>,
 }
 
 impl FeedbackTags {
@@ -319,6 +330,15 @@ impl FeedbackTags {
         }
         if let Some(v) = self.fix_mode {
             map.insert("fix_mode".to_string(), v);
+        }
+        if let Some(v) = self.primary_model {
+            map.insert("primary_model".to_string(), v);
+        }
+        if let Some(v) = self.fallback_model {
+            map.insert("fallback_model".to_string(), v);
+        }
+        if let Some(v) = self.fallback_used {
+            map.insert("fallback_used".to_string(), v.to_string());
         }
         map
     }
@@ -674,6 +694,9 @@ pub async fn post_resolved_feedback(
                 .get("cognition_items_retrieved")
                 .and_then(|v| v.parse().ok()),
             fix_mode: m.get("fix_mode").cloned(),
+            primary_model: m.get("primary_model").cloned(),
+            fallback_model: m.get("fallback_model").cloned(),
+            fallback_used: m.get("fallback_used").and_then(|v| v.parse().ok()),
         });
         post_episode_feedback(
             gateway_url,

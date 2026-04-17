@@ -131,6 +131,17 @@ pub struct OrchestratorContext<'a> {
     /// How many times the CoT planner has been invoked this session.
     /// Capped at 1 to prevent the planner from consuming all iteration budget.
     pub cot_planner_invocations: u32,
+    /// Fallback cascade model that actually served a successful manager call,
+    /// if the primary (configured) model's fallback path fired. `None` means the
+    /// primary served every manager call (or no cloud configured).
+    pub cascade_fallback_model: Option<String>,
+    /// Verifier error count from two iterations ago, used to detect "flat" runs
+    /// (same error count across multiple iterations = stuck) for early fail-fast.
+    pub prev_prev_error_count: Option<usize>,
+    /// Number of consecutive iterations where the verifier error count did not
+    /// decrease. When this reaches `SWARM_FLAT_ERROR_LIMIT` (default 2), the
+    /// driver fails fast to avoid burning iterations on an unwinnable issue.
+    pub consecutive_flat_iterations: u32,
 
     // ── Coordination integrations (P2.2 + P2.3) ──
     pub router: DynamicRouter,
@@ -372,6 +383,9 @@ impl<'a> OrchestratorContext<'a> {
             auto_fix_applied: false,
             last_plan_output: None,
             cot_planner_invocations: 0,
+            cascade_fallback_model: None,
+            prev_prev_error_count: None,
+            consecutive_flat_iterations: 0,
             reformulation_store,
             intent_contract,
             factory,
@@ -585,6 +599,9 @@ impl<'a> OrchestratorContext<'a> {
             auto_fix_applied: false,
             last_plan_output: None,
             cot_planner_invocations: 0,
+            cascade_fallback_model: None,
+            prev_prev_error_count: None,
+            consecutive_flat_iterations: 0,
             reformulation_store,
             intent_contract,
             factory,
@@ -1585,6 +1602,7 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
                             {
                                 Ok(Ok(response)) if !response.trim().is_empty() => {
                                     info!(iteration, model = %entry.model, "Fallback succeeded (state driver)");
+                                    ctx.cascade_fallback_model = Some(entry.model.clone());
                                     fallback_result = Some(Ok(response));
                                     break;
                                 }
@@ -2934,16 +2952,22 @@ async fn post_tensorzero_feedback(ctx: &mut OrchestratorContext<'_>, final_tier:
             .next()
             .map(|c| c.to_string())
     });
+    let primary_model = ctx.config.cloud_endpoint.as_ref().map(|e| e.model.clone());
+    let fallback_model = ctx.cascade_fallback_model.clone();
+    let fallback_used = fallback_model.is_some();
     let tags = crate::tensorzero::FeedbackTags {
         issue_id: Some(ctx.issue.id.clone()),
         language: ctx.factory.language.clone(),
-        model: ctx.config.cloud_endpoint.as_ref().map(|e| e.model.clone()),
+        model: primary_model.clone(),
         repo_id: ctx.config.repo_id.clone(),
         error_category: primary_err,
         prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
         retry_tier: Some(final_tier.to_string()),
         write_deadline: Some(ctx.config.max_turns_without_write),
         max_tool_calls: Some(ctx.config.max_worker_tool_calls),
+        primary_model,
+        fallback_model,
+        fallback_used: Some(fallback_used),
         ..Default::default()
     };
 

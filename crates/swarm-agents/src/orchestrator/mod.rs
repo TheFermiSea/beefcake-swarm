@@ -4138,6 +4138,11 @@ async fn process_issue_core(
                 None
             },
             fix_mode: Some(fix_mode.to_string()),
+            primary_model: config.cloud_endpoint.as_ref().map(|e| e.model.clone()),
+            // Legacy orchestrator path does not currently track which fallback
+            // tier served; the state-driver path (driver.rs) does. Leave None here.
+            fallback_model: None,
+            fallback_used: None,
         };
         // Populate harness parameter tags so TZ Autopilot can correlate
         // harness settings with task_resolved outcomes (Meta-Harness optimization).
