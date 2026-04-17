@@ -43,6 +43,7 @@ nohup numactl --interleave=all "${LLAMA_SERVER}" \
   --threads 32 --batch-size 4096 --ubatch-size 4096 \
   --cache-type-k q4_0 --cache-type-v q4_0 \
   --cache-prompt -fa on --parallel 2 --mlock --cont-batching --metrics --jinja \
+  --reasoning off \
   > "${LOG_PATH}" 2>&1 &
 
 echo "Started Qwen3.6-35B-A3B (${QUANT}) PID=$! binary=${LLAMA_SERVER}"
