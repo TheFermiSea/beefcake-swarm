@@ -951,9 +951,7 @@ impl ContextPacker {
     /// so `pop()` removes the least important contexts first.
     fn trim_to_budget(&self, packet: &mut WorkPacket) {
         // Sort so highest-priority-number (least important) is last → popped first
-        packet
-            .file_contexts
-            .sort_by(|a, b| a.priority.cmp(&b.priority));
+        packet.file_contexts.sort_by_key(|a| a.priority);
 
         // Drop file contexts from the end until we're under budget
         while packet.estimated_tokens() > self.max_context_tokens

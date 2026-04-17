@@ -252,11 +252,9 @@ impl CompactionObserver {
             "compactions={}/{} ({}% success), tokens_freed={}, avg_ratio={:.2}, avg_duration={}us",
             self.stats.successful_compactions,
             self.stats.total_compactions,
-            if self.stats.total_compactions > 0 {
-                self.stats.successful_compactions * 100 / self.stats.total_compactions
-            } else {
-                0
-            },
+            (self.stats.successful_compactions * 100)
+                .checked_div(self.stats.total_compactions)
+                .unwrap_or(0),
             self.stats.total_tokens_freed,
             self.stats.avg_compression_ratio,
             self.stats.avg_duration_us as u64
