@@ -1932,10 +1932,16 @@ fn resolve_final_tier(
         && packet.failure_signals.is_empty()
     {
         if ctx.config.disable_council {
-            warn!(iteration, "Sparse context — staying on Worker (Council disabled per config)");
+            warn!(
+                iteration,
+                "Sparse context — staying on Worker (Council disabled per config)"
+            );
             tier
         } else if ctx.config.cloud_endpoint.is_some() {
-            warn!(iteration, "Sparse context — escalating Worker→Council (state driver)");
+            warn!(
+                iteration,
+                "Sparse context — escalating Worker→Council (state driver)"
+            );
             ctx.escalation.record_escalation(
                 SwarmTier::Council,
                 EscalationReason::Explicit {
@@ -1944,7 +1950,10 @@ fn resolve_final_tier(
             );
             SwarmTier::Council
         } else {
-            warn!(iteration, "Sparse context but no cloud — keeping Worker (state driver)");
+            warn!(
+                iteration,
+                "Sparse context but no cloud — keeping Worker (state driver)"
+            );
             tier
         }
     } else {
@@ -2968,7 +2977,14 @@ async fn post_tensorzero_feedback(ctx: &mut OrchestratorContext<'_>, final_tier:
     // Autopilot audit (2026-04-17) showed 0/22,948 feedback rows had this
     // populated — because only late-stage verifier errors filled it in.
     let error_category = primary_err.or_else(|| {
-        Some(if ctx.success { "none_resolved" } else { "none_unresolved" }.to_string())
+        Some(
+            if ctx.success {
+                "none_resolved"
+            } else {
+                "none_unresolved"
+            }
+            .to_string(),
+        )
     });
     let mut tags = crate::tensorzero::FeedbackTags {
         issue_id: Some(ctx.issue.id.clone()),

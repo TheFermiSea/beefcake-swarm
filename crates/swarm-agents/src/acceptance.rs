@@ -603,8 +603,8 @@ fn sanitize_location_token(token: &str) -> Option<String> {
 fn strip_line_suffix(token: &str) -> &str {
     let mut segments = token.rsplitn(3, ':');
     let last = segments.next();
-    let second = segments.next();
-    match (last, second) {
+    let _second = segments.next();
+    match (last, _second) {
         (Some(last), Some(_second)) if last.chars().all(|c| c.is_ascii_digit() || c == '-') => {
             &token[..token.len() - last.len() - 1]
         }

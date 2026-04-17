@@ -132,7 +132,7 @@ impl MutationArchive {
             .into_iter()
             .filter(|r| r.resolved && r.error_categories.iter().any(|c| c == category))
             .collect();
-        records.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
+        records.sort_by_key(|record| std::cmp::Reverse(record.timestamp));
         records.truncate(limit);
         records
     }
@@ -563,7 +563,7 @@ impl MutationArchive {
             })
             .filter(|(score, _)| *score > 0)
             .collect();
-        scored.sort_by(|a, b| b.0.cmp(&a.0));
+        scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
         scored.truncate(limit);
         scored.into_iter().map(|(_, r)| r).collect()
     }

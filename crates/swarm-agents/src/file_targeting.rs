@@ -140,7 +140,7 @@ pub(crate) fn find_target_files_by_grep(
         .into_iter()
         .map(|f| (score_candidate(&patterns, &f, wt_root), f))
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    scored.sort_by_key(|entry| std::cmp::Reverse(entry.0));
 
     let result: Vec<String> = scored.into_iter().map(|(_, f)| f).take(3).collect();
     if result.is_empty() {

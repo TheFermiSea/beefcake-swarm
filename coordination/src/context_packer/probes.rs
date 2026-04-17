@@ -141,7 +141,7 @@ impl ProbeGenerator {
                 (f.clone(), count)
             })
             .collect();
-        file_freq.sort_by(|a, b| b.1.cmp(&a.1));
+        file_freq.sort_by_key(|entry| std::cmp::Reverse(entry.1));
 
         for (file, _) in file_freq.iter().take(5) {
             probes.push(Probe {

@@ -87,7 +87,7 @@ impl NormalizedOutput {
             })
             .collect();
         // Most frequent first
-        buckets.sort_by(|a, b| b.count.cmp(&a.count));
+        buckets.sort_by_key(|bucket| std::cmp::Reverse(bucket.count));
 
         let total_errors: usize = gates.iter().map(|g| g.error_count).sum();
         let total_warnings: usize = gates.iter().map(|g| g.warning_count).sum();
