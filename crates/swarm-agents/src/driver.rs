@@ -244,7 +244,12 @@ impl<'a> OrchestratorContext<'a> {
             worker_first_tier,
         );
         let initial_tier = orchestrator::tier_from_env("SWARM_INITIAL_TIER", default_tier);
-        let initial_tier = if initial_tier == SwarmTier::Council
+        // Force Worker when Council is disabled at config level (TZ Autopilot audit
+        // 2026-04-17 showed Council under-resolves 5x vs Worker on same model).
+        let initial_tier = if initial_tier == SwarmTier::Council && config.disable_council {
+            warn!("Council disabled; initial tier forced to Worker (state driver)");
+            SwarmTier::Worker
+        } else if initial_tier == SwarmTier::Council
             && config.cloud_endpoint.is_none()
             && std::env::var("SWARM_INITIAL_TIER").is_err()
         {
@@ -1140,7 +1145,10 @@ pub async fn handle_implementing(ctx: &mut OrchestratorContext<'_>) -> Result<St
             // Escalate to Council tier — the cloud manager can still function
             // even when local workers are hung, because it delegates via proxy
             // tools which have their own timeouts.
-            if ctx.config.cloud_endpoint.is_some() {
+            if ctx.config.disable_council {
+                warn!(iteration, "Deep probe: Council disabled, staying on Worker");
+                tier
+            } else if ctx.config.cloud_endpoint.is_some() {
                 info!(
                     iteration,
                     "Deep probe escalation: using Council tier instead of Worker"
