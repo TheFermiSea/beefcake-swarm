@@ -137,7 +137,7 @@ where
     }
 
     pub fn reference_answer(mut self, reference_answer: &str) -> Self {
-        self.reference_answer = Some(reference_answer.to_string());
+        self.reference_answer = Some(reference_answer.to_owned());
         self
     }
 
@@ -152,7 +152,7 @@ where
             .embedding_model
             .embed_text(&reference_answer)
             .await
-            .map_err(|x| EvalError::Custom(x.to_string()))?
+            .map_err(|x| EvalError::Custom(x.to_owned()))?
             .vec;
 
         let res = SemanticSimilarityMetric {
@@ -180,7 +180,7 @@ where
     async fn eval(&self, input: String) -> EvalOutcome<SemanticSimilarityMetricScore> {
         let input = match self.embedding_model.embed_text(&input).await {
             Ok(res) => res.vec,
-            Err(e) => return EvalOutcome::Invalid(e.to_string()),
+            Err(e) => return EvalOutcome::Invalid(e.to_owned()),
         };
         let ref_answer = &self.reference_answer_embedding;
 
@@ -424,7 +424,7 @@ where
     }
 
     pub fn criteria(mut self, criteria: &str) -> Self {
-        self.criteria.push(criteria.to_string());
+        self.criteria.push(criteria.to_owned());
         self
     }
 
