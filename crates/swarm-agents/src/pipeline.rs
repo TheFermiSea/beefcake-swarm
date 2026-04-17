@@ -243,132 +243,112 @@ impl ArchitectPlan {
 ///
 /// This is the "direct" editor mode (`SWARM_EDITOR_MODE=direct`): zero LLM rounds
 /// for the edit phase, compared to 10-15 agentic rounds in the default mode.
+/// All byte-offsets where `needle` occurs in `haystack` (overlapping allowed).
+fn find_all_offsets(haystack: &str, needle: &str) -> Vec<usize> {
+    let mut offsets = Vec::new();
+    let mut start = 0;
+    while let Some(pos) = haystack[start..].find(needle) {
+        offsets.push(start + pos);
+        start += pos + 1;
+    }
+    offsets
+}
+
+fn replace_at_offset(content: &str, start: usize, search_len: usize, replace: &str) -> String {
+    let end = start + search_len;
+    let mut result = String::with_capacity(content.len() - search_len + replace.len());
+    result.push_str(&content[..start]);
+    result.push_str(replace);
+    result.push_str(&content[end..]);
+    result
+}
+
+fn normalize_whitespace(text: &str) -> Vec<String> {
+    text.lines()
+        .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
+        .collect()
+}
+
+/// Whitespace-normalized fuzzy match (patch_tool tier 4 behaviour).
+/// Returns the new content if exactly one fuzzy match is found.
+fn fuzzy_replace(content: &str, search: &str, replace: &str) -> Result<String, usize> {
+    let norm_search = normalize_whitespace(search);
+    let content_lines: Vec<&str> = content.lines().collect();
+    let norm_content = normalize_whitespace(content);
+
+    let window = norm_search.len();
+    let scan_end = content_lines.len().saturating_sub(window.saturating_sub(1));
+    let matches: Vec<usize> = (0..scan_end)
+        .filter(|&j| norm_content[j..j + window] == norm_search[..])
+        .collect();
+
+    if matches.len() != 1 {
+        return Err(matches.len());
+    }
+    let match_start = matches[0];
+    let match_end = match_start + window;
+    let mut result = String::new();
+    for (idx, line) in content_lines.iter().enumerate() {
+        if idx == match_start {
+            result.push_str(replace);
+            result.push('\n');
+        } else if !(idx >= match_start && idx < match_end) {
+            result.push_str(line);
+            result.push('\n');
+        }
+    }
+    if !content.ends_with('\n') && result.ends_with('\n') {
+        result.pop();
+    }
+    Ok(result)
+}
+
+/// Apply a single edit to the given file, returning the new content or an error reason.
+fn apply_single_edit(edit: &ArchitectEdit, wt_path: &std::path::Path) -> Result<String, String> {
+    let full_path = wt_path.join(&edit.file);
+    let content = std::fs::read_to_string(&full_path)
+        .map_err(|e| format!("cannot read {}: {e}", edit.file))?;
+
+    let occurrences = find_all_offsets(&content, &edit.search);
+    let new_content = match occurrences.len() {
+        1 => replace_at_offset(&content, occurrences[0], edit.search.len(), &edit.replace),
+        0 => fuzzy_replace(&content, &edit.search, &edit.replace).map_err(|fuzzy_n| {
+            format!(
+                "search block not found in {} (0 exact, {fuzzy_n} fuzzy matches)",
+                edit.file
+            )
+        })?,
+        n => {
+            return Err(format!(
+                "search block matches {n} locations in {} — ambiguous",
+                edit.file
+            ))
+        }
+    };
+
+    std::fs::write(&full_path, &new_content)
+        .map_err(|e| format!("write failed for {}: {e}", edit.file))?;
+    Ok(new_content)
+}
+
 pub fn direct_apply_plan(plan: &ArchitectPlan, wt_path: &std::path::Path) -> DirectApplyResult {
     let mut applied = Vec::new();
     let mut failed = Vec::new();
 
     for (i, edit) in plan.edits.iter().enumerate() {
-        let full_path = wt_path.join(&edit.file);
-
-        // Read current file
-        let content = match std::fs::read_to_string(&full_path) {
-            Ok(c) => c,
-            Err(e) => {
-                failed.push(format!("Edit {}: cannot read {}: {e}", i + 1, edit.file));
-                continue;
+        match apply_single_edit(edit, wt_path) {
+            Ok(_) => {
+                applied.push(format!("Edit {}: {} — {}", i + 1, edit.file, edit.description));
+                info!(
+                    file = %edit.file,
+                    edit = i + 1,
+                    total = plan.edits.len(),
+                    "Direct editor: applied edit"
+                );
             }
-        };
-
-        // Try exact match
-        let occurrences: Vec<usize> = {
-            let mut offsets = Vec::new();
-            let mut start = 0;
-            while let Some(pos) = content[start..].find(&edit.search) {
-                offsets.push(start + pos);
-                start += pos + 1;
-            }
-            offsets
-        };
-
-        let new_content = match occurrences.len() {
-            1 => {
-                let start = occurrences[0];
-                let end = start + edit.search.len();
-                let mut result =
-                    String::with_capacity(content.len() - edit.search.len() + edit.replace.len());
-                result.push_str(&content[..start]);
-                result.push_str(&edit.replace);
-                result.push_str(&content[end..]);
-                result
-            }
-            0 => {
-                // Fuzzy whitespace-normalized matching (same as patch_tool tier 4)
-                let norm_search: Vec<String> = edit
-                    .search
-                    .lines()
-                    .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .collect();
-                let content_lines: Vec<&str> = content.lines().collect();
-                let norm_content: Vec<String> = content_lines
-                    .iter()
-                    .map(|l| l.split_whitespace().collect::<Vec<_>>().join(" "))
-                    .collect();
-
-                let mut matches = Vec::new();
-                for j in 0..content_lines
-                    .len()
-                    .saturating_sub(norm_search.len().saturating_sub(1))
-                {
-                    let window = &norm_content[j..j + norm_search.len()];
-                    if window.iter().zip(norm_search.iter()).all(|(a, b)| a == b) {
-                        matches.push(j);
-                    }
-                }
-
-                if matches.len() == 1 {
-                    let match_start = matches[0];
-                    let match_end = match_start + norm_search.len();
-                    let mut result = String::new();
-                    for (idx, line) in content_lines.iter().enumerate() {
-                        if idx == match_start {
-                            result.push_str(&edit.replace);
-                            result.push('\n');
-                        } else if idx >= match_start && idx < match_end {
-                            // skip replaced lines
-                        } else {
-                            result.push_str(line);
-                            result.push('\n');
-                        }
-                    }
-                    // Trim trailing extra newline if original didn't end with one
-                    if !content.ends_with('\n') && result.ends_with('\n') {
-                        result.pop();
-                    }
-                    result
-                } else {
-                    failed.push(format!(
-                        "Edit {}: search block not found in {} (0 exact, {} fuzzy matches)",
-                        i + 1,
-                        edit.file,
-                        matches.len()
-                    ));
-                    continue;
-                }
-            }
-            n => {
-                failed.push(format!(
-                    "Edit {}: search block matches {n} locations in {} — ambiguous",
-                    i + 1,
-                    edit.file
-                ));
-                continue;
-            }
-        };
-
-        // Write the modified file
-        if let Err(e) = std::fs::write(&full_path, &new_content) {
-            failed.push(format!(
-                "Edit {}: write failed for {}: {e}",
-                i + 1,
-                edit.file
-            ));
-            continue;
+            Err(reason) => failed.push(format!("Edit {}: {reason}", i + 1)),
         }
-
-        applied.push(format!(
-            "Edit {}: {} — {}",
-            i + 1,
-            edit.file,
-            edit.description
-        ));
-        info!(
-            file = %edit.file,
-            edit = i + 1,
-            total = plan.edits.len(),
-            "Direct editor: applied edit"
-        );
     }
-
     DirectApplyResult { applied, failed }
 }
 

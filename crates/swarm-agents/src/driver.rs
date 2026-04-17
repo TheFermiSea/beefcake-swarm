@@ -2906,135 +2906,359 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
 /// Takes `MetricsCollector` by value because `finalize()` consumes `self`.
 /// The caller should `std::mem::replace` the collector out of the context
 /// before calling this.
+/// Post TensorZero episode feedback for this outcome — health-gated so
+/// infrastructure failures (crashes, <30s failed runs) don't pollute Thompson
+/// Sampling with false negatives blaming the model for hangs or context overflow.
+async fn post_tensorzero_feedback(ctx: &mut OrchestratorContext<'_>, final_tier: &str) {
+    let Some(tz_url) = ctx.config.tensorzero_url.as_deref() else { return };
+
+    let wall_secs = ctx.process_start.elapsed().as_secs_f64();
+    let iterations = ctx.session.iteration();
+
+    let is_infra_failure = !ctx.success && (iterations == 0 || wall_secs < 30.0);
+    if is_infra_failure {
+        info!(
+            id = %ctx.issue.id,
+            iterations,
+            wall_secs = format!("{wall_secs:.0}"),
+            "Skipping TZ feedback: likely infrastructure failure (0 iters or <30s)"
+        );
+        return;
+    }
+
+    let primary_err = ctx.last_report.as_ref().and_then(|r| {
+        r.unique_error_categories()
+            .into_iter()
+            .next()
+            .map(|c| c.to_string())
+    });
+    let tags = crate::tensorzero::FeedbackTags {
+        issue_id: Some(ctx.issue.id.clone()),
+        language: ctx.factory.language.clone(),
+        model: ctx.config.cloud_endpoint.as_ref().map(|e| e.model.clone()),
+        repo_id: ctx.config.repo_id.clone(),
+        error_category: primary_err,
+        prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
+        retry_tier: Some(final_tier.to_string()),
+        write_deadline: Some(ctx.config.max_turns_without_write),
+        max_tool_calls: Some(ctx.config.max_worker_tool_calls),
+        ..Default::default()
+    };
+
+    let Some(tz_pg) = ctx.config.tensorzero_pg_url.as_deref() else {
+        warn!(id = %ctx.issue.id, "TZ PG URL not configured — skipping episode feedback");
+        return;
+    };
+
+    let session_start = ctx.process_start.elapsed().as_secs_f64();
+    let start_timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs_f64()
+        - session_start;
+    let episode_ids = crate::tensorzero::resolve_episode_ids(tz_pg, start_timestamp).await;
+
+    if episode_ids.is_empty() {
+        let fallback_id =
+            crate::tensorzero::generate_episode_id(&ctx.issue.id, ctx.session.session_id());
+        warn!(
+            id = %ctx.issue.id,
+            fallback_id = %fallback_id,
+            "No TZ episode IDs resolved — using generated UUIDv7 fallback"
+        );
+        crate::tensorzero::post_episode_feedback(
+            tz_url, &fallback_id, ctx.success, iterations, wall_secs, Some(tags),
+        )
+        .await;
+    } else {
+        info!(
+            count = episode_ids.len(),
+            success = ctx.success,
+            "TZ episode feedback: posting to {} resolved episodes",
+            episode_ids.len()
+        );
+        for ep_id in &episode_ids {
+            crate::tensorzero::post_episode_feedback(
+                tz_url, ep_id, ctx.success, iterations, wall_secs, Some(tags.clone()),
+            )
+            .await;
+        }
+    }
+}
+
+/// Parse line counts from `git diff --stat main` output into an existing record.
+fn populate_diff_line_counts(record: &mut crate::mutation_archive::MutationRecord, wt_path: &std::path::Path) {
+    let Ok(output) = std::process::Command::new("git")
+        .args(["diff", "--stat", "main"])
+        .current_dir(wt_path)
+        .output()
+    else { return };
+    let stat = String::from_utf8_lossy(&output.stdout);
+    for line in stat.lines() {
+        if line.contains("insertion") {
+            if let Some(n) = line.split_whitespace().next().and_then(|s| s.parse().ok()) {
+                record.lines_added = n;
+            }
+        }
+        if line.contains("deletion") {
+            for word in line.split_whitespace() {
+                if let Ok(n) = word.parse::<u32>() {
+                    record.lines_removed = n;
+                    break;
+                }
+            }
+        }
+    }
+}
+
+/// Insert the completed mutation into the QD archive alongside historical records
+/// so coverage reflects accumulated exploration, not just this session.
+fn update_map_elites_archive(
+    archive: &crate::mutation_archive::MutationArchive,
+    record: &crate::mutation_archive::MutationRecord,
+    success: bool,
+    iteration: u32,
+    issue_id: &str,
+    issue_title: &str,
+) {
+    let lines_changed = (record.lines_added + record.lines_removed) as usize;
+    let files_changed = record.files_changed.len();
+    let features =
+        crate::map_elites::FeatureExtractor::extract_from_metadata(lines_changed, files_changed);
+    let score = if success { 1.0 / iteration.max(1) as f64 } else { 0.0 };
+    let node = crate::map_elites::ExperimentNode {
+        id: issue_id.to_string(),
+        description: issue_title.to_string(),
+        score,
+        lines_changed,
+        files_changed,
+        strategy: crate::map_elites::FeatureExtractor::infer_strategy(files_changed, lines_changed),
+    };
+    let mut qd_archive = crate::map_elites::QualityDiversityArchive::new();
+    for past in archive.load_all() {
+        let past_lines = (past.lines_added + past.lines_removed) as usize;
+        let past_files = past.files_changed.len();
+        let past_features =
+            crate::map_elites::FeatureExtractor::extract_from_metadata(past_lines, past_files);
+        let past_score = if past.resolved { 1.0 / past.iterations.max(1) as f64 } else { 0.0 };
+        qd_archive.insert(
+            crate::map_elites::ExperimentNode {
+                id: past.issue_id.clone(),
+                description: past.issue_title.clone(),
+                score: past_score,
+                lines_changed: past_lines,
+                files_changed: past_files,
+                strategy: crate::map_elites::FeatureExtractor::infer_strategy(past_files, past_lines),
+            },
+            past_features,
+        );
+    }
+    let inserted = qd_archive.insert(node, features);
+    info!(
+        issue = issue_id,
+        complexity_bin = features.complexity_bin,
+        strategy_bin = features.strategy_bin,
+        score,
+        inserted,
+        coverage = qd_archive.coverage(),
+        occupied_cells = qd_archive.len(),
+        "MAP-Elites: updated quality-diversity archive (state driver)"
+    );
+}
+
+/// Extract a reusable skill from a successful mutation record and persist it
+/// to the skill library (Hyperagents pattern).
+fn maybe_extract_skill(
+    record: &crate::mutation_archive::MutationRecord,
+    repo_root: &std::path::Path,
+) {
+    let skills_path = repo_root.join(".swarm/skills.json");
+    let Some(candidate) = crate::mutation_archive::MutationArchive::extract_skill_candidate(record)
+    else { return };
+    let Ok(mut lib) = coordination::analytics::skills::SkillLibrary::load(&skills_path) else { return };
+    let triggers: Vec<coordination::feedback::ErrorCategory> = candidate
+        .error_categories
+        .iter()
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    if triggers.is_empty() {
+        return;
+    }
+    let trigger = coordination::analytics::skills::SkillTrigger {
+        error_categories: triggers,
+        file_patterns: vec![],
+        task_type: None,
+    };
+    lib.create_skill(&candidate.approach_summary, trigger, &candidate.approach_summary);
+    match lib.save(&skills_path) {
+        Ok(()) => info!(
+            skill = %candidate.approach_summary,
+            "Hyperagents: extracted skill from successful mutation (state driver)"
+        ),
+        Err(e) => warn!(error = %e, "Hyperagents: failed to save skill library (state driver)"),
+    }
+}
+
+/// Record this run's outcome into the mutation archive, update MAP-Elites coverage,
+/// and extract any reusable skill on success.
+fn record_to_mutation_archive(ctx: &mut OrchestratorContext<'_>) {
+    let archive = crate::mutation_archive::MutationArchive::new(ctx.worktree_bridge.repo_root());
+    let language = ctx.factory.language.as_deref().unwrap_or("rust").to_string();
+    let final_tier = format!("{:?}", ctx.escalation.current_tier);
+    let primary_model = ctx.config.resolve_role_model(crate::config::SwarmRole::Planner);
+
+    let mut record = crate::mutation_archive::build_record(
+        &ctx.issue.id,
+        &ctx.issue.title,
+        &language,
+        ctx.success,
+        ctx.session.iteration(),
+        &final_tier,
+        &primary_model,
+        ctx.process_start.elapsed().as_secs(),
+    );
+
+    record.auto_fix_only = ctx.success && ctx.session.iteration() == 0;
+    if let Some(ref report) = ctx.last_report {
+        record.error_categories = report
+            .unique_error_categories()
+            .iter()
+            .map(|c| c.to_string())
+            .collect();
+        record.first_failure_gate = report.first_failure.clone();
+    }
+    if !ctx.success {
+        record.failure_reason = Some(ctx.escalation.summary());
+    }
+    record.files_changed = crate::orchestrator::helpers::list_changed_files(&ctx.wt_path);
+    populate_diff_line_counts(&mut record, &ctx.wt_path);
+    archive.record(&record);
+
+    update_map_elites_archive(
+        &archive,
+        &record,
+        ctx.success,
+        ctx.session.iteration(),
+        &ctx.issue.id,
+        &ctx.issue.title,
+    );
+    if ctx.success {
+        maybe_extract_skill(&record, ctx.worktree_bridge.repo_root());
+    }
+}
+
+/// Handle the failure branch: retrospective capture, reformulation, session state save,
+/// resume file write, and the final error log line.
+async fn handle_failure_outcome(ctx: &mut OrchestratorContext<'_>) {
+    ctx.session.fail();
+    let _ = ctx.progress.log_session_end(
+        ctx.session.session_id(),
+        ctx.session.iteration(),
+        format!(
+            "Failed after {} iterations — {}",
+            ctx.session.iteration(),
+            ctx.escalation.summary()
+        ),
+    );
+
+    if let Some(kb) = ctx.knowledge_base {
+        let entries = ctx.progress.read_all().unwrap_or_default();
+        let retro = ctx.session.retrospective(&entries);
+        let svc = knowledge_sync::KnowledgeSyncService::new(kb);
+        let captures = svc.capture_from_retrospective(&retro, &ctx.issue.id, &ctx.issue.title);
+        debug!(count = captures.len(), "Retrospective (failure, state driver)");
+    }
+
+    reformulate_on_failure(ctx);
+
+    let state_path = crate::session::session_state_path(&ctx.wt_path);
+    if let Err(e) = save_session_state(ctx.session.state(), &state_path) {
+        warn!("Failed to save session state (state driver): {e}");
+    }
+
+    let resume = SwarmResumeFile {
+        issue: ctx.issue.clone(),
+        worktree_path: ctx.wt_path.display().to_string(),
+        iteration: ctx.session.iteration(),
+        escalation_summary: ctx.escalation.summary(),
+        current_tier: format!("{:?}", ctx.escalation.current_tier),
+        total_iterations: ctx.escalation.total_iterations,
+        saved_at: chrono::Utc::now().to_rfc3339(),
+    };
+    let resume_path = ctx.worktree_bridge.repo_root().join(".swarm-resume.json");
+    if let Ok(json) = serde_json::to_string_pretty(&resume) {
+        let _ = std::fs::write(&resume_path, json);
+    }
+
+    error!(
+        id = %ctx.issue.id,
+        session_id = ctx.session.short_id(),
+        elapsed = %ctx.session.elapsed_human(),
+        iterations = ctx.session.iteration(),
+        summary = %ctx.escalation.summary(),
+        "Issue NOT resolved (state driver)"
+    );
+}
+
+/// Classify the failure, rewrite the bead description via reformulation store,
+/// and reset the issue to open (unless escalated to human review).
+fn reformulate_on_failure(ctx: &mut OrchestratorContext<'_>) {
+    use crate::orchestrator::helpers::{list_changed_files, load_failure_ledger};
+    use crate::reformulation::{reformulate, FailureReviewInput};
+
+    let failure_ledger = load_failure_ledger(&ctx.wt_path);
+    let files_changed = list_changed_files(&ctx.wt_path);
+    let error_cats: Vec<String> = ctx
+        .last_report
+        .as_ref()
+        .map(|r| r.unique_error_categories().iter().map(|c| c.to_string()).collect())
+        .unwrap_or_default();
+
+    let review_input = FailureReviewInput {
+        issue_id: ctx.issue.id.clone(),
+        issue_title: ctx.issue.title.clone(),
+        issue_description: ctx.issue.description.clone(),
+        failure_ledger,
+        iterations_used: ctx.session.iteration(),
+        max_iterations: ctx.config.max_retries,
+        files_changed,
+        error_categories: error_cats,
+        failure_reason: Some(ctx.escalation.summary()),
+    };
+
+    let result = reformulate(&ctx.reformulation_store, &review_input);
+    let bridge = BeadsBridge::new();
+
+    if let Some(ref new_desc) = result.new_description {
+        match bridge.update_description(&ctx.issue.id, new_desc) {
+            Ok(()) => info!(
+                id = %ctx.issue.id,
+                classification = ?result.classification,
+                "Reformulated issue description (state driver)"
+            ),
+            Err(e) => warn!(
+                id = %ctx.issue.id,
+                error = %e,
+                "Failed to update issue description (state driver)"
+            ),
+        }
+    }
+    if let Some(ref notes) = result.notes_appended {
+        if let Err(e) = bridge.update_notes(&ctx.issue.id, notes) {
+            warn!(id = %ctx.issue.id, error = %e, "Failed to append reformulation notes (state driver)");
+        }
+    }
+    if result.escalated {
+        let _ = bridge.add_swarm_label(&ctx.issue.id, "swarm:needs-human-review");
+        warn!(id = %ctx.issue.id, "Reformulation exhausted — labeled for human review (state driver)");
+    } else {
+        let _ = ctx.beads.update_status(&ctx.issue.id, "open");
+    }
+}
+
 pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsCollector) {
     if !ctx.success {
-        ctx.session.fail();
-        let _ = ctx.progress.log_session_end(
-            ctx.session.session_id(),
-            ctx.session.iteration(),
-            format!(
-                "Failed after {} iterations — {}",
-                ctx.session.iteration(),
-                ctx.escalation.summary()
-            ),
-        );
-
-        // Retrospective on failure
-        if let Some(kb) = ctx.knowledge_base {
-            let entries = ctx.progress.read_all().unwrap_or_default();
-            let retro = ctx.session.retrospective(&entries);
-            let svc = knowledge_sync::KnowledgeSyncService::new(kb);
-            let captures = svc.capture_from_retrospective(&retro, &ctx.issue.id, &ctx.issue.title);
-            debug!(
-                count = captures.len(),
-                "Retrospective (failure, state driver)"
-            );
-        }
-
-        // Reformulation engine — classify WHY the session failed and rewrite the bead
-        // description so the next attempt has a solvable formulation. Mirrors the
-        // equivalent logic in the legacy orchestrator/mod.rs path.
-        {
-            use crate::orchestrator::helpers::{list_changed_files, load_failure_ledger};
-            use crate::reformulation::{reformulate, FailureReviewInput};
-
-            let failure_ledger = load_failure_ledger(&ctx.wt_path);
-            let files_changed = list_changed_files(&ctx.wt_path);
-            let error_cats: Vec<String> = ctx
-                .last_report
-                .as_ref()
-                .map(|r| {
-                    r.unique_error_categories()
-                        .iter()
-                        .map(|c| c.to_string())
-                        .collect()
-                })
-                .unwrap_or_default();
-
-            let review_input = FailureReviewInput {
-                issue_id: ctx.issue.id.clone(),
-                issue_title: ctx.issue.title.clone(),
-                issue_description: ctx.issue.description.clone(),
-                failure_ledger,
-                iterations_used: ctx.session.iteration(),
-                max_iterations: ctx.config.max_retries,
-                files_changed,
-                error_categories: error_cats,
-                failure_reason: Some(ctx.escalation.summary()),
-            };
-
-            let result = reformulate(&ctx.reformulation_store, &review_input);
-            let bridge = BeadsBridge::new();
-
-            if let Some(ref new_desc) = result.new_description {
-                match bridge.update_description(&ctx.issue.id, new_desc) {
-                    Ok(()) => info!(
-                        id = %ctx.issue.id,
-                        classification = ?result.classification,
-                        "Reformulated issue description (state driver)"
-                    ),
-                    Err(e) => warn!(
-                        id = %ctx.issue.id,
-                        error = %e,
-                        "Failed to update issue description (reformulation not applied, state driver)"
-                    ),
-                }
-            }
-
-            if let Some(ref notes) = result.notes_appended {
-                if let Err(e) = bridge.update_notes(&ctx.issue.id, notes) {
-                    warn!(
-                        id = %ctx.issue.id,
-                        error = %e,
-                        "Failed to append reformulation notes (state driver)"
-                    );
-                }
-            }
-
-            if result.escalated {
-                let _ = bridge.add_swarm_label(&ctx.issue.id, "swarm:needs-human-review");
-                warn!(
-                    id = %ctx.issue.id,
-                    "Reformulation exhausted — labeled for human review (state driver)"
-                );
-            }
-
-            // Reset issue to open so the next loop iteration picks it up with the
-            // rewritten description (unless escalated to human review).
-            if !result.escalated {
-                let _ = ctx.beads.update_status(&ctx.issue.id, "open");
-            }
-        }
-
-        // Save session state for resume
-        let state_path = crate::session::session_state_path(&ctx.wt_path);
-        if let Err(e) = save_session_state(ctx.session.state(), &state_path) {
-            warn!("Failed to save session state (state driver): {e}");
-        }
-
-        // Resume file
-        let resume = SwarmResumeFile {
-            issue: ctx.issue.clone(),
-            worktree_path: ctx.wt_path.display().to_string(),
-            iteration: ctx.session.iteration(),
-            escalation_summary: ctx.escalation.summary(),
-            current_tier: format!("{:?}", ctx.escalation.current_tier),
-            total_iterations: ctx.escalation.total_iterations,
-            saved_at: chrono::Utc::now().to_rfc3339(),
-        };
-        let resume_path = ctx.worktree_bridge.repo_root().join(".swarm-resume.json");
-        if let Ok(json) = serde_json::to_string_pretty(&resume) {
-            let _ = std::fs::write(&resume_path, json);
-        }
-
-        error!(
-            id = %ctx.issue.id,
-            session_id = ctx.session.short_id(),
-            elapsed = %ctx.session.elapsed_human(),
-            iterations = ctx.session.iteration(),
-            summary = %ctx.escalation.summary(),
-            "Issue NOT resolved (state driver)"
-        );
+        handle_failure_outcome(ctx).await;
     }
 
     // Telemetry
@@ -3046,117 +3270,7 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
     }
     telemetry::append_telemetry(&session_metrics, ctx.worktree_bridge.repo_root());
 
-    // TensorZero feedback — health-gated to prevent data poisoning.
-    //
-    // Only post feedback when the outcome reflects model quality, not infrastructure
-    // failures. Infrastructure issues (0 iterations, <10s wall time on failure,
-    // empty-response errors) would pollute Thompson Sampling with false negatives
-    // that blame the model for crashes, hangs, or context overflow.
-    //
-    // Design: docs/research/self-improving-swarm-architecture.md Layer 1.
-    if let Some(tz_url) = ctx.config.tensorzero_url.as_deref() {
-        let wall_secs = ctx.process_start.elapsed().as_secs_f64();
-        let iterations = ctx.session.iteration();
-
-        // Health gate: determine if this outcome is meaningful model signal.
-        // Infrastructure failures have characteristic signatures:
-        // - 0 iterations completed (crashed before any LLM call)
-        // - Very short wall time on failure (<30s means crash, not failed attempt)
-        // - Success always gets posted (it's always real signal)
-        let is_infra_failure = !ctx.success && (iterations == 0 || wall_secs < 30.0);
-
-        if is_infra_failure {
-            info!(
-                id = %ctx.issue.id,
-                iterations,
-                wall_secs = format!("{wall_secs:.0}"),
-                "Skipping TZ feedback: likely infrastructure failure (0 iters or <30s)"
-            );
-        } else {
-            // Resolve actual TZ episode IDs from Postgres — TZ auto-generates
-            // UUIDv7 episode IDs per inference, which differ from our session_id.
-            // We must post feedback to TZ's own episode IDs for Thompson Sampling
-            // to correlate feedback with the correct variant.
-            // Build rich tags for TZ episode feedback (was sparse: only 3/16 fields).
-            let primary_err = ctx.last_report.as_ref().and_then(|r| {
-                r.unique_error_categories()
-                    .into_iter()
-                    .next()
-                    .map(|c| c.to_string())
-            });
-            let tags = crate::tensorzero::FeedbackTags {
-                issue_id: Some(ctx.issue.id.clone()),
-                language: ctx.factory.language.clone(),
-                model: ctx.config.cloud_endpoint.as_ref().map(|e| e.model.clone()),
-                repo_id: ctx.config.repo_id.clone(),
-                error_category: primary_err,
-                prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
-                retry_tier: Some(final_tier.clone()),
-                write_deadline: Some(ctx.config.max_turns_without_write),
-                max_tool_calls: Some(ctx.config.max_worker_tool_calls),
-                ..Default::default()
-            };
-
-            // Resolve TZ episode IDs. If PG is unreachable, use a generated fallback.
-            let tz_pg = match ctx.config.tensorzero_pg_url.as_deref() {
-                Some(pg) => pg,
-                None => {
-                    warn!(id = %ctx.issue.id, "TZ PG URL not configured — skipping episode feedback");
-                    // Jump past the feedback block
-                    ""
-                }
-            };
-            if !tz_pg.is_empty() {
-                let session_start = ctx.process_start.elapsed().as_secs_f64();
-                let start_timestamp = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs_f64()
-                    - session_start;
-                let episode_ids =
-                    crate::tensorzero::resolve_episode_ids(tz_pg, start_timestamp).await;
-
-                if episode_ids.is_empty() {
-                    let fallback_id = crate::tensorzero::generate_episode_id(
-                        &ctx.issue.id,
-                        ctx.session.session_id(),
-                    );
-                    warn!(
-                        id = %ctx.issue.id,
-                        fallback_id = %fallback_id,
-                        "No TZ episode IDs resolved — using generated UUIDv7 fallback"
-                    );
-                    crate::tensorzero::post_episode_feedback(
-                        tz_url,
-                        &fallback_id,
-                        ctx.success,
-                        iterations,
-                        wall_secs,
-                        Some(tags),
-                    )
-                    .await;
-                } else {
-                    info!(
-                        count = episode_ids.len(),
-                        success = ctx.success,
-                        "TZ episode feedback: posting to {} resolved episodes",
-                        episode_ids.len()
-                    );
-                    for ep_id in &episode_ids {
-                        crate::tensorzero::post_episode_feedback(
-                            tz_url,
-                            ep_id,
-                            ctx.success,
-                            iterations,
-                            wall_secs,
-                            Some(tags.clone()),
-                        )
-                        .await;
-                    }
-                }
-            }
-        }
-    }
+    post_tensorzero_feedback(ctx, &final_tier).await;
 
     otel::record_process_result(
         &ctx.process_span,
@@ -3245,186 +3359,7 @@ pub async fn handle_outcome(ctx: &mut OrchestratorContext<'_>, metrics: MetricsC
         info!(sessions = reader.sessions().len(), "\n{summary}");
     }
 
-    // --- Mutation archive (Phase 4a: evolutionary tracking) ---
-    //
-    // Record outcome for SERA-14B critic training and strategy seeding.
-    // Mirrors the legacy path in orchestrator/mod.rs:4056-4145.
-    {
-        let archive =
-            crate::mutation_archive::MutationArchive::new(ctx.worktree_bridge.repo_root());
-        let language = ctx
-            .factory
-            .language
-            .as_deref()
-            .unwrap_or("rust")
-            .to_string();
-        let final_tier = format!("{:?}", ctx.escalation.current_tier);
-        let primary_model = ctx
-            .config
-            .resolve_role_model(crate::config::SwarmRole::Planner);
-
-        let mut record = crate::mutation_archive::build_record(
-            &ctx.issue.id,
-            &ctx.issue.title,
-            &language,
-            ctx.success,
-            ctx.session.iteration(),
-            &final_tier,
-            &primary_model,
-            ctx.process_start.elapsed().as_secs(),
-        );
-
-        // Populate error categories and first-failure gate from last verifier report.
-        record.auto_fix_only = ctx.success && ctx.session.iteration() == 0;
-        if let Some(ref report) = ctx.last_report {
-            record.error_categories = report
-                .unique_error_categories()
-                .iter()
-                .map(|c| c.to_string())
-                .collect();
-            record.first_failure_gate = report.first_failure.clone();
-        }
-        if !ctx.success {
-            record.failure_reason = Some(ctx.escalation.summary());
-        }
-
-        // Populate files changed and line counts.
-        record.files_changed = crate::orchestrator::helpers::list_changed_files(&ctx.wt_path);
-        if let Ok(output) = std::process::Command::new("git")
-            .args(["diff", "--stat", "main"])
-            .current_dir(&ctx.wt_path)
-            .output()
-        {
-            let stat = String::from_utf8_lossy(&output.stdout);
-            for line in stat.lines() {
-                if line.contains("insertion") {
-                    if let Some(n) = line.split_whitespace().next().and_then(|s| s.parse().ok()) {
-                        record.lines_added = n;
-                    }
-                }
-                if line.contains("deletion") {
-                    for word in line.split_whitespace() {
-                        if let Ok(n) = word.parse::<u32>() {
-                            record.lines_removed = n;
-                            break;
-                        }
-                    }
-                }
-            }
-        }
-
-        archive.record(&record);
-
-        // --- Part C: MAP-Elites diversity update ---
-        //
-        // Insert the outcome into the quality-diversity archive so the swarm
-        // tracks which (complexity, strategy) bins have been explored and
-        // avoids converging on a single approach.
-        {
-            let lines_changed = (record.lines_added + record.lines_removed) as usize;
-            let files_changed = record.files_changed.len();
-            let features = crate::map_elites::FeatureExtractor::extract_from_metadata(
-                lines_changed,
-                files_changed,
-            );
-            let score = if ctx.success {
-                // Reward speed: fewer iterations → higher score.
-                let iter = ctx.session.iteration().max(1) as f64;
-                1.0 / iter
-            } else {
-                0.0
-            };
-            let node = crate::map_elites::ExperimentNode {
-                id: ctx.issue.id.clone(),
-                description: ctx.issue.title.clone(),
-                score,
-                lines_changed,
-                files_changed,
-                strategy: crate::map_elites::FeatureExtractor::infer_strategy(
-                    files_changed,
-                    lines_changed,
-                ),
-            };
-            let mut qd_archive = crate::map_elites::QualityDiversityArchive::new();
-            // Load existing archive records into the in-memory grid so coverage
-            // reflects accumulated history, not just the current session.
-            for past in archive.load_all() {
-                let past_lines = (past.lines_added + past.lines_removed) as usize;
-                let past_files = past.files_changed.len();
-                let past_features = crate::map_elites::FeatureExtractor::extract_from_metadata(
-                    past_lines, past_files,
-                );
-                let past_score = if past.resolved {
-                    1.0 / past.iterations.max(1) as f64
-                } else {
-                    0.0
-                };
-                let past_node = crate::map_elites::ExperimentNode {
-                    id: past.issue_id.clone(),
-                    description: past.issue_title.clone(),
-                    score: past_score,
-                    lines_changed: past_lines,
-                    files_changed: past_files,
-                    strategy: crate::map_elites::FeatureExtractor::infer_strategy(
-                        past_files, past_lines,
-                    ),
-                };
-                qd_archive.insert(past_node, past_features);
-            }
-            let inserted = qd_archive.insert(node, features);
-            info!(
-                issue = %ctx.issue.id,
-                complexity_bin = features.complexity_bin,
-                strategy_bin = features.strategy_bin,
-                score,
-                inserted,
-                coverage = qd_archive.coverage(),
-                occupied_cells = qd_archive.len(),
-                "MAP-Elites: updated quality-diversity archive (state driver)"
-            );
-        }
-
-        // --- Hyperagents: extract skills from successful mutations ---
-        if ctx.success {
-            let skills_path = ctx.worktree_bridge.repo_root().join(".swarm/skills.json");
-            if let Some(candidate) =
-                crate::mutation_archive::MutationArchive::extract_skill_candidate(&record)
-            {
-                if let Ok(mut lib) =
-                    coordination::analytics::skills::SkillLibrary::load(&skills_path)
-                {
-                    let triggers: Vec<coordination::feedback::ErrorCategory> = candidate
-                        .error_categories
-                        .iter()
-                        .filter_map(|s| s.parse().ok())
-                        .collect();
-                    if !triggers.is_empty() {
-                        let trigger = coordination::analytics::skills::SkillTrigger {
-                            error_categories: triggers,
-                            file_patterns: vec![],
-                            task_type: None,
-                        };
-                        lib.create_skill(
-                            &candidate.approach_summary,
-                            trigger,
-                            &candidate.approach_summary,
-                        );
-                        if let Err(e) = lib.save(&skills_path) {
-                            warn!(
-                                error = %e,
-                                "Hyperagents: failed to save skill library (state driver)"
-                            );
-                        } else {
-                            info!(
-                                skill = %candidate.approach_summary,
-                                "Hyperagents: extracted skill from successful mutation (state driver)"
-                            );
-                        }
-                    }
-                }
-            }
-        }
-    }
+    record_to_mutation_archive(ctx);
 
     // --- Self-assessment (Layer 3) ---
     //

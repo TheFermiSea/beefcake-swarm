@@ -1,3 +1,48 @@
+const STANDALONE_ELLIPSIS: &[&str] = &["...", "…", ".. ."];
+const ELLIPSIS_MARKS: &[&str] = &["...", "…"];
+const DESCRIPTIVE_OMISSION_KEYWORDS: &[&str] = &[
+    "existing", "rest of", "remaining", "unchanged", "omitted", "truncated", "snip",
+];
+const BRACKETED_OMISSION_KEYWORDS: &[&str] =
+    &["rest", "remaining", "implementation", "unchanged"];
+const PARENTHESIZED_OMISSION_KEYWORDS: &[&str] = &["remaining", "unchanged", "omitted"];
+const BLOCK_OMISSION_KEYWORDS: &[&str] = &["existing", "rest of", "remaining", "omitted"];
+
+fn contains_any(haystack: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|n| haystack.contains(n))
+}
+
+/// Classify a line-comment body (already lowercased, with `//` or `#` stripped).
+fn is_omission_line_comment(body: &str) -> bool {
+    if STANDALONE_ELLIPSIS.contains(&body) {
+        return true;
+    }
+    if contains_any(body, ELLIPSIS_MARKS) && contains_any(body, DESCRIPTIVE_OMISSION_KEYWORDS) {
+        return true;
+    }
+    if body.starts_with('[')
+        && body.ends_with(']')
+        && contains_any(body, BRACKETED_OMISSION_KEYWORDS)
+    {
+        return true;
+    }
+    if body.starts_with('(')
+        && body.ends_with(')')
+        && contains_any(body, PARENTHESIZED_OMISSION_KEYWORDS)
+    {
+        return true;
+    }
+    false
+}
+
+/// Classify a `/* ... */` block comment's inner text (not lowercased).
+fn is_omission_block_comment(inner: &str) -> bool {
+    if inner == "..." || inner == "…" {
+        return true;
+    }
+    contains_any(&inner.to_ascii_lowercase(), BLOCK_OMISSION_KEYWORDS)
+}
+
 /// Detect placeholder/omission patterns in content that indicate the LLM
 /// truncated code instead of providing the complete replacement.
 ///
@@ -10,64 +55,20 @@
 pub fn detect_omission_placeholder(content: &str) -> Option<&str> {
     for line in content.lines() {
         let trimmed = line.trim();
-        // Match comment-style omission markers
-        if let Some(comment_body) = trimmed
+        if let Some(body_raw) = trimmed
             .strip_prefix("//")
             .or_else(|| trimmed.strip_prefix('#'))
         {
-            let body = comment_body.trim().to_ascii_lowercase();
-            // Standalone ellipsis: "// ..." or "// …"
-            if body == "..." || body == "…" || body == ".. ." {
-                return Some(trimmed);
-            }
-            // Descriptive omission: "// ... existing code ..."
-            if (body.contains("...") || body.contains('…'))
-                && (body.contains("existing")
-                    || body.contains("rest of")
-                    || body.contains("remaining")
-                    || body.contains("unchanged")
-                    || body.contains("omitted")
-                    || body.contains("truncated")
-                    || body.contains("snip"))
-            {
-                return Some(trimmed);
-            }
-            // Bracketed omission: "// [rest of implementation]"
-            if body.starts_with('[')
-                && body.ends_with(']')
-                && (body.contains("rest")
-                    || body.contains("remaining")
-                    || body.contains("implementation")
-                    || body.contains("unchanged"))
-            {
-                return Some(trimmed);
-            }
-            // Parenthesized: "// (remaining code unchanged)"
-            if body.starts_with('(')
-                && body.ends_with(')')
-                && (body.contains("remaining")
-                    || body.contains("unchanged")
-                    || body.contains("omitted"))
-            {
+            if is_omission_line_comment(&body_raw.trim().to_ascii_lowercase()) {
                 return Some(trimmed);
             }
         }
-        // Block comment omission: "/* ... */"
-        if trimmed.starts_with("/*") && trimmed.ends_with("*/") {
-            let inner = trimmed
-                .strip_prefix("/*")
-                .and_then(|s| s.strip_suffix("*/"))
-                .unwrap_or("")
-                .trim();
-            if inner == "..." || inner == "…" {
-                return Some(trimmed);
-            }
-            let lower = inner.to_ascii_lowercase();
-            if lower.contains("existing")
-                || lower.contains("rest of")
-                || lower.contains("remaining")
-                || lower.contains("omitted")
-            {
+        if let Some(inner) = trimmed
+            .strip_prefix("/*")
+            .and_then(|s| s.strip_suffix("*/"))
+            .map(str::trim)
+        {
+            if is_omission_block_comment(inner) {
                 return Some(trimmed);
             }
         }

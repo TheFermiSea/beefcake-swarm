@@ -208,6 +208,112 @@ fn is_infra_path(path: &str) -> bool {
         .any(|prefix| path == *prefix || path.starts_with(&format!("{prefix}/")))
 }
 
+/// Append a section with `header` if `items` is non-empty, rendering each via `render`.
+fn append_section<T>(
+    prompt: &mut String,
+    header: &str,
+    items: &[T],
+    mut render: impl FnMut(&mut String, &T),
+) {
+    if items.is_empty() {
+        return;
+    }
+    prompt.push_str(header);
+    for item in items {
+        render(prompt, item);
+    }
+    prompt.push('\n');
+}
+
+fn append_failure_signals(prompt: &mut String, packet: &WorkPacket) {
+    append_section(
+        prompt,
+        "## Current Errors to Fix\n",
+        &packet.failure_signals,
+        |p, signal| {
+            p.push_str(&format!(
+                "- **{}** ({}): {}\n",
+                signal.category,
+                signal.code.as_deref().unwrap_or("?"),
+                signal.message
+            ));
+            if let Some(file) = &signal.file {
+                p.push_str(&format!("  File: {}:{}\n", file, signal.line.unwrap_or(0)));
+            }
+        },
+    );
+}
+
+fn append_file_contexts(prompt: &mut String, packet: &WorkPacket) {
+    if packet.file_contexts.is_empty() {
+        return;
+    }
+    append_section(
+        prompt,
+        "## Relevant Files\n",
+        &packet.file_contexts,
+        |p, ctx| {
+            p.push_str(&format!(
+                "- `{}` (lines {}-{}) — {}\n",
+                ctx.file, ctx.start_line, ctx.end_line, ctx.relevance
+            ));
+        },
+    );
+    prompt.push_str("_Use the `read_file` tool to read these files before making changes._\n\n");
+}
+
+fn append_key_symbols(prompt: &mut String, packet: &WorkPacket) {
+    append_section(prompt, "## Key Symbols\n", &packet.key_symbols, |p, sym| {
+        p.push_str(&format!("- `{}` ({}) in {}", sym.name, sym.kind, sym.file));
+        if let Some(line) = sym.line {
+            p.push_str(&format!(":{line}"));
+        }
+        p.push('\n');
+    });
+}
+
+fn append_scope_constraints(prompt: &mut String, scoped_files: &[&String]) {
+    if scoped_files.is_empty() {
+        return;
+    }
+    prompt.push_str("## Scope Constraints\n");
+    prompt.push_str("**IMPORTANT:** Only modify these files:\n");
+    for f in scoped_files {
+        prompt.push_str(&format!("- `{f}`\n"));
+    }
+    prompt.push_str("\nDo NOT modify any other files. Do NOT reformat, refactor, or ");
+    prompt.push_str("\"improve\" code outside the listed files. If you believe additional ");
+    prompt.push_str("files need changes, note them in your response but do not modify them.\n\n");
+}
+
+fn append_validator_feedback(prompt: &mut String, packet: &WorkPacket) {
+    if packet.validator_feedback.is_empty() {
+        return;
+    }
+    prompt.push_str("## Reviewer Feedback (from prior iteration)\n");
+    prompt.push_str("A code reviewer identified these issues. **Address each one:**\n\n");
+    for (i, fb) in packet.validator_feedback.iter().enumerate() {
+        prompt.push_str(&format!(
+            "{}. **[{}]** {}\n",
+            i + 1,
+            fb.issue_type,
+            fb.description
+        ));
+        if let Some(file) = &fb.file {
+            match fb.line_range {
+                Some((start, end)) => {
+                    prompt.push_str(&format!("   Location: `{file}` lines {start}-{end}\n"));
+                }
+                None => prompt.push_str(&format!("   Location: `{file}`\n")),
+            }
+        }
+        if let Some(fix) = &fb.suggested_fix {
+            prompt.push_str(&format!("   Suggested fix: {fix}\n"));
+        }
+    }
+    prompt.push('\n');
+}
+
 pub fn format_task_prompt(packet: &WorkPacket) -> String {
     let mut prompt = String::new();
     let scoped_files: Vec<&String> = packet
@@ -222,30 +328,13 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
         packet.bead_id, packet.branch, packet.iteration, packet.target_tier
     ));
 
-    if !packet.constraints.is_empty() {
-        prompt.push_str("## Constraints\n");
-        for c in &packet.constraints {
-            prompt.push_str(&format!("- [{:?}] {}\n", c.kind, c.description));
-        }
-        prompt.push('\n');
-    }
-
-    if !packet.failure_signals.is_empty() {
-        prompt.push_str("## Current Errors to Fix\n");
-        for signal in &packet.failure_signals {
-            prompt.push_str(&format!(
-                "- **{}** ({}): {}\n",
-                signal.category,
-                signal.code.as_deref().unwrap_or("?"),
-                signal.message
-            ));
-            if let Some(file) = &signal.file {
-                prompt.push_str(&format!("  File: {}:{}\n", file, signal.line.unwrap_or(0)));
-            }
-        }
-        prompt.push('\n');
-    }
-
+    append_section(
+        &mut prompt,
+        "## Constraints\n",
+        &packet.constraints,
+        |p, c| p.push_str(&format!("- [{:?}] {}\n", c.kind, c.description)),
+    );
+    append_failure_signals(&mut prompt, packet);
     if !packet.previous_attempts.is_empty() {
         prompt.push_str("## What We've Already Tried (do NOT repeat these)\n");
         prompt.push_str("These approaches were attempted and failed. Do not repeat them:\n");
@@ -254,22 +343,8 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
         }
         prompt.push('\n');
     }
+    append_file_contexts(&mut prompt, packet);
 
-    if !packet.file_contexts.is_empty() {
-        prompt.push_str("## Relevant Files\n");
-        for ctx in &packet.file_contexts {
-            prompt.push_str(&format!(
-                "- `{}` (lines {}-{}) — {}\n",
-                ctx.file, ctx.start_line, ctx.end_line, ctx.relevance
-            ));
-        }
-        prompt.push('\n');
-        prompt
-            .push_str("_Use the `read_file` tool to read these files before making changes._\n\n");
-    }
-
-    // Repository Map — whole-codebase structure showing public symbols by file.
-    // Gives the agent a complete mental model without reading files one by one.
     if let Some(ref repo_map) = packet.repo_map {
         prompt.push_str("## Repository Map\n");
         prompt.push_str(
@@ -278,114 +353,57 @@ pub fn format_task_prompt(packet: &WorkPacket) -> String {
         prompt.push_str(repo_map);
         prompt.push('\n');
     }
-
     if let Some(ref dep_graph) = packet.dependency_graph {
         prompt.push_str("## Dependency Graph\n");
         prompt.push_str(dep_graph);
         prompt.push('\n');
     }
 
-    if !packet.key_symbols.is_empty() {
-        prompt.push_str("## Key Symbols\n");
-        for sym in &packet.key_symbols {
-            prompt.push_str(&format!("- `{}` ({}) in {}", sym.name, sym.kind, sym.file));
-            if let Some(line) = sym.line {
-                prompt.push_str(&format!(":{line}"));
-            }
-            prompt.push('\n');
-        }
-        prompt.push('\n');
-    }
-
-    // Knowledge layer fields (populated by NotebookBridge)
-    if !packet.relevant_heuristics.is_empty() {
-        prompt.push_str("## Knowledge Base Context\n");
-        for h in &packet.relevant_heuristics {
-            prompt.push_str(&format!("{h}\n"));
-        }
-        prompt.push('\n');
-    }
-
-    if !packet.relevant_playbooks.is_empty() {
-        prompt.push_str("## Known Fix Patterns\n");
-        for p in &packet.relevant_playbooks {
-            prompt.push_str(&format!("{p}\n"));
-        }
-        prompt.push('\n');
-    }
-
-    if !packet.decisions.is_empty() {
-        prompt.push_str("## Relevant Decisions\n");
-        for d in &packet.decisions {
-            prompt.push_str(&format!("- {d}\n"));
-        }
-        prompt.push('\n');
-    }
-
-    // Scope constraints — explicitly tell the worker what it may modify
-    if !scoped_files.is_empty() {
-        prompt.push_str("## Scope Constraints\n");
-        prompt.push_str("**IMPORTANT:** Only modify these files:\n");
-        for f in scoped_files {
-            prompt.push_str(&format!("- `{f}`\n"));
-        }
-        prompt.push_str("\nDo NOT modify any other files. Do NOT reformat, refactor, or ");
-        prompt.push_str("\"improve\" code outside the listed files. If you believe additional ");
-        prompt
-            .push_str("files need changes, note them in your response but do not modify them.\n\n");
-    }
-
-    // Validator feedback from prior iteration (TextGrad pattern)
-    if !packet.validator_feedback.is_empty() {
-        prompt.push_str("## Reviewer Feedback (from prior iteration)\n");
-        prompt.push_str("A code reviewer identified these issues. **Address each one:**\n\n");
-        for (i, fb) in packet.validator_feedback.iter().enumerate() {
-            prompt.push_str(&format!(
-                "{}. **[{}]** {}\n",
-                i + 1,
-                fb.issue_type,
-                fb.description
-            ));
-            if let Some(file) = &fb.file {
-                if let Some((start, end)) = fb.line_range {
-                    prompt.push_str(&format!("   Location: `{file}` lines {start}-{end}\n"));
-                } else {
-                    prompt.push_str(&format!("   Location: `{file}`\n"));
-                }
-            }
-            if let Some(fix) = &fb.suggested_fix {
-                prompt.push_str(&format!("   Suggested fix: {fix}\n"));
-            }
-        }
-        prompt.push('\n');
-    }
-
-    // --- Skill hints from past successful resolutions (Hyperagents pattern) ---
-    if !packet.skill_hints.is_empty() {
-        prompt.push_str("\n## Recommended Approaches (from past successes)\n\n");
-        for hint in &packet.skill_hints {
-            prompt.push_str(&format!(
+    append_key_symbols(&mut prompt, packet);
+    append_section(
+        &mut prompt,
+        "## Knowledge Base Context\n",
+        &packet.relevant_heuristics,
+        |p, h| p.push_str(&format!("{h}\n")),
+    );
+    append_section(
+        &mut prompt,
+        "## Known Fix Patterns\n",
+        &packet.relevant_playbooks,
+        |p, pb| p.push_str(&format!("{pb}\n")),
+    );
+    append_section(
+        &mut prompt,
+        "## Relevant Decisions\n",
+        &packet.decisions,
+        |p, d| p.push_str(&format!("- {d}\n")),
+    );
+    append_scope_constraints(&mut prompt, &scoped_files);
+    append_validator_feedback(&mut prompt, packet);
+    append_section(
+        &mut prompt,
+        "\n## Recommended Approaches (from past successes)\n\n",
+        &packet.skill_hints,
+        |p, hint| {
+            p.push_str(&format!(
                 "- [confidence: {:.0}%] {}: {}\n",
                 hint.confidence * 100.0,
                 hint.label,
                 hint.approach,
             ));
-        }
-        prompt.push('\n');
-    }
+        },
+    );
 
     prompt.push_str(&format!(
         "**Max patch size:** {} LOC\n\n",
         packet.max_patch_loc
     ));
-
     prompt.push_str(
         "**STOP RULE**: Once you have applied your changes with edit_file or write_file, \
          YOU ARE DONE. Do NOT call any more tools. Do NOT run cargo check, cargo test, \
          or any verification commands — the orchestrator runs verification automatically. \
          After your edit succeeds, immediately return a brief summary of what you changed.\n",
     );
-
     prompt
 }
 
