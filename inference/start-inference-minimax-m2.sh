@@ -19,8 +19,9 @@ set -euo pipefail
 
 LLAMA_SERVER="${LLAMA_SERVER:-/usr/local/bin/llama-server-mmq}"
 LOG_PATH="${LOG_PATH:-/tmp/llama-inference-minimax.log}"
-QUANT="${QUANT:-Q3_K_M}"
-MODEL_FILE="${MODEL_FILE:-/scratch/ai/models/MiniMax-M2.7-${QUANT}.gguf}"
+QUANT="${QUANT:-UD-Q3_K_M}"
+# First shard only — llama.cpp auto-detects the remaining 00002..00004 from filename.
+MODEL_FILE="${MODEL_FILE:-/scratch/ai/models/${QUANT}/MiniMax-M2.7-${QUANT}-00001-of-00004.gguf}"
 PORT="${PORT:-8084}"
 
 if [[ ! -x "${LLAMA_SERVER}" ]]; then
@@ -61,11 +62,10 @@ nohup numactl --interleave=all "${LLAMA_SERVER}" \
   --model "${MODEL_FILE}" \
   --alias MiniMax-M2.7 \
   --host 0.0.0.0 --port "${PORT}" \
-  --ctx-size 32768 --n-gpu-layers 999 \
-  --override-tensor '\.ffn_(gate|up|down)_exps\.weight=CPU' \
+  --ctx-size 32768 --n-gpu-layers 0 \
   --threads 48 --batch-size 512 --ubatch-size 512 \
   --cache-type-k q4_0 --cache-type-v q4_0 \
-  --cache-prompt -fa on --mlock --no-mmap --cont-batching --metrics --jinja \
+  --cache-prompt -fa on --no-mmap --cont-batching --metrics --jinja \
   > "${LOG_PATH}" 2>&1 &
 
 echo "Started MiniMax-M2.7 (${QUANT}) PID=$! port=${PORT} binary=${LLAMA_SERVER}"
