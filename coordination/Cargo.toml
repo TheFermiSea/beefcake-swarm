@@ -38,7 +38,7 @@ petgraph = { version = "0.6", features = ["serde-1"] }
 
 # Ensemble coordination dependencies (optional, behind heavy-state feature)
 rocksdb = { version = "0.24", optional = true }
-bincode = { version = "1.3", optional = true }
+bincode = { version = "2.0.0-rc.3", optional = true, features = ["serde"] }
 
 # Council and SLURM integration dependencies
 async-trait = "0.1"
