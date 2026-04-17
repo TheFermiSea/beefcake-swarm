@@ -689,14 +689,15 @@ impl Default for SwarmConfig {
                 },
             ),
             cloud_endpoint: Self::cloud_from_env(),
-            // Default 4 based on TZ autopilot audit (2026-04-17): iterations 6+
-            // produce <3% success while consuming ~60% of compute. Iterations 1-3
-            // produce 63% of wins. Cut the budget to the region that actually works.
+            // Default 3 per TZ Autopilot recommendation (2026-04-17). Prior
+            // conservative choice of 4 was too generous — Autopilot measured avg
+            // iterations_used=5.2-5.5 and recommended capping at 3 for ~43%
+            // compute saved vs ~25% at max_retries=4.
             max_retries: std::env::var("SWARM_MAX_RETRIES")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .filter(|v| *v > 0)
-                .unwrap_or(4),
+                .unwrap_or(3),
             worktree_base: None,
             notebook_registry_path: None, // resolved at startup via NotebookBridge::resolve_registry
             verifier_packages: std::env::var("SWARM_VERIFIER_PACKAGES")
@@ -1493,7 +1494,7 @@ mod tests {
             std::env::remove_var(var);
         }
         let config = SwarmConfig::default();
-        assert_eq!(config.max_retries, 4);
+        assert_eq!(config.max_retries, 3);
         assert!(config.fast_endpoint.url.contains("vasp-01"));
         assert!(config.coder_endpoint.url.contains("vasp-01"));
         assert!(config.reasoning_endpoint.url.contains("vasp-02"));
