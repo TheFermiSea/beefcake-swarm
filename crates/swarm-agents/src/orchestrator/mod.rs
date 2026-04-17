@@ -252,6 +252,36 @@ pub async fn process_issue(
 
 /// Core orchestration loop — implement → verify → review → escalate.
 ///
+/// Check if an issue is actionable by the swarm. Returns `Some(reason)` if it should
+/// be rejected without claiming (title too short, epic, benchmark-execution, or matches
+/// a configured reject pattern), `None` if actionable.
+fn issue_rejection_reason(issue: &BeadsIssue, config: &SwarmConfig) -> Option<&'static str> {
+    let title_trimmed = issue.title.trim();
+    if title_trimmed.is_empty() || title_trimmed.len() < config.min_objective_len {
+        return Some("title too short");
+    }
+    let title_lower = title_trimmed.to_lowercase();
+    let desc_lower = issue.description.as_deref().unwrap_or("").to_lowercase();
+    let combined = format!("{title_lower} {desc_lower}");
+
+    if title_lower.contains("[epic]") || title_lower.starts_with("epic:") {
+        return Some("epic (not a code task)");
+    }
+    let benchmark_markers: &[&str] = &[
+        "run benchmark",
+        "run.*suite",
+        "execute benchmark",
+        "record performance metrics",
+    ];
+    if benchmark_markers.iter().any(|m| combined.contains(m)) {
+        return Some("benchmark execution (requires manual run)");
+    }
+    if config.reject_patterns.iter().any(|p| combined.contains(p.as_str())) {
+        return Some("matches SWARM_REJECT_PATTERNS");
+    }
+    None
+}
+
 /// Separated from [`process_issue`] so the future can be wrapped with
 /// [`tracing::Instrument`] for Send-safe span management. The process span
 /// is accessible inside via [`tracing::Span::current()`].
@@ -283,51 +313,9 @@ async fn process_issue_core(
     let feature_flags = FeatureFlags::from_env();
     info!(flags = %feature_flags, summary = %feature_flags.summary(), "Feature flags loaded");
 
-    // --- Validate objective ---
-    let title_trimmed = issue.title.trim();
-    if title_trimmed.is_empty() || title_trimmed.len() < config.min_objective_len {
-        warn!(
-            id = %issue.id,
-            title_len = title_trimmed.len(),
-            min_len = config.min_objective_len,
-            "Rejecting issue: title too short (\"{}\")",
-            title_trimmed,
-        );
-        // Don't claim the issue — leave it open for a human to improve the title
-        return Ok(false);
-    }
-
-    // --- Issue quality pre-filter (AI-Researcher pattern) ---
-    // Reject issues the swarm can't handle: epics, benchmark-execution tasks,
-    // deferred status, and configurable reject patterns. Prevents wasting
-    // iterations on unactionable work.
-    let title_lower = title_trimmed.to_lowercase();
-    let desc_lower = issue.description.as_deref().unwrap_or("").to_lowercase();
-    let combined = format!("{} {}", title_lower, desc_lower);
-
-    let is_epic = title_lower.contains("[epic]") || title_lower.starts_with("epic:");
-    let is_benchmark_exec = combined.contains("run benchmark")
-        || combined.contains("run.*suite")
-        || combined.contains("execute benchmark")
-        || combined.contains("record performance metrics");
-    let matches_reject = config
-        .reject_patterns
-        .iter()
-        .any(|pat| combined.contains(pat.as_str()));
-
-    if is_epic || is_benchmark_exec || matches_reject {
-        let reason = if is_epic {
-            "epic (not a code task)"
-        } else if is_benchmark_exec {
-            "benchmark execution (requires manual run)"
-        } else {
-            "matches SWARM_REJECT_PATTERNS"
-        };
-        warn!(
-            id = %issue.id,
-            reason,
-            "Pre-filter: rejecting issue the swarm cannot handle"
-        );
+    // --- Validate + pre-filter ---
+    if let Some(reason) = issue_rejection_reason(issue, config) {
+        warn!(id = %issue.id, reason, "Pre-filter: rejecting issue the swarm cannot handle");
         return Ok(false);
     }
 
