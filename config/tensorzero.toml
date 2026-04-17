@@ -512,13 +512,16 @@ model = "strand_rust_14b"
 # Retired 2026-04-07: qwen35_direct (0.0% resolved, n=192), devstral_structured (0.0% resolved, n=189).
 # Rankings (clean data, poisoned Apr 7-10 feedback purged — 36K false negatives from
 # tokio panic, TZ gateway down, context overflow, hung OmniCoder):
-# omnicoder_9b (60.4%), sera_14b_worker (43.6%), devstral_24b (38.7%), qwen35_27b (31.9%).
-# Using static weights to prevent single-variant lock-in (adaptive TS converged on
-# omnicoder exclusively, causing cascading failure when it hung).
-# strand_rust_14b in fallback — only used when SLURM job is active on vasp-02:8080.
+# TZ Autopilot audit (2026-04-17): highest-weighted variants were the worst
+# performers. Rebalanced per Autopilot recommendation — promote qwen35_27b
+# (best, 9.57%), demote omnicoder_9b (worst, 7.16%). Expected +0.6-0.8pp
+# aggregate resolution from traffic rebalancing alone.
+#
+# Old: omnicoder_9b=0.35, sera_14b_worker=0.25, devstral_24b=0.22, qwen35_27b=0.18
+# New (Autopilot):
 [functions.worker_code_edit.experimentation]
 type = "static"
-candidate_variants = { omnicoder_9b = 0.35, sera_14b_worker = 0.25, devstral_24b = 0.22, qwen35_27b = 0.18 }
+candidate_variants = { qwen35_27b = 0.35, sera_14b_worker = 0.25, devstral_24b = 0.25, omnicoder_9b = 0.15 }
 fallback_variants = ["strand_rust_14b"]
 
 # --- Code Review: blind reviewer ---
@@ -610,14 +613,14 @@ model = "strand_rust_14b"
 type = "chat_completion"
 model = "qwen_reasoning"
 
-# Static weights based on TZ performance data (2026-04-14 reset):
-# qwen35_fixer (15s avg) is 10x faster than gemma_31b_fixer (149s avg, already removed).
-# Adaptive TS priors poisoned by infrastructure failures — reset to static with
-# known-good performers. sera_14b historically best (92.1% resolved, n=165).
-# Previous: adaptive TS with poisoned feedback → unreliable variant selection.
+# TZ Autopilot audit (2026-04-17): same inverted-allocation problem as worker
+# — sera_14b_fixer was 30% weight with 6.71% resolve rate (worst), while
+# omnicoder_fixer was 20% weight with 9.18% (best). Swapped per Autopilot.
+#
+# Old: sera_14b_fixer=0.30, qwen35_fixer=0.25, omnicoder_fixer=0.20, devstral_fixer=0.15, qwen_reasoning_fixer=0.10
 [functions.code_fixing.experimentation]
 type = "static"
-candidate_variants = { sera_14b_fixer = 0.30, qwen35_fixer = 0.25, omnicoder_fixer = 0.20, devstral_fixer = 0.15, qwen_reasoning_fixer = 0.10 }
+candidate_variants = { omnicoder_fixer = 0.35, qwen35_fixer = 0.25, sera_14b_fixer = 0.15, qwen_reasoning_fixer = 0.15, devstral_fixer = 0.10 }
 fallback_variants = ["strand_rust_fixer"]
 
 # --- Adversarial Testing: red-team agent ---

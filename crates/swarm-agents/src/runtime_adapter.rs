@@ -744,9 +744,16 @@ impl<M: CompletionModel> PromptHook<M> for RuntimeAdapter {
                 s.successful_writes += 1;
             }
 
-            // Fail-fast when the agent keeps hitting the harness-path sandbox.
-            // The marker is owned by tools/mod.rs — see HARNESS_SANDBOX_MARKER.
-            if is_error && result.contains(crate::tools::HARNESS_SANDBOX_MARKER) {
+            // Fail-fast when the agent keeps hitting the path sandbox. We match
+            // BOTH the current marker ("harness state") AND legacy sandbox error
+            // substrings ("escapes sandbox", "protected swarm infrastructure",
+            // "is read-only swarm") so older bundled binaries and future error
+            // text rewrites both still trigger fail-fast.
+            let is_sandbox_error = result.contains(crate::tools::HARNESS_SANDBOX_MARKER)
+                || result.contains("escapes sandbox")
+                || result.contains("protected swarm infrastructure")
+                || result.contains("read-only swarm infrastructure");
+            if is_error && is_sandbox_error {
                 s.swarm_internal_attempts += 1;
                 warn!(
                     agent = %config.agent_name,

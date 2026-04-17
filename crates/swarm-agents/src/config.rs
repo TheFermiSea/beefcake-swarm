@@ -453,12 +453,12 @@ impl CloudFallbackMatrix {
         Self {
             entries: vec![
                 CloudFallbackEntry {
-                    model: "claude-opus-4-6".to_string(),
+                    model: "claude-sonnet-4-6".to_string(),
                     tier_label: "primary".to_string(),
                     max_tokens: 4096,
                 },
                 CloudFallbackEntry {
-                    model: "claude-sonnet-4-6".to_string(),
+                    model: "claude-opus-4-6".to_string(),
                     tier_label: "fallback-1".to_string(),
                     max_tokens: 4096,
                 },
@@ -506,6 +506,13 @@ pub struct SwarmConfig {
     /// Requires `cloud_endpoint` to be configured.
     /// Populated from `--cloud-only` CLI flag or `SWARM_CLOUD_ONLY=1` env var.
     pub cloud_only: bool,
+    /// Disable Worker→Council escalation. TZ Autopilot audit (2026-04-17) found
+    /// Council resolved at 7.4% (2/27) vs Worker at 41.4% (12/29) using the SAME
+    /// model (gpt-5.4) — Council is actively hurting the swarm, not helping it.
+    /// When true, tier resolution stays on Worker and sparse-context / dynamic-
+    /// router / write-deadline escalations to Council become no-ops.
+    /// Populated from `SWARM_DISABLE_COUNCIL=1` env var. Default: true.
+    pub disable_council: bool,
     /// Ordered cloud model fallback matrix.
     /// When the primary cloud model fails, the orchestrator tries the next model.
     /// Populated from `SWARM_CLOUD_FALLBACK_MODELS` env var (comma-separated) or defaults.
@@ -689,14 +696,15 @@ impl Default for SwarmConfig {
                 },
             ),
             cloud_endpoint: Self::cloud_from_env(),
-            // Default 4 based on TZ autopilot audit (2026-04-17): iterations 6+
-            // produce <3% success while consuming ~60% of compute. Iterations 1-3
-            // produce 63% of wins. Cut the budget to the region that actually works.
+            // Default 3 per TZ Autopilot recommendation (2026-04-17). Prior
+            // conservative choice of 4 was too generous — Autopilot measured avg
+            // iterations_used=5.2-5.5 and recommended capping at 3 for ~43%
+            // compute saved vs ~25% at max_retries=4.
             max_retries: std::env::var("SWARM_MAX_RETRIES")
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .filter(|v| *v > 0)
-                .unwrap_or(4),
+                .unwrap_or(3),
             worktree_base: None,
             notebook_registry_path: None, // resolved at startup via NotebookBridge::resolve_registry
             verifier_packages: std::env::var("SWARM_VERIFIER_PACKAGES")
@@ -711,6 +719,10 @@ impl Default for SwarmConfig {
             cloud_only: std::env::var("SWARM_CLOUD_ONLY")
                 .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
                 .unwrap_or(false),
+            // Default disabled — see field docs. Set SWARM_DISABLE_COUNCIL=0 to re-enable.
+            disable_council: std::env::var("SWARM_DISABLE_COUNCIL")
+                .map(|v| !matches!(v.as_str(), "0" | "false" | "FALSE" | ""))
+                .unwrap_or(true),
             cloud_fallback_matrix: CloudFallbackMatrix::from_env(),
             max_consecutive_no_change: std::env::var("SWARM_MAX_NO_CHANGE")
                 .ok()
@@ -1091,14 +1103,14 @@ impl SwarmConfig {
             },
             reasoning_endpoint: Endpoint {
                 url: proxy_url.clone(),
-                model: "claude-opus-4-6".into(),
+                model: "claude-sonnet-4-6".into(),
                 tier: Tier::Reasoning,
                 api_key: proxy_key.clone(),
             },
             cloud_endpoint: Some(CloudEndpoint {
                 url: proxy_url.clone(),
                 api_key: proxy_key.clone(),
-                model: "claude-opus-4-6".into(),
+                model: "claude-sonnet-4-6".into(),
             }),
             strategist_endpoint: Some(Endpoint {
                 url: proxy_url,
@@ -1112,6 +1124,7 @@ impl SwarmConfig {
             verifier_packages: Vec::new(),
             cloud_max_retries: 3,
             cloud_only: false,
+            disable_council: true,
             cloud_fallback_matrix: CloudFallbackMatrix::default_matrix(),
             max_consecutive_no_change: 3,
             min_objective_len: 10,
@@ -1493,7 +1506,7 @@ mod tests {
             std::env::remove_var(var);
         }
         let config = SwarmConfig::default();
-        assert_eq!(config.max_retries, 4);
+        assert_eq!(config.max_retries, 3);
         assert!(config.fast_endpoint.url.contains("vasp-01"));
         assert!(config.coder_endpoint.url.contains("vasp-01"));
         assert!(config.reasoning_endpoint.url.contains("vasp-02"));
@@ -1527,11 +1540,11 @@ mod tests {
         assert_eq!(matrix.len(), 4);
         assert!(!matrix.is_empty());
         let primary = matrix.primary().unwrap();
-        assert_eq!(primary.model, "claude-opus-4-6");
+        assert_eq!(primary.model, "claude-sonnet-4-6");
         assert_eq!(primary.tier_label, "primary");
         let fallbacks = matrix.fallbacks();
         assert_eq!(fallbacks.len(), 3);
-        assert_eq!(fallbacks[0].model, "claude-sonnet-4-6");
+        assert_eq!(fallbacks[0].model, "claude-opus-4-6");
         assert_eq!(fallbacks[1].model, "gpt-5.4");
         assert_eq!(fallbacks[2].model, "gemini-3-flash-preview");
     }
@@ -1551,7 +1564,7 @@ mod tests {
         assert_eq!(config.cloud_fallback_matrix.len(), 4);
         assert_eq!(
             config.cloud_fallback_matrix.primary().unwrap().model,
-            "claude-opus-4-6"
+            "claude-sonnet-4-6"
         );
     }
 }

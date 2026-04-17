@@ -8,13 +8,19 @@ export RUST_LOG="${RUST_LOG:-info}"
 export BD_ACTOR="${BD_ACTOR:-swarm-$(hostname -s 2>/dev/null || echo worker)}"
 # Scout/Fast tier: rerouted to vasp-01 (Qwen3.5-27B). vasp-03 freed for other tasks.
 export SWARM_FAST_URL="${SWARM_FAST_URL:-http://vasp-01:8081/v1}"
-export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3.5-27B}"
-# Coder tier: Qwen3.5-27B on vasp-01 (dense, GPU-resident, ~27 tok/s, 32K context)
+export SWARM_FAST_MODEL="${SWARM_FAST_MODEL:-Qwen3.6-35B-A3B}"
+# Coder tier: Qwen3.6-35B-A3B MoE on vasp-01 (35B total / 3B active, ~50 tok/s).
+# Replaced dense Qwen3.5-27B (2026-04-17) — MoE is 2x faster and smarter.
 export SWARM_CODER_URL="${SWARM_CODER_URL:-http://vasp-01:8081/v1}"
-export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.5-27B}"
+export SWARM_CODER_MODEL="${SWARM_CODER_MODEL:-Qwen3.6-35B-A3B}"
 # Reasoning tier: Devstral-Small-2-24B on vasp-02 (agentic coding, ~30 tok/s, 32K context)
 export SWARM_REASONING_URL="${SWARM_REASONING_URL:-http://vasp-02:8081/v1}"
 export SWARM_REASONING_MODEL="${SWARM_REASONING_MODEL:-Qwen3.5-27B}"
+# Strategist tier (optional): MiniMax-M2.7 as slow-smart oracle on vasp-01:8084.
+# ~300B MoE / 9B active / CPU-offloaded experts. ~6 tok/s, 3-8 min per call.
+# Only invoked on final escalation when SWARM_STACK_PROFILE=strategist_hybrid_v1.
+export SWARM_STRATEGIST_URL="${SWARM_STRATEGIST_URL:-http://vasp-01:8084/v1}"
+export SWARM_STRATEGIST_MODEL="${SWARM_STRATEGIST_MODEL:-MiniMax-M2.7}"
 # Cloud manager via CLIAPIProxy
 # Set SWARM_CLOUD_URL="" (empty) to run in worker-first mode (local models only).
 # Default to localhost when running on ai-proxy (where the proxy lives).
@@ -53,9 +59,11 @@ if [[ -n "${SWARM_CLOUD_URL:-}" ]]; then
   : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
   export SWARM_CLOUD_API_KEY
   # Default primary cloud model routed via CLIAPIProxy; override SWARM_CLOUD_MODEL to switch.
-  # claude-opus-4-6 is the primary cloud model (Anthropic credits renewed).
-  export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-opus-4-6}"
-  export SWARM_CLOUD_FALLBACK_MODEL="${SWARM_CLOUD_FALLBACK_MODEL:-claude-sonnet-4-6}"
+  # claude-sonnet-4-6 is primary (2026-04-17: Autopilot data shows sonnet-4-6
+  # consistently resolves issues that opus-4-6 did not; opus also hits quota
+  # more aggressively). opus-4-6 is kept as fallback-1 in CloudFallbackMatrix.
+  export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-sonnet-4-6}"
+  export SWARM_CLOUD_FALLBACK_MODEL="${SWARM_CLOUD_FALLBACK_MODEL:-claude-opus-4-6}"
   # CLIAPIProxy v6.8+ uses x-api-key header (not Authorization: Bearer)
   _PROXY_AUTH=(-H "x-api-key: $SWARM_CLOUD_API_KEY")
   if [[ "${SWARM_REQUIRE_ANTHROPIC_OWNERSHIP:-1}" == "1" ]]; then

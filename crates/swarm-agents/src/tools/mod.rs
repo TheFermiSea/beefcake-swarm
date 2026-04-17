@@ -38,7 +38,7 @@ pub enum ToolError {
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
-    #[error("path `{0}` escapes sandbox")]
+    #[error("sandbox: {0}")]
     Sandbox(String),
 
     #[error("command `{command}` not in allowlist")]

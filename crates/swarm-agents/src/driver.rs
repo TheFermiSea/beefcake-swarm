@@ -1923,7 +1923,13 @@ fn resolve_final_tier(
         && packet.files_touched.is_empty()
         && packet.failure_signals.is_empty()
     {
-        if ctx.config.cloud_endpoint.is_some() {
+        if ctx.config.disable_council {
+            warn!(
+                iteration,
+                "Sparse context — staying on Worker (Council disabled per config)"
+            );
+            tier
+        } else if ctx.config.cloud_endpoint.is_some() {
             warn!(
                 iteration,
                 "Sparse context — escalating Worker→Council (state driver)"
@@ -1947,7 +1953,7 @@ fn resolve_final_tier(
     };
 
     // Step 2: DynamicRouter recommendation (P2.2)
-    if tier != SwarmTier::Worker || ctx.last_report.is_none() {
+    if tier != SwarmTier::Worker || ctx.last_report.is_none() || ctx.config.disable_council {
         return tier;
     }
     let parsed_errors: Vec<coordination::feedback::error_parser::ParsedError> = ctx
@@ -2055,10 +2061,13 @@ async fn handle_no_file_changes(
         "No file changes (state driver)"
     );
 
-    // Write-deadline escalation: immediate Cloud escalation
+    // Write-deadline escalation: immediate Cloud escalation.
+    // Gated behind !disable_council — Autopilot audit showed Council underperforms
+    // Worker 5x even on the same model. When disabled, Worker just retries.
     if agent_terminated_without_writing
         && ctx.escalation.current_tier == SwarmTier::Worker
         && ctx.config.cloud_endpoint.is_some()
+        && !ctx.config.disable_council
     {
         warn!(
             iteration,
@@ -2955,12 +2964,26 @@ async fn post_tensorzero_feedback(ctx: &mut OrchestratorContext<'_>, final_tier:
     let primary_model = ctx.config.cloud_endpoint.as_ref().map(|e| e.model.clone());
     let fallback_model = ctx.cascade_fallback_model.clone();
     let fallback_used = fallback_model.is_some();
-    let tags = crate::tensorzero::FeedbackTags {
+    // Fallback `error_category` to a coarse final-state marker so Autopilot can
+    // slice by it even when the run didn't end with a verifier failure. TZ
+    // Autopilot audit (2026-04-17) showed 0/22,948 feedback rows had this
+    // populated — because only late-stage verifier errors filled it in.
+    let error_category = primary_err.or_else(|| {
+        Some(
+            if ctx.success {
+                "none_resolved"
+            } else {
+                "none_unresolved"
+            }
+            .to_string(),
+        )
+    });
+    let mut tags = crate::tensorzero::FeedbackTags {
         issue_id: Some(ctx.issue.id.clone()),
         language: ctx.factory.language.clone(),
         model: primary_model.clone(),
         repo_id: ctx.config.repo_id.clone(),
-        error_category: primary_err,
+        error_category,
         prompt_version: Some(crate::prompts::PROMPT_VERSION.to_string()),
         retry_tier: Some(final_tier.to_string()),
         write_deadline: Some(ctx.config.max_turns_without_write),
@@ -2970,6 +2993,11 @@ async fn post_tensorzero_feedback(ctx: &mut OrchestratorContext<'_>, final_tier:
         fallback_used: Some(fallback_used),
         ..Default::default()
     };
+    // Emit harness parameters so Autopilot can correlate settings→outcomes.
+    // The legacy orchestrator/mod.rs path already does this; the state-driver
+    // path was missing it (0/22,948 feedback rows had harness_preset populated
+    // as of TZ Autopilot audit 2026-04-17).
+    crate::tensorzero::HarnessPreset::select_uniform().apply_to_tags(&mut tags);
 
     let Some(tz_pg) = ctx.config.tensorzero_pg_url.as_deref() else {
         warn!(id = %ctx.issue.id, "TZ PG URL not configured — skipping episode feedback");
