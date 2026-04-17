@@ -65,3 +65,9 @@
 {"id":65,"timestamp":"2026-04-16T15:28:18.843787543Z","kind":{"type":"state_transition","from":"planning","to":"implementing","iteration":1,"reason":"iteration 1 planned, tier=Worker"}}
 {"id":66,"timestamp":"2026-04-16T15:28:18.845370929Z","kind":{"type":"checkpoint_written","checkpoint_id":3,"state":"implementing","iteration":1}}
 {"id":67,"timestamp":"2026-04-16T16:25:05.070955209Z","kind":{"type":"state_transition","from":"implementing","to":"planning","iteration":1,"reason":"agent failed, escalation continues: Continuing at Worker (3 iterations remaining)"}}
+{"id":68,"timestamp":"2026-04-17T04:51:31.451883627Z","kind":{"type":"session_started","issue_id":"beefcake-4302","objective":"Complex function: process_issue_core (score 357.8, 3089 lines, 296 branches)","base_commit":"6f177c80a01696d5f61586809885c628b60e4d62"}}
+{"id":69,"timestamp":"2026-04-17T04:51:31.452325609Z","kind":{"type":"worktree_provisioned","path":"/tmp/swarm-wt/beefcake-swarm/beefcake-4302","branch":"swarm/beefcake-4302","commit":"6f177c80a01696d5f61586809885c628b60e4d62"}}
+{"id":70,"timestamp":"2026-04-17T04:51:31.562546724Z","kind":{"type":"state_transition","from":"preparing_worktree","to":"planning","iteration":0,"reason":"worktree ready, endpoints healthy"}}
+{"id":71,"timestamp":"2026-04-17T04:51:31.564230465Z","kind":{"type":"state_transition","from":"planning","to":"implementing","iteration":1,"reason":"iteration 1 planned, tier=Worker"}}
+{"id":72,"timestamp":"2026-04-17T04:51:31.565808175Z","kind":{"type":"checkpoint_written","checkpoint_id":3,"state":"implementing","iteration":1}}
+{"id":73,"timestamp":"2026-04-17T04:56:19.366411103Z","kind":{"type":"state_transition","from":"implementing","to":"planning","iteration":1,"reason":"agent failed, escalation continues: Continuing at Worker (3 iterations remaining)"}}

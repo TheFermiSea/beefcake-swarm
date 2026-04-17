@@ -710,7 +710,12 @@ impl WorktreeBridge {
                 let _ = std::fs::remove_dir_all(&swarm_dir);
             }
             // Also clean up legacy top-level artifacts from pre-2026-04-16 worktrees.
-            for artifact in &[".swarm-progress.txt", ".swarm-session.json", ".swarm-session.jsonl", ".swarm-checkpoint.json"] {
+            for artifact in &[
+                ".swarm-progress.txt",
+                ".swarm-session.json",
+                ".swarm-session.jsonl",
+                ".swarm-checkpoint.json",
+            ] {
                 let artifact_path = wt_path.join(artifact);
                 if artifact_path.exists() {
                     let _ = std::fs::remove_file(&artifact_path);

@@ -276,7 +276,11 @@ fn issue_rejection_reason(issue: &BeadsIssue, config: &SwarmConfig) -> Option<&'
     if benchmark_markers.iter().any(|m| combined.contains(m)) {
         return Some("benchmark execution (requires manual run)");
     }
-    if config.reject_patterns.iter().any(|p| combined.contains(p.as_str())) {
+    if config
+        .reject_patterns
+        .iter()
+        .any(|p| combined.contains(p.as_str()))
+    {
         return Some("matches SWARM_REJECT_PATTERNS");
     }
     None
