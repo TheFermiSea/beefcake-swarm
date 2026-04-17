@@ -1,10 +1,15 @@
 const STANDALONE_ELLIPSIS: &[&str] = &["...", "…", ".. ."];
 const ELLIPSIS_MARKS: &[&str] = &["...", "…"];
 const DESCRIPTIVE_OMISSION_KEYWORDS: &[&str] = &[
-    "existing", "rest of", "remaining", "unchanged", "omitted", "truncated", "snip",
+    "existing",
+    "rest of",
+    "remaining",
+    "unchanged",
+    "omitted",
+    "truncated",
+    "snip",
 ];
-const BRACKETED_OMISSION_KEYWORDS: &[&str] =
-    &["rest", "remaining", "implementation", "unchanged"];
+const BRACKETED_OMISSION_KEYWORDS: &[&str] = &["rest", "remaining", "implementation", "unchanged"];
 const PARENTHESIZED_OMISSION_KEYWORDS: &[&str] = &["remaining", "unchanged", "omitted"];
 const BLOCK_OMISSION_KEYWORDS: &[&str] = &["existing", "rest of", "remaining", "omitted"];
 

@@ -136,9 +136,7 @@ const FORBIDDEN_FILES: &[&str] = &[
 ];
 
 /// Substrings in shell commands that reach into harness state, rejected by `sandbox_command`.
-pub const FORBIDDEN_COMMAND_SUBSTRINGS: &[&str] = &[
-    ".swarm-", ".swarm/", ".beads/", ".git/",
-];
+pub const FORBIDDEN_COMMAND_SUBSTRINGS: &[&str] = &[".swarm-", ".swarm/", ".beads/", ".git/"];
 
 /// Marker substring embedded in every sandbox error message. `runtime_adapter`
 /// greps tool result strings for this to fail-fast when agents repeatedly hit

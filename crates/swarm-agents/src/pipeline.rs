@@ -338,7 +338,12 @@ pub fn direct_apply_plan(plan: &ArchitectPlan, wt_path: &std::path::Path) -> Dir
     for (i, edit) in plan.edits.iter().enumerate() {
         match apply_single_edit(edit, wt_path) {
             Ok(_) => {
-                applied.push(format!("Edit {}: {} — {}", i + 1, edit.file, edit.description));
+                applied.push(format!(
+                    "Edit {}: {} — {}",
+                    i + 1,
+                    edit.file,
+                    edit.description
+                ));
                 info!(
                     file = %edit.file,
                     edit = i + 1,

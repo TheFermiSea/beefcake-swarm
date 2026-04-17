@@ -2910,7 +2910,9 @@ pub async fn drive(ctx: &mut OrchestratorContext<'_>) -> Result<bool> {
 /// infrastructure failures (crashes, <30s failed runs) don't pollute Thompson
 /// Sampling with false negatives blaming the model for hangs or context overflow.
 async fn post_tensorzero_feedback(ctx: &mut OrchestratorContext<'_>, final_tier: &str) {
-    let Some(tz_url) = ctx.config.tensorzero_url.as_deref() else { return };
+    let Some(tz_url) = ctx.config.tensorzero_url.as_deref() else {
+        return;
+    };
 
     let wall_secs = ctx.process_start.elapsed().as_secs_f64();
     let iterations = ctx.session.iteration();
@@ -2967,7 +2969,12 @@ async fn post_tensorzero_feedback(ctx: &mut OrchestratorContext<'_>, final_tier:
             "No TZ episode IDs resolved — using generated UUIDv7 fallback"
         );
         crate::tensorzero::post_episode_feedback(
-            tz_url, &fallback_id, ctx.success, iterations, wall_secs, Some(tags),
+            tz_url,
+            &fallback_id,
+            ctx.success,
+            iterations,
+            wall_secs,
+            Some(tags),
         )
         .await;
     } else {
@@ -2979,7 +2986,12 @@ async fn post_tensorzero_feedback(ctx: &mut OrchestratorContext<'_>, final_tier:
         );
         for ep_id in &episode_ids {
             crate::tensorzero::post_episode_feedback(
-                tz_url, ep_id, ctx.success, iterations, wall_secs, Some(tags.clone()),
+                tz_url,
+                ep_id,
+                ctx.success,
+                iterations,
+                wall_secs,
+                Some(tags.clone()),
             )
             .await;
         }
@@ -2987,12 +2999,17 @@ async fn post_tensorzero_feedback(ctx: &mut OrchestratorContext<'_>, final_tier:
 }
 
 /// Parse line counts from `git diff --stat main` output into an existing record.
-fn populate_diff_line_counts(record: &mut crate::mutation_archive::MutationRecord, wt_path: &std::path::Path) {
+fn populate_diff_line_counts(
+    record: &mut crate::mutation_archive::MutationRecord,
+    wt_path: &std::path::Path,
+) {
     let Ok(output) = std::process::Command::new("git")
         .args(["diff", "--stat", "main"])
         .current_dir(wt_path)
         .output()
-    else { return };
+    else {
+        return;
+    };
     let stat = String::from_utf8_lossy(&output.stdout);
     for line in stat.lines() {
         if line.contains("insertion") {
@@ -3025,7 +3042,11 @@ fn update_map_elites_archive(
     let files_changed = record.files_changed.len();
     let features =
         crate::map_elites::FeatureExtractor::extract_from_metadata(lines_changed, files_changed);
-    let score = if success { 1.0 / iteration.max(1) as f64 } else { 0.0 };
+    let score = if success {
+        1.0 / iteration.max(1) as f64
+    } else {
+        0.0
+    };
     let node = crate::map_elites::ExperimentNode {
         id: issue_id.to_string(),
         description: issue_title.to_string(),
@@ -3040,7 +3061,11 @@ fn update_map_elites_archive(
         let past_files = past.files_changed.len();
         let past_features =
             crate::map_elites::FeatureExtractor::extract_from_metadata(past_lines, past_files);
-        let past_score = if past.resolved { 1.0 / past.iterations.max(1) as f64 } else { 0.0 };
+        let past_score = if past.resolved {
+            1.0 / past.iterations.max(1) as f64
+        } else {
+            0.0
+        };
         qd_archive.insert(
             crate::map_elites::ExperimentNode {
                 id: past.issue_id.clone(),
@@ -3048,7 +3073,9 @@ fn update_map_elites_archive(
                 score: past_score,
                 lines_changed: past_lines,
                 files_changed: past_files,
-                strategy: crate::map_elites::FeatureExtractor::infer_strategy(past_files, past_lines),
+                strategy: crate::map_elites::FeatureExtractor::infer_strategy(
+                    past_files, past_lines,
+                ),
             },
             past_features,
         );
@@ -3074,8 +3101,12 @@ fn maybe_extract_skill(
 ) {
     let skills_path = repo_root.join(".swarm/skills.json");
     let Some(candidate) = crate::mutation_archive::MutationArchive::extract_skill_candidate(record)
-    else { return };
-    let Ok(mut lib) = coordination::analytics::skills::SkillLibrary::load(&skills_path) else { return };
+    else {
+        return;
+    };
+    let Ok(mut lib) = coordination::analytics::skills::SkillLibrary::load(&skills_path) else {
+        return;
+    };
     let triggers: Vec<coordination::feedback::ErrorCategory> = candidate
         .error_categories
         .iter()
@@ -3089,7 +3120,11 @@ fn maybe_extract_skill(
         file_patterns: vec![],
         task_type: None,
     };
-    lib.create_skill(&candidate.approach_summary, trigger, &candidate.approach_summary);
+    lib.create_skill(
+        &candidate.approach_summary,
+        trigger,
+        &candidate.approach_summary,
+    );
     match lib.save(&skills_path) {
         Ok(()) => info!(
             skill = %candidate.approach_summary,
@@ -3103,9 +3138,16 @@ fn maybe_extract_skill(
 /// and extract any reusable skill on success.
 fn record_to_mutation_archive(ctx: &mut OrchestratorContext<'_>) {
     let archive = crate::mutation_archive::MutationArchive::new(ctx.worktree_bridge.repo_root());
-    let language = ctx.factory.language.as_deref().unwrap_or("rust").to_string();
+    let language = ctx
+        .factory
+        .language
+        .as_deref()
+        .unwrap_or("rust")
+        .to_string();
     let final_tier = format!("{:?}", ctx.escalation.current_tier);
-    let primary_model = ctx.config.resolve_role_model(crate::config::SwarmRole::Planner);
+    let primary_model = ctx
+        .config
+        .resolve_role_model(crate::config::SwarmRole::Planner);
 
     let mut record = crate::mutation_archive::build_record(
         &ctx.issue.id,
@@ -3166,7 +3208,10 @@ async fn handle_failure_outcome(ctx: &mut OrchestratorContext<'_>) {
         let retro = ctx.session.retrospective(&entries);
         let svc = knowledge_sync::KnowledgeSyncService::new(kb);
         let captures = svc.capture_from_retrospective(&retro, &ctx.issue.id, &ctx.issue.title);
-        debug!(count = captures.len(), "Retrospective (failure, state driver)");
+        debug!(
+            count = captures.len(),
+            "Retrospective (failure, state driver)"
+        );
     }
 
     reformulate_on_failure(ctx);
@@ -3211,7 +3256,12 @@ fn reformulate_on_failure(ctx: &mut OrchestratorContext<'_>) {
     let error_cats: Vec<String> = ctx
         .last_report
         .as_ref()
-        .map(|r| r.unique_error_categories().iter().map(|c| c.to_string()).collect())
+        .map(|r| {
+            r.unique_error_categories()
+                .iter()
+                .map(|c| c.to_string())
+                .collect()
+        })
         .unwrap_or_default();
 
     let review_input = FailureReviewInput {
