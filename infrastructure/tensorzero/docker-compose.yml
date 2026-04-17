@@ -57,6 +57,9 @@ services:
       TENSORZERO_GATEWAY_URL: http://host.docker.internal:3000
       # Postgres connection for full dashboard features (inference browsing, metrics)
       TENSORZERO_POSTGRES_URL: postgres://tensorzero:tensorzero@host.docker.internal:5433/tensorzero
+      # UI reads the Autopilot key from its OWN env to gate the Autopilot tab.
+      # Without this the UI hides the tab even though the gateway has a valid key.
+      TENSORZERO_AUTOPILOT_API_KEY: ${TENSORZERO_AUTOPILOT_API_KEY:-}
     ports:
       - "4000:4000"
     extra_hosts:
