@@ -42,7 +42,7 @@ def _load_bundled_default_config() -> dict:
         return yaml.safe_load(f) or {}
 
 
-def build_model(model_name: str, *, timeout_s: int = 300):
+def build_model(model_name: str, *, timeout_s: int = 1800):
     """Build a LitellmTextbasedModel routed through the TensorZero gateway.
 
     Every inference flows through TZ (localhost:3000) for observability + A/B
@@ -179,7 +179,9 @@ def run_worker(req: dict) -> dict:
     agent_cfg["step_limit"] = step_limit
     agent_cfg["cost_limit"] = cost_limit
 
-    model = build_model(primary_model, timeout_s=300)
+    # 1800s tolerates slow CPU-offloaded variants (MiniMax-M2.7: 3-8 min/call).
+    # Fast GPU variants finish in seconds; no downside to the large timeout.
+    model = build_model(primary_model, timeout_s=1800)
     env = LocalEnvironment(cwd=str(worktree), timeout=300)
     agent = DefaultAgent(model, env, **agent_cfg)
 

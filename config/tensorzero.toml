@@ -519,9 +519,18 @@ model = "strand_rust_14b"
 #
 # Old: omnicoder_9b=0.35, sera_14b_worker=0.25, devstral_24b=0.22, qwen35_27b=0.18
 # New (Autopilot):
+
+# MiniMax-M2.7: slow-smart oracle on vasp-01:8084 (300B MoE / 9B active;
+# experts CPU-offloaded). ~6 tok/s output; 3-8 min per call. Weighted very
+# low in candidate_variants so it's tested / used ~4% of the time, not as
+# a primary worker — its value is reasoning quality on hard issues.
+[functions.worker_code_edit.variants.minimax_m2_7]
+type = "chat_completion"
+model = "minimax_m2_7"
+
 [functions.worker_code_edit.experimentation]
 type = "static"
-candidate_variants = { qwen36_a3b = 0.3, devstral_24b = 0.2, glm_flash = 0.2, gemma4_31b = 0.3 }
+candidate_variants = { qwen36_a3b = 0.28, devstral_24b = 0.2, glm_flash = 0.2, gemma4_31b = 0.28, minimax_m2_7 = 0.04 }
 fallback_variants = []  # other variants kept defined but unweighted; restart their endpoints and re-add here to activate
 
 # --- Code Review: blind reviewer ---

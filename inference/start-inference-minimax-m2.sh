@@ -58,6 +58,10 @@ fi
 #   --no-mmap               : keep experts resident (no page faults under load)
 #   --ctx-size 32768        : 32K is generous for Strategist prompts; trim if KV
 #                             cache is tight alongside attention weights on GPU
+# --reasoning off: MiniMax-M2.7 has a reasoning channel (same pattern as
+# Gemma-4, GLM-4.7, Qwen3). Without this flag, chat responses land in
+# message.reasoning_content and `content` is empty, which breaks the
+# mini-SWE-agent text parser.
 nohup numactl --interleave=all "${LLAMA_SERVER}" \
   --model "${MODEL_FILE}" \
   --alias MiniMax-M2.7 \
@@ -66,6 +70,7 @@ nohup numactl --interleave=all "${LLAMA_SERVER}" \
   --threads 48 --batch-size 512 --ubatch-size 512 \
   --cache-type-k q4_0 --cache-type-v q4_0 \
   --cache-prompt -fa on --no-mmap --cont-batching --metrics --jinja \
+  --reasoning off \
   > "${LOG_PATH}" 2>&1 &
 
 echo "Started MiniMax-M2.7 (${QUANT}) PID=$! port=${PORT} binary=${LLAMA_SERVER}"
