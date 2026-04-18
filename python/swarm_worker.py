@@ -43,25 +43,52 @@ def _load_bundled_default_config() -> dict:
 
 
 def build_model(model_name: str, *, timeout_s: int = 300):
-    """Build a LitellmTextbasedModel pointed at CLIAPIProxy.
+    """Build a LitellmTextbasedModel routed through the TensorZero gateway.
 
-    The swarm's cloud endpoint is http://localhost:8317/v1, OpenAI-compatible,
-    authenticated via either x-api-key or Authorization: Bearer. We send both;
-    CLIAPIProxy accepts either.
+    Every inference flows through TZ (localhost:3000) for observability + A/B
+    variant selection + automatic logging to Postgres/Clickhouse. TZ then
+    routes to the backing model (local llama.cpp or cloud via CLIAPIProxy)
+    based on the variant config in config/tensorzero.toml.
+
+    `model_name` interpretation:
+      • `tensorzero::…`              — use as-is (caller knows TZ routing).
+      • `claude-*|gpt-*|gemini-*`    — only valid with SWARM_USE_CLOUD=1;
+                                       routes via `tensorzero::model_name::…`.
+                                       Without that flag, falls back to the
+                                       default function (local variants) so
+                                       we don't quietly burn quota.
+      • anything else                — treated as a TZ function_name
+                                       (default: `worker_code_edit`).
     """
     from minisweagent.models.litellm_textbased_model import LitellmTextbasedModel
 
-    api_key = os.environ.get("SWARM_CLOUD_API_KEY", "")
-    api_base = os.environ.get("SWARM_CLOUD_URL", "http://localhost:8317/v1")
-    # LiteLLM needs the `openai/` prefix to route OpenAI-compatible endpoints.
-    full_model = model_name if "/" in model_name else f"openai/{model_name}"
+    tz_base = os.environ.get("SWARM_TENSORZERO_URL",
+                             "http://localhost:3000").rstrip("/")
+    api_base = f"{tz_base}/openai/v1"
+
+    CLOUD_PREFIXES = ("claude-", "gpt-", "gemini-")
+    if model_name.startswith("tensorzero::"):
+        tz_model = model_name
+    elif any(model_name.startswith(p) for p in CLOUD_PREFIXES):
+        if os.environ.get("SWARM_USE_CLOUD") != "1":
+            sys.stderr.write(
+                f"WARN build_model: cloud model {model_name!r} requested without "
+                f"SWARM_USE_CLOUD=1 — falling back to tz function_name="
+                f"worker_code_edit (local variants) so we don't burn quota.\n"
+            )
+            tz_model = "tensorzero::function_name::worker_code_edit"
+        else:
+            tz_model = f"tensorzero::model_name::{model_name}"
+    else:
+        tz_model = f"tensorzero::function_name::{model_name}"
+
+    full_model = f"openai/{tz_model}"
 
     return LitellmTextbasedModel(
         model_name=full_model,
         model_kwargs={
             "api_base": api_base,
-            "api_key": api_key,
-            "extra_headers": {"x-api-key": api_key} if api_key else {},
+            "api_key": "tensorzero",  # TZ ignores the value; LiteLLM requires one
             "timeout": timeout_s,
             "temperature": 0.0,
         },

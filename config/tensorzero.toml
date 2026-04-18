@@ -264,23 +264,23 @@ json_mode = "strict"
 
 # Rerouted from vasp-03 (GLM-4.7-Flash) to vasp-01 (Qwen3.5-27B).
 # vasp-03 freed for other computational tasks (2026-04-14).
-[models.qwen_fast]
-routing = ["vasp01_fast"]
+[models.glm47_flash]
+routing = ["vasp03"]
 
-[models.qwen_fast.providers.vasp01_fast]
+[models.glm47_flash.providers.vasp03]
 type = "openai"
-model_name = "Qwen3.5-27B"
-api_base = "http://10.0.0.20:8081/v1"
+model_name = "GLM-4.7-Flash"
+api_base = "http://10.0.0.22:8081/v1"
 api_key_location = "none"
 
 # --- Coder tier on vasp-01 (Qwen3.5-27B dense — current champion) ---
 
-[models.qwen_coder]
+[models.qwen36_a3b]
 routing = ["vasp01"]
 
-[models.qwen_coder.providers.vasp01]
+[models.qwen36_a3b.providers.vasp01]
 type = "openai"
-model_name = "Qwen3.5-27B"
+model_name = "Qwen3.6-35B-A3B"
 api_base = "http://10.0.0.20:8081/v1"
 api_key_location = "none"
 
@@ -292,7 +292,7 @@ routing = ["vasp02"]
 [models.devstral.providers.vasp02]
 type = "openai"
 model_name = "Devstral-Small-2-24B"
-api_base = "http://10.0.0.21:8081/v1"
+api_base = "http://10.0.0.21:8082/v1"
 api_key_location = "none"
 
 # --- Reasoning tier: alias to Devstral (same node, replaces duplicate 27B) ---
@@ -303,7 +303,7 @@ routing = ["vasp02_reasoning"]
 [models.qwen_reasoning.providers.vasp02_reasoning]
 type = "openai"
 model_name = "Devstral-Small-2-24B"
-api_base = "http://10.0.0.21:8081/v1"
+api_base = "http://10.0.0.21:8082/v1"
 api_key_location = "none"
 
 # --- SERA-14B SWE specialist: Allen AI model on Qwen3 backbone, vasp-03:8083 ---
@@ -341,12 +341,12 @@ api_key_location = "none"
 # Dense 30.7B model, 256K context, Google. Q4_K_M ~19.6GB — exclusive use of V100S.
 # NOT always running. Swap in via: scripts/experiment-gemma-swap.sh start
 
-[models.gemma_31b]
+[models.gemma4_31b]
 routing = ["vasp02_gemma"]
 
-[models.gemma_31b.providers.vasp02_gemma]
+[models.gemma4_31b.providers.vasp02_gemma]
 type = "openai"
-model_name = "gemma-4-31B-it"
+model_name = "Gemma-4-31B-it"
 api_base = "http://10.0.0.21:8081/v1"
 api_key_location = "none"
 
@@ -441,7 +441,7 @@ type = "chat"
 
 [functions.editor_apply.variants.qwen_coder]
 type = "chat_completion"
-model = "qwen_coder"
+model = "qwen36_a3b"
 
 [functions.editor_apply.variants.qwen_reasoning]
 type = "chat_completion"
@@ -464,20 +464,20 @@ type = "chat"
 # Kept for config validation but removed from candidate_variants
 [functions.worker_code_edit.variants.glm_flash]
 type = "chat_completion"
-model = "qwen_fast"
+model = "glm47_flash"
 
-[functions.worker_code_edit.variants.qwen35_27b]
+[functions.worker_code_edit.variants.qwen36_a3b]
 type = "chat_completion"
-model = "qwen_coder"
+model = "qwen36_a3b"
 
 [functions.worker_code_edit.variants.devstral_24b]
 type = "chat_completion"
 model = "devstral"
 
 # A/B: qwen35 with direct-write prompt (blunt, action-oriented — skip exploration)
-[functions.worker_code_edit.variants.qwen35_direct]
+[functions.worker_code_edit.variants.qwen36_direct]
 type = "chat_completion"
-model = "qwen_coder"
+model = "qwen36_a3b"
 
 # A/B: devstral with structured-minimal prompt (2-step plan-then-execute)
 [functions.worker_code_edit.variants.devstral_structured]
@@ -497,9 +497,9 @@ type = "chat_completion"
 model = "omnicoder"
 
 # Gemma-4-31B-it: time-sliced experiment on vasp-02:8081. Dense 30.7B, 256K context.
-[functions.worker_code_edit.variants.gemma_31b_worker]
+[functions.worker_code_edit.variants.gemma4_31b]
 type = "chat_completion"
-model = "gemma_31b"
+model = "gemma4_31b"
 
 # Strand-Rust-Coder-14B: SWE-trained Rust specialist. Historically excellent.
 # Requires SLURM job running on vasp-02:8080 (not always available).
@@ -521,8 +521,8 @@ model = "strand_rust_14b"
 # New (Autopilot):
 [functions.worker_code_edit.experimentation]
 type = "static"
-candidate_variants = { qwen35_27b = 0.35, sera_14b_worker = 0.25, devstral_24b = 0.25, omnicoder_9b = 0.15 }
-fallback_variants = ["strand_rust_14b"]
+candidate_variants = { qwen36_a3b = 0.3, devstral_24b = 0.2, glm_flash = 0.2, gemma4_31b = 0.3 }
+fallback_variants = []  # other variants kept defined but unweighted; restart their endpoints and re-add here to activate
 
 # --- Code Review: blind reviewer ---
 [functions.code_review]
@@ -530,7 +530,7 @@ type = "chat"
 
 [functions.code_review.variants.qwen_reviewer]
 type = "chat_completion"
-model = "qwen_fast"
+model = "glm47_flash"
 
 # --- Deep Reasoning: complex analysis ---
 # Routes to vasp-02 (Devstral-24B) for reasoning-heavy tasks.
@@ -548,11 +548,11 @@ type = "chat"
 
 [functions.task_planning.variants.qwen_fast_planner]
 type = "chat_completion"
-model = "qwen_fast"
+model = "glm47_flash"
 
 [functions.task_planning.variants.qwen_planner]
 type = "chat_completion"
-model = "qwen_coder"
+model = "qwen36_a3b"
 
 [functions.task_planning.variants.devstral_planner]
 type = "chat_completion"
@@ -575,11 +575,11 @@ type = "chat"
 # Kept for config validation but removed from candidate_variants (0% task_resolved).
 [functions.code_fixing.variants.glm_flash_fixer]
 type = "chat_completion"
-model = "qwen_fast"
+model = "glm47_flash"
 
 [functions.code_fixing.variants.qwen35_fixer]
 type = "chat_completion"
-model = "qwen_coder"
+model = "qwen36_a3b"
 
 [functions.code_fixing.variants.devstral_fixer]
 type = "chat_completion"
@@ -598,7 +598,7 @@ model = "omnicoder"
 # Gemma-4-31B-it fixer: time-sliced experiment on vasp-02:8081.
 [functions.code_fixing.variants.gemma_31b_fixer]
 type = "chat_completion"
-model = "gemma_31b"
+model = "gemma4_31b"
 
 # Adaptive — gemma_31b_fixer removed (0% task_resolved, experiment concluded 2026-04-12).
 # Restored strong performers: omnicoder_fixer, devstral_fixer.
@@ -629,7 +629,7 @@ type = "chat"
 
 [functions.adversarial_test.variants.qwen_breaker]
 type = "chat_completion"
-model = "qwen_coder"
+model = "qwen36_a3b"
 
 # ─── Harness Parameter Optimization (Tag-Based Thompson Sampling) ───────────
 #
@@ -675,4 +675,17 @@ routing = ["vasp_embed"]
 type = "openai"
 model_name = "nomic-embed-text-v1.5"
 api_base = "http://10.0.0.22:8082/v1"
+api_key_location = "none"
+
+
+# MiniMax-M2.7 slow-smart oracle (vasp-01:8084). 300B MoE / 9B active,
+# CPU-offloaded experts, ~6 tok/s, 3-8 min per call. Reserve for
+# deep-reasoning / architect oracle calls, NOT first-line worker.
+[models.minimax_m2_7]
+routing = ["vasp01_strategist"]
+
+[models.minimax_m2_7.providers.vasp01_strategist]
+type = "openai"
+model_name = "MiniMax-M2.7"
+api_base = "http://10.0.0.20:8084/v1"
 api_key_location = "none"

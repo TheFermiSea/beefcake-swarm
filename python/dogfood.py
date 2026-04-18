@@ -130,7 +130,11 @@ def main() -> int:
     src.add_argument("--issue-list", help="Space-separated beads IDs")
     src.add_argument("--discover", action="store_true",
                      help="Auto-fetch issues from `bd ready` each iteration")
-    ap.add_argument("--model", default=os.environ.get("SWARM_CLOUD_MODEL", "claude-sonnet-4-6"))
+    # Routes through TensorZero (see swarm_worker.build_model). Default is the
+    # `worker_code_edit` function (local variants A/B-weighted). Override with
+    # SWARM_WORKER_MODEL or --model.
+    ap.add_argument("--model", default=os.environ.get("SWARM_WORKER_MODEL",
+                                                      "worker_code_edit"))
     ap.add_argument("--repo-root", type=pathlib.Path, default=REPO_ROOT_DEFAULT)
     ap.add_argument("--cooldown", type=int, default=60,
                     help="Seconds between batches")

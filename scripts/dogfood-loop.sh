@@ -16,14 +16,13 @@ VENV="$REPO_ROOT/python/.venv"
 export BD_ACTOR="${BD_ACTOR:-swarm-$(hostname -s 2>/dev/null || echo worker)}"
 export SWARM_BEADS_BIN="${SWARM_BEADS_BIN:-$SCRIPT_DIR/bd-safe.sh}"
 
-if [[ -z "${SWARM_CLOUD_URL+x}" ]]; then
-  export SWARM_CLOUD_URL="http://localhost:8317/v1"
-fi
-if [[ -n "${SWARM_CLOUD_URL:-}" ]]; then
-  : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set}"
+export SWARM_TENSORZERO_URL="${SWARM_TENSORZERO_URL:-http://localhost:3000}"
+if [[ "${SWARM_USE_CLOUD:-0}" == "1" ]]; then
+  export SWARM_CLOUD_URL="${SWARM_CLOUD_URL:-http://localhost:8317/v1}"
+  : "${SWARM_CLOUD_API_KEY:?SWARM_CLOUD_API_KEY must be set for SWARM_USE_CLOUD=1}"
   export SWARM_CLOUD_API_KEY
+  export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-sonnet-4-6}"
 fi
-export SWARM_CLOUD_MODEL="${SWARM_CLOUD_MODEL:-claude-sonnet-4-6}"
 export MSWEA_COST_TRACKING="${MSWEA_COST_TRACKING:-ignore_errors}"
 
 if [[ ! -d "$VENV" ]]; then

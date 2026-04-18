@@ -27,7 +27,11 @@ from datetime import datetime, timezone
 from swarm_worker import run_worker  # reuse the Phase 1 worker
 
 DEFAULT_WT_ROOT = pathlib.Path("/tmp/beefcake-wt")
-DEFAULT_MODEL = os.environ.get("SWARM_CLOUD_MODEL", "claude-sonnet-4-6")
+# Routes through TensorZero. Default is the `worker_code_edit` function (local
+# variants A/B-weighted). `SWARM_WORKER_MODEL` lets callers pick a different
+# TZ function name, a `tensorzero::…` routing string, or — with
+# SWARM_USE_CLOUD=1 — a cloud model alias (claude-sonnet-4-6, etc.).
+DEFAULT_MODEL = os.environ.get("SWARM_WORKER_MODEL", "worker_code_edit")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
