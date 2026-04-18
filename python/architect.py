@@ -30,39 +30,32 @@ DEFAULT_FUNCTION = "code_patch_architect"
 MAX_FILE_BYTES = 60_000  # ~15k tokens; trim very long files so the prompt fits
 ARCHITECT_TIMEOUT = 1_800  # 30 min; MiniMax can be slow on long outputs
 
-SYSTEM_PROMPT = """You are a senior software engineer. Given a task description
-and the current contents of the relevant file(s), respond with a git unified
-diff that resolves the task.
+SYSTEM_PROMPT = """You are a senior software engineer. Given a task and the
+current contents of the relevant file(s), respond with the FULL NEW contents
+of each file you want to change.
 
-Output format:
-  • Respond with ONLY the diff, wrapped in a ```diff ... ``` fenced code block.
-  • The diff MUST apply cleanly with `git apply` against the current worktree.
-  • REQUIRED header shape for every file in the diff:
+Output format — follow EXACTLY:
 
-        diff --git a/<path> b/<path>
-        --- a/<path>
-        +++ b/<path>
-        @@ -<old-start>,<old-len> +<new-start>,<new-len> @@
-         <context line>
-         <context line>
-        -<line to remove>
-        +<line to add>
-         <context line>
-         <context line>
+  ### FILE: <relative/path/from/repo-root>
+  ```<language>
+  <complete new contents of the file, top to bottom>
+  ```
 
-  • Always include the `diff --git a/... b/...` header line. Always include
-    at least 3 lines of unchanged context around each change. Always use
-    `a/` and `b/` path prefixes.
-  • For multi-file changes, emit multiple `diff --git` sections in one block.
-  • When modifying an EXISTING attribute like `#[derive(Debug, Deserialize)]`,
-    EDIT THE LINE — e.g. replace with `#[derive(Debug, Clone, Deserialize)]`.
-    Do NOT append a second `#[derive(Clone)]` as a new line; that produces
-    a redundant/conflicting attribute.
-  • Do NOT add prose, plan explanations, or step-by-step reasoning in the
-    output. The harness consumes only the diff. Everything else is
-    discarded.
+For multi-file changes, emit one ### FILE block per file.
 
-If you cannot produce a correct diff (e.g. insufficient context), respond
+Rules:
+  • Emit the ENTIRE file contents, not a patch or diff. The harness will
+    write your content byte-for-byte to disk, replacing the current file.
+  • Copy ALL unchanged lines verbatim. Only the lines you want changed
+    should differ from the input.
+  • The ```<language>``` fence language tag matches the file (`rust`,
+    `python`, `toml`, `markdown`, etc.). Use `text` if unsure.
+  • Do NOT abbreviate, elide, or use placeholders like "// ... (rest
+    unchanged)". The harness treats your output as the literal new file.
+  • Do NOT include explanations outside the ### FILE blocks. Anything
+    before/between/after the blocks is discarded.
+
+If you cannot produce the content (e.g. insufficient context), respond
 with exactly:
   NEED_CONTEXT: <path/to/file/you/need>
 and the harness will re-invoke you with that file's contents attached.
@@ -76,16 +69,12 @@ Current src/foo.rs:
         pub x: i32,
     }
 Correct response:
-```diff
-diff --git a/src/foo.rs b/src/foo.rs
---- a/src/foo.rs
-+++ b/src/foo.rs
-@@ -1,4 +1,4 @@
--#[derive(Debug)]
-+#[derive(Debug, Clone)]
- pub struct FooStruct {
-     pub x: i32,
- }
+### FILE: src/foo.rs
+```rust
+#[derive(Debug, Clone)]
+pub struct FooStruct {
+    pub x: i32,
+}
 ```
 """
 
@@ -261,50 +250,47 @@ def build_architect_prompt(
 # Diff extraction
 # ───────────────────────────────────────────────────────────────────────────────
 
-# Two valid starts for a unified diff we'll accept:
-#   • `diff --git a/… b/…` (canonical git format)
-#   • `--- a/…` + `+++ b/…`  (POSIX unified diff; MiniMax often emits this)
-_FENCE_RE = re.compile(
-    r"```(?:diff|patch)?\s*\n(?P<body>(?:diff --git |---\s).*?)```",
-    re.DOTALL,
-)
 _THINK_RE = re.compile(r"<think>.*?</think>", re.DOTALL | re.IGNORECASE)
+# Whole-file replacement: `### FILE: <path>\n```<lang>\n<content>\n```\n`
+_WHOLE_FILE_RE = re.compile(
+    r"^###\s+FILE:\s*(?P<path>\S+)\s*\n"
+    r"```(?P<lang>[^\n]*)\n"
+    r"(?P<content>.*?)^```",
+    re.MULTILINE | re.DOTALL,
+)
 
 
 def _strip_reasoning(response_text: str) -> str:
     """Remove <think>...</think> blocks that some models (MiniMax-M2.7,
-    DeepSeek-R1, QwQ) emit in the `content` field even when the server's
-    --reasoning off flag routes reasoning out of the separate channel.
-
-    Also strips a trailing `</think>` without an opening tag — MiniMax
-    sometimes emits only the closing tag after its reasoning, then the
-    actual response follows."""
+    DeepSeek-R1, QwQ) emit in `content` even when --reasoning off is set
+    on the server. Also handles trailing-only `</think>` without an
+    opener (MiniMax sometimes emits only the close tag)."""
     if not response_text:
         return ""
     cleaned = _THINK_RE.sub("", response_text)
-    # Drop any orphan </think>
     if (idx := cleaned.find("</think>")) >= 0:
         cleaned = cleaned[idx + len("</think>"):]
     return cleaned.strip()
 
 
-def extract_unified_diff(response_text: str) -> str | None:
-    """Pull the unified diff out of a model response, ignoring any
-    <think>...</think> reasoning wrapper."""
+def extract_whole_files(response_text: str) -> dict[str, str]:
+    """Parse the whole-file replacement format. Returns {relative_path: content}.
+
+    Model format:
+        ### FILE: path/to/file.rs
+        ```rust
+        <full file contents>
+        ```
+    """
     body = _strip_reasoning(response_text)
-    if not body:
-        return None
-    m = _FENCE_RE.search(body)
-    if m:
-        return m.group("body").rstrip() + "\n"
-    # Fallback: unfenced diff starting with `diff --git ` or `--- a/`
-    for marker in ("diff --git ", "--- a/"):
-        if marker in body:
-            idx = body.index(marker)
-            tail = body[idx:]
-            end = tail.find("```")
-            return (tail[:end] if end >= 0 else tail).rstrip() + "\n"
-    return None
+    out: dict[str, str] = {}
+    for m in _WHOLE_FILE_RE.finditer(body):
+        path = m.group("path").strip().lstrip("./").rstrip("/")
+        content = m.group("content")
+        # Model sometimes emits a trailing newline inside the fence but not
+        # on the source file — don't preserve it unconditionally, leave as-is.
+        out[path] = content
+    return out
 
 
 def needs_more_context(response_text: str) -> str | None:
@@ -319,35 +305,33 @@ def needs_more_context(response_text: str) -> str | None:
 # Diff application
 # ───────────────────────────────────────────────────────────────────────────────
 
-def apply_diff(diff: str, worktree: pathlib.Path) -> dict:
-    """`git apply --check` then `git apply`. Returns {ok, error?, files?}."""
-    try:
-        chk = subprocess.run(
-            ["git", "apply", "--check", "-"],
-            input=diff, cwd=worktree,
-            capture_output=True, text=True, timeout=30,
-        )
-        if chk.returncode != 0:
-            return {"ok": False, "error": f"git apply --check failed:\n{chk.stderr.strip()}"}
-
-        r = subprocess.run(
-            ["git", "apply", "-"],
-            input=diff, cwd=worktree,
-            capture_output=True, text=True, timeout=60,
-        )
-        if r.returncode != 0:
-            return {"ok": False, "error": f"git apply failed:\n{r.stderr.strip()}"}
-
-        changed = subprocess.run(
-            ["git", "diff", "--name-only", "HEAD"],
-            cwd=worktree, capture_output=True, text=True, timeout=15,
-        )
-        files = [ln for ln in changed.stdout.splitlines() if ln.strip()]
-        return {"ok": True, "files": files}
-    except subprocess.TimeoutExpired as e:
-        return {"ok": False, "error": f"apply timeout: {e}"}
-    except Exception as e:
-        return {"ok": False, "error": f"apply exception: {type(e).__name__}: {e}"}
+def apply_whole_files(files: dict[str, str], worktree: pathlib.Path) -> dict:
+    """Overwrite each file in the worktree with the provided content.
+    Returns {ok, files?, error?}."""
+    if not files:
+        return {"ok": False, "error": "no files to write"}
+    wt_resolved = worktree.resolve()
+    written: list[str] = []
+    for rel, content in files.items():
+        p = (worktree / rel).resolve()
+        # Refuse to escape the worktree
+        try:
+            p.relative_to(wt_resolved)
+        except ValueError:
+            return {"ok": False, "error": f"path escape: {rel}"}
+        # Some file templates don't end in newline — preserve the model's output
+        # verbatim. Ensure parent exists for new files.
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            # Guarantee trailing newline to avoid `git diff`'s "no newline at
+            # end of file" annotation cluttering the summary.
+            if content and not content.endswith("\n"):
+                content = content + "\n"
+            p.write_text(content)
+            written.append(rel)
+        except Exception as e:
+            return {"ok": False, "error": f"write {rel} failed: {type(e).__name__}: {e}"}
+    return {"ok": True, "files": written}
 
 
 def reset_worktree(worktree: pathlib.Path) -> None:
@@ -420,8 +404,10 @@ def run_architect_coder(
     t0 = time.time()
     total_tokens = {"prompt": 0, "completion": 0}
     extra_files: list[pathlib.PurePosixPath] = []
-    debug_dir = worktree / ".architect-debug"
-    debug_dir.mkdir(exist_ok=True)
+    # Debug dir lives OUTSIDE the worktree so reset_worktree() (which runs
+    # `git clean -fd`) doesn't wipe it between iterations.
+    debug_dir = pathlib.Path("/tmp/beefcake-architect-debug") / worktree.name
+    debug_dir.mkdir(parents=True, exist_ok=True)
 
     for iteration in range(1, max_iters + 1):
         messages = build_architect_prompt(issue, worktree,
@@ -459,24 +445,24 @@ def run_architect_coder(
                                  "feedback": f"Attached {ctx_path}. Now emit the diff."})
                 continue
 
-        diff = extract_unified_diff(response)
-        if not diff:
+        files = extract_whole_files(response)
+        if not files:
             attempts.append({
                 "response": response,
-                "feedback": ("I couldn't find a unified diff in your response. "
-                             "Output ONLY a ```diff ... ``` fenced block. "
-                             "No prose, no reasoning, no prefix text."),
+                "feedback": ("I couldn't find any `### FILE: <path>` blocks in "
+                             "your response. Re-emit using the exact format:\n\n"
+                             "### FILE: <relative/path>\n```<language>\n"
+                             "<full file contents>\n```\n"),
             })
             continue
 
-        applied = apply_diff(diff, worktree)
+        applied = apply_whole_files(files, worktree)
         if not applied["ok"]:
             reset_worktree(worktree)
             attempts.append({
                 "response": response,
-                "feedback": (f"Your diff did not apply cleanly:\n\n{applied['error']}\n\n"
-                             "Produce a revised diff that applies against the current state. "
-                             "Pay close attention to line numbers, context lines, and file paths."),
+                "feedback": (f"Writing your files failed:\n\n{applied['error']}\n\n"
+                             "Revise your response."),
             })
             continue
 
@@ -487,7 +473,6 @@ def run_architect_coder(
                 "iterations": iteration,
                 "wall_s": round(time.time() - t0, 2),
                 "files_modified": applied["files"],
-                "diff": diff,
                 "attempts": len(attempts) + 1,
             }
 
@@ -502,8 +487,9 @@ def run_architect_coder(
         attempts.append({
             "response": response,
             "feedback": (
-                f"Your diff applied, but the `{gate_name}` gate failed:\n\n"
-                f"```\n{err_tail}\n```\n\nProduce a revised diff that fixes the above."
+                f"Your files wrote successfully, but the `{gate_name}` gate failed:\n\n"
+                f"```\n{err_tail}\n```\n\n"
+                "Re-emit the ### FILE blocks with fixes for the above error."
             ),
         })
 
