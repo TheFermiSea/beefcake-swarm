@@ -33,6 +33,7 @@ nohup numactl --interleave=all apptainer run --nv --bind /scratch/ai:/scratch/ai
   --threads 32 --batch-size 4096 --ubatch-size 4096 \
   --cache-type-k q8_0 --cache-type-v q8_0 \
   --cache-prompt -fa on --parallel 1 --mlock --cont-batching --metrics --jinja \
+  --reasoning off \
   > "${LOG_PATH}" 2>&1 &
 
 echo "Started GLM-4.7-Flash PID=$! container=${CONTAINER}"
