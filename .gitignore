@@ -95,3 +95,13 @@ GEMINI_SUGGESTIONS/
 .beadhub
 .aw/
 adapters/
+
+# Third-party clones for research/spike
+vendor/
+
+# Python worker artifacts
+python/.venv/
+python/uv.lock
+
+# Spike outputs
+logs/mini-spike-*/

@@ -2,6 +2,27 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 🚨 2026-04-18 Architecture migration in progress (`feat/mini-swe-agent-overhaul`)
+
+The Rust inner loop (`crates/swarm-agents` + most of `coordination/`) has been **deleted** and replaced by a ~1.5k-LOC Python orchestrator built on mini-SWE-agent. See `docs/research/overhaul-decision-2026-04-18.md` for rationale (9 recent arXiv papers on agent architectures, NotebookLM auth regression, 0/30 baseline resolve rate).
+
+New structure:
+- **`python/swarm_worker.py`** — the actual agent loop (LiteLLM → CLIAPIProxy → Claude Sonnet 4.6; bash-tool-only; mini-SWE-agent `LitellmTextbasedModel`).
+- **`python/run.py`** — single-issue driver: beads resolve → worktree → worker → cargo check (+test) → merge → close.
+- **`python/dogfood.py`** — continuous loop: `bd ready` → `run.process_issue` → repeat.
+- **`scripts/run-swarm.sh` / `scripts/dogfood-loop.sh`** — thin shell shims preserving the env-var contract; point at the Python path.
+- **`config/litellm.yaml`** — LiteLLM routing config (cloud + local fallback cascade). Phase 1 uses direct CLIAPIProxy; Phase 2 will load the Router.
+
+Gone (still in git history; `git revert c755c57` restores):
+- `crates/swarm-agents/` entirely (65k LOC): driver, state_machine, acceptance, reformulation, runtime_adapter, subtask, pipeline, autopilot, context_firewall, map_elites, mutation_archive, tools/, agents/, modes/.
+- `coordination/src/{council,ensemble,debate,escalation,feedback,router,work_packet,context_packer,analytics,verifier}/` + `reformulation.rs`, `speculation.rs`, `main.rs`, `benchmark_tools.rs`.
+
+Still there (29k LOC, lib-only): `coordination/src/{benchmark,fim,harness,otel,rollout,state}` + feature-gated `slurm`, `agent_profile`, `events`, `memory`, `patch`, `perf_control`, `registry`, `resilience`, `reviewer_*`, `shell_safety`, `tool_bundle`, `tool_schema`.
+
+**Sections below describing multi-tier routing, ensemble voting, Council escalation, and the Rust orchestrator are historical** — left in place until cutover is fully validated. The authoritative current behavior is in `python/`.
+
+---
+
 ## Model Selection & Routing
 
 - **Scout/Fast (vasp-03:8081):** GLM-4.7-Flash — 30B/3B MoE, SOTA tool-calling, ~50 tok/s. Used for scout, reviewer, fixer roles.
@@ -14,16 +35,16 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Test Commands
 
 ```bash
-cargo build --workspace                    # Build all crates
-cargo test -p coordination                 # Run coordination tests
-cargo test -p coordination <test_name>     # Run single test
-cargo test -p swarm-agents                 # Run swarm-agents tests
-cargo run -p swarm-agents                  # Run orchestrator (needs inference running)
-cargo run -p coordination                  # Run MCP server (stdio transport)
-cargo run -p coordination -- --harness     # MCP server with harness tools
-cargo run -p coordination -- --ensemble --state-path ./state  # MCP with ensemble
+# Python worker (the active orchestrator)
+cd python && uv sync                       # Install dependencies
+scripts/run-swarm.sh --issue <id>          # Single-issue end-to-end run
+scripts/dogfood-loop.sh --discover         # Continuous loop (bd ready → resolve)
+
+# Remaining Rust lib (coordination, now lib-only)
+cargo build --workspace                    # Build remaining library
+cargo test -p coordination                 # Unit tests
 cargo fmt --all -- --check                 # Check formatting
-cargo clippy --workspace -- -D warnings    # Lint
+cargo clippy --workspace -- -D warnings    # Lint (currently 10 pre-existing warnings on main)
 ```
 
 ## Code Conventions
