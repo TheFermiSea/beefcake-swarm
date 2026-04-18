@@ -270,7 +270,7 @@ routing = ["vasp03"]
 [models.glm47_flash.providers.vasp03]
 type = "openai"
 model_name = "GLM-4.7-Flash"
-api_base = "http://10.0.0.22:8081/v1"
+api_base = "http://10.0.0.22:8082/v1"
 api_key_location = "none"
 
 # --- Coder tier on vasp-01 (Qwen3.5-27B dense — current champion) ---
@@ -721,5 +721,5 @@ routing = ["vasp01_strategist"]
 [models.minimax_m2_7.providers.vasp01_strategist]
 type = "openai"
 model_name = "MiniMax-M2.7"
-api_base = "http://10.0.0.20:8084/v1"
+api_base = "http://10.0.0.22:8081/v1"
 api_key_location = "none"
