@@ -632,6 +632,31 @@ type = "static"
 candidate_variants = { omnicoder_fixer = 0.35, qwen35_fixer = 0.25, sera_14b_fixer = 0.15, qwen_reasoning_fixer = 0.15, devstral_fixer = 0.10 }
 fallback_variants = ["strand_rust_fixer"]
 
+
+# --- Code Patch Architect: produce unified diffs from issue descriptions ---
+# Used by python/architect.py's architect-coder loop. The architect is a slow
+# high-quality model that emits a `git apply`-able unified diff; the caller
+# applies it and runs the verifier. If verification fails, the caller
+# re-engages the architect with the error output.
+[functions.code_patch_architect]
+type = "chat"
+
+[functions.code_patch_architect.variants.minimax_m2_7]
+type = "chat_completion"
+model = "minimax_m2_7"
+
+# Cloud fallback variant for when MiniMax is unreachable (SWARM_USE_CLOUD=1).
+[functions.code_patch_architect.variants.claude_sonnet]
+type = "chat_completion"
+model = "claude_sonnet"
+
+# Default: MiniMax 100%. Cloud variant exists but is opt-in via
+# tensorzero::function_name::code_patch_architect::variant_name::claude_sonnet.
+[functions.code_patch_architect.experimentation]
+type = "static"
+candidate_variants = { minimax_m2_7 = 1.0 }
+fallback_variants = []
+
 # --- Adversarial Testing: red-team agent ---
 [functions.adversarial_test]
 type = "chat"

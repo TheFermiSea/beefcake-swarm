@@ -235,7 +235,11 @@ def run_verifier(wt_path: pathlib.Path, skip_tests: bool = False) -> dict:
 def process_issue(issue_id: str, *, repo_root: pathlib.Path, model: str,
                   objective: str | None = None, skip_tests: bool = False,
                   keep_on_fail: bool = True, close_on_success: bool = True,
-                  query_kb: bool = True) -> dict:
+                  query_kb: bool = True,
+                  architect_coder: bool = False,
+                  architect_function: str = "code_patch_architect",
+                  architect_variant: str | None = None,
+                  architect_max_iters: int = 3) -> dict:
     t0 = time.time()
     result: dict = {
         "issue_id": issue_id, "model": model,
@@ -278,36 +282,72 @@ def process_issue(issue_id: str, *, repo_root: pathlib.Path, model: str,
     if not objective:
         bd_claim(issue_id)
 
-    # 5. Invoke worker
-    req = {
-        "issue": issue,
-        "worktree_path": str(wt_path),
-        "iteration": 1,
-        "tier": "Worker",
-        "model_config": {
-            "model_name": model,
-            "max_tool_calls": 60,
-            "cost_limit_usd": 8.0,
-            "deadline_secs": 1800,
-        },
-        "knowledge_base": kb_context,
-        "prior_context": {},
-    }
-    try:
-        outcome = run_worker(req)
-    except Exception as e:
-        outcome = {"status": "failed", "failure_reason": f"{type(e).__name__}: {e}"}
+    # 5. Invoke inner loop — either architect-coder (MiniMax emits a diff,
+    # we apply+verify with retry) or mini-SWE-agent bash-loop (the default).
+    if architect_coder:
+        log(f"architect-coder mode: function={architect_function} "
+            f"variant={architect_variant or 'weighted'}")
+        from architect import run_architect_coder
+        arch = run_architect_coder(
+            issue, wt_path,
+            verifier_fn=lambda wt: run_verifier(wt, skip_tests=skip_tests),
+            max_iters=architect_max_iters,
+            function_name=architect_function,
+            variant_name=architect_variant,
+        )
+        result["architect"] = {k: arch.get(k) for k in
+                               ("status", "iterations", "wall_s",
+                                "files_modified", "attempts", "reason")}
+        # Translate architect result into the same shape downstream code expects.
+        if arch["status"] == "resolved":
+            outcome = {"status": "produced_changes", "exit_status": "Submitted",
+                       "files_modified": arch.get("files_modified", []),
+                       "wall_time_s": arch.get("wall_s"),
+                       "iterations": arch.get("iterations"),
+                       "cost_usd": 0.0}
+            # Architect's apply_diff left files in the worktree uncommitted.
+            # Downstream commit step below picks them up.
+        else:
+            outcome = {"status": "failed",
+                       "failure_reason": arch.get("reason", "architect failed"),
+                       "wall_time_s": arch.get("wall_s")}
+    else:
+        req = {
+            "issue": issue,
+            "worktree_path": str(wt_path),
+            "iteration": 1,
+            "tier": "Worker",
+            "model_config": {
+                "model_name": model,
+                "max_tool_calls": 60,
+                "cost_limit_usd": 8.0,
+                "deadline_secs": 1800,
+            },
+            "knowledge_base": kb_context,
+            "prior_context": {},
+        }
+        try:
+            outcome = run_worker(req)
+        except Exception as e:
+            outcome = {"status": "failed", "failure_reason": f"{type(e).__name__}: {e}"}
     result["worker"] = {k: outcome.get(k) for k in
                         ("status", "exit_status", "iterations",
                          "wall_time_s", "cost_usd", "files_modified")}
 
-    # 6. Verifier (only run if worker produced changes — no point verifying main)
+    # 6. Verifier — skip re-verifying for architect-coder (architect loop
+    # already ran + passed the verifier before returning "resolved"). For
+    # the mini-SWE-agent path we still gate on a fresh verifier run.
     if outcome.get("status") == "produced_changes":
         committed = worktree_commit_if_needed(wt_path, issue_id)
         result["worker"]["committed"] = committed
-        ver = run_verifier(wt_path, skip_tests=skip_tests)
-        result["verifier"] = ver
-        if ver["all_green"] and committed:
+        if architect_coder:
+            result["verifier"] = {"all_green": True, "gates": {"architect_verified": {"passed": True}}}
+            ver_green = committed
+        else:
+            ver = run_verifier(wt_path, skip_tests=skip_tests)
+            result["verifier"] = ver
+            ver_green = ver["all_green"] and committed
+        if ver_green:
             # 7. Merge + close
             if worktree_merge(repo_root, issue_id):
                 result["merged"] = True
@@ -319,7 +359,7 @@ def process_issue(issue_id: str, *, repo_root: pathlib.Path, model: str,
                 result["merged"] = False
                 bd_note(issue_id, f"merge failed for swarm/{issue_id}; branch retained")
         else:
-            bd_note(issue_id, f"verifier failed: {list(ver['gates'].keys())}")
+            bd_note(issue_id, f"verifier failed or uncommitted for {issue_id}")
     else:
         result["verifier"] = None
 
@@ -357,6 +397,17 @@ def main() -> int:
     ap.add_argument("--skip-tests", action="store_true")
     ap.add_argument("--no-close", action="store_true",
                     help="Don't close the beads issue on success (for debugging)")
+    ap.add_argument("--architect-coder", action="store_true",
+                    help="Use the architect-coder flow (MiniMax emits a unified "
+                         "diff, we apply+verify, retry on failure) instead of "
+                         "the mini-SWE-agent bash loop.")
+    ap.add_argument("--architect-function", default="code_patch_architect",
+                    help="TZ function name for the architect call.")
+    ap.add_argument("--architect-variant",
+                    help="Pin to a specific TZ variant (e.g. 'claude_sonnet'). "
+                         "Default: use the function's weighted selection.")
+    ap.add_argument("--architect-max-iters", type=int, default=3,
+                    help="Max architect-coder retry iterations (default 3).")
     ap.add_argument("--no-kb", action="store_true",
                     help="Skip NotebookLM pre-task queries")
     ap.add_argument("--summary-path", type=pathlib.Path,
@@ -372,6 +423,10 @@ def main() -> int:
         skip_tests=args.skip_tests,
         close_on_success=not args.no_close,
         query_kb=not args.no_kb,
+        architect_coder=args.architect_coder,
+        architect_function=args.architect_function,
+        architect_variant=args.architect_variant,
+        architect_max_iters=args.architect_max_iters,
     )
     append_summary(row, args.summary_path)
     log(f"DONE status={row['status']} wall={row['wall_s']}s "
