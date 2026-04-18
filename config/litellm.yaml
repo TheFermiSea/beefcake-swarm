@@ -1,0 +1,175 @@
+# LiteLLM routing config for beefcake-swarm Python agents.
+# Docs: https://docs.litellm.ai/docs/routing
+#       https://docs.litellm.ai/docs/proxy/config_settings
+#       https://docs.litellm.ai/docs/proxy/reliability
+#
+# Topology:
+#   Cloud primary/fallbacks -> CLIAPIProxy at http://localhost:8317/v1 (x-api-key auth)
+#   Local primary           -> vasp-01 Qwen3.6-35B-A3B
+#   Local peers             -> vasp-02 (reasoning), vasp-03 (fast)
+#
+# Fallback order (sonnet -> opus -> gpt -> gemini -> local):
+#   429 / quota / auth failures on a cloud model cascade to the next cloud model.
+#   If every cloud model fails (including proxy-unreachable connect errors),
+#   default_fallbacks route to vasp-01-local as the local primary.
+
+model_list:
+  # ---------- Cloud tier (all go through CLIAPIProxy at :8317) ----------
+  # NOTE: CLIAPIProxy is OpenAI-compatible, so use the `openai/` prefix.
+  # It accepts either `Authorization: Bearer` or `x-api-key`; litellm's openai
+  # provider sends both `Authorization: Bearer <api_key>` and the custom
+  # x-api-key via `extra_headers` for belt-and-suspenders.
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: openai/claude-sonnet-4-6
+      api_base: http://localhost:8317/v1
+      api_key: os.environ/SWARM_CLOUD_API_KEY
+      timeout: 300
+      stream_timeout: 300
+      extra_headers:
+        x-api-key: os.environ/SWARM_CLOUD_API_KEY
+    model_info:
+      mode: chat
+      input_cost_per_token: 0.000003   # $3 / 1M in  (Sonnet 4.6 list price)
+      output_cost_per_token: 0.000015  # $15 / 1M out
+
+  - model_name: claude-opus-4-6
+    litellm_params:
+      model: openai/claude-opus-4-6
+      api_base: http://localhost:8317/v1
+      api_key: os.environ/SWARM_CLOUD_API_KEY
+      timeout: 300
+      stream_timeout: 300
+      extra_headers:
+        x-api-key: os.environ/SWARM_CLOUD_API_KEY
+    model_info:
+      mode: chat
+      input_cost_per_token: 0.000015
+      output_cost_per_token: 0.000075
+
+  - model_name: gpt-5.4
+    litellm_params:
+      model: openai/gpt-5.4
+      api_base: http://localhost:8317/v1
+      api_key: os.environ/SWARM_CLOUD_API_KEY
+      timeout: 300
+      stream_timeout: 300
+      extra_headers:
+        x-api-key: os.environ/SWARM_CLOUD_API_KEY
+    model_info:
+      mode: chat
+
+  - model_name: gemini-3-flash-preview
+    litellm_params:
+      model: openai/gemini-3-flash-preview
+      api_base: http://localhost:8317/v1
+      api_key: os.environ/SWARM_CLOUD_API_KEY
+      timeout: 300
+      stream_timeout: 300
+      extra_headers:
+        x-api-key: os.environ/SWARM_CLOUD_API_KEY
+    model_info:
+      mode: chat
+
+  # ---------- Local tier (no auth, long timeouts) ----------
+  - model_name: vasp-01-local
+    litellm_params:
+      model: openai/Qwen3.6-35B-A3B
+      api_base: http://vasp-01:8081/v1
+      api_key: "sk-no-auth-required"   # placeholder; openai/ provider requires non-empty
+      timeout: 2700
+      stream_timeout: 2700
+    model_info:
+      mode: chat
+
+  - model_name: vasp-02-local
+    litellm_params:
+      model: openai/Qwen3.5-27B
+      api_base: http://vasp-02:8081/v1
+      api_key: "sk-no-auth-required"
+      timeout: 2700
+      stream_timeout: 2700
+    model_info:
+      mode: chat
+
+  - model_name: vasp-03-local
+    litellm_params:
+      model: openai/GLM-4.7-Flash
+      api_base: http://vasp-03:8081/v1
+      api_key: "sk-no-auth-required"
+      timeout: 2700
+      stream_timeout: 2700
+    model_info:
+      mode: chat
+
+# ---------- Router / retry / fallback behaviour ----------
+# `fallbacks` + `retry_policy` live under litellm_settings (these are the
+# keys LiteLLM actually reads; router_settings duplicates some but the
+# canonical surface documented in /docs/proxy/reliability is litellm_settings).
+litellm_settings:
+  num_retries: 3                       # per route before cascading
+  request_timeout: 300                 # default; model-level timeout overrides
+  allowed_fails: 3                     # trip cooldown after N fails in window
+  cooldown_time: 30                    # seconds a model stays cooled off
+  drop_params: true                    # drop unsupported params silently
+  set_verbose: false
+  success_callback: []                 # add "langfuse" / "prometheus" later
+  failure_callback: []
+
+  # Per-model fallback chain. Keys are the caller-visible model_name.
+  fallbacks:
+    - claude-sonnet-4-6:
+        - claude-opus-4-6
+        - gpt-5.4
+        - gemini-3-flash-preview
+        - vasp-01-local
+    - claude-opus-4-6:
+        - gpt-5.4
+        - gemini-3-flash-preview
+        - vasp-01-local
+    - gpt-5.4:
+        - gemini-3-flash-preview
+        - vasp-01-local
+    - gemini-3-flash-preview:
+        - vasp-01-local
+    # Local-only chain: if vasp-01 is down, try peers.
+    - vasp-01-local:
+        - vasp-02-local
+        - vasp-03-local
+
+  # Prompt-size overflow (distinct from error-driven fallbacks).
+  context_window_fallbacks:
+    - claude-sonnet-4-6: [claude-opus-4-6, gemini-3-flash-preview]
+    - claude-opus-4-6: [gemini-3-flash-preview]
+    - vasp-01-local: [vasp-02-local]
+
+  # Content-policy refusals -> swap provider family.
+  content_policy_fallbacks:
+    - claude-sonnet-4-6: [gpt-5.4, vasp-01-local]
+    - claude-opus-4-6: [gpt-5.4, vasp-01-local]
+
+  # Ultimate last-resort (fires if no model-specific rule matched).
+  default_fallbacks: [vasp-01-local]
+
+router_settings:
+  routing_strategy: simple-shuffle
+  num_retries: 3
+  retry_after: 5
+  allowed_fails: 3
+  cooldown_time: 30
+  enable_pre_call_checks: true
+  # Per-error retry counts. Auth/quota are non-retryable for the *same* model
+  # but we let num_retries handle transient 5xx; the fallback list handles 429.
+  retry_policy:
+    AuthenticationErrorRetries: 0      # bad key won't get better with retries
+    BadRequestErrorRetries: 0
+    TimeoutErrorRetries: 2
+    RateLimitErrorRetries: 1           # one quick retry, then cascade
+    ContentPolicyViolationErrorRetries: 0
+    InternalServerErrorRetries: 2
+
+general_settings:
+  # No master_key / database_url -- we use library mode, not the proxy DB.
+  background_health_checks: true
+  health_check_interval: 60
+  disable_spend_logs: false            # keep cost tracking on
