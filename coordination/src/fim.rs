@@ -7,7 +7,7 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 /// Request body for FIM completion endpoint.
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FimRequest {
     /// The prefix part (code before the insertion point).
     pub prompt: String,
@@ -18,14 +18,14 @@ pub struct FimRequest {
 }
 
 /// Response from the FIM completion endpoint.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct FimResponse {
     /// The generated completion text.
     pub choices: Vec<FimChoice>,
 }
 
 /// A single choice in the FIM response.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct FimChoice {
     /// The generated text.
     pub text: String,
