@@ -86,7 +86,11 @@ def discover_ready_issues(limit: int = 10) -> list[str]:
 
 def run_batch(issue_ids: list[str], *, repo_root: pathlib.Path, model: str,
               skip_tests: bool, parallel: int,
-              summary_path: pathlib.Path) -> list[dict]:
+              summary_path: pathlib.Path,
+              architect_coder: bool = False,
+              architect_function: str = "code_patch_architect",
+              architect_variant: str | None = None,
+              architect_max_iters: int = 3) -> list[dict]:
     """Process a batch of issues. Returns outcome rows."""
     outcomes: list[dict] = []
 
@@ -96,6 +100,10 @@ def run_batch(issue_ids: list[str], *, repo_root: pathlib.Path, model: str,
                 iid, repo_root=repo_root, model=model,
                 skip_tests=skip_tests, close_on_success=True,
                 query_kb=True,
+                architect_coder=architect_coder,
+                architect_function=architect_function,
+                architect_variant=architect_variant,
+                architect_max_iters=architect_max_iters,
             )
         except Exception as e:
             return {"issue_id": iid, "status": "failed",
@@ -146,6 +154,14 @@ def main() -> int:
                     help="Issues per batch in --discover mode")
     ap.add_argument("--skip-tests", action="store_true")
     ap.add_argument("--summary-dir", type=pathlib.Path, default=SUMMARY_DIR_DEFAULT)
+    ap.add_argument("--architect-coder", action="store_true",
+                    help="Route each issue through MiniMax-led architect-coder "
+                         "flow (unified diff + apply + retry) instead of the "
+                         "default mini-SWE-agent bash loop.")
+    ap.add_argument("--architect-function", default="code_patch_architect")
+    ap.add_argument("--architect-variant",
+                    help="Pin a specific TZ variant for architect calls.")
+    ap.add_argument("--architect-max-iters", type=int, default=3)
     args = ap.parse_args()
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
@@ -182,7 +198,11 @@ def main() -> int:
             log(f"=== batch of {len(batch)}: {' '.join(batch)} ===")
             run_batch(batch, repo_root=repo_root, model=args.model,
                       skip_tests=args.skip_tests, parallel=args.parallel,
-                      summary_path=summary_path)
+                      summary_path=summary_path,
+                      architect_coder=args.architect_coder,
+                      architect_function=args.architect_function,
+                      architect_variant=args.architect_variant,
+                      architect_max_iters=args.architect_max_iters)
             total += len(batch)
 
             if args.max_runs and total >= args.max_runs:
