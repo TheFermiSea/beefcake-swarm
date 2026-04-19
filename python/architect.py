@@ -346,6 +346,36 @@ def reset_worktree(worktree: pathlib.Path) -> None:
 # Architect call
 # ───────────────────────────────────────────────────────────────────────────────
 
+def call_architect_meta(
+    messages: list[dict],
+    *,
+    tz_url: str = DEFAULT_TZ_URL,
+    function_name: str = DEFAULT_FUNCTION,
+    variant_name: str | None = None,
+    timeout_s: int = ARCHITECT_TIMEOUT,
+    max_tokens: int = 16384,
+) -> tuple[str, str | None]:
+    """Like call_architect but also returns the model string TZ actually
+    served (for Phase 4 feedback: even when variant_name is None, TZ
+    picks one under weighted routing and reports it in response.model)."""
+    if variant_name:
+        model = f"openai/tensorzero::function_name::{function_name}::variant_name::{variant_name}"
+    else:
+        model = f"openai/tensorzero::function_name::{function_name}"
+    resp = litellm.completion(
+        model=model,
+        messages=messages,
+        api_base=f"{tz_url.rstrip('/')}/openai/v1",
+        api_key="tensorzero",
+        timeout=timeout_s,
+        temperature=0.0,
+        max_tokens=max_tokens,
+    )
+    content = resp.choices[0].message.content or ""
+    served_model = getattr(resp, "model", None)
+    return content, served_model
+
+
 def call_architect(
     messages: list[dict],
     *,
@@ -521,16 +551,29 @@ SEPL_LINEAGE_ROOT = pathlib.Path("/tmp/beefcake-lineage")
 
 
 def _resolve_lineage_path(worktree: pathlib.Path, issue_id: str) -> pathlib.Path:
-    """Lineage lands at <repo>/.swarm/lineage/<id>.jsonl (gitignored) if
-    we can resolve the main repo, else /tmp/beefcake-lineage/<id>.jsonl.
-    We avoid the worktree root because reset_worktree()'s `git clean -fd`
-    would nuke the audit trail."""
+    """Lineage lands at <repo>/.swarm/lineage/<id>.jsonl (gitignored) when
+    `worktree` is a bona fide git worktree (common .git is OUTSIDE
+    `worktree`), else /tmp/beefcake-lineage/<id>.jsonl. We avoid putting
+    the audit trail inside the worktree itself because reset_worktree()'s
+    `git clean -fd` would nuke it in any setup where `.swarm/lineage/`
+    isn't in the worktree's .gitignore."""
     try:
         main_git_dir = subprocess.run(
             ["git", "rev-parse", "--git-common-dir"], cwd=worktree,
             capture_output=True, text=True, timeout=10, check=True,
         ).stdout.strip()
-        repo_root = pathlib.Path(main_git_dir).resolve().parent
+        git_path = pathlib.Path(main_git_dir)
+        if not git_path.is_absolute():
+            git_path = (worktree / git_path).resolve()
+        else:
+            git_path = git_path.resolve()
+        repo_root = git_path.parent
+        # Only use repo-local lineage when worktree != repo_root (true
+        # multi-worktree setup). Single-repo (git init) mode falls back
+        # to /tmp so the audit trail survives worktree teardown.
+        worktree_resolved = worktree.resolve()
+        if worktree_resolved == repo_root:
+            raise RuntimeError("worktree is repo root; using /tmp fallback")
         candidate = repo_root / ".swarm" / "lineage" / f"{issue_id}.jsonl"
         candidate.parent.mkdir(parents=True, exist_ok=True)
         return candidate
@@ -549,6 +592,7 @@ def run_architect_sepl(
     function_name: str = DEFAULT_FUNCTION,
     variant_name: str | None = None,
     rollback_threshold: int = 3,
+    outcome_logger: Any = None,
 ) -> dict:
     """SEPL-driven architect loop.
 
@@ -655,6 +699,15 @@ def run_architect_sepl(
         lineage.append(rec)
 
         if ev.all_green:
+            # Phase 4: emit feedback event tagged with TZ-served variant
+            if outcome_logger is not None:
+                from sepl import emit_outcome
+                emit_outcome(
+                    outcome_logger, issue_id=issue_id,
+                    model_str=mod.served_model, outcome="resolved",
+                    iteration=iteration, wall_s=time.time() - t0,
+                    metrics={"files_modified": sorted(mod.files.keys())},
+                )
             return {
                 "status": "resolved",
                 "iterations": iteration,
@@ -684,6 +737,14 @@ def run_architect_sepl(
 
         if state.consecutive_same_category_fails >= rollback_threshold:
             reset_worktree(worktree)
+            if outcome_logger is not None:
+                from sepl import emit_outcome
+                emit_outcome(
+                    outcome_logger, issue_id=issue_id,
+                    model_str=mod.served_model, outcome="rollback",
+                    iteration=iteration, wall_s=time.time() - t0,
+                    metrics={"category": first_fail.category.value if first_fail else "unknown"},
+                )
             return {
                 "status": "failed",
                 "iterations": iteration,

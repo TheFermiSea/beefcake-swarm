@@ -227,7 +227,7 @@ class Improve:
     ) -> tuple[Modification | None, LineageRecord]:
         from architect import (
             build_architect_prompt,
-            call_architect,
+            call_architect_meta,
             extract_whole_files,
             needs_more_context,
         )
@@ -239,8 +239,9 @@ class Improve:
             extra_files=extra_files,
         )
 
+        served_model: str | None = None
         try:
-            response = call_architect(
+            response, served_model = call_architect_meta(
                 messages,
                 tz_url=self.tz_url,
                 function_name=self.function_name,
@@ -265,7 +266,7 @@ class Improve:
             # Stash the response via an "empty" Modification so the driver
             # can preserve it as a prior attempt when re-calling with
             # the requested file attached.
-            return Modification(files={}, source_response=response), rec
+            return Modification(files={}, source_response=response, served_model=served_model), rec
 
         files = extract_whole_files(response)
         if not files:
@@ -275,9 +276,9 @@ class Improve:
                 metrics={"response_len": len(response)},
                 note="no_file_blocks_in_response",
             )
-            return Modification(files={}, source_response=response), rec
+            return Modification(files={}, source_response=response, served_model=served_model), rec
 
-        mod = Modification(files=files, source_response=response)
+        mod = Modification(files=files, source_response=response, served_model=served_model)
         rec = now_record(
             self.name, state.iteration, OperatorStatus.OK,
             input_digest=text_digest(hypothesis.summary if hypothesis else None),

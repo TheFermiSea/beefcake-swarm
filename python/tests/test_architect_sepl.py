@@ -17,18 +17,19 @@ from sepl import LineageWriter
 
 @pytest.fixture
 def stubbed_architect(monkeypatch):
-    """Replaces architect.call_architect with a stub that returns responses
-    from a list, one per call. Returns the list so tests can inspect it."""
+    """Replaces architect.call_architect_meta with a stub that returns
+    (response, model_str) pairs from a list, one per call."""
     calls: list[dict] = []
+    default_model = "tensorzero::function_name::code_patch_architect::variant_name::minimax_m2_7"
 
-    def make_stub(responses: list[str]):
+    def make_stub(responses: list[str], model_str: str = default_model):
         resp_iter = iter(responses)
 
         def _stub(messages, **kw):
             calls.append({"messages_len": len(messages), "kwargs": kw})
-            return next(resp_iter)
+            return next(resp_iter), model_str
 
-        monkeypatch.setattr(A, "call_architect", _stub)
+        monkeypatch.setattr(A, "call_architect_meta", _stub)
         return calls
 
     return make_stub

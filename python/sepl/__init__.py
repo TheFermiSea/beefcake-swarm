@@ -8,6 +8,7 @@ Phase 1.2 adds concrete operator implementations.
 Phase 1.3 wires the loop into python/architect.py.
 """
 
+from .feedback import FeedbackEvent, OutcomeLogger, emit_outcome, parse_variant
 from .lineage import LineageRecord, LineageWriter, now_record
 from .operators import Commit, Evaluate, Improve, Operator, Reflect, Select
 from .state import SEPLState
@@ -27,6 +28,7 @@ __all__ = [
     "ErrorCategory",
     "EvalResult",
     "Evaluate",
+    "FeedbackEvent",
     "GateResult",
     "Hypothesis",
     "Improve",
@@ -35,10 +37,13 @@ __all__ = [
     "Modification",
     "Operator",
     "OperatorStatus",
+    "OutcomeLogger",
     "Reflect",
     "SEPLState",
     "Select",
     "Trace",
+    "emit_outcome",
     "now_record",
+    "parse_variant",
     "text_digest",
 ]

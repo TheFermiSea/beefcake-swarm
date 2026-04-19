@@ -53,6 +53,7 @@ class Modification:
     without reshaping."""
     files: dict[str, str]
     source_response: str
+    served_model: str | None = None   # Phase 4: which TZ variant produced this
 
     def digest(self) -> str:
         h = hashlib.sha256()
