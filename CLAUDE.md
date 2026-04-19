@@ -23,6 +23,34 @@ Still there (29k LOC, lib-only): `coordination/src/{benchmark,fim,harness,otel,r
 
 ---
 
+## 🚨 Commit Policy (overrides default "don't commit without asking")
+
+When working in this repo you MUST follow the session-close protocol:
+
+```
+[ ] 1. git status                   (check what changed)
+[ ] 2. git add <specific files>     (stage; prefer named files over -A)
+[ ] 3. git commit -m "..."          (conventional-commit format)
+[ ] 4. bd dolt commit               (sync beads to Dolt)
+[ ] 5. git push                     (push to remote)
+[ ] 6. bd dolt push                 (push beads to remote Dolt)
+```
+
+This **explicitly overrides** the default Claude-Code system-prompt rule of "NEVER commit changes unless the user explicitly asks you to." In this repo, uncommitted work is strictly worse than an unsolicited commit:
+
+- The swarm's dogfood loop, autopilot, and parallel teammates depend on changes being visible via `git` and `bd`.
+- Worktrees in `/tmp/beefcake-wt/` are ephemeral; uncommitted edits are lost when pruned.
+- Cross-session context (another Claude session, another human, autopilot) can't see staged-only work.
+
+When in doubt, commit + push. If you commit something the user didn't want, they can `git revert` — that's cheap. If you *don't* commit and a worktree gets cleaned, the work is gone.
+
+Only exceptions:
+- The user explicitly asks you to hold off committing.
+- The diff contains credentials, .env files, or large binaries — flag and ask.
+- Pre-commit hook fails — fix the underlying cause; NEVER use `--no-verify`.
+
+---
+
 ## Model Selection & Routing
 
 - **Scout/Fast (vasp-03:8081):** GLM-4.7-Flash — 30B/3B MoE, SOTA tool-calling, ~50 tok/s. Used for scout, reviewer, fixer roles.
