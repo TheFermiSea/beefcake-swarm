@@ -53,14 +53,14 @@ jobs:
 
             This is a Rust workspace with two main crates:
             - `coordination/` — deterministic logic layer (verifier, escalation, router)
-            - `crates/swarm-agents/` — orchestrator with Rig-based LLM agents
+
 
             Quality gates (all must pass):
             1. `cargo fmt --all -- --check`
             2. `cargo clippy --workspace -- -D warnings`
             3. `cargo check --workspace`
             4. `cargo test -p coordination` (if you changed coordination/)
-            5. `cargo test -p swarm-agents` (if you changed swarm-agents/)
+
 
             Rules:
             - Make minimal changes — fix the issue, nothing more
@@ -86,7 +86,7 @@ jobs:
 
             This is a Rust workspace (beefcake-swarm) with:
             - `coordination/` — deterministic logic (verifier, escalation, router)
-            - `crates/swarm-agents/` — orchestrator with LLM agents
+
 
             Quality gates: cargo fmt, clippy -D warnings, cargo check, cargo test.
             Make minimal changes. Run quality gates before creating the PR.
