@@ -500,3 +500,205 @@ def run_architect_coder(
         "wall_s": round(time.time() - t0, 2),
         "attempts": len(attempts),
     }
+
+
+# ───────────────────────────────────────────────────────────────────────────────
+# SEPL driver (AGP Phase 1.3)
+# ───────────────────────────────────────────────────────────────────────────────
+#
+# run_architect_sepl replaces the ad-hoc retry loop above with an explicit
+# Reflect -> Select -> Improve -> Evaluate -> Commit state machine and per-
+# iteration lineage persistence. Same return shape as run_architect_coder.
+# Per the Autogenesis paper (arXiv:2604.15034), decoupling *what evolves*
+# (state + modification) from *how evolution occurs* (the 5 operators)
+# gives us:
+#   - audit trail (which operator + which iteration regressed)
+#   - rollback on repeated same-category failure (safety gate)
+#   - unit-testable operators (no model call in Reflect/Select/Commit)
+
+SEPL_LINEAGE_ROOT = pathlib.Path("/tmp/beefcake-lineage")
+# Repo-local preferred; falls back to /tmp if not a git checkout.
+
+
+def _resolve_lineage_path(worktree: pathlib.Path, issue_id: str) -> pathlib.Path:
+    """Lineage lands at <repo>/.swarm/lineage/<id>.jsonl (gitignored) if
+    we can resolve the main repo, else /tmp/beefcake-lineage/<id>.jsonl.
+    We avoid the worktree root because reset_worktree()'s `git clean -fd`
+    would nuke the audit trail."""
+    try:
+        main_git_dir = subprocess.run(
+            ["git", "rev-parse", "--git-common-dir"], cwd=worktree,
+            capture_output=True, text=True, timeout=10, check=True,
+        ).stdout.strip()
+        repo_root = pathlib.Path(main_git_dir).resolve().parent
+        candidate = repo_root / ".swarm" / "lineage" / f"{issue_id}.jsonl"
+        candidate.parent.mkdir(parents=True, exist_ok=True)
+        return candidate
+    except Exception:
+        SEPL_LINEAGE_ROOT.mkdir(parents=True, exist_ok=True)
+        return SEPL_LINEAGE_ROOT / f"{issue_id}.jsonl"
+
+
+def run_architect_sepl(
+    issue: dict[str, Any],
+    worktree: pathlib.Path,
+    verifier_fn,
+    *,
+    max_iters: int = 3,
+    tz_url: str = DEFAULT_TZ_URL,
+    function_name: str = DEFAULT_FUNCTION,
+    variant_name: str | None = None,
+    rollback_threshold: int = 3,
+) -> dict:
+    """SEPL-driven architect loop.
+
+    Same external contract as run_architect_coder (same return keys), but
+    internally runs Reflect -> Select -> Improve -> Evaluate -> Commit
+    per iteration with per-step lineage records written to
+    <repo>/.swarm/lineage/<issue-id>.jsonl.
+
+    Rollback: if `rollback_threshold` consecutive iterations fail with the
+    same top error category, abort and return {status: "failed",
+    reason: "rollback_no_progress"}.
+    """
+    from dataclasses import replace
+    from sepl import (
+        Commit, Evaluate, Improve, LineageWriter, Reflect, Select, SEPLState,
+    )
+
+    t0 = time.time()
+    issue_id = str(issue.get("id", "unknown"))
+    lineage_path = _resolve_lineage_path(worktree, issue_id)
+    lineage = LineageWriter(lineage_path)
+
+    reflect = Reflect()
+    select = Select()
+    improve = Improve(
+        tz_url=tz_url, function_name=function_name, variant_name=variant_name,
+    )
+    evaluate = Evaluate(verifier_fn=verifier_fn)
+    commit = Commit()
+
+    state = SEPLState(issue=issue, worktree=worktree)
+    attempts: list[dict] = []
+    extra_files: list[pathlib.PurePosixPath] = []
+
+    debug_dir = pathlib.Path("/tmp/beefcake-architect-debug") / worktree.name
+    debug_dir.mkdir(parents=True, exist_ok=True)
+
+    for iteration in range(1, max_iters + 1):
+        print(f"[sepl] iter {iteration}/{max_iters}: state.iteration={state.iteration} "
+              f"streak={state.consecutive_same_category_fails}", flush=True)
+
+        # ── Reflect ──
+        hyps, rec = reflect.run(state)
+        lineage.append(rec)
+
+        # ── Select ──
+        hyp, rec = select.run(hyps, state)
+        lineage.append(rec)
+
+        # ── Improve ──
+        mod, rec = improve.run(
+            hyp, state, prior_attempts=attempts, extra_files=extra_files,
+        )
+        lineage.append(rec)
+        if mod is not None:
+            (debug_dir / f"iter-{iteration}-response.txt").write_text(mod.source_response)
+
+        # Handle improve edge cases
+        if mod is None:
+            # Model call failed outright
+            return {
+                "status": "failed", "iterations": iteration,
+                "reason": rec.note or "improve_returned_none",
+                "wall_s": round(time.time() - t0, 2),
+                "attempts": len(attempts),
+                "lineage_path": str(lineage_path),
+            }
+        if not mod.files:
+            # NEED_CONTEXT or parse failure
+            ctx = rec.metrics.get("need_context")
+            if ctx:
+                ctx_path = pathlib.PurePosixPath(ctx)
+                if ctx_path not in extra_files:
+                    extra_files.append(ctx_path)
+                attempts.append({
+                    "response": mod.source_response,
+                    "feedback": f"Attached {ctx_path}. Now emit the ### FILE blocks.",
+                })
+                continue
+            # No ### FILE blocks in response → explicit feedback for retry
+            attempts.append({
+                "response": mod.source_response,
+                "feedback": ("I couldn't find any `### FILE: <path>` blocks in "
+                             "your response. Re-emit using the exact format:\n\n"
+                             "### FILE: <relative/path>\n```<language>\n"
+                             "<full file contents>\n```\n"),
+            })
+            continue
+
+        # ── Evaluate ──
+        ev, rec = evaluate.run(mod, state)
+        lineage.append(rec)
+
+        # ── Commit (logs at current iteration; rollback on red) ──
+        # Build a transient state that carries the fresh modification/eval
+        # so Commit sees them, but keep the same iteration counter.
+        commit_state = replace(
+            state,
+            last_modification=mod,
+            last_eval=ev,
+            last_response=mod.source_response,
+        )
+        cstatus, rec = commit.run(commit_state)
+        lineage.append(rec)
+
+        if ev.all_green:
+            return {
+                "status": "resolved",
+                "iterations": iteration,
+                "wall_s": round(time.time() - t0, 2),
+                "files_modified": sorted(mod.files.keys()),
+                "attempts": len(attempts) + 1,
+                "lineage_path": str(lineage_path),
+            }
+
+        # Red path: record feedback for the next Improve, advance state, test
+        # rollback trigger.
+        first_fail = ev.first_failing
+        err_tail = (first_fail.stderr_tail if first_fail else "")[-3000:]
+        gate_name = first_fail.name if first_fail else "unknown"
+        attempts.append({
+            "response": mod.source_response,
+            "feedback": (
+                f"Your files wrote successfully, but the `{gate_name}` gate failed:\n\n"
+                f"```\n{err_tail}\n```\n\n"
+                "Re-emit the ### FILE blocks with fixes for the above error."
+            ),
+        })
+
+        state = state.advance(
+            modification=mod, eval_result=ev, response=mod.source_response,
+        )
+
+        if state.consecutive_same_category_fails >= rollback_threshold:
+            reset_worktree(worktree)
+            return {
+                "status": "failed",
+                "iterations": iteration,
+                "reason": (f"rollback_no_progress: {rollback_threshold} consecutive "
+                           f"{first_fail.category.value if first_fail else 'unknown'} failures"),
+                "wall_s": round(time.time() - t0, 2),
+                "attempts": len(attempts),
+                "lineage_path": str(lineage_path),
+            }
+
+    return {
+        "status": "failed",
+        "iterations": max_iters,
+        "reason": f"exhausted max_iters={max_iters}",
+        "wall_s": round(time.time() - t0, 2),
+        "attempts": len(attempts),
+        "lineage_path": str(lineage_path),
+    }

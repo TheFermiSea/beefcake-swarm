@@ -237,6 +237,7 @@ def process_issue(issue_id: str, *, repo_root: pathlib.Path, model: str,
                   keep_on_fail: bool = True, close_on_success: bool = True,
                   query_kb: bool = True,
                   architect_coder: bool = False,
+                  architect_sepl: bool = False,
                   architect_function: str = "code_patch_architect",
                   architect_variant: str | None = None,
                   architect_max_iters: int = 3) -> dict:
@@ -285,16 +286,27 @@ def process_issue(issue_id: str, *, repo_root: pathlib.Path, model: str,
     # 5. Invoke inner loop — either architect-coder (MiniMax emits a diff,
     # we apply+verify with retry) or mini-SWE-agent bash-loop (the default).
     if architect_coder:
-        log(f"architect-coder mode: function={architect_function} "
+        mode_label = "architect-sepl" if architect_sepl else "architect-coder"
+        log(f"{mode_label} mode: function={architect_function} "
             f"variant={architect_variant or 'weighted'}")
-        from architect import run_architect_coder
-        arch = run_architect_coder(
-            issue, wt_path,
-            verifier_fn=lambda wt: run_verifier(wt, skip_tests=skip_tests),
-            max_iters=architect_max_iters,
-            function_name=architect_function,
-            variant_name=architect_variant,
-        )
+        if architect_sepl:
+            from architect import run_architect_sepl
+            arch = run_architect_sepl(
+                issue, wt_path,
+                verifier_fn=lambda wt: run_verifier(wt, skip_tests=skip_tests),
+                max_iters=architect_max_iters,
+                function_name=architect_function,
+                variant_name=architect_variant,
+            )
+        else:
+            from architect import run_architect_coder
+            arch = run_architect_coder(
+                issue, wt_path,
+                verifier_fn=lambda wt: run_verifier(wt, skip_tests=skip_tests),
+                max_iters=architect_max_iters,
+                function_name=architect_function,
+                variant_name=architect_variant,
+            )
         result["architect"] = {k: arch.get(k) for k in
                                ("status", "iterations", "wall_s",
                                 "files_modified", "attempts", "reason")}
@@ -401,6 +413,12 @@ def main() -> int:
                     help="Use the architect-coder flow (MiniMax emits a unified "
                          "diff, we apply+verify, retry on failure) instead of "
                          "the mini-SWE-agent bash loop.")
+    ap.add_argument("--architect-sepl", action="store_true",
+                    default=os.environ.get("SWARM_ARCHITECT_SEPL") == "1",
+                    help="Drive the architect-coder flow through the SEPL state "
+                         "machine (Reflect/Select/Improve/Evaluate/Commit) with "
+                         "per-issue lineage at .swarm/lineage/<id>.jsonl. "
+                         "Implies --architect-coder. Env: SWARM_ARCHITECT_SEPL=1")
     ap.add_argument("--architect-function", default="code_patch_architect",
                     help="TZ function name for the architect call.")
     ap.add_argument("--architect-variant",
@@ -423,7 +441,8 @@ def main() -> int:
         skip_tests=args.skip_tests,
         close_on_success=not args.no_close,
         query_kb=not args.no_kb,
-        architect_coder=args.architect_coder,
+        architect_coder=args.architect_coder or args.architect_sepl,
+        architect_sepl=args.architect_sepl,
         architect_function=args.architect_function,
         architect_variant=args.architect_variant,
         architect_max_iters=args.architect_max_iters,
