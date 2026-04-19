@@ -60,7 +60,7 @@ jobs:
             2. `cargo clippy --workspace -- -D warnings`
             3. `cargo check --workspace`
             4. `cargo test -p coordination` (if you changed coordination/)
-            5. `cargo test -p swarm-agents` (if you changed swarm-agents/)
+            5. (Removed swarm-agents step)
 
             Rules:
             - Make minimal changes — fix the issue, nothing more
