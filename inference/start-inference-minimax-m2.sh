@@ -50,10 +50,11 @@ nohup env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" numactl --interleave=all \
   --model "${MODEL_FILE}" \
   --alias MiniMax-M2.7 \
   --host 0.0.0.0 --port "${PORT}" \
-  --ctx-size 32768 --n-gpu-layers 999 \
+  --ctx-size 131072 --n-gpu-layers 999 \
   --override-tensor 'ffn_.*_exps\.=CPU' \
-  --threads 32 --batch-size 512 --ubatch-size 512 \
+  --threads 32 --batch-size 1024 --ubatch-size 1024 \
   --cache-type-k q8_0 --cache-type-v q8_0 \
+  --cache-reuse 256 \
   --cache-prompt -fa on --no-mmap --cont-batching --metrics --jinja \
   --reasoning off \
   > "${LOG_PATH}" 2>&1 &

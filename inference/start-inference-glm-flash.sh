@@ -36,17 +36,18 @@ if [[ ! -f "${MODEL_FILE}" ]]; then
   exit 1
 fi
 
-# --threads 24: leave ~8 cores for the co-resident MiniMax expert pool.
-# (vasp-03 has ~36 logical cores; MiniMax uses 32, GLM uses 24, some
-# overlap is fine since they rarely both peak simultaneously on swarm
-# dispatch.)
+# --threads 16: bias CPU toward MiniMax architect (vasp-03:8081 uses 32).
+# vasp-03 has ~36 logical cores; 32 + 16 = 48 = ~1.3x oversubscribe,
+# down from 1.55x (24+32) — MiniMax's latency under contention matters
+# more because it's the architect/oracle, and GLM-4.7's 3B-active sparse
+# MoE saturates DDR4 bandwidth well before 16 threads anyway.
 nohup env LD_LIBRARY_PATH="${LD_LIBRARY_PATH}" numactl --interleave=all \
   "${LLAMA_SERVER}" \
   --model "${MODEL_FILE}" \
   --alias GLM-4.7-Flash \
   --host 0.0.0.0 --port "${PORT}" \
   --ctx-size 32768 --n-gpu-layers 0 \
-  --threads 24 --batch-size 512 --ubatch-size 512 \
+  --threads 16 --batch-size 512 --ubatch-size 512 \
   --cache-type-k q8_0 --cache-type-v q8_0 \
   --cache-prompt -fa on --no-mmap --cont-batching --metrics --jinja \
   --reasoning off \
