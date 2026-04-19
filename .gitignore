@@ -53,6 +53,7 @@ venv/
 .swarm-telemetry.jsonl
 .swarm-hook-events.jsonl
 .swarm/cognition/
+.swarm/lineage/
 
 # Swarm agent working files (exploration artifacts, grep dumps, plans)
 exploration-notes.*
